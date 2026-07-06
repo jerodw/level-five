@@ -30,6 +30,7 @@ One reusable template per agent role: `planner.md`, `implementer.md`, `tester.md
 - `story_coordinator.py` — the Story Coordinator. Loads the workflow definition, story artifact, and rules; creates the story branch and run directory; loops: determine stage → assemble context → render prompt → invoke agent → save artifacts → update state → route (advance, retry, or escalate).
 - `context_assembler.py` — builds each stage's runtime context from the story artifact, prior stage artifacts, retry state, and architecture documents, and renders it into the prompt template.
 - `agent_runner.py` — invokes `claude -p` headlessly (`--permission-mode acceptEdits --output-format stream-json --verbose`, prompt on stdin), streams raw output to the run's log, and returns the agent's final result text.
+- `run_status.py` — read-only status snapshot backing `l5-status`. Lists every run under the configured runs directory (story id, status, current stage, retry count, sorted by story id) or shows one run's full `RunState` plus the last 10 lines of its `events.log`. Reuses `story_coordinator.load_state` for state parsing (never duplicated); a run with a missing or unparseable `state.json` is flagged `unreadable` in the listing without aborting it, while the detail view fails loudly (stderr, exit 1). Never writes to run directories or anywhere else.
 
 ### Tool allowlist
 
@@ -41,7 +42,7 @@ Headless agents cannot answer permission prompts, so `.harness/config.yaml` carr
 
 ### Scripts (`scripts/`)
 
-Thin entry points only; no orchestration logic. `l5-init`, `l5-plan`, `l5-run`, `l5-assist`.
+Thin entry points only; no orchestration logic. `l5-init`, `l5-plan`, `l5-run`, `l5-assist`, `l5-status`. Each resolves HARNESS_ROOT from its own location, adds `orchestration/` to `sys.path`, and locates the target repository by walking up to the nearest `.harness/config.yaml` before delegating to its orchestration module.
 
 ### Target-repository state (`.harness/`)
 
