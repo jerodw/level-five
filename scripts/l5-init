@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Initialize the .harness/ structure in a target repository.
+
+Usage: l5-init [--test-command "<command>"]
+Run from the root of the repository you want the harness to work on.
+Creates .harness/ with a starter config, starter standards, and the
+stories, runs, and logs directories. Starter standards are templates;
+replace them with the repository's real expectations before running
+stories.
+"""
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATES = HARNESS_ROOT / "templates"
+
+
+def main() -> int:
+    target = Path.cwd()
+    test_command = "echo 'no test command configured'"
+    args = sys.argv[1:]
+    if args[:1] == ["--test-command"] and len(args) == 2:
+        test_command = args[1]
+    elif args:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+
+    harness_dir = target / ".harness"
+    if (harness_dir / "config.yaml").is_file():
+        print(f"{harness_dir} already initialized.", file=sys.stderr)
+        return 1
+
+    for sub in ("standards", "stories", "runs", "logs"):
+        (harness_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")
+    config = config.replace("{project}", target.name).replace("{test_command}", test_command)
+    (harness_dir / "config.yaml").write_text(config, encoding="utf-8")
+
+    for template in sorted((TEMPLATES / "standards").glob("*.md")):
+        (harness_dir / "standards" / template.name).write_text(
+            template.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+    print(f"Initialized {harness_dir}")
+    print("Next: replace the starter standards in .harness/standards/, then plan a story with l5-plan.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
