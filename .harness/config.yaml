@@ -1,0 +1,13 @@
+# Target-repository harness configuration
+project: level-five
+workflow: story-workflow
+branch_prefix: story/
+permission_mode: acceptEdits
+# model: leave unset to use the developer's default Claude Code model
+stories_dir: .harness/stories
+runs_dir: .harness/runs
+logs_dir: .harness/logs
+standards_dir: .harness/standards
+architecture_docs:
+  - docs/ARCHITECTURE.md
+test_command: python3 -m pytest tests/ -q
