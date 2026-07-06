@@ -1,0 +1,32 @@
+{
+  "name": "story-workflow",
+  "stages": [
+    {
+      "name": "implementer",
+      "prompt": "implementer.md",
+      "outputs": ["changed-files.json", "implementation-summary.md"]
+    },
+    {
+      "name": "tester",
+      "prompt": "tester.md",
+      "outputs": ["test-results.json"]
+    },
+    {
+      "name": "verifier",
+      "prompt": "verifier.md",
+      "outputs": ["verification-result.json"],
+      "on_failure": {
+        "retry_stage": "implementer",
+        "max_retries": 2
+      }
+    },
+    {
+      "name": "documenter",
+      "prompt": "documenter.md",
+      "outputs": ["documentation-report.md"]
+    }
+  ],
+  "escalation_rules": {
+    "max_retries_exceeded": { "action": "escalate" }
+  }
+}
