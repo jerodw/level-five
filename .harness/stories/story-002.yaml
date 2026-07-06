@@ -1,0 +1,115 @@
+story:
+  id: story-002
+  title: Per-stage changed-files records with blocked-path enforcement after every writing stage
+  description: |
+    Keep changed-files records accurate when more than one stage writes to
+    the repository. Today only the implementer records what it changed
+    (changed-files.json), so tester-created test files appear in the
+    working tree with no record, producing inconsistent evidence by
+    construction (flagged by story-001's verifier; see
+    .harness/runs/story-001/verification/iteration-1.json).
+
+    After this story, each writing stage keeps its own record: the
+    implementer keeps changed-files.json, and the tester writes
+    tester-changed-files.json (same schema) recording the test files it
+    creates or modifies, required as a tester output in the workflow
+    definition. The verifier receives both records injected separately so
+    it can hold the implementation to the approved scope while treating
+    tester-created test files as expected additions of a later stage. The
+    coordinator enforces blocked paths after every stage that declares a
+    changed-files record, not only the implementer.
+
+tasks:
+  - In workflows/story-workflow.json, add tester-changed-files.json to the
+    tester's required outputs, and declare the changed-files record per
+    stage (a changed_files key on the implementer and tester stages) so
+    blocked-path enforcement is driven by the workflow definition, not
+    hard-coded stage names in Python.
+  - Update prompts/tester.md to require writing tester-changed-files.json
+    to the run directory, using the same schema as changed-files.json
+    (modified/created/deleted arrays), listing exactly the test files the
+    tester creates or modifies.
+  - Update prompts/verifier.md to receive two separately-injected records
+    with distinct interpretation guidance — the implementer's
+    {{changed_files}} is held to the approved story scope, while
+    {{tester_changed_files}} lists test files that are expected additions
+    of a later stage, not scope violations.
+  - Add a tester_changed_files key to
+    orchestration/context_assembler.build_context that reads
+    tester-changed-files.json from the run directory (None when absent).
+  - In orchestration/story_coordinator.py, generalize _blocked_violation
+    to take the record filename, and enforce blocked paths after every
+    stage whose workflow entry declares a changed_files record, escalating
+    on violation exactly as the implementer check does today.
+  - Update existing unit tests so fake runners produce
+    tester-changed-files.json, and add tests covering the new behavior.
+
+technical_plan: |
+  Enforcement becomes data-driven: the coordinator reads an optional
+  changed_files key from each stage entry in the workflow definition and,
+  when present, checks that record against blocked_paths after the stage
+  completes. This follows the architecture standard that workflow
+  behavior lives in workflows/, not Python, and means the documenter —
+  which produces no changed-files record today — is intentionally out of
+  scope; adding a documenter record later is a one-line workflow change.
+
+  Each stage is checked against its own record only: after the
+  implementer, changed-files.json; after the tester,
+  tester-changed-files.json. The tester's missing-artifact case needs no
+  new code path — adding tester-changed-files.json to the stage's outputs
+  list makes the existing required-artifacts check escalate when it is
+  absent.
+
+  The verifier prompt gains a {{tester_changed_files}} placeholder in the
+  runtime state layer, filled by a new context_assembler key that reads
+  the file with the existing _read helper (renders as None when absent,
+  e.g. on a retry pass before the tester has re-run). The existing
+  {{changed_files}} placeholder and its meaning are unchanged.
+
+  Retry routing, verification semantics, and the implementer flow are
+  untouched. On retry the tester re-runs and overwrites its record, so
+  the verifier always sees the current iteration's records.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - prompts/tester.md
+    - prompts/verifier.md
+    - orchestration/context_assembler.py
+    - orchestration/story_coordinator.py
+    - tests/
+  do_not_modify:
+    - rules/
+    - scripts/
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - prompts/planner.md
+    - prompts/implementer.md
+    - prompts/documenter.md
+    - prompts/assist.md
+    - .harness/standards/
+
+acceptance_criteria:
+  - "workflows/story-workflow.json requires tester-changed-files.json as a tester output, and the coordinator escalates when the tester does not produce it."
+  - "prompts/tester.md instructs the tester to write tester-changed-files.json with the same schema as changed-files.json (modified/created/deleted arrays), recording the test files it creates or modifies."
+  - "prompts/verifier.md contains two distinct placeholders — the implementer's changed-files record and the tester's — with instructions to hold the implementation to the approved scope while treating tester-created test files as expected additions of a later stage."
+  - "The coordinator checks blocked paths against each stage's own changed-files record after that stage completes, for every stage whose workflow entry declares one (implementer and tester), escalating on violation."
+  - "Blocked-path enforcement is driven by the per-stage changed_files declaration in the workflow definition, with no hard-coded stage names in the coordinator's enforcement logic."
+  - "New unit tests cover: a tester blocked-path violation escalates, a missing tester-changed-files.json escalates, and context assembly injects both records separately (tester_changed_files rendering None when the file is absent). The full suite passes via .venv/bin/python -m pytest tests/ -q."
+
+verification_requirements:
+  - "Confirm every acceptance criterion against the evidence artifacts (implementation-summary.md, changed-files.json, tester-changed-files.json, test-results.json)."
+  - "Confirm the full test suite passes via .venv/bin/python -m pytest tests/ -q, including the new tests."
+  - "Confirm the implementer's changed-files.json touches only files within the modify scope; treat files listed in tester-changed-files.json as expected tester additions, not implementation scope violations."
+  - "Confirm existing behavior is preserved: implementer flow, retry routing, and verification semantics are unchanged, and no existing test assertions were weakened or skipped."
+
+constraints:
+  - The coordinator stays deterministic — no model calls in coordinator or
+    context-assembly logic, and none in the new tests.
+  - No third-party runtime dependencies; Python 3.10+ standard library
+    only, with type hints on public functions.
+  - rules/execution-rules.json is unchanged; the blocked-path rules
+    themselves do not change, only where they are enforced.
+  - The changed-files schema (modified/created/deleted arrays) is shared
+    verbatim between both records; do not introduce a divergent schema.
