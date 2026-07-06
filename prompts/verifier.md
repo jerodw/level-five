@@ -74,8 +74,14 @@ Story:
 Acceptance criteria:
 {{acceptance_criteria}}
 
-Changed files:
+Changed files (implementer's record — hold these changes to the approved
+story scope):
 {{changed_files}}
+
+Tester changed files (tester's record — test files created or modified by
+the tester stage; treat them as expected additions of a later stage, not
+implementation scope violations):
+{{tester_changed_files}}
 
 Implementation summary:
 {{implementation_summary}}

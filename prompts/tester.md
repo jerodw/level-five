@@ -26,7 +26,7 @@ Do not:
 
 New tests belong in tests/ and become permanent repository assets.
 
-When you finish, write this file to the run directory at {{run_dir}}:
+When you finish, write these files to the run directory at {{run_dir}}:
 
 test-results.json:
 {
@@ -38,6 +38,14 @@ test-results.json:
   "failures": [
     { "test": "<name>", "issue": "<what the failure shows>" }
   ]
+}
+
+tester-changed-files.json (same schema as changed-files.json), listing
+exactly the test files you create or modify:
+{
+  "modified": ["<path>", "..."],
+  "created": ["<path>", "..."],
+  "deleted": ["<path>", "..."]
 }
 
 [Workflow Layer]

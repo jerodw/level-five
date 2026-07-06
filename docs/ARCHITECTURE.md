@@ -21,6 +21,8 @@ l5 is a level 3 agentic harness: a story execution system. The workflow defines 
 
 `story-workflow.json` defines the execution structure: stage list (implementer, tester, verifier, documenter), the prompt and expected artifacts for each stage, the retry route (verification failure returns execution to the implementer), and the escalation rule (retries exhausted → escalate).
 
+A stage that writes to the repository declares an optional `changed_files` key naming its changed-files record: the implementer declares `changed-files.json`, the tester declares `tester-changed-files.json`. After any stage with this declaration completes, the coordinator checks that record against `blocked_paths` and escalates on violation — enforcement is driven by the workflow definition, with no stage names hard-coded in the coordinator. The documenter declares no record and is intentionally unchecked; enabling it later is a one-line workflow change. Both records share the same schema verbatim (`modified`/`created`/`deleted` arrays).
+
 ### Prompts (`prompts/`)
 
 One reusable template per agent role: `planner.md`, `implementer.md`, `tester.md`, `verifier.md`, `documenter.md`, `assist.md`. Each follows the five-layer structure: harness layer (durable rules shared by every agent), role layer (responsibilities and do-not boundaries), workflow layer (workflow priorities), stage layer (current objective), and runtime state layer (`{{placeholder}}` fields the coordinator fills at runtime). Optional placeholders render as `None` when nothing applies.
@@ -38,7 +40,7 @@ Headless agents cannot answer permission prompts, so `.harness/config.yaml` carr
 
 ### Rules (`rules/`)
 
-`execution-rules.json` — `max_retries`, `blocked_paths`, `require_verifier_pass`. The coordinator refuses to advance past verification without a passing `verification-result.json`, stops retrying at the ceiling, and fails a stage that modified a blocked path.
+`execution-rules.json` — `max_retries`, `blocked_paths`, `require_verifier_pass`. The coordinator refuses to advance past verification without a passing `verification-result.json`, stops retrying at the ceiling, and fails a stage that modified a blocked path. Blocked paths are checked after every stage that declares a `changed_files` record in the workflow definition, each stage against its own record only.
 
 ### Scripts (`scripts/`)
 
@@ -70,7 +72,8 @@ Thin entry points only; no orchestration logic. `l5-init`, `l5-plan`, `l5-run`, 
       state.json                current stage, status, retry_count, branch
       events.log                append-only stage/retry/escalation events
       implementation-summary.md
-      changed-files.json
+      changed-files.json        implementer's record (modified/created/deleted)
+      tester-changed-files.json tester's record, same schema; required tester output
       test-results.json
       verification/iteration-1.json
       retry-guidance.json       written by the verifier on failure
@@ -81,5 +84,7 @@ Thin entry points only; no orchestration logic. `l5-init`, `l5-plan`, `l5-run`, 
 - Story IDs are `story-NNN`, assigned sequentially by `l5-plan`.
 - Branch per story: `story/<story-id>`, created from the current branch by the coordinator.
 - The implementer runs existing tests locally as implementation discipline; the tester creates and runs new validation; the verifier evaluates evidence only.
+- Every writing stage keeps its own changed-files record, and the verifier receives them injected separately: the implementer's `{{changed_files}}` is held to the approved story scope, while `{{tester_changed_files}}` lists test files that are expected additions of a later stage, not scope violations (`None` when absent, e.g. before the tester has run). Requiring the record in the stage's `outputs` list makes the existing required-artifacts check escalate when it is missing — no separate code path.
+- The coordinator loads the workflow definition at run start, so changes to the workflow (new outputs, new `changed_files` declarations) take effect for runs started after they merge, not for the run that made them.
 - Verification rules never change between retries; retries narrow scope, they do not restart the workflow.
 - Capacity exhaustion (rate limits) is a reason to wait, not to fail; budget ceilings are a reason to stop.

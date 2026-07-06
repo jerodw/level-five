@@ -49,6 +49,54 @@ def test_real_templates_render_without_leftover_placeholders(target_root, harnes
     assert "Retry state:\nNone" in implementer
 
 
+def test_both_changed_files_records_injected_separately(target_root, harness_root):
+    config = harness_config.load_config(target_root)
+    rules = harness_config.load_rules(harness_root)
+    story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "changed-files.json").write_text(
+        json.dumps({"modified": ["src/app.py"], "created": [], "deleted": []})
+    )
+    (run_dir / "tester-changed-files.json").write_text(
+        json.dumps({"modified": [], "created": ["tests/test_app.py"], "deleted": []})
+    )
+
+    context = context_assembler.build_context(
+        story_text=story_text,
+        run_dir=run_dir,
+        target_root=target_root,
+        config=config,
+        rules=rules,
+        retry_count=0,
+    )
+    assert "src/app.py" in context["changed_files"]
+    assert "tests/test_app.py" not in context["changed_files"]
+    assert "tests/test_app.py" in context["tester_changed_files"]
+
+
+def test_tester_changed_files_renders_none_when_absent(target_root, harness_root):
+    config = harness_config.load_config(target_root)
+    rules = harness_config.load_rules(harness_root)
+    story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    context = context_assembler.build_context(
+        story_text=story_text,
+        run_dir=run_dir,
+        target_root=target_root,
+        config=config,
+        rules=rules,
+        retry_count=0,
+    )
+    assert context["tester_changed_files"] is None
+    verifier = context_assembler.render(
+        context_assembler.load_template(harness_root, "verifier.md"), context
+    )
+    assert "{{" not in verifier
+
+
 def test_latest_verifier_finding_reads_newest_iteration(tmp_path: Path):
     run_dir = tmp_path
     (run_dir / "verification").mkdir()

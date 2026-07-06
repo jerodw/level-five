@@ -13,11 +13,15 @@ class FakeRunner:
     """Stands in for agent_runner.run_agent; writes stage artifacts directly."""
 
     def __init__(self, target_root: Path, story_id: str, verifier_verdicts: list[dict],
-                 changed_files: dict | None = None):
+                 changed_files: dict | None = None,
+                 tester_changed_files: dict | None = None):
         self.run_dir = target_root / ".harness" / "runs" / story_id
         self.verifier_verdicts = list(verifier_verdicts)
         self.changed_files = changed_files or {
             "modified": ["src/app.py"], "created": [], "deleted": []
+        }
+        self.tester_changed_files = tester_changed_files or {
+            "modified": [], "created": ["tests/test_app.py"], "deleted": []
         }
         self.calls: list[str] = []
 
@@ -32,6 +36,7 @@ class FakeRunner:
                 "status": "passed", "tests_written": 2, "tests_run": 5,
                 "tests_passed": 5, "tests_failed": 0, "failures": [],
             })
+            write_json(self.run_dir / "tester-changed-files.json", self.tester_changed_files)
         elif stage == "verifier":
             verdict = self.verifier_verdicts.pop(0)
             write_json(self.run_dir / "verification-result.json", verdict)
@@ -112,6 +117,34 @@ def test_blocked_path_modification_escalates(target_root, harness_root):
     assert read_state(target_root)["status"] == "escalated"
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
     assert "blocked path" in summary
+
+
+def test_tester_blocked_path_modification_escalates(target_root, harness_root):
+    runner = FakeRunner(
+        target_root, "story-001", [PASS],
+        tester_changed_files={"modified": [], "created": ["rules/new-rule.json"], "deleted": []},
+    )
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 2
+    assert read_state(target_root)["status"] == "escalated"
+    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    assert "tester modified blocked path" in summary
+
+
+def test_missing_tester_changed_files_escalates(target_root, harness_root):
+    class NoTesterRecordRunner(FakeRunner):
+        def __call__(self, prompt, *, stage, **kwargs):
+            result = super().__call__(prompt, stage=stage, **kwargs)
+            if stage == "tester":
+                (self.run_dir / "tester-changed-files.json").unlink()
+            return result
+
+    runner = NoTesterRecordRunner(target_root, "story-001", [PASS])
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 2
+    assert read_state(target_root)["status"] == "escalated"
+    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    assert "tester-changed-files.json" in summary
 
 
 def test_missing_artifact_escalates(target_root, harness_root):

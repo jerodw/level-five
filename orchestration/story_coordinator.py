@@ -70,8 +70,8 @@ def _checkout_story_branch(target_root: Path, branch: str) -> None:
         raise RuntimeError(f"Could not check out branch {branch}: {result.stderr.strip()}")
 
 
-def _blocked_violation(run_dir: Path, blocked: list[str]) -> str | None:
-    changed = json.loads((run_dir / "changed-files.json").read_text(encoding="utf-8"))
+def _blocked_violation(run_dir: Path, record_name: str, blocked: list[str]) -> str | None:
+    changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     for group in ("modified", "created", "deleted"):
         for path in changed.get(group, []):
             for prefix in blocked:
@@ -202,10 +202,11 @@ def run_story(
         if missing:
             return _escalate(run_dir, state, f"{name} did not produce required artifacts: {', '.join(missing)}")
 
-        if name == "implementer":
-            violation = _blocked_violation(run_dir, rules.get("blocked_paths", []))
+        record_name = stage.get("changed_files")
+        if record_name:
+            violation = _blocked_violation(run_dir, record_name, rules.get("blocked_paths", []))
             if violation:
-                return _escalate(run_dir, state, f"implementer modified blocked path: {violation}")
+                return _escalate(run_dir, state, f"{name} modified blocked path: {violation}")
 
         if name == "verifier":
             verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))
