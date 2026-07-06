@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Show a read-only snapshot of story runs.
+
+Usage: l5-status [story-id]
+With no arguments, lists every run under the runs directory. With a
+story id, shows that run's full state and its most recent events.
+The target repository is found by walking up from the current directory
+to the nearest .harness/config.yaml.
+"""
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import run_status  # noqa: E402
+
+
+def find_target_root(start: Path) -> Path:
+    for candidate in [start, *start.parents]:
+        if (candidate / ".harness" / "config.yaml").is_file():
+            return candidate
+    sys.exit("No .harness/config.yaml found here or above. Run l5-init first.")
+
+
+def main() -> int:
+    if len(sys.argv) > 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+    target_root = find_target_root(Path.cwd())
+    story_id = sys.argv[1] if len(sys.argv) == 2 else None
+    return run_status.main(target_root, story_id)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
