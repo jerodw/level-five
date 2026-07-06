@@ -1,0 +1,90 @@
+story:
+  id: story-001
+  title: Add l5-status script showing a snapshot of story runs
+  description: |
+    Add a read-only l5-status command that reports on story runs recorded
+    under .harness/runs/.
+
+    Invoked with no arguments, it lists every run: story id, status,
+    current stage, and retry count, read from each run's state.json,
+    sorted by story id, in plain aligned text.
+
+    Invoked with a story id, it shows that run's full state (story id,
+    status, current stage, retry count, branch, verification iterations)
+    followed by the last 10 lines of its events.log.
+
+tasks:
+  - Create orchestration/run_status.py holding all status logic — discover
+    run directories under .harness/runs/, load each run's state via
+    story_coordinator.load_state, read the tail of events.log, and format
+    the list and detail views as plain aligned text.
+  - Create the thin entry point scripts/l5-status that parses the optional
+    story-id argument, locates the target repository by walking up to the
+    nearest .harness/config.yaml (same approach as l5-run), and delegates
+    to run_status.
+  - Handle edge cases — missing/empty runs directory prints "no runs
+    found" and exits 0; an unknown story id in detail mode errors to
+    stderr and exits non-zero; a run with a missing or unparseable
+    state.json is flagged as unreadable in the listing without aborting
+    the snapshot.
+  - Add unit tests in tests/ covering the listing view, the detail view,
+    event tailing, and each error case, using fixture run directories and
+    no model invocations.
+
+technical_plan: |
+  All logic lives in a new orchestration/run_status.py module, per the
+  architecture standard that scripts stay thin entry points. The module
+  reuses story_coordinator.load_state for state.json parsing rather than
+  duplicating it. State fields shown come from the RunState dataclass:
+  story_id, status, current_stage, retry_count, branch,
+  verification_iterations.
+
+  scripts/l5-status mirrors the structure of scripts/l5-run: resolve
+  HARNESS_ROOT from the script location, add orchestration/ to sys.path,
+  walk up from the current directory to the nearest .harness/config.yaml
+  to find the target root, then hand control to run_status.
+
+  Defaults chosen during planning (cheap to revisit in a follow-up
+  story): the detail view tails 10 events; the list view is plain text
+  with no color; runs sort by story id. The command is strictly
+  read-only — it never writes to run directories or anywhere else.
+
+scope:
+  modify:
+    - scripts/          # new l5-status entry point
+    - orchestration/    # new run_status.py module
+    - tests/            # new unit tests
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - workflows/
+    - prompts/
+    - rules/
+    - scripts/l5-init
+    - scripts/l5-plan
+    - scripts/l5-run
+    - scripts/l5-assist
+
+acceptance_criteria:
+  - "scripts/l5-status with no arguments lists every directory under .harness/runs/, showing story id, status, current stage, and retry count per run, sorted by story id."
+  - "scripts/l5-status <story-id> shows that run's full state fields and the last 10 lines of its events.log."
+  - "Unknown story id exits non-zero with an error on stderr; an empty or absent runs directory prints a 'no runs' message and exits 0."
+  - "A run with a missing or unparseable state.json appears in the listing flagged as unreadable, without aborting the listing."
+  - "All logic lives in orchestration/run_status.py; the script only parses arguments and delegates. No existing files are modified."
+  - "New unit tests cover listing, detail view, event tailing, and the error cases using fixture run directories with no model invocations; the full suite passes via .venv/bin/python -m pytest tests/ -q."
+
+verification_requirements:
+  - "Confirm every acceptance criterion against the evidence artifacts (implementation-summary.md, changed-files.json, test-results.json)."
+  - "Confirm the full test suite passes via .venv/bin/python -m pytest tests/ -q, including the new tests."
+  - "Confirm changed-files.json touches only scripts/, orchestration/, and tests/, and modifies no existing files."
+  - "Confirm the new code is read-only with respect to run directories and complies with the coding standards (stdlib only, type hints, fail loudly)."
+
+constraints:
+  - The command is read-only; it never writes to run directories or
+    anywhere else.
+  - No third-party runtime dependencies; Python 3.10+ standard library
+    only, with type hints on public functions.
+  - No model calls anywhere in the new code or its tests.
+  - Do not duplicate state-parsing logic; reuse story_coordinator.load_state.
