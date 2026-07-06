@@ -10,6 +10,12 @@ import json
 from pathlib import Path
 
 
+def _unquote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
 def load_config(target_root: Path) -> dict:
     path = target_root / ".harness" / "config.yaml"
     if not path.is_file():
@@ -23,10 +29,10 @@ def load_config(target_root: Path) -> dict:
         if not line.strip():
             continue
         if line.lstrip().startswith("- ") and current_list:
-            config[current_list].append(line.strip()[2:].strip())
+            config[current_list].append(_unquote(line.strip()[2:].strip()))
         elif ":" in line:
             key, _, value = line.partition(":")
-            key, value = key.strip(), value.strip()
+            key, value = key.strip(), _unquote(value.strip())
             if value:
                 config[key] = value
                 current_list = None
