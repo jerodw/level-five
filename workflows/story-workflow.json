@@ -4,12 +4,14 @@
     {
       "name": "implementer",
       "prompt": "implementer.md",
-      "outputs": ["changed-files.json", "implementation-summary.md"]
+      "outputs": ["changed-files.json", "implementation-summary.md"],
+      "changed_files": "changed-files.json"
     },
     {
       "name": "tester",
       "prompt": "tester.md",
-      "outputs": ["test-results.json"]
+      "outputs": ["test-results.json", "tester-changed-files.json"],
+      "changed_files": "tester-changed-files.json"
     },
     {
       "name": "verifier",

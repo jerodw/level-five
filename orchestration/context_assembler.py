@@ -95,6 +95,7 @@ def build_context(
         "architecture_doc_paths": "\n".join(f"- {p}" for p in doc_paths) or None,
         "run_dir": str(run_dir),
         "changed_files": _read(run_dir / "changed-files.json"),
+        "tester_changed_files": _read(run_dir / "tester-changed-files.json"),
         "implementation_summary": _read(run_dir / "implementation-summary.md"),
         "test_results": _read(run_dir / "test-results.json"),
         "verification_result": _read(run_dir / "verification-result.json"),
