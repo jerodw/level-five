@@ -11,3 +11,14 @@ standards_dir: .harness/standards
 architecture_docs:
   - docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q
+# Bash commands stage agents may run without prompting. Everything else
+# is denied in headless mode, so grant exactly what the stages need.
+allowed_tools:
+  - "Bash(.venv/bin/python:*)"
+  - "Bash(python3:*)"
+  - "Bash(chmod:*)"
+  - "Bash(ls:*)"
+  - "Bash(cat:*)"
+  - "Bash(git status:*)"
+  - "Bash(git diff:*)"
+  - "Bash(git log:*)"

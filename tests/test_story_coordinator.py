@@ -21,7 +21,8 @@ class FakeRunner:
         }
         self.calls: list[str] = []
 
-    def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model):
+    def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
+                 allowed_tools=None):
         self.calls.append(stage)
         if stage == "implementer":
             write_json(self.run_dir / "changed-files.json", self.changed_files)

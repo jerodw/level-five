@@ -27,6 +27,7 @@ def run_agent(
     log_path: Path,
     permission_mode: str = "acceptEdits",
     model: str | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> AgentResult:
     """Run `claude -p` with the rendered prompt on stdin.
 
@@ -45,6 +46,8 @@ def run_agent(
     ]
     if model:
         cmd += ["--model", model]
+    if allowed_tools:
+        cmd += ["--allowedTools", *allowed_tools]
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     result_text = ""

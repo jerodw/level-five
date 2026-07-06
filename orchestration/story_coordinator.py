@@ -193,6 +193,7 @@ def run_story(
             log_path=log_path,
             permission_mode=config.get("permission_mode", "acceptEdits"),
             model=config.get("model"),
+            allowed_tools=config.get("allowed_tools"),
         )
         if not result.ok:
             return _escalate(run_dir, state, f"{name} agent process failed")

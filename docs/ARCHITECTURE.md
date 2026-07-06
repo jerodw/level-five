@@ -31,6 +31,10 @@ One reusable template per agent role: `planner.md`, `implementer.md`, `tester.md
 - `context_assembler.py` — builds each stage's runtime context from the story artifact, prior stage artifacts, retry state, and architecture documents, and renders it into the prompt template.
 - `agent_runner.py` — invokes `claude -p` headlessly (`--permission-mode acceptEdits --output-format stream-json --verbose`, prompt on stdin), streams raw output to the run's log, and returns the agent's final result text.
 
+### Tool allowlist
+
+Headless agents cannot answer permission prompts, so `.harness/config.yaml` carries an `allowed_tools` list of Bash command patterns (for example `Bash(.venv/bin/python:*)`) that the runner passes to every stage invocation via `--allowedTools`. Grant exactly what the stages need: the test command, `chmod`, and read-only git inspection. A command outside the allowlist is denied, and a stage that cannot gather its evidence will fail verification honestly rather than invent it. (story-001's first execution escalated for exactly this reason before the allowlist existed.)
+
 ### Rules (`rules/`)
 
 `execution-rules.json` — `max_retries`, `blocked_paths`, `require_verifier_pass`. The coordinator refuses to advance past verification without a passing `verification-result.json`, stops retrying at the ceiling, and fails a stage that modified a blocked path.
