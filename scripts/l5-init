@@ -30,7 +30,7 @@ def main() -> int:
         print(f"{harness_dir} already initialized.", file=sys.stderr)
         return 1
 
-    for sub in ("standards", "stories", "runs", "logs"):
+    for sub in ("standards", "docs", "stories", "runs", "logs"):
         (harness_dir / sub).mkdir(parents=True, exist_ok=True)
 
     config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")

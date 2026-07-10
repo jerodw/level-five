@@ -20,7 +20,7 @@ Do not:
 - write the story artifact before the developer approves the plan.
 
 [Process]
-1. Read docs/ARCHITECTURE.md and the standards in .harness/standards/.
+1. Read .harness/docs/ARCHITECTURE.md and the standards in .harness/standards/.
 2. Ask the developer any questions required to remove important
    ambiguity. Ask about decisions that are expensive or hard to reverse;
    apply sensible defaults to cheap, reversible ones and say you did.

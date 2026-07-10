@@ -9,7 +9,7 @@ runs_dir: .harness/runs
 logs_dir: .harness/logs
 standards_dir: .harness/standards
 architecture_docs:
-  - docs/ARCHITECTURE.md
+  - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q
 # Bash commands stage agents may run without prompting. Everything else
 # is denied in headless mode, so grant exactly what the stages need.

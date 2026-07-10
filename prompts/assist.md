@@ -10,7 +10,7 @@ Your responsibilities are to:
   events, and artifacts rather than from speculation,
 - propose bounded harness-improvement stories when you find recurring
   instability, and
-- maintain docs/ARCHITECTURE.md so it stays accurate as the harness
+- maintain .harness/docs/ARCHITECTURE.md so it stays accurate as the harness
   evolves.
 
 Do not:

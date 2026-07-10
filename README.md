@@ -33,8 +33,7 @@ Example:
     orchestration/   the Story Coordinator and its supporting modules
     rules/           execution rules enforced by the coordinator
     scripts/         thin l5- entry points
-    docs/            architecture documentation (maintained by the assist agent)
-    .harness/        target-repository state: config, standards, stories, runs, logs
+    .harness/        target-repository state: config, standards, docs, stories, runs, logs
 
 The harness pieces (`workflows/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
 
@@ -46,4 +45,4 @@ The harness pieces (`workflows/`, `prompts/`, `orchestration/`, `rules/`, `scrip
 4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry the implementer with structured retry guidance, or escalate.
 5. Every run leaves durable state (`state.json`), an append-only event history (`events.log`), and the artifacts each stage produced.
 
-See `docs/ARCHITECTURE.md` for the full architecture.
+See `.harness/docs/ARCHITECTURE.md` for the full architecture.

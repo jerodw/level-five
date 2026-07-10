@@ -8,7 +8,7 @@ runs_dir: .harness/runs
 logs_dir: .harness/logs
 standards_dir: .harness/standards
 architecture_docs:
-  - docs/ARCHITECTURE.md
+  - .harness/docs/ARCHITECTURE.md
 test_command: {test_command}
 # Bash commands stage agents may run without prompting. Headless agents
 # cannot answer permission prompts, so grant exactly what the stages need.
