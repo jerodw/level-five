@@ -1,6 +1,6 @@
 # level-five (l5)
 
-A level 3 agentic harness built by following *Agentic Programming* (Chapters 12–17). The harness is a story execution system: stories enter with an approved plan, move through implementation, testing, and verification, retry when verification fails, and end completed, terminated, or escalated.
+A level 3 agentic harness built by following *Agentic Programming* (Chapters 12–17). The harness is a story execution system: stories enter with an approved plan, move through implementation, testing, and verification, retry when verification fails, and end completed or escalated.
 
 This repository is both the harness repository and its own first target repository. Every demo story is a real harness feature, so the harness participates in building itself from the start.
 
