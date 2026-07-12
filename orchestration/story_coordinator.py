@@ -30,6 +30,28 @@ class RunState:
     artifacts: list[str] = field(default_factory=list)
 
 
+# The story artifact's top-level sections the harness consumes. Format
+# compliance is known behavior, so it is enforced here rather than
+# requested in the planner prompt alone.
+REQUIRED_STORY_SECTIONS = (
+    "story",
+    "tasks",
+    "acceptance_criteria",
+    "scope",
+    "verification_requirements",
+    "constraints",
+)
+
+
+def missing_story_sections(story_text: str) -> list[str]:
+    present = {
+        line.split(":", 1)[0]
+        for line in story_text.splitlines()
+        if line and not line.startswith((" ", "\t", "#")) and ":" in line
+    }
+    return [key for key in REQUIRED_STORY_SECTIONS if key not in present]
+
+
 def _state_path(run_dir: Path) -> Path:
     return run_dir / "state.json"
 
@@ -141,6 +163,16 @@ def run_story(
         print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
         return 1
     story_text = story_path.read_text(encoding="utf-8")
+
+    missing_sections = missing_story_sections(story_text)
+    if missing_sections:
+        print(
+            f"{story_path} is missing required top-level section(s): "
+            f"{', '.join(missing_sections)}. Fix the artifact or re-run "
+            f"planning before executing the story.",
+            file=sys.stderr,
+        )
+        return 1
 
     run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
     run_dir.mkdir(parents=True, exist_ok=True)

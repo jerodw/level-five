@@ -164,3 +164,22 @@ def test_completed_story_refuses_rerun(target_root, harness_root):
     runner = FakeRunner(target_root, "story-001", [PASS])
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 0
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 1
+
+
+def test_malformed_story_artifact_refused(target_root, harness_root):
+    story_path = target_root / ".harness" / "stories" / "story-001.yaml"
+    story_text = story_path.read_text()
+    story_path.write_text(story_text.replace("acceptance_criteria:", "criteria:"))
+
+    runner = FakeRunner(target_root, "story-001", [PASS])
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 1
+    assert runner.calls == []
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    assert not (run_dir / "state.json").is_file()
+
+
+def test_missing_story_sections_reports_each_absent_key():
+    text = "story:\n  id: x\ntasks:\n  - t\nscope:\n  modify: []\n"
+    missing = story_coordinator.missing_story_sections(text)
+    assert missing == ["acceptance_criteria", "verification_requirements", "constraints"]
