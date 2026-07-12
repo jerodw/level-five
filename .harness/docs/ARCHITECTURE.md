@@ -1,6 +1,6 @@
 # l5 Harness Architecture
 
-Maintained by the assist and documenter agents. Update this document whenever a story changes the harness's structure or behavior. Future planning agents load this document before generating story plans.
+Maintained by the documenter stage as stories complete. Future planning agents load this document before generating story plans.
 
 ## Purpose
 
