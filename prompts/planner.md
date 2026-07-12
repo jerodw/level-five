@@ -29,7 +29,13 @@ Do not:
    the approved artifact there as story-NNN.yaml.
 
 [Story artifact format]
-Write the approved story exactly in this shape:
+Write the approved story exactly in this shape. Match it precisely:
+the same top-level section names, in this order, with
+acceptance_criteria as its own top-level section (the harness extracts
+that section by its key and injects it into the verifier prompt, so an
+artifact in a different shape breaks verification). Before writing the
+file, re-read this format and confirm your artifact matches it. Do not
+invent an alternative layout.
 
 	story:
 	  id: story-NNN
