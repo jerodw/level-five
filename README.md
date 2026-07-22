@@ -67,6 +67,10 @@ The Story Coordinator is deterministic and fully unit-tested without any model c
 
     .venv/bin/python -m pytest tests/ -q
 
+## Issues and feedback
+
+Found a bug in the harness code? Open a GitHub issue. For anything about the **book's content** — typos, unclear passages, errata — please use the feedback form at [agenticprogrammingbook.com/feedback](https://agenticprogrammingbook.com/feedback) rather than GitHub Issues.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Copyright © 2026 Jerod W. Wilkerson.

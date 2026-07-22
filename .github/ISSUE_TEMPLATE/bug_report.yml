@@ -1,0 +1,31 @@
+name: Harness bug
+description: A bug in the l5 harness code (not the book text)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For problems with the book's content (typos, unclear passages, errata), use the
+        feedback form instead — see the link on the previous screen. This form is for bugs
+        in the l5 harness code.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What went wrong, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran and the story or workflow involved.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: Python version and OS (and Claude Code version if relevant).
+    validations:
+      required: false
