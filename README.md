@@ -1,5 +1,8 @@
 # level-five (l5)
 
+[![tests](https://github.com/jerodw/level-five/actions/workflows/tests.yml/badge.svg)](https://github.com/jerodw/level-five/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A **level 3 agentic harness** built by following *Agentic Programming* by Jerod W. Wilkerson. The harness is a story execution system: stories enter with an approved plan, move through implementation, testing, and verification, retry when verification fails, and end completed or escalated.
 
 > **About the name.** The name is aspirational. What you'll find here is a *level 3* harness, but level five is where the ladder leads, and the repository is built to grow in that direction.
@@ -67,7 +70,9 @@ The Story Coordinator is deterministic and fully unit-tested without any model c
 
     .venv/bin/python -m pytest tests/ -q
 
-## Issues and feedback
+## Contributing and feedback
+
+This repository tracks the book, so it stays close to what Appendix A describes. Small fixes — genuine bugs, or errors in the code and its docs — are welcome via pull request. Larger changes that would take it beyond the book are out of scope here.
 
 Found a bug in the harness code? Open a GitHub issue. For anything about the **book's content** — typos, unclear passages, errata — please use the feedback form at [agenticprogrammingbook.com/feedback](https://agenticprogrammingbook.com/feedback) rather than GitHub Issues.
 
