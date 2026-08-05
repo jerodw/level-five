@@ -31,6 +31,7 @@ def test_real_templates_render_without_leftover_placeholders(target_root, harnes
         story_text=story_text,
         run_dir=run_dir,
         target_root=target_root,
+        harness_root=harness_root,
         config=config,
         rules=rules,
         retry_count=0,
@@ -66,6 +67,7 @@ def test_both_changed_files_records_injected_separately(target_root, harness_roo
         story_text=story_text,
         run_dir=run_dir,
         target_root=target_root,
+        harness_root=harness_root,
         config=config,
         rules=rules,
         retry_count=0,
@@ -86,6 +88,7 @@ def test_tester_changed_files_renders_none_when_absent(target_root, harness_root
         story_text=story_text,
         run_dir=run_dir,
         target_root=target_root,
+        harness_root=harness_root,
         config=config,
         rules=rules,
         retry_count=0,
@@ -95,6 +98,50 @@ def test_tester_changed_files_renders_none_when_absent(target_root, harness_root
         context_assembler.load_template(harness_root, "verifier.md"), context
     )
     assert "{{" not in verifier
+
+
+def test_harness_layer_is_single_source_of_truth(target_root, harness_root, tmp_path):
+    config = harness_config.load_config(target_root)
+    rules = harness_config.load_rules(harness_root)
+    story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Mirror the real prompts into a throwaway harness so we can edit the
+    # shared partial without mutating the repository.
+    stages = ("implementer.md", "tester.md", "documenter.md")
+    fake_root = tmp_path / "harness"
+    prompts = fake_root / "prompts"
+    prompts.mkdir(parents=True)
+    for name in (*stages, "harness-layer.md"):
+        (prompts / name).write_text((harness_root / "prompts" / name).read_text(), encoding="utf-8")
+
+    def render_stages():
+        context = context_assembler.build_context(
+            story_text=story_text, run_dir=run_dir, target_root=target_root,
+            harness_root=fake_root, config=config, rules=rules, retry_count=0,
+        )
+        return {
+            name: context_assembler.render(context_assembler.load_template(fake_root, name), context)
+            for name in stages
+        }
+
+    before = render_stages()
+    for name, text in before.items():
+        assert "- rules/" in text, name            # blocked paths resolved inside the injected block
+        assert "{{harness_layer}}" not in text, name
+        assert "{{blocked_paths}}" not in text, name
+
+    # A single-file edit to the shared partial changes every stage prompt.
+    (prompts / "harness-layer.md").write_text(
+        "[Harness Layer]\nSENTINEL shared rule change\nBlocked paths for every stage:\n{{blocked_paths}}",
+        encoding="utf-8",
+    )
+    after = render_stages()
+    for name in stages:
+        assert "SENTINEL shared rule change" in after[name], name
+        assert after[name] != before[name], name
+        assert "- rules/" in after[name], name     # blocked paths still resolve after the edit
 
 
 def test_latest_verifier_finding_reads_newest_iteration(tmp_path: Path):
