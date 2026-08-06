@@ -9,6 +9,7 @@ report and commit subject end up saying.
 """
 import inspect
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -226,6 +227,21 @@ def test_a_run_calls_read_story_exactly_once(target_root, harness_root, monkeypa
     complete_run(target_root, harness_root)
     assert len(calls) == 1
     assert calls[0] == AWKWARD_STORY
+
+
+def test_the_read_is_written_above_the_run_directory_and_the_checkout():
+    """The ordering held textually, so a later edit cannot quietly invert it.
+
+    The runtime test below proves nothing exists *when* the read happens. This
+    one pins where the call sits in the source, so moving it below the
+    run-directory creation or the branch checkout fails here rather than only
+    in a run that happens to be rejected.
+    """
+    source = Path(story_coordinator.__file__).read_text(encoding="utf-8")
+    call = source.index("reading = read_story(")
+    assert call < source.index("run_dir.mkdir(")
+    # The checkout *call* in run_story, not the helper's definition above it.
+    assert call < source.rindex("_checkout_story_branch(target_root")
 
 
 def test_the_one_read_happens_before_any_run_state_or_branch_exists(
@@ -487,13 +503,27 @@ def test_extract_section_is_gone_from_context_assembler():
 
 
 def test_no_module_in_orchestration_scans_story_text_by_line(harness_root):
+    """Look for the scanning *patterns*, not for the words being scanned for.
+
+    A bare `"title:" not in source` would also fail on a docstring that
+    mentions the field, which is prose about the design rather than a second
+    reader of it. What makes a line-prefix scan is splitting story text into
+    lines and testing those lines against a key prefix.
+    """
+    scans = (
+        "story_text.splitlines",
+        'startswith("title:")',
+        "startswith('title:')",
+        'startswith("acceptance_criteria:")',
+        "startswith('acceptance_criteria:')",
+        'startswith(f"{key}:")',
+    )
     for path in sorted((harness_root / "orchestration").glob("*.py")):
         if path.name == "story_parser.py":      # the one reader
             continue
         source = path.read_text(encoding="utf-8")
-        assert "story_text.splitlines" not in source, path.name
-        assert "title:" not in source, path.name
-        assert "acceptance_criteria:" not in source, path.name
+        for scan in scans:
+            assert scan not in source, (path.name, scan)
 
 
 def test_story_parser_parse_is_the_only_entry_point_into_a_story(harness_root):
@@ -523,9 +553,10 @@ def test_the_single_mechanism_test_was_retargeted_not_removed(harness_root):
 
 
 def test_no_conforming_yaml_library_reads_a_story(harness_root):
+    """An *import* of a YAML library, not the word appearing in prose."""
     for path in sorted((harness_root / "orchestration").glob("*.py")):
         if path.name == "story_parser.py":      # its docstring names what it bans
             continue
         source = path.read_text(encoding="utf-8")
-        assert "import yaml" not in source, path.name
-        assert "safe_load" not in source, path.name
+        assert not re.search(r"^\s*(import|from) (yaml|ruamel)", source, re.M), path.name
+        assert "yaml.safe_load(" not in source, path.name
