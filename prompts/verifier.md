@@ -29,25 +29,16 @@ rather than inventing a failure.
 
 When you finish, write these files to the run directory at {{run_dir}}:
 
-verification-result.json:
-{
-  "status": "passed" | "failed",
-  "blocking_issues": [
-    { "severity": "high" | "medium" | "low",
-      "issue": "<what failed>",
-      "location": "<file or area>",
-      "required_behavior": "<what must be true>" }
-  ],
-  "unverified": ["<what could not be verified and why>"],
-  "retry_recommended": true | false
-}
+verification-result.json, your verdict and the evidence behind it. The
+coordinator routes the workflow on this file, so it must satisfy this
+schema:
 
-retry-guidance.json (only when status is "failed" and a retry is recommended):
-{
-  "current_focus": ["<the specific things the retry must fix>"],
-  "preserve_behavior": ["<accepted behavior that must not change>"],
-  "retry_scope": ["<files or areas the retry may modify>"]
-}
+{{verification_result_schema}}
+
+retry-guidance.json, written only when status is "failed" and a retry is
+recommended. It must satisfy this schema:
+
+{{retry_guidance_schema}}
 
 [Workflow Layer]
 This workflow prioritizes:

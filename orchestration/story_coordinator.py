@@ -17,6 +17,7 @@ from pathlib import Path
 import agent_runner
 import context_assembler
 import harness_config
+import schema_validator
 
 
 @dataclass
@@ -30,26 +31,27 @@ class RunState:
     artifacts: list[str] = field(default_factory=list)
 
 
-# The story artifact's top-level sections the harness consumes. Format
-# compliance is known behavior, so it is enforced here rather than
-# requested in the planner prompt alone.
-REQUIRED_STORY_SECTIONS = (
-    "story",
-    "tasks",
-    "acceptance_criteria",
-    "scope",
-    "verification_requirements",
-    "constraints",
-)
+def load_required_story_sections(harness_root: Path | None = None) -> tuple[str, ...]:
+    """The story artifact's top-level sections the harness consumes.
+
+    Read from schemas/story.schema.json so the shape the planner is asked to
+    produce and the shape enforced here are the same file.
+    """
+    return tuple(schema_validator.load_schema("story", harness_root)["required"])
 
 
-def missing_story_sections(story_text: str) -> list[str]:
+REQUIRED_STORY_SECTIONS = load_required_story_sections()
+
+
+def missing_story_sections(
+    story_text: str, required: tuple[str, ...] = REQUIRED_STORY_SECTIONS
+) -> list[str]:
     present = {
         line.split(":", 1)[0]
         for line in story_text.splitlines()
         if line and not line.startswith((" ", "\t", "#")) and ":" in line
     }
-    return [key for key in REQUIRED_STORY_SECTIONS if key not in present]
+    return [key for key in required if key not in present]
 
 
 def _state_path(run_dir: Path) -> Path:
@@ -99,6 +101,33 @@ def _blocked_violation(run_dir: Path, record_name: str, blocked: list[str]) -> s
             for prefix in blocked:
                 if path.startswith(prefix):
                     return path
+    return None
+
+
+def _schema_violation(run_dir: Path, stage: dict) -> str | None:
+    """Check the stage's declared artifacts against their schemas.
+
+    The artifact-to-schema mapping lives in the workflow definition, so no
+    artifact or schema name is named here. An artifact the stage did not
+    write is skipped: whether it is required is the outputs list's job, and
+    a conditional artifact like retry-guidance.json is legitimately absent.
+    """
+    for artifact, schema_name in sorted(stage.get("schemas", {}).items()):
+        path = run_dir / artifact
+        if not path.is_file():
+            continue
+        try:
+            instance = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            return f"{artifact} is not parseable as JSON: {error}"
+        errors = schema_validator.validate(
+            instance, schema_validator.load_schema(schema_name)
+        )
+        if errors:
+            return (
+                f"{artifact} does not match the {schema_name} schema: "
+                + "; ".join(errors)
+            )
     return None
 
 
@@ -234,6 +263,10 @@ def run_story(
         missing = [out for out in stage.get("outputs", []) if not (run_dir / out).is_file()]
         if missing:
             return _escalate(run_dir, state, f"{name} did not produce required artifacts: {', '.join(missing)}")
+
+        violation = _schema_violation(run_dir, stage)
+        if violation:
+            return _escalate(run_dir, state, f"{name} wrote an invalid artifact: {violation}")
 
         record_name = stage.get("changed_files")
         if record_name:

@@ -1,0 +1,168 @@
+story:
+  id: story-004
+  title: Machine-readable schemas for structured artifacts
+  description: |
+    Every structured artifact the harness routes on is currently defined
+    twice: once as inline JSON example text inside a prompt template, and
+    once implicitly in the coordinator code that reads it. Nothing checks
+    that a stage's output actually matches the shape the next stage
+    expects, so a malformed field surfaces as a confusing downstream
+    failure rather than a clear one.
+
+    This story introduces schemas/ as the single source of truth for those
+    shapes: one JSON Schema per structured artifact (changed-files,
+    test-results, verification-result, retry-guidance, story). Prompts stop
+    carrying inline copies and receive the schema by injection, so the
+    definition an agent is asked to satisfy and the definition the
+    coordinator enforces are the same file. The coordinator validates each
+    stage's JSON output against its declared schema and escalates on
+    mismatch.
+
+    Two deliberate design decisions:
+
+    A schema mismatch escalates immediately rather than triggering a
+    bounded regeneration. This keeps the coordinator's routing loop to a
+    single new branch with no second retry axis and no new RunState field,
+    and it matches the repository's published "fail loudly" coding
+    standard. The cost of that strictness is bought down by requiring the
+    escalation to name the artifact, the failing path, what was expected,
+    and what was found, so recovery is obvious. Whether bounded
+    regeneration is worth adding is a question this story generates data
+    for rather than answers.
+
+    Validation allows additional properties. The failure mode that matters
+    is a missing or mistyped field the coordinator routes on, and that is
+    caught by marking every consumed field required; an agent emitting an
+    extra harmless key should not end a run when a mismatch is fatal.
+
+    story.schema.json is authored with the full story shape even though
+    this story consumes only its top-level `required` list. That structure
+    is the input to the schema-directed story parser planned as the
+    following story, where the schema resolves an ambiguity YAML cannot:
+    whether `- some criterion: with a colon` is a string or a mapping.
+    Full story-artifact validation is explicitly out of scope here.
+
+tasks:
+  - Create schemas/ at the harness root with changed-files.schema.json, test-results.schema.json, verification-result.schema.json, retry-guidance.schema.json, and story.schema.json.
+  - Add orchestration/schema_validator.py providing schema loading and a validate() function that returns a list of human-readable error strings.
+  - Declare an artifact-to-schema mapping per stage in workflows/story-workflow.json.
+  - Validate each stage's declared artifacts in story_coordinator.py after the required-artifacts check and before the blocked-paths check, escalating on mismatch or unparseable JSON.
+  - Derive REQUIRED_STORY_SECTIONS from story.schema.json instead of the hard-coded tuple.
+  - Load all schemas in context_assembler.build_context and expose each as a {{<stem>_schema}} placeholder.
+  - Replace the inline JSON artifact bodies in implementer.md, tester.md, and verifier.md with the corresponding schema placeholders.
+  - Add tests/test_schema_validator.py and extend the existing coordinator, context-assembler, and story-validation tests.
+
+acceptance_criteria:
+  - schemas/ exists at the harness root and contains exactly changed-files.schema.json, test-results.schema.json, verification-result.schema.json, retry-guidance.schema.json, and story.schema.json.
+  - Each schema is valid JSON, declares $schema as the draft 2020-12 URI, and uses only keywords the validator supports.
+  - Every field the coordinator routes on or a prompt consumes is listed in its schema's required array; specifically verification-result requires status and retry_recommended, test-results requires status, and changed-files requires modified, created, and deleted.
+  - No schema sets additionalProperties to false; an artifact carrying an extra key not named in its schema validates successfully.
+  - orchestration/schema_validator.py supports type, required, properties, items, and enum, and raises rather than silently ignoring a schema keyword it does not support.
+  - A validation error string names the failing JSON path, what the schema expected, and what was found. For example a verification-result missing retry_recommended produces an error containing "$.retry_recommended", and a blocking_issues entry with severity "critical" produces an error containing "$.blocking_issues[0].severity".
+  - workflows/story-workflow.json declares a schemas map on the implementer, tester, and verifier stages mapping artifact filename to schema name; the implementer maps changed-files.json and the tester maps tester-changed-files.json to the same changed-files schema.
+  - The coordinator validates every artifact named in a stage's schemas map that exists in the run directory; retry-guidance.json is validated when present and its absence is not an error.
+  - Schema validation runs after the required-artifacts check and before the blocked-paths check, so a malformed changed-files.json escalates with a validation error rather than raising out of the blocked-paths check.
+  - A stage that writes an artifact violating its schema causes the run to escalate immediately, with no retry and no change to retry_count.
+  - The escalation reason recorded in events.log and the reason written into escalation-summary.md both name the offending artifact and include the validation error detail (failing path, expected, found).
+  - An artifact that is not parseable as JSON escalates with a message identifying the artifact and the decode error, not an uncaught exception or traceback.
+  - REQUIRED_STORY_SECTIONS is derived from the required array in schemas/story.schema.json rather than a hard-coded tuple, and the set of sections enforced is unchanged from before this story (story, tasks, acceptance_criteria, scope, verification_requirements, constraints).
+  - story.schema.json declares technical_plan as a known optional property and describes the full story shape including nested story fields and typed arrays.
+  - context_assembler.build_context loads every schemas/*.schema.json file and exposes it under the placeholder name formed from the file stem with hyphens replaced by underscores plus "_schema" (for example verification_result_schema).
+  - prompts/implementer.md contains {{changed_files_schema}} and no inline changed-files JSON body; prompts/tester.md contains {{test_results_schema}} and {{changed_files_schema}} and no inline JSON bodies; prompts/verifier.md contains {{verification_result_schema}} and {{retry_guidance_schema}} and no inline JSON bodies.
+  - A rendered implementer, tester, and verifier prompt contains the actual schema text with no leftover placeholder markers, and the existing test_real_templates_render_without_leftover_placeholders guard still passes.
+  - prompts/planner.md, prompts/assist.md, prompts/documenter.md, and prompts/harness-layer.md are unchanged.
+  - Tests use inline fixtures rather than reading .harness/runs/, which is gitignored and absent in CI.
+  - The full test suite passes via .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Create schemas/ and author the five schema files, taking the field sets from the JSON bodies currently inline in prompts/implementer.md, prompts/tester.md, and prompts/verifier.md so the shapes are preserved exactly.
+    - Write orchestration/schema_validator.py with load_schema(harness_root, name) reading schemas/<name>.schema.json, and validate(instance, schema) walking the instance against the schema and returning a list of error strings. Track a JSON path while walking so errors read as "$.blocking_issues[0].severity". Raise on an unrecognized schema keyword. Do not enforce additionalProperties.
+    - Add a "schemas" object to the implementer, tester, and verifier stages in workflows/story-workflow.json mapping artifact filename to schema name.
+    - In story_coordinator.run_story, after the missing-outputs check and before the changed_files blocked-paths check, iterate the stage's schemas map; skip artifacts that do not exist; read and json.loads each, catching JSONDecodeError and escalating with the artifact name and decode error; validate the parsed value and escalate with the joined error detail on any failure.
+    - Replace the REQUIRED_STORY_SECTIONS module constant with a value read from schemas/story.schema.json's required array, and pass the required sections into missing_story_sections from run_story, which already has harness_root.
+    - In context_assembler.build_context, glob harness_root/schemas/*.schema.json, and for each set context[stem.replace("-", "_") + "_schema"] to the file text. Do this before the harness-layer two-pass render so the values are available to any template.
+    - Edit prompts/implementer.md, prompts/tester.md, and prompts/verifier.md, replacing each inline JSON body with its placeholder while keeping the surrounding sentence that names the file and says what it is for.
+    - Add tests/test_schema_validator.py covering each supported keyword, nested path formatting in error strings, the unsupported-keyword raise, extra-key tolerance, and a check that every shipped schema parses and uses only supported keywords.
+    - Extend tests/test_story_coordinator.py with a fake runner writing a schema-invalid artifact (asserting escalation, unchanged retry_count, and that the reason names the artifact and path), a malformed-JSON case, and a case confirming absent retry-guidance.json is not an error.
+    - Extend tests/test_context_assembler.py to assert schema placeholders resolve in rendered implementer, tester, and verifier prompts, and update the story-section tests for the schema-derived required list.
+  likely_file_changes:
+    - file: schemas/changed-files.schema.json
+      reason: Shared shape for the implementer's and tester's changed-files records.
+    - file: schemas/test-results.schema.json
+      reason: Shape of the tester's structured result.
+    - file: schemas/verification-result.schema.json
+      reason: Shape of the artifact the coordinator routes the workflow on.
+    - file: schemas/retry-guidance.schema.json
+      reason: Shape of the verifier's conditional retry guidance.
+    - file: schemas/story.schema.json
+      reason: Source of truth for the story shape; drives the pre-flight section check now and the schema-directed parser next story.
+    - file: orchestration/schema_validator.py
+      reason: New module holding schema loading and validation.
+    - file: orchestration/story_coordinator.py
+      reason: Validate stage artifacts, escalate on mismatch, derive required story sections from the schema.
+    - file: orchestration/context_assembler.py
+      reason: Load schemas and expose them as injectable placeholders.
+    - file: workflows/story-workflow.json
+      reason: Declare which schema validates which artifact per stage.
+    - file: prompts/implementer.md
+      reason: Replace the inline changed-files body with a schema placeholder.
+    - file: prompts/tester.md
+      reason: Replace the inline test-results and changed-files bodies with schema placeholders.
+    - file: prompts/verifier.md
+      reason: Replace the inline verification-result and retry-guidance bodies with schema placeholders.
+    - file: tests/test_schema_validator.py
+      reason: New unit tests for the validator and the shipped schemas.
+    - file: tests/test_story_coordinator.py
+      reason: Cover escalation on schema mismatch, malformed JSON, and schema-derived story sections.
+    - file: tests/test_context_assembler.py
+      reason: Cover schema loading and placeholder resolution in rendered prompts.
+
+scope:
+  modify:
+    - schemas/
+    - orchestration/schema_validator.py
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - tests/test_schema_validator.py
+    - tests/test_story_coordinator.py
+    - tests/test_context_assembler.py
+  do_not_modify:
+    - rules/execution-rules.json
+    - prompts/planner.md
+    - prompts/assist.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - scripts/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm schemas/ holds exactly the five named schemas, that each is valid JSON using only validator-supported keywords, and that none sets additionalProperties to false.
+  - Confirm the validator rejects a missing required field, a wrong type, and an out-of-enum value, and accepts an object carrying an extra unlisted key.
+  - Confirm a validation error string contains the JSON path, the expectation, and the found value, including array-index paths such as $.blocking_issues[0].severity.
+  - Confirm the validator raises on a schema keyword it does not support rather than ignoring it.
+  - Confirm the coordinator escalates immediately on a schema mismatch without incrementing retry_count, and that the recorded reason and escalation-summary.md both name the artifact and carry the error detail.
+  - Confirm an unparseable JSON artifact escalates with a clear message rather than an uncaught exception, and that this happens before the blocked-paths check reads the same file.
+  - Confirm retry-guidance.json being absent is not treated as a validation failure.
+  - Confirm the set of enforced top-level story sections is unchanged and is now read from schemas/story.schema.json.
+  - Confirm implementer.md, tester.md, and verifier.md carry schema placeholders instead of inline JSON bodies, and that rendered prompts contain the resolved schema text with no leftover placeholders.
+  - Confirm planner.md, assist.md, documenter.md, and harness-layer.md are byte-identical to before this story.
+  - Confirm no test reads from .harness/runs/.
+  - Confirm the full test suite passes via .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - The artifact shapes defined in schemas/ must match the JSON bodies currently inline in the prompts; this story relocates and enforces those shapes, it does not redesign them.
+  - changed-files.json and tester-changed-files.json must continue to share one schema definition rather than acquiring divergent copies.
+  - Schema-to-artifact mapping stays in the workflow definition; no artifact or schema name is hard-coded in the coordinator.
+  - The coordinator stays deterministic; validation is a rule applied to a recorded fact, with no model call.
+  - Existing routing behavior is unchanged for artifacts that validate; schema validation adds an escalation path and alters nothing else.
+  - No new key is added to rules/execution-rules.json, which is a blocked path.
+  - Python standard library only; no third-party validation dependency.
+  - Full story-artifact validation and any YAML parser are out of scope and belong to the following story.

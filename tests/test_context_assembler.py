@@ -144,6 +144,69 @@ def test_harness_layer_is_single_source_of_truth(target_root, harness_root, tmp_
         assert "- rules/" in after[name], name     # blocked paths still resolve after the edit
 
 
+def _context(target_root, harness_root):
+    config = harness_config.load_config(target_root)
+    rules = harness_config.load_rules(harness_root)
+    story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return context_assembler.build_context(
+        story_text=story_text,
+        run_dir=run_dir,
+        target_root=target_root,
+        harness_root=harness_root,
+        config=config,
+        rules=rules,
+        retry_count=0,
+    )
+
+
+def test_every_schema_is_exposed_under_its_placeholder_name(target_root, harness_root):
+    context = _context(target_root, harness_root)
+    for path in sorted((harness_root / "schemas").glob("*.schema.json")):
+        stem = path.name[: -len(".schema.json")]
+        key = stem.replace("-", "_") + "_schema"
+        assert context[key] == path.read_text(), key
+        assert json.loads(context[key])["title"] == stem
+    assert "verification_result_schema" in context
+
+
+def test_prompts_carry_schema_placeholders_not_inline_json(harness_root):
+    implementer = (harness_root / "prompts" / "implementer.md").read_text()
+    tester = (harness_root / "prompts" / "tester.md").read_text()
+    verifier = (harness_root / "prompts" / "verifier.md").read_text()
+
+    assert "{{changed_files_schema}}" in implementer
+    assert "{{test_results_schema}}" in tester
+    assert "{{changed_files_schema}}" in tester
+    assert "{{verification_result_schema}}" in verifier
+    assert "{{retry_guidance_schema}}" in verifier
+
+    # No inline JSON artifact body survives in any of the three.
+    for name, text in (("implementer", implementer), ("tester", tester),
+                       ("verifier", verifier)):
+        assert '["<path>", "..."]' not in text, name
+        assert '"passed" | "failed"' not in text, name
+        assert "<int>" not in text, name
+
+
+def test_rendered_prompts_contain_the_resolved_schema_text(target_root, harness_root):
+    context = _context(target_root, harness_root)
+    expected = {
+        "implementer.md": ["changed-files"],
+        "tester.md": ["test-results", "changed-files"],
+        "verifier.md": ["verification-result", "retry-guidance"],
+    }
+    for prompt_file, schema_names in expected.items():
+        rendered = context_assembler.render(
+            context_assembler.load_template(harness_root, prompt_file), context
+        )
+        assert "{{" not in rendered, prompt_file
+        for schema_name in schema_names:
+            body = (harness_root / "schemas" / f"{schema_name}.schema.json").read_text()
+            assert body in rendered, (prompt_file, schema_name)
+
+
 def test_latest_verifier_finding_reads_newest_iteration(tmp_path: Path):
     run_dir = tmp_path
     (run_dir / "verification").mkdir()

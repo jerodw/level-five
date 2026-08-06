@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "story",
+  "description": "An approved story artifact. The coordinator's pre-flight check enforces the top-level required list; the full shape here is the source of truth for the schema-directed story parser.",
+  "type": "object",
+  "required": [
+    "story",
+    "tasks",
+    "acceptance_criteria",
+    "scope",
+    "verification_requirements",
+    "constraints"
+  ],
+  "properties": {
+    "story": {
+      "type": "object",
+      "description": "Identity and intent of the story.",
+      "required": ["id", "title", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Sequential identifier of the form story-NNN."
+        },
+        "title": {
+          "type": "string",
+          "description": "One-line summary of the story."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the story changes and why."
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "description": "The discrete units of work the story comprises.",
+      "items": { "type": "string" }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "description": "Observable conditions the verifier evaluates against.",
+      "items": { "type": "string" }
+    },
+    "technical_plan": {
+      "type": "object",
+      "description": "Optional planner-produced implementation guidance.",
+      "properties": {
+        "implementation_steps": {
+          "type": "array",
+          "description": "Ordered steps the implementer is expected to follow.",
+          "items": { "type": "string" }
+        },
+        "likely_file_changes": {
+          "type": "array",
+          "description": "Files the plan expects to touch, with the reason for each.",
+          "items": {
+            "type": "object",
+            "required": ["file", "reason"],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Repository-relative path."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Why this file is expected to change."
+              }
+            }
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "description": "The boundary the implementer must stay inside.",
+      "required": ["modify", "do_not_modify"],
+      "properties": {
+        "modify": {
+          "type": "array",
+          "description": "Paths the story is authorized to change.",
+          "items": { "type": "string" }
+        },
+        "do_not_modify": {
+          "type": "array",
+          "description": "Paths the story must leave alone.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "verification_requirements": {
+      "type": "array",
+      "description": "What the verifier must confirm before the story can pass.",
+      "items": { "type": "string" }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Standing limits on how the story may be implemented.",
+      "items": { "type": "string" }
+    }
+  }
+}

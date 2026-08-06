@@ -20,25 +20,16 @@ New tests belong in tests/ and become permanent repository assets.
 
 When you finish, write these files to the run directory at {{run_dir}}:
 
-test-results.json:
-{
-  "status": "passed" | "failed",
-  "tests_written": <int>,
-  "tests_run": <int>,
-  "tests_passed": <int>,
-  "tests_failed": <int>,
-  "failures": [
-    { "test": "<name>", "issue": "<what the failure shows>" }
-  ]
-}
+test-results.json, the structured outcome of the validation you ran. It
+must satisfy this schema:
+
+{{test_results_schema}}
 
 tester-changed-files.json (same schema as changed-files.json), listing
-exactly the test files you create or modify:
-{
-  "modified": ["<path>", "..."],
-  "created": ["<path>", "..."],
-  "deleted": ["<path>", "..."]
-}
+exactly the test files you create or modify under "modified", "created",
+and "deleted". It must satisfy this schema:
+
+{{changed_files_schema}}
 
 [Workflow Layer]
 This workflow prioritizes:
