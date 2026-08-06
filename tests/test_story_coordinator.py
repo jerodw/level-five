@@ -1,7 +1,8 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
-import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
 
@@ -167,37 +168,106 @@ def test_completed_story_refuses_rerun(target_root, harness_root):
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 1
 
 
-def test_malformed_story_artifact_refused(target_root, harness_root):
-    story_path = target_root / ".harness" / "stories" / "story-001.yaml"
-    story_text = story_path.read_text()
-    story_path.write_text(story_text.replace("acceptance_criteria:", "criteria:"))
+def branches(target_root: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "-C", str(target_root), "branch", "--format=%(refname:short)"],
+        capture_output=True, text=True, check=True,
+    )
+    return result.stdout.split()
 
+
+def rewrite_story(target_root: Path, old: str, new: str) -> Path:
+    story_path = target_root / ".harness" / "stories" / "story-001.yaml"
+    story_path.write_text(story_path.read_text().replace(old, new))
+    return story_path
+
+
+def assert_rejected_leaving_no_trace(target_root, harness_root, capsys=None):
+    """A pre-flight rejection is exit 1 with no agent and no partial state."""
+    before = branches(target_root)
     runner = FakeRunner(target_root, "story-001", [PASS])
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 1
     assert runner.calls == []
     run_dir = target_root / ".harness" / "runs" / "story-001"
+    assert not run_dir.exists()
     assert not (run_dir / "state.json").is_file()
+    assert branches(target_root) == before
+    assert "story/story-001" not in branches(target_root)
 
 
-def test_missing_story_sections_reports_each_absent_key():
-    text = "story:\n  id: x\ntasks:\n  - t\nscope:\n  modify: []\n"
-    missing = story_coordinator.missing_story_sections(text)
-    assert missing == ["acceptance_criteria", "verification_requirements", "constraints"]
+def test_malformed_story_artifact_refused(target_root, harness_root, capsys):
+    rewrite_story(target_root, "acceptance_criteria:", "criteria:")
+    assert_rejected_leaving_no_trace(target_root, harness_root)
+    assert "acceptance_criteria" in capsys.readouterr().err
 
 
-def test_required_story_sections_come_from_the_schema():
-    assert story_coordinator.REQUIRED_STORY_SECTIONS == (
-        "story",
-        "tasks",
-        "acceptance_criteria",
-        "scope",
-        "verification_requirements",
-        "constraints",
+def test_a_missing_top_level_section_is_named_in_the_message(target_root, harness_root,
+                                                             capsys):
+    rewrite_story(target_root, "constraints:", "limits:")
+    assert_rejected_leaving_no_trace(target_root, harness_root)
+    err = capsys.readouterr().err
+    assert "constraints" in err
+    assert "missing" in err
+
+
+def test_a_wrong_nested_structure_is_rejected_during_pre_flight(target_root,
+                                                                harness_root, capsys):
+    """Before this story a scope without do_not_modify passed pre-flight."""
+    rewrite_story(target_root, "  do_not_modify:\n    - rules/\n", "")
+    assert_rejected_leaving_no_trace(target_root, harness_root)
+    assert "$.scope.do_not_modify" in capsys.readouterr().err
+
+
+def test_an_unparseable_story_is_rejected_with_a_line_number(target_root, harness_root,
+                                                             capsys):
+    rewrite_story(target_root, "  - do the sample work", "\t- do the sample work")
+    assert_rejected_leaving_no_trace(target_root, harness_root)
+    err = capsys.readouterr().err
+    assert "line 8" in err                      # the tabbed tasks entry
+    assert "tab" in err
+
+
+def test_story_problems_are_empty_for_a_valid_story(target_root):
+    story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    assert story_coordinator.story_problems(story_text) == []
+
+
+def test_pre_flight_reads_the_schema_file_rather_than_a_constant(tmp_path):
+    """Editing the schema changes what pre-flight enforces."""
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    write_json(schemas / "story.schema.json",
+               {"type": "object", "required": ["story", "sentinel_section"],
+                "properties": {"story": {"type": "object"}}})
+    problems = story_coordinator.story_problems("story:\n  id: x\n", tmp_path)
+    assert problems == ["$.sentinel_section: expected a required property, found it missing"]
+
+
+def test_l5_run_exits_1_on_a_rejected_story_without_invoking_an_agent(target_root):
+    """End to end through the entry point: no agent can run, because the
+    refusal happens before the coordinator reaches agent invocation."""
+    harness_root = Path(story_coordinator.__file__).resolve().parents[1]
+    rewrite_story(target_root, "verification_requirements:", "checks:")
+    result = subprocess.run(
+        [sys.executable, str(harness_root / "scripts" / "l5-run"), "story-001"],
+        cwd=target_root, capture_output=True, text=True,
     )
-    assert story_coordinator.REQUIRED_STORY_SECTIONS == tuple(
-        schema_validator.load_schema("story")["required"]
-    )
+    assert result.returncode == 1
+    assert "verification_requirements" in result.stderr
+    assert not (target_root / ".harness" / "runs" / "story-001").exists()
+    assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
+    assert "story/story-001" not in branches(target_root)
+
+
+def test_exactly_one_mechanism_validates_a_story_artifact():
+    """The line-prefix helpers are gone; nothing checks a story a second way."""
+    source = Path(story_coordinator.__file__).read_text()
+    for obsolete in ("missing_story_sections", "load_required_story_sections",
+                     "REQUIRED_STORY_SECTIONS"):
+        assert obsolete not in source, obsolete
+        assert not hasattr(story_coordinator, obsolete), obsolete
+    assert source.count("story_problems(") == 2   # the definition and its one call
 
 
 class InvalidArtifactRunner(FakeRunner):

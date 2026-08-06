@@ -18,6 +18,7 @@ import agent_runner
 import context_assembler
 import harness_config
 import schema_validator
+import story_parser
 
 
 @dataclass
@@ -31,27 +32,21 @@ class RunState:
     artifacts: list[str] = field(default_factory=list)
 
 
-def load_required_story_sections(harness_root: Path | None = None) -> tuple[str, ...]:
-    """The story artifact's top-level sections the harness consumes.
+def story_problems(story_text: str, harness_root: Path | None = None) -> list[str]:
+    """Everything wrong with a story artifact, read structurally.
 
-    Read from schemas/story.schema.json so the shape the planner is asked to
-    produce and the shape enforced here are the same file.
+    The story is parsed with schemas/story.schema.json steering the parse,
+    then the parsed structure is validated against that same schema, so the
+    shape the planner is asked to produce and the shape enforced here are one
+    file. A parse failure is a single line-numbered message; a structural
+    failure is one message per offending path.
     """
-    return tuple(schema_validator.load_schema("story", harness_root)["required"])
-
-
-REQUIRED_STORY_SECTIONS = load_required_story_sections()
-
-
-def missing_story_sections(
-    story_text: str, required: tuple[str, ...] = REQUIRED_STORY_SECTIONS
-) -> list[str]:
-    present = {
-        line.split(":", 1)[0]
-        for line in story_text.splitlines()
-        if line and not line.startswith((" ", "\t", "#")) and ":" in line
-    }
-    return [key for key in required if key not in present]
+    schema = schema_validator.load_schema("story", harness_root)
+    try:
+        parsed = story_parser.parse(story_text, schema)
+    except story_parser.StoryParseError as error:
+        return [str(error)]
+    return schema_validator.validate(parsed, schema)
 
 
 def _state_path(run_dir: Path) -> Path:
@@ -193,12 +188,17 @@ def run_story(
         return 1
     story_text = story_path.read_text(encoding="utf-8")
 
-    missing_sections = missing_story_sections(story_text)
-    if missing_sections:
+    # Pre-flight: refuse a bad story before any run state exists, so a
+    # rejection leaves no run directory, no state.json, and no new branch.
+    # The schema ships with the harness code, so it is resolved by
+    # schema_validator relative to its own module, not from harness_root.
+    problems = story_problems(story_text)
+    if problems:
+        print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
         print(
-            f"{story_path} is missing required top-level section(s): "
-            f"{', '.join(missing_sections)}. Fix the artifact or re-run "
-            f"planning before executing the story.",
+            "Fix the artifact or re-run planning before executing the story.",
             file=sys.stderr,
         )
         return 1
