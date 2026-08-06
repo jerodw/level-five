@@ -209,6 +209,7 @@ def run_story(
             story_text=story_text,
             run_dir=run_dir,
             target_root=target_root,
+            harness_root=harness_root,
             config=config,
             rules=rules,
             retry_count=state.retry_count,

@@ -68,6 +68,7 @@ def build_context(
     story_text: str,
     run_dir: Path,
     target_root: Path,
+    harness_root: Path,
     config: dict,
     rules: dict,
     retry_count: int,
@@ -85,7 +86,7 @@ def build_context(
             indent=2,
         )
 
-    return {
+    context: dict[str, str | None] = {
         "story": story_text,
         "acceptance_criteria": extract_section(story_text, "acceptance_criteria"),
         "blocked_paths": "\n".join(f"- {p}" for p in rules.get("blocked_paths", [])),
@@ -104,3 +105,14 @@ def build_context(
         "retry_state": retry_state,
         "testing_standards": _read(standards_dir / "testing.md"),
     }
+
+    # Two-pass render: resolve the shared harness-layer partial (including its
+    # own {{blocked_paths}} placeholder) against the assembled context before
+    # injecting it, because render() is single-pass and does not re-scan
+    # substituted text. Absent partial leaves harness_layer unset -> None.
+    harness_layer_path = harness_root / "prompts" / "harness-layer.md"
+    if harness_layer_path.is_file():
+        partial = load_template(harness_root, "harness-layer.md")
+        context["harness_layer"] = render(partial, context)
+
+    return context

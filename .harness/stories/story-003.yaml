@@ -1,0 +1,93 @@
+story:
+  id: story-003
+  title: Extract shared Harness Layer into one injected file
+  description: |
+    The [Harness Layer] block (stay in scope, produce required artifacts,
+    avoid blocked paths, ending in "Blocked paths for every stage:
+    {{blocked_paths}}") is duplicated verbatim across implementer.md,
+    tester.md, and documenter.md. Extract it into a single shared file,
+    prompts/harness-layer.md, and inject it into a new {{harness_layer}}
+    placeholder in those three stage templates so a shared-rule change is a
+    one-file edit.
+
+    The verifier's harness layer is a distinct evidence-discipline block,
+    not a duplicate, so it is intentionally left as-is. planner.md and
+    assist.md have no harness layer and are not workflow stages; they are
+    untouched.
+
+    One mechanical constraint drives the design: context_assembler.render
+    is single-pass (re.sub does not re-scan substituted text), so the
+    shared file's own {{blocked_paths}} placeholder must be resolved before
+    the file's content is injected into {{harness_layer}}. The coordinator
+    therefore renders the shared partial against the assembled context
+    first, then injects the already-resolved text.
+
+tasks:
+  - Create prompts/harness-layer.md containing the shared harness-layer block, matching the current wording exactly, including the "Blocked paths for every stage:\n{{blocked_paths}}" line.
+  - Replace the literal [Harness Layer] block in prompts/implementer.md, prompts/tester.md, and prompts/documenter.md with the single placeholder {{harness_layer}}.
+  - Add a harness_root parameter to context_assembler.build_context; load prompts/harness-layer.md, render it against the assembled context, and expose the result as the harness_layer context value (two-pass render).
+  - Update story_coordinator.py to pass harness_root into build_context.
+  - Update the build_context call sites in tests/test_context_assembler.py for the new harness_root parameter.
+
+acceptance_criteria:
+  - prompts/harness-layer.md exists and contains the shared harness-layer block including the {{blocked_paths}} placeholder line.
+  - prompts/implementer.md, prompts/tester.md, and prompts/documenter.md each contain the {{harness_layer}} placeholder and no longer contain the literal duplicated harness-layer block.
+  - prompts/verifier.md, prompts/planner.md, and prompts/assist.md are unchanged.
+  - A rendered implementer, tester, and documenter prompt contains the fully resolved harness layer with the actual blocked-paths list and no literal "{{harness_layer}}" or "{{blocked_paths}}" text remaining.
+  - The rendered harness-layer text in those three prompts is equivalent to the pre-change harness-layer text (same rules, same resolved blocked paths).
+  - A test demonstrates the one-file-edit property: editing only prompts/harness-layer.md changes the harness layer of all three rendered stage prompts.
+  - The full test suite passes via .venv/bin/python -m pytest tests/ -q, including the existing no-leftover-placeholder guard (test_real_templates_render_without_leftover_placeholders).
+
+technical_plan:
+  implementation_steps:
+    - Copy the current shared block from implementer.md verbatim into a new prompts/harness-layer.md, keeping the {{blocked_paths}} line intact.
+    - In implementer.md, tester.md, and documenter.md, delete the [Harness Layer] heading through the {{blocked_paths}} line and replace it with a single {{harness_layer}} line in the same position.
+    - In context_assembler.build_context, add a harness_root keyword parameter. After assembling the base context dict, load prompts/harness-layer.md via load_template, render it against that context with render(), and set context["harness_layer"] to the resolved text. If the partial is absent, leave harness_layer unset so it renders as None.
+    - In story_coordinator.py, pass harness_root into the existing build_context call.
+    - Update the three build_context invocations in tests/test_context_assembler.py to pass harness_root, and add a test asserting the one-file-edit property and that blocked paths resolve inside the injected block.
+  likely_file_changes:
+    - file: prompts/harness-layer.md
+      reason: New shared file holding the single source of truth for the harness layer.
+    - file: prompts/implementer.md
+      reason: Replace duplicated block with {{harness_layer}}.
+    - file: prompts/tester.md
+      reason: Replace duplicated block with {{harness_layer}}.
+    - file: prompts/documenter.md
+      reason: Replace duplicated block with {{harness_layer}}.
+    - file: orchestration/context_assembler.py
+      reason: Resolve the shared partial (two-pass render) and expose it as the harness_layer context value.
+    - file: orchestration/story_coordinator.py
+      reason: Pass harness_root into build_context.
+    - file: tests/test_context_assembler.py
+      reason: Update call sites for the new parameter and assert the extraction behavior.
+
+scope:
+  modify:
+    - prompts/harness-layer.md
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/documenter.md
+    - orchestration/context_assembler.py
+    - orchestration/story_coordinator.py
+    - tests/test_context_assembler.py
+  do_not_modify:
+    - prompts/verifier.md
+    - prompts/planner.md
+    - prompts/assist.md
+    - workflows/story-workflow.json
+    - rules/execution-rules.json
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - orchestration/harness_config.py
+
+verification_requirements:
+  - Confirm the shared block was removed from all three stage templates and replaced with {{harness_layer}}, and that prompts/harness-layer.md holds it once.
+  - Confirm that rendered implementer, tester, and documenter prompts contain the resolved blocked-paths list with no leftover {{harness_layer}} or {{blocked_paths}} placeholders (verifies the two-pass render).
+  - Confirm verifier.md, planner.md, and assist.md are untouched.
+  - Confirm the full test suite passes, including test_real_templates_render_without_leftover_placeholders.
+
+constraints:
+  - The rendered harness-layer content for implementer, tester, and documenter must be behaviorally identical to before this change (same rules text, same resolved blocked paths in the same position).
+  - The verifier's existing harness layer and its rendering must remain unchanged.
+  - Single-pass render semantics must be preserved; the nested {{blocked_paths}} placeholder is resolved by rendering the shared partial before injection, not by re-scanning substituted output.
+  - No changes to the workflow definition, execution rules, or agent invocation path.
