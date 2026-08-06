@@ -42,7 +42,8 @@
       "items": { "type": "string" }
     },
     "technical_plan": {
-      "description": "Optional planner-produced implementation guidance. Untyped on purpose: story-001 and story-002 wrote it as a free-form block scalar, story-003 onward write the structured object described below. The nested constraints apply when it is an object; a block scalar is accepted as written.",
+      "type": "object",
+      "description": "Optional planner-produced implementation guidance. story-001 and story-002 wrote this as a free-form block scalar, before this schema existed; they are execution records rather than inputs and are not held to this contract. See the corpus test in tests/test_story_parser.py.",
       "properties": {
         "implementation_steps": {
           "type": "array",

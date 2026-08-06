@@ -60,7 +60,7 @@ acceptance_criteria:
   - Parsing is schema-directed. Under a schema node whose items.type is "string", a sequence item is taken as the verbatim remainder of its line including any colon; under a schema node whose items.type is "object", a sequence item is parsed into key/value pairs.
   - The line `- A test demonstrates the one-file-edit property, editing only X changes Y.` written with a colon after the word "property" parses to a single string containing that colon, not to a mapping.
   - .harness/stories/story-003.yaml parses and validates against schemas/story.schema.json without being edited, and its acceptance_criteria parses to a list of strings with no mapping among them.
-  - Every committed artifact in .harness/stories/ parses and validates against schemas/story.schema.json, asserted by a test that discovers the files rather than naming them.
+  - Every committed artifact written under the current convention parses and validates against schemas/story.schema.json, asserted by a test that discovers the files rather than naming them. Artifacts predating schemas/ are execution records rather than inputs and are held only to parsing, so that a schema written later is never forced weaker to accommodate them.
   - The parser supports nested mappings, block scalars introduced by a pipe, sequences of strings, sequences of mappings, full-line comments, and blank lines.
   - Every parsed scalar is a Python string; the parser performs no type coercion of numbers or booleans.
   - A line indented with a tab is rejected with an error naming the line number.
@@ -128,7 +128,8 @@ scope:
 verification_requirements:
   - Confirm a sequence item containing a colon parses to one string under a string-typed schema node, and that a sequence item under an object-typed node still parses into key/value pairs, demonstrating that the schema and not the syntax decides.
   - Confirm story-003.yaml is unmodified by this story and that it parses and validates as written, with its acceptance_criteria containing only strings.
-  - Confirm every committed story artifact parses and validates, via a test that discovers the files rather than hard-coding their names.
+  - Confirm every committed story artifact written under the current convention parses and validates, via a test that discovers the files rather than hard-coding their names, and that earlier artifacts still parse.
+  - Confirm the schema was not weakened to accommodate an artifact that predates it; technical_plan in particular must remain typed as an object.
   - Confirm nested mappings, pipe block scalars, sequences of strings, sequences of mappings, comments, and blank lines each parse correctly.
   - Confirm tab indentation is rejected and that the error names the offending line number.
   - Confirm every parse error message carries a line number, an expectation, and what was found.

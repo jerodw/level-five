@@ -155,12 +155,36 @@ def test_a_hand_wrapped_criterion_with_a_colon_is_still_one_string():
 # --------------------------------------------------------------------------
 
 
-def committed_stories() -> list[Path]:
+# Artifacts written before schemas/ existed are execution records, not inputs.
+# Holding them to a contract written later can only ever force the schema
+# weaker, so the corpus contract starts where the current convention does.
+FIRST_SCHEMA_ERA_STORY = "story-003"
+
+
+def all_committed_stories() -> list[Path]:
     return sorted(STORIES_DIR.glob("*.yaml"))
+
+
+def committed_stories() -> list[Path]:
+    return [p for p in all_committed_stories() if p.stem >= FIRST_SCHEMA_ERA_STORY]
 
 
 def test_the_corpus_discovery_finds_files_so_the_corpus_test_cannot_pass_on_zero():
     assert committed_stories(), f"no story artifacts discovered under {STORIES_DIR}"
+
+
+def test_the_schema_is_not_weakened_to_accommodate_pre_schema_artifacts():
+    """The reason the corpus is scoped: technical_plan stays typed.
+
+    story-001 and story-002 wrote technical_plan as a free-form block
+    scalar. If they were held to this schema, the only way to pass would be
+    to drop the type constraint, permanently costing every future story its
+    structural checking on that field.
+    """
+    technical_plan = story_schema()["properties"]["technical_plan"]
+    assert technical_plan["type"] == "object"
+    entry = technical_plan["properties"]["likely_file_changes"]["items"]
+    assert set(entry["required"]) == {"file", "reason"}
 
 
 def test_every_committed_story_artifact_parses_and_validates():
