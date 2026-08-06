@@ -55,7 +55,7 @@
           "description": "Files the plan expects to touch, with the reason for each.",
           "items": {
             "type": "object",
-            "required": ["file", "reason"],
+            "required": ["file", "reason", "stage"],
             "properties": {
               "file": {
                 "type": "string",
@@ -64,6 +64,10 @@
               "reason": {
                 "type": "string",
                 "description": "Why this file is expected to change."
+              },
+              "stage": {
+                "type": "string",
+                "description": "The workflow stage the plan expects to change this file. Advisory only: it tells an agent reading the plan whether an entry is its own work, so a flat unowned list does not read as \"your job\" to whichever stage looks first. The coordinator never compares this to what a stage actually changed — a prediction that guesses wrong must not end a run. The enforced rule is may_not_create in the workflow definition."
               }
             }
           }
@@ -96,6 +100,28 @@
       "type": "array",
       "description": "Standing limits on how the story may be implemented.",
       "items": { "type": "string" }
+    },
+    "stage_exceptions": {
+      "type": "array",
+      "description": "Optional, and rare: explicit grants lifting a stage's may_not_create declaration for this story only. A story whose deliverable is itself a regression suite needs the implementer's tests/ restriction lifted; the reason is required because the grant is a judgement the reviewer must be able to weigh. Not in the top-level required list — almost every story declares none. The coordinator cross-checks each entry against the loaded workflow at pre-flight and refuses a grant that names an undefined stage or a prefix that stage was never restricted on.",
+      "items": {
+        "type": "object",
+        "required": ["stage", "create", "reason"],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "description": "Name of the workflow stage the grant applies to."
+          },
+          "create": {
+            "type": "string",
+            "description": "The repository-relative path prefix that stage may create under, matching a prefix in that stage's may_not_create list."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this story needs the rule lifted."
+          }
+        }
+      }
     }
   }
 }

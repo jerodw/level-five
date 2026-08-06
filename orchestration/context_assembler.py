@@ -53,6 +53,21 @@ def _dashed_lines(items: object) -> str | None:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _exception_lines(exceptions: object) -> str | None:
+    """Render the story's stage exceptions, one dash-prefixed line each.
+
+    The reason travels with the grant: a stage told a rule is lifted should
+    also be told why, so it can tell whether its own work is the case the
+    story had in mind. Absent or empty renders as None.
+    """
+    if not exceptions:
+        return None
+    return "\n".join(
+        f"- {item['stage']} may create {item['create']}: {item['reason']}"
+        for item in exceptions
+    )
+
+
 def latest_verifier_finding(run_dir: Path) -> str | None:
     iterations = sorted((run_dir / "verification").glob("iteration-*.json"))
     return _read(iterations[-1]) if iterations else None
@@ -88,6 +103,7 @@ def build_context(
     context: dict[str, str | None] = {
         "story": story_text,
         "acceptance_criteria": _dashed_lines(story.get("acceptance_criteria")),
+        "stage_exceptions": _exception_lines(story.get("stage_exceptions")),
         "blocked_paths": "\n".join(f"- {p}" for p in rules.get("blocked_paths", [])),
         "test_command": config.get("test_command"),
         "repository_standards": standards,

@@ -109,8 +109,10 @@ technical_plan:
     - write it
   likely_file_changes:
     - file: orchestration/story_parser.py
+      stage: implementer
       reason: New module.
     - file: orchestration/story_coordinator.py
+      stage: implementer
       reason: Parse then validate.
 
 scope:
@@ -155,8 +157,10 @@ def test_a_sequence_of_strings_parses(document):
 
 def test_a_sequence_of_mappings_parses(document):
     assert document["technical_plan"]["likely_file_changes"] == [
-        {"file": "orchestration/story_parser.py", "reason": "New module."},
-        {"file": "orchestration/story_coordinator.py", "reason": "Parse then validate."},
+        {"file": "orchestration/story_parser.py", "stage": "implementer",
+         "reason": "New module."},
+        {"file": "orchestration/story_coordinator.py", "stage": "implementer",
+         "reason": "Parse then validate."},
     ]
 
 
@@ -255,7 +259,11 @@ def test_an_error_carries_its_parts_separately_for_the_coordinator():
 # later can only ever force the schema weaker. The corpus test therefore covers
 # artifacts written under the current convention. Earlier ones must still parse
 # (see below) so the parser stays honest about the constructs they use.
-FIRST_SCHEMA_ERA_STORY = "story-003"
+#
+# Bumped to story-007 when likely_file_changes gained its required `stage`
+# field: stories 003 through 006 were written before that contract existed and
+# are execution records, never edited to satisfy one written after them.
+FIRST_SCHEMA_ERA_STORY = "story-007"
 
 
 def all_committed_stories() -> list[Path]:
@@ -277,7 +285,9 @@ def test_stories_predating_the_schema_still_parse():
     They are excluded from validation, not from parsing, so dropping them
     from the corpus cannot hide a parser regression on the constructs they
     use — story-001 and story-002 carry a free-form block-scalar
-    technical_plan the newer artifacts no longer exercise.
+    technical_plan the newer artifacts no longer exercise, and stories 003
+    through 006 carry likely_file_changes entries written before that item
+    required a stage.
     """
     legacy = [p for p in all_committed_stories() if p.stem < FIRST_SCHEMA_ERA_STORY]
     assert legacy, "expected pre-schema story artifacts to still be committed"
@@ -310,7 +320,12 @@ def test_story_003_parses_as_written_with_no_mapping_among_its_criteria():
     ), "story-003.yaml was edited; this story must parse it as written"
 
     parsed = story_parser.parse(text, story_schema())
-    assert schema_validator.validate(parsed, story_schema()) == []
+    # story-003 predates the schema era (its likely_file_changes entries were
+    # written before that item required a stage), so it is held to the part of
+    # the schema this test is about rather than to the whole of a contract
+    # written after it.
+    problems = schema_validator.validate(parsed, story_schema())
+    assert [p for p in problems if "acceptance_criteria" in p] == []
     criteria = parsed["acceptance_criteria"]
     assert all(isinstance(item, str) for item in criteria), criteria
     assert not any(isinstance(item, dict) for item in criteria)

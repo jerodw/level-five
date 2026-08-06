@@ -61,6 +61,42 @@ def read_story(story_text: str, harness_root: Path | None = None) -> StoryReadin
     return StoryReading(parsed, schema_validator.validate(parsed, schema))
 
 
+def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
+    """Cross-check a story's stage exceptions against the loaded workflow.
+
+    read_story answers whether a story conforms to its schema. This answers
+    the separate question the schema cannot: whether an exception means
+    anything against the workflow this run actually loaded. An exception
+    naming a stage that does not exist, or granting a path its stage was
+    never restricted on, grants nothing — a planning error rather than a
+    harmless one, so both refuse the run. Stage names and prefixes come from
+    the workflow definition; none is named here.
+    """
+    restricted = {stage["name"]: stage.get("may_not_create", []) for stage in stages}
+    problems = []
+    for index, exception in enumerate(story.get("stage_exceptions", [])):
+        name, granted = exception["stage"], exception["create"]
+        if name not in restricted:
+            problems.append(
+                f"$.stage_exceptions[{index}]: names stage '{name}', which the "
+                f"loaded workflow does not define"
+            )
+        elif granted not in restricted[name]:
+            problems.append(
+                f"$.stage_exceptions[{index}]: grants '{granted}' to stage "
+                f"'{name}', which was never restricted from creating it"
+            )
+    return problems
+
+
+def _granted_prefixes(story: dict, stage_name: str) -> list[str]:
+    return [
+        exception["create"]
+        for exception in story.get("stage_exceptions", [])
+        if exception["stage"] == stage_name
+    ]
+
+
 def _state_path(run_dir: Path) -> Path:
     return run_dir / "state.json"
 
@@ -111,6 +147,33 @@ def _blocked_violation(run_dir: Path, record_name: str, blocked: list[str]) -> s
     return None
 
 
+@dataclass(frozen=True)
+class OwnershipViolation:
+    """A path a stage created under a prefix it declared it must not create."""
+
+    path: str
+    prefix: str
+
+
+def _ownership_violation(
+    run_dir: Path, record_name: str, prefixes: list[str]
+) -> OwnershipViolation | None:
+    """Hold a stage to the outputs it declared it does not own.
+
+    Only the created array is checked. The line falls between creating and
+    modifying because the rule is about independence, not directories: an
+    implementer must be able to update an existing test whose call site its
+    own signature change broke, but validation it authors itself checks what
+    it built rather than what was asked.
+    """
+    changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
+    for path in changed.get("created", []):
+        for prefix in prefixes:
+            if path.startswith(prefix):
+                return OwnershipViolation(path, prefix)
+    return None
+
+
 def _schema_violation(run_dir: Path, stage: dict) -> str | None:
     """Check the stage's declared artifacts against their schemas.
 
@@ -136,6 +199,18 @@ def _schema_violation(run_dir: Path, stage: dict) -> str | None:
                 + "; ".join(errors)
             )
     return None
+
+
+def _refuse(story_path: Path, problems: list[str]) -> int:
+    """The one pre-flight refusal path: exit 1, one message per problem."""
+    print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
+    for problem in problems:
+        print(f"  - {problem}", file=sys.stderr)
+    print(
+        "Fix the artifact or re-run planning before executing the story.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _escalate(run_dir: Path, state: RunState, reason: str) -> int:
@@ -205,14 +280,15 @@ def run_story(
     # schema_validator relative to its own module, not from harness_root.
     reading = read_story(story_text)
     if reading.problems:
-        print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
-        for problem in reading.problems:
-            print(f"  - {problem}", file=sys.stderr)
-        print(
-            "Fix the artifact or re-run planning before executing the story.",
-            file=sys.stderr,
-        )
-        return 1
+        return _refuse(story_path, reading.problems)
+
+    # Conformance is one question, agreement with this workflow another. A
+    # stage exception is checked here rather than inside read_story so schema
+    # reading stays schema reading, and both refusals stay above run-directory
+    # creation.
+    exception_problems = stage_exception_problems(reading.parsed, stages)
+    if exception_problems:
+        return _refuse(story_path, exception_problems)
 
     run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -285,6 +361,27 @@ def run_story(
             violation = _blocked_violation(run_dir, record_name, rules.get("blocked_paths", []))
             if violation:
                 return _escalate(run_dir, state, f"{name} modified blocked path: {violation}")
+
+            # Stage output ownership, read from the workflow definition the
+            # way blocked paths are read from the rules. A story may lift a
+            # declared prefix for one stage; the grant is recorded so the
+            # routing stays reconstructable from events.log.
+            enforced = list(stage.get("may_not_create", []))
+            for granted in _granted_prefixes(reading.parsed, name):
+                if granted in enforced:
+                    enforced.remove(granted)
+                    append_event(
+                        run_dir,
+                        f"stage exception applied: {name} may create {granted}",
+                    )
+            ownership = _ownership_violation(run_dir, record_name, enforced)
+            if ownership:
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"{name} created {ownership.path}, which it declared it "
+                    f"must not create under {ownership.prefix}",
+                )
 
         if name == "verifier":
             verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))

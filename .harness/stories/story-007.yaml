@@ -1,0 +1,250 @@
+story:
+  id: story-007
+  title: Coordinator-enforced stage output ownership
+  description: |
+    prompts/implementer.md tells the implementer "do not create new tests (the
+    tester stage owns new validation)". It is only a suggestion. In story-006
+    the story artifact named tests/test_story_006_validation.py in its plan, the
+    implementer created it because injected story state is declared
+    authoritative, and the tester — arriving second, forbidden to delete an
+    existing test — wrote its own file alongside it. The result was two test
+    files covering one plan, 17 of 19 tests duplicated. Every stage did what it
+    was told; nothing in the harness could see the aggregate.
+
+    This makes the rule real. A stage declares in the workflow definition what
+    it must not create, the coordinator checks that declaration against the
+    changed-files record the stage already produces, and a violation escalates
+    the way a blocked-path violation does. This closes the gap between
+    ARCHITECTURE.md's stated principle — rules are enforced by the coordinator,
+    not merely suggested to agents — and the implementer's test-writing
+    boundary, which until now was suggestion only.
+
+    The rule is about independence, not about directories. Tests written by the
+    agent that wrote the implementation validate what was built rather than what
+    was asked. So the line falls between creating and modifying: an implementer
+    may modify existing tests, because a changed signature must leave the suite
+    compiling, but may not add new validation. A story whose deliverable *is*
+    the regression suite is not an exception to independence — the tests are the
+    implementation and the tester still validates them — but it does need the
+    filesystem rule lifted, so a story may grant an explicit, reasoned exception
+    that the coordinator honors and records.
+
+    A second, quieter cause was that technical_plan.likely_file_changes is a
+    flat list with no owner, so every entry reads as "your job" to whichever
+    agent looks first, and the implementer looks first. Entries become
+    attributed to a stage. That stays advisory: it is a prediction, and a
+    prediction that guesses slightly wrong must not end a run.
+
+tasks:
+  - Add an optional may_not_create declaration to the workflow stage
+    definition, declared by the implementer stage for tests/.
+  - Add a post-stage ownership check to the coordinator that reads the stage's
+    own changed-files record and escalates when the stage created a path under
+    a prefix it declared it must not create.
+  - Add an optional top-level stage_exceptions section to the story schema, with
+    stage, create, and reason all required per item.
+  - Reject at pre-flight a stage_exception naming a stage the workflow does not
+    define, and one granting a path the named stage was never restricted on.
+  - Add a required stage field to technical_plan.likely_file_changes items and
+    bump the schema-era constant so committed artifacts written before this
+    contract are scoped out of corpus validation while still being parsed.
+  - Inject the story's stage exceptions into the implementer prompt and reword
+    its test boundary to state the create/modify distinction.
+
+acceptance_criteria:
+  - A workflow stage definition may carry an optional may_not_create key, a list
+    of repository-relative path prefixes. The implementer stage declares
+    ["tests/"]; no other stage declares one.
+  - After any stage that declares both changed_files and may_not_create, the
+    coordinator reads that stage's own changed-files record and escalates when
+    any entry in its created array falls under a declared prefix. Entries in
+    modified and deleted are not checked.
+  - An implementer that modifies an existing file under tests/ — updating call
+    sites for a changed signature, for example — does not escalate.
+  - The ownership check runs after the blocked-paths check, making the fixed
+    post-stage order: required artifacts present, declared artifacts match their
+    schemas, changed-files record clear of blocked paths, then stage output
+    ownership.
+  - An ownership violation escalates immediately without incrementing
+    retry_count, matching how a blocked-path violation is treated, and the
+    escalation reason in both events.log and escalation-summary.md names the
+    stage, the offending path, and the prefix it violated.
+  - No stage name and no path prefix appears in orchestration code; the rule is
+    read from the workflow definition, as blocked-path enforcement already is.
+  - schemas/story.schema.json gains an optional top-level stage_exceptions
+    property: an array of objects, each requiring stage, create, and reason,
+    all strings. It is not added to the schema's top-level required list.
+  - A story carrying a stage_exception whose stage matches a stage declaring
+    that prefix in may_not_create allows that stage to create files under the
+    prefix, and the coordinator records that the exception was applied in
+    events.log.
+  - A stage_exception naming a stage the loaded workflow does not define is a
+    pre-flight refusal: exit 1, message naming the unknown stage, no run
+    directory, no state.json, no log, and no new branch.
+  - A stage_exception granting a path the named stage was never restricted on is
+    a pre-flight refusal on the same terms, because an exception that grants
+    nothing is a planning error rather than a harmless one.
+  - read_story continues to do schema conformance only. The workflow cross-check
+    is a separate function taking the parsed story and the workflow's stage
+    definitions, called from run_story beside read_story and sharing its
+    refusal path, so both refusals happen above run-directory creation.
+  - technical_plan.likely_file_changes items require a stage field in addition
+    to file and reason.
+  - The schema-era constant used by the corpus tests is bumped to story-007, so
+    stories 003 through 006 are scoped out of corpus validation. Both
+    definitions of that constant are updated, and the companion assertion that
+    pre-era artifacts still parse continues to cover them.
+  - The plan attribution is advisory: the coordinator never compares
+    likely_file_changes against what a stage actually changed, and a stage
+    touching a file the plan did not predict does not escalate.
+  - context_assembler exposes the parsed story's stage exceptions as a
+    stage_exceptions context value, rendered as one dash-prefixed line per
+    exception naming the stage, the granted path, and the reason, and rendering
+    as None when the story declares none.
+  - prompts/implementer.md injects {{stage_exceptions}} and its do-not list
+    states the create/modify distinction: existing tests may be modified, new
+    test files may not be created unless the story grants an exception.
+  - Every prompt template still renders with no leftover {{placeholder}}, and
+    the full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Add "may_not_create": ["tests/"] to the implementer stage in
+      workflows/story-workflow.json.
+    - In story_coordinator, add the ownership check beside the existing
+      blocked-paths check: it reads the same record the stage declares through
+      changed_files, consults the stage's may_not_create list, subtracts the
+      prefixes granted to that stage by the story's stage_exceptions, and
+      escalates naming stage, path, and prefix. Call it after the blocked-paths
+      check in the post-stage sequence.
+    - Add the optional stage_exceptions property to schemas/story.schema.json,
+      and the required stage field to likely_file_changes items.
+    - Add a function taking the parsed story and the workflow stage definitions
+      and returning a list of problem messages: one for an exception naming an
+      undefined stage, one for an exception granting a prefix that stage never
+      restricted. Call it in run_story immediately after read_story, printing
+      through the same refusal path, still above run_dir.mkdir and the branch
+      checkout.
+    - In context_assembler, render the parsed story's stage_exceptions into a
+      stage_exceptions context value, None when absent, following the
+      dash-prefixed convention already used for acceptance criteria.
+    - Add {{stage_exceptions}} to prompts/implementer.md and reword its do-not
+      entry from "create new tests" to the create/modify distinction plus the
+      exception mechanism.
+    - Bump the schema-era constant to story-007 in both test files that define
+      it, and update the existing story artifacts' expectations accordingly
+      without editing any committed story.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The implementer stage declares the paths it must not create.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Post-stage ownership check and the pre-flight cross-check of a
+        story's stage exceptions against the loaded workflow.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Renders the parsed story's stage exceptions into the context.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: Optional stage_exceptions section and the required stage field on
+        likely_file_changes items.
+    - file: prompts/implementer.md
+      stage: implementer
+      reason: Injects the exceptions and states the create/modify boundary.
+    - file: tests/test_story_parser.py
+      stage: implementer
+      reason: The schema-era constant is bumped to story-007.
+    - file: tests/test_story_005_validation.py
+      stage: implementer
+      reason: The second definition of the schema-era constant is bumped.
+    - file: tests/test_story_coordinator.py
+      stage: implementer
+      reason: Existing coordinator tests updated for the new post-stage check
+        and the new pre-flight refusal.
+    - file: tests/test_context_assembler.py
+      stage: implementer
+      reason: Existing context tests updated for the new context value.
+    - file: tests/test_story_007_validation.py
+      stage: tester
+      reason: Independent validation of stage output ownership, the exception
+        mechanism, and the pre-flight refusals. New validation is the tester's
+        output, not the implementer's. This story exists because that boundary
+        was suggestion only.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - schemas/story.schema.json
+    - prompts/implementer.md
+    - tests/
+  do_not_modify:
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - orchestration/harness_config.py
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - prompts/planner.md
+    - rules/
+    - scripts/
+    - schemas/changed-files.schema.json
+    - schemas/test-results.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/retry-guidance.schema.json
+    - .harness/stories/story-001.yaml
+    - .harness/stories/story-002.yaml
+    - .harness/stories/story-003.yaml
+    - .harness/stories/story-004.yaml
+    - .harness/stories/story-005.yaml
+    - .harness/stories/story-006.yaml
+
+verification_requirements:
+  - Confirm the ownership rule is driven by the workflow definition: no stage
+    name and no path prefix appears in orchestration code, checked the way the
+    existing blocked-paths enforcement is checked.
+  - Confirm an implementer record creating a file under tests/ escalates, that
+    one modifying an existing file under tests/ does not, and that the
+    escalation reason names stage, path, and prefix in both events.log and
+    escalation-summary.md.
+  - Confirm retry_count is unchanged by an ownership escalation.
+  - Confirm both pre-flight refusals — unknown stage, and a grant on a prefix
+    the stage never restricted — exit 1 and leave no run directory, no
+    state.json, no log, and no new branch.
+  - Confirm a valid stage_exception actually lifts the rule for the named stage
+    and that its application is recorded in events.log.
+  - Confirm read_story still performs schema conformance only and did not absorb
+    the workflow cross-check.
+  - Confirm the plan attribution is advisory: nothing compares
+    likely_file_changes to a stage's actual changes.
+  - Confirm the schema-era bump scoped stories 003 through 006 out of corpus
+    validation while the companion assertion still parses them, and that no
+    committed story artifact was edited.
+  - Confirm every prompt template renders with no leftover placeholder and the
+    full suite passes.
+  - Confirm .harness/docs/ARCHITECTURE.md records stage output ownership, the
+    exception mechanism, and the reason the boundary is create-not-modify. This
+    is documenter work, not implementer scope.
+
+constraints:
+  - New test files are the tester's output. The implementer modifies existing
+    tests only; this story must not itself repeat the defect it removes.
+  - The rule the coordinator enforces is declared in the workflow definition.
+    Workflow behavior does not move into Python.
+  - Pre-flight refusal behavior is unchanged in shape: exit 1, one message per
+    problem, nothing created.
+  - An ownership violation escalates rather than retrying, matching blocked
+    paths, so no new retry axis and no new RunState field is introduced.
+  - Committed story artifacts are execution records and are never edited to
+    satisfy a contract written after them.
+  - The ownership rule will not be enforced during this story's own run: the
+    coordinator loads the workflow definition at run start, so the declaration
+    added by the implementer is not in memory for its own stage check. Expect
+    it to take effect for story-008 onward.
+  - Standard library only, Python 3.10+, type hints on public functions, and
+    dataclasses for structured values.

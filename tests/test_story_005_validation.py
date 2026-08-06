@@ -82,6 +82,7 @@ technical_plan:
     - write the code
   likely_file_changes:
     - file: src/app.py
+      stage: implementer
       reason: it holds the behavior
 
 scope:
@@ -158,7 +159,10 @@ def test_a_hand_wrapped_criterion_with_a_colon_is_still_one_string():
 # Artifacts written before schemas/ existed are execution records, not inputs.
 # Holding them to a contract written later can only ever force the schema
 # weaker, so the corpus contract starts where the current convention does.
-FIRST_SCHEMA_ERA_STORY = "story-003"
+#
+# Bumped to story-007 when likely_file_changes gained its required `stage`
+# field; stories 003 through 006 predate that contract.
+FIRST_SCHEMA_ERA_STORY = "story-007"
 
 
 def all_committed_stories() -> list[Path]:
@@ -184,7 +188,7 @@ def test_the_schema_is_not_weakened_to_accommodate_pre_schema_artifacts():
     technical_plan = story_schema()["properties"]["technical_plan"]
     assert technical_plan["type"] == "object"
     entry = technical_plan["properties"]["likely_file_changes"]["items"]
-    assert set(entry["required"]) == {"file", "reason"}
+    assert set(entry["required"]) == {"file", "reason", "stage"}
 
 
 def test_every_committed_story_artifact_parses_and_validates():
@@ -401,8 +405,8 @@ def test_a_scope_without_do_not_modify_is_now_rejected(target_root, harness_root
 def test_a_likely_file_changes_entry_missing_file_is_rejected(target_root,
                                                               harness_root, capsys):
     text = VALID_STORY.replace(
-        "    - file: src/app.py\n      reason: it holds the behavior\n",
-        "    - reason: it holds the behavior\n",
+        "    - file: src/app.py\n      stage: implementer\n",
+        "    - stage: implementer\n",
     )
     assert reject(target_root, harness_root, text) == 1
     err = capsys.readouterr().err

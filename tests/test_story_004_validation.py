@@ -149,7 +149,7 @@ def test_story_schema_types_its_nested_shape(harness_root):
     assert "technical_plan" not in schema["required"]
     plan = schema["properties"]["technical_plan"]["properties"]
     changes = plan["likely_file_changes"]["items"]
-    assert set(changes["required"]) == {"file", "reason"}
+    assert set(changes["required"]) == {"file", "reason", "stage"}
     assert schema["properties"]["scope"]["properties"]["modify"]["items"]["type"] == "string"
 
 
@@ -169,8 +169,8 @@ def test_deeply_nested_error_path_names_every_step(harness_root):
         "constraints": ["d"],
         "technical_plan": {
             "likely_file_changes": [
-                {"file": "a.py", "reason": "ok"},
-                {"file": "b.py"},
+                {"file": "a.py", "stage": "implementer", "reason": "ok"},
+                {"file": "b.py", "stage": "implementer"},
             ]
         },
     }
