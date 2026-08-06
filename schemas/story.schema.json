@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "story",
-  "description": "An approved story artifact. The coordinator's pre-flight check enforces the top-level required list; the full shape here is the source of truth for the schema-directed story parser.",
+  "description": "An approved story artifact. This schema does not merely check a story, it drives the parse: orchestration/story_parser.py reads a story guided by the node it is at, so items.type of \"string\" takes a \"- \" line verbatim (colons included) while items.type of \"object\" parses the same syntax into key/value pairs. That makes the story dialect NOT YAML — a conforming YAML parser terminates a plain scalar at the first \": \" and would read the committed criterion \"- A test demonstrates the one-file-edit property: editing only ...\" as a mapping rather than a string. Never load a story artifact with yaml.safe_load; the two readings disagree. The coordinator parses with this schema and then validates the result against it before any run state is created.",
   "type": "object",
   "required": [
     "story",
@@ -43,7 +43,7 @@
     },
     "technical_plan": {
       "type": "object",
-      "description": "Optional planner-produced implementation guidance.",
+      "description": "Optional planner-produced implementation guidance. story-001 and story-002 wrote this as a free-form block scalar, before this schema existed; they are execution records rather than inputs and are not held to this contract. See the corpus test in tests/test_story_parser.py.",
       "properties": {
         "implementation_steps": {
           "type": "array",

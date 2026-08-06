@@ -1,0 +1,149 @@
+story:
+  id: story-005
+  title: Schema-directed story parser and full pre-flight validation
+  description: |
+    story-004 made schemas the source of truth for every structured
+    artifact and validated the four JSON artifacts the stages produce. The
+    story artifact itself was left behind: schemas/story.schema.json
+    describes its full shape, but the coordinator still checks only that
+    six top-level keys appear on unindented lines. A story with a
+    mistyped nested field, a missing scope.do_not_modify, or a mangled
+    likely_file_changes entry passes pre-flight and fails later, during a
+    run that has already created a branch and spent tokens.
+
+    This story closes that gap by parsing the story artifact and validating
+    the parsed structure against story.schema.json, before any run state
+    exists.
+
+    The obstacle is that story artifacts are YAML-shaped but not reliably
+    YAML. story-003.yaml line 38 reads:
+
+      - A test demonstrates the one-file-edit property: editing only
+        prompts/harness-layer.md changes the harness layer...
+
+    A conforming YAML parser reads that as a mapping, not a string, because
+    colon-space terminates a plain scalar. That story ran, passed, and
+    merged. Writing "property: explanation" is the natural way to phrase an
+    acceptance criterion, so this is not an outlier to be corrected but the
+    normal case to be supported.
+
+    The resolution is schema-directed parsing. The parser first builds an
+    indentation tree of lines, then interprets that tree guided by the
+    schema node it is currently at. Because story.schema.json says
+    acceptance_criteria.items.type is "string", every "- " line beneath it
+    is taken verbatim, colons included. Because it says
+    likely_file_changes.items.type is "object", those items are parsed as
+    key/value children. The ambiguity YAML cannot resolve from local
+    syntax, the schema resolves from context. story-003.yaml therefore
+    parses correctly as written and needs no edit, and nothing about how
+    stories are authored has to change.
+
+    The deliberate cost is that this dialect is not YAML, and a file that
+    the harness and a conforming YAML library disagree about is a trap for
+    anyone who later reaches for yaml.safe_load. That divergence must be
+    documented loudly rather than left for a reader to discover.
+
+    Blast radius is bounded by placement: validation runs before the run
+    directory and story branch are created, so a rejection is an exit-1
+    refusal leaving no partial state behind.
+
+tasks:
+  - Add orchestration/story_parser.py providing schema-directed parsing of a story artifact into a Python structure, with errors carrying line numbers.
+  - Replace the line-prefix top-level section check in story_coordinator.py with parse-then-validate against schemas/story.schema.json, still as a pre-flight step before any run state is created.
+  - Document the story dialect and its divergence from conforming YAML in the parser module docstring and in the description field of schemas/story.schema.json.
+  - Add tests/test_story_parser.py covering each supported construct, each rejection case, and line-numbered error messages.
+  - Add a corpus test that every committed artifact in .harness/stories/ parses and validates.
+  - Update tests/test_story_coordinator.py for the replaced pre-flight check.
+
+acceptance_criteria:
+  - orchestration/story_parser.py exists and exposes a parse function that takes story text and a schema and returns a Python dict.
+  - Parsing is schema-directed. Under a schema node whose items.type is "string", a sequence item is taken as the verbatim remainder of its line including any colon; under a schema node whose items.type is "object", a sequence item is parsed into key/value pairs.
+  - The line `- A test demonstrates the one-file-edit property, editing only X changes Y.` written with a colon after the word "property" parses to a single string containing that colon, not to a mapping.
+  - .harness/stories/story-003.yaml parses and validates against schemas/story.schema.json without being edited, and its acceptance_criteria parses to a list of strings with no mapping among them.
+  - Every committed artifact written under the current convention parses and validates against schemas/story.schema.json, asserted by a test that discovers the files rather than naming them. Artifacts predating schemas/ are execution records rather than inputs and are held only to parsing, so that a schema written later is never forced weaker to accommodate them.
+  - The parser supports nested mappings, block scalars introduced by a pipe, sequences of strings, sequences of mappings, full-line comments, and blank lines.
+  - Every parsed scalar is a Python string; the parser performs no type coercion of numbers or booleans.
+  - A line indented with a tab is rejected with an error naming the line number.
+  - Every parse error message includes the line number where the problem was found and states what was expected and what was found.
+  - Structural validation of the parsed story runs before the run directory and the story branch are created, so a rejected story leaves no run directory, no state.json, and no new branch behind.
+  - A story missing a required top-level section is rejected with a message naming the missing section or sections, at least as clearly as the message it replaces.
+  - A story whose nested structure is wrong (for example scope missing do_not_modify, or a likely_file_changes entry missing file) is rejected during pre-flight, where before this story it would have been accepted.
+  - l5-run exits with status 1 on a rejected story and does not invoke any agent.
+  - The parser module docstring states explicitly that the dialect is not YAML, names the plain-scalar colon divergence, and warns against loading story artifacts with a conforming YAML library.
+  - The description field in schemas/story.schema.json records that the schema drives parsing and names the dialect divergence.
+  - The line-prefix helpers made obsolete by this change are removed rather than left alongside the new path, so exactly one mechanism validates a story artifact.
+  - orchestration/schema_validator.py is reused unmodified for validating the parsed structure.
+  - The full test suite passes via .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Write orchestration/story_parser.py in two layers. First a lexer that turns text into a list of records carrying line number, indentation width, and content, dropping blank lines and full-line comments, and rejecting tab indentation. Then a schema-directed interpreter that walks the records alongside the schema node.
+    - In the interpreter, dispatch on the schema node's type. For an object node, read `key: value` and `key:` entries, matching keys against properties and falling back to structural inference for keys the schema does not name. For an array node, read `- ` items and dispatch on items.type, taking the line remainder verbatim for a string and parsing key/value children for an object. For a string node, read a single-line scalar, a quoted scalar, or a pipe-introduced block scalar.
+    - Treat a line more indented than its parent that begins neither a new sequence item nor a new key as a continuation of the preceding scalar, joining it with a single space, so a long hand-wrapped criterion parses as one string.
+    - Raise a single error type carrying the line number, the expectation, and what was found, so the coordinator can print it directly.
+    - In story_coordinator.run_story, replace the missing_story_sections call with parse-then-validate: load schemas/story.schema.json via schema_validator.load_schema, parse the story text, then validate the result. On a parse error or any validation error, print the artifact path with the collected messages to stderr and return 1. Keep this above the run-directory creation and branch checkout so nothing is created on rejection.
+    - Remove missing_story_sections, load_required_story_sections, and REQUIRED_STORY_SECTIONS once nothing references them.
+    - Extend the description in schemas/story.schema.json to record that it drives the parser and how the dialect diverges from YAML.
+    - Add tests/test_story_parser.py with one test per construct and per rejection case, asserting line numbers appear in error text, plus the colon-in-criterion case stated as its own test.
+    - Add the corpus test that globs .harness/stories/*.yaml, parses and validates each, and fails naming any file that does not pass. .harness/stories/ is committed, so this runs in CI.
+    - Update tests/test_story_coordinator.py to drive the new rejection path and assert that no run directory or branch is created for a rejected story.
+  likely_file_changes:
+    - file: orchestration/story_parser.py
+      reason: New module holding the lexer and the schema-directed interpreter.
+    - file: orchestration/story_coordinator.py
+      reason: Replace the line-prefix pre-flight check with parse-then-validate and drop the obsolete helpers.
+    - file: schemas/story.schema.json
+      reason: Record in the description that the schema drives parsing and how the dialect diverges from YAML.
+    - file: tests/test_story_parser.py
+      reason: New unit tests for every construct, rejection case, and the committed-story corpus.
+    - file: tests/test_story_coordinator.py
+      reason: Cover the replaced pre-flight path and the no-partial-state guarantee.
+
+scope:
+  modify:
+    - orchestration/story_parser.py
+    - orchestration/story_coordinator.py
+    - schemas/story.schema.json
+    - tests/test_story_parser.py
+    - tests/test_story_coordinator.py
+  do_not_modify:
+    - orchestration/schema_validator.py
+    - orchestration/context_assembler.py
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - schemas/changed-files.schema.json
+    - schemas/test-results.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/retry-guidance.schema.json
+    - prompts/
+    - workflows/
+    - rules/
+    - scripts/
+    - .harness/stories/story-001.yaml
+    - .harness/stories/story-002.yaml
+    - .harness/stories/story-003.yaml
+    - .harness/stories/story-004.yaml
+
+verification_requirements:
+  - Confirm a sequence item containing a colon parses to one string under a string-typed schema node, and that a sequence item under an object-typed node still parses into key/value pairs, demonstrating that the schema and not the syntax decides.
+  - Confirm story-003.yaml is unmodified by this story and that it parses and validates as written, with its acceptance_criteria containing only strings.
+  - Confirm every committed story artifact written under the current convention parses and validates, via a test that discovers the files rather than hard-coding their names, and that earlier artifacts still parse.
+  - Confirm the schema was not weakened to accommodate an artifact that predates it; technical_plan in particular must remain typed as an object.
+  - Confirm nested mappings, pipe block scalars, sequences of strings, sequences of mappings, comments, and blank lines each parse correctly.
+  - Confirm tab indentation is rejected and that the error names the offending line number.
+  - Confirm every parse error message carries a line number, an expectation, and what was found.
+  - Confirm a story that is structurally wrong below the top level, such as a scope missing do_not_modify, is now rejected during pre-flight.
+  - Confirm a rejected story causes exit status 1, invokes no agent, and leaves behind no run directory, no state.json, and no new git branch.
+  - Confirm the obsolete line-prefix helpers were removed and that no second story-validation mechanism remains.
+  - Confirm schema_validator.py is byte-identical to its state before this story.
+  - Confirm the parser docstring and the story schema description both record the dialect divergence from conforming YAML.
+  - Confirm the full test suite passes via .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - No third-party dependency; Python standard library only. A YAML library must not be added, and none may be imported.
+  - The parser must not require any change to how stories are authored. Existing committed artifacts parse as written; quoting must not become mandatory.
+  - Pre-flight validation stays pre-flight. It must not move into a stage, and it must not create or mutate run state, branches, or artifacts.
+  - context_assembler.extract_section is deliberately left alone; the verifier continues to receive the verbatim acceptance_criteria text. Unifying the two readers of a story artifact is a later story, and this one must not start it.
+  - Schema semantics are unchanged. The parser consumes type, properties, items, and required as story-004 defined them, and adds no keyword of its own.
+  - Behavior for stories that are already valid is unchanged; this story adds rejection of stories that were previously accepted in error, and nothing else.

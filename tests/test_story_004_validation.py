@@ -373,10 +373,20 @@ def test_valid_artifacts_route_exactly_as_before(target_root, harness_root):
 
 
 def test_enforced_story_sections_are_unchanged_and_schema_derived(harness_root):
-    assert story_coordinator.REQUIRED_STORY_SECTIONS == ORIGINAL_STORY_SECTIONS
-    assert story_coordinator.REQUIRED_STORY_SECTIONS == tuple(
+    """story-005 replaced the line-prefix check with parse-then-validate; the
+    set of top-level sections enforced is still the schema's required list."""
+    required = tuple(
         json.loads((harness_root / "schemas" / "story.schema.json").read_text())["required"]
     )
+    assert required == ORIGINAL_STORY_SECTIONS
+    problems = story_coordinator.story_problems("story:\n  id: x\n")
+    missing = {
+        problem.split(":")[0].removeprefix("$.")
+        for problem in problems
+        if "found it missing" in problem
+    }
+    missing = {section for section in missing if "." not in section}
+    assert missing == set(ORIGINAL_STORY_SECTIONS) - {"story"}
 
 
 def test_the_section_list_tracks_the_schema_file_rather_than_a_constant(tmp_path):
@@ -384,11 +394,10 @@ def test_the_section_list_tracks_the_schema_file_rather_than_a_constant(tmp_path
     schemas = tmp_path / "schemas"
     schemas.mkdir()
     _write(schemas / "story.schema.json",
-           {"type": "object", "required": ["story", "sentinel_section"]})
-    derived = story_coordinator.load_required_story_sections(tmp_path)
-    assert derived == ("story", "sentinel_section")
-    assert story_coordinator.missing_story_sections("story:\n  id: x\n", derived) == [
-        "sentinel_section"
+           {"type": "object", "required": ["story", "sentinel_section"],
+            "properties": {"story": {"type": "object"}}})
+    assert story_coordinator.story_problems("story:\n  id: x\n", tmp_path) == [
+        "$.sentinel_section: expected a required property, found it missing"
     ]
 
 
