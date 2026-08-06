@@ -32,21 +32,33 @@ class RunState:
     artifacts: list[str] = field(default_factory=list)
 
 
-def story_problems(story_text: str, harness_root: Path | None = None) -> list[str]:
-    """Everything wrong with a story artifact, read structurally.
+@dataclass(frozen=True)
+class StoryReading:
+    """The run's one reading of a story artifact: the parse and its problems."""
+
+    parsed: dict | None
+    problems: list[str]
+
+
+def read_story(story_text: str, harness_root: Path | None = None) -> StoryReading:
+    """Read a story artifact once, structurally, and report what is wrong.
 
     The story is parsed with schemas/story.schema.json steering the parse,
     then the parsed structure is validated against that same schema, so the
     shape the planner is asked to produce and the shape enforced here are one
     file. A parse failure is a single line-numbered message; a structural
     failure is one message per offending path.
+
+    The parse is returned rather than discarded: it is the only reading of the
+    artifact the run makes, and every structural value the coordinator derives
+    from a story comes from it.
     """
     schema = schema_validator.load_schema("story", harness_root)
     try:
         parsed = story_parser.parse(story_text, schema)
     except story_parser.StoryParseError as error:
-        return [str(error)]
-    return schema_validator.validate(parsed, schema)
+        return StoryReading(None, [str(error)])
+    return StoryReading(parsed, schema_validator.validate(parsed, schema))
 
 
 def _state_path(run_dir: Path) -> Path:
@@ -143,15 +155,14 @@ def _escalate(run_dir: Path, state: RunState, reason: str) -> int:
     return 2
 
 
-def _complete(run_dir: Path, state: RunState, story_text: str, target_root: Path) -> int:
+def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) -> int:
     state.status = "completed"
     state.current_stage = ""
     save_state(run_dir, state)
-    title = ""
-    for line in story_text.splitlines():
-        if line.strip().startswith("title:"):
-            title = line.split(":", 1)[1].strip()
-            break
+    # The schema marks title required and the run cannot reach here without
+    # having passed validation, so a missing title is a loud failure rather
+    # than a silently empty report.
+    title = story["story"]["title"]
     report = (
         f"# {state.story_id} Completion Report\n\n"
         f"## Story\n{title}\n\n"
@@ -192,10 +203,10 @@ def run_story(
     # rejection leaves no run directory, no state.json, and no new branch.
     # The schema ships with the harness code, so it is resolved by
     # schema_validator relative to its own module, not from harness_root.
-    problems = story_problems(story_text)
-    if problems:
+    reading = read_story(story_text)
+    if reading.problems:
         print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
-        for problem in problems:
+        for problem in reading.problems:
             print(f"  - {problem}", file=sys.stderr)
         print(
             "Fix the artifact or re-run planning before executing the story.",
@@ -236,6 +247,7 @@ def run_story(
 
         context = context_assembler.build_context(
             story_text=story_text,
+            story=reading.parsed,
             run_dir=run_dir,
             target_root=target_root,
             harness_root=harness_root,
@@ -300,4 +312,4 @@ def run_story(
 
         index += 1
 
-    return _complete(run_dir, state, story_text, target_root)
+    return _complete(run_dir, state, reading.parsed, target_root)

@@ -1,0 +1,206 @@
+story:
+  id: story-006
+  title: One reader of a story artifact
+  description: |
+    Three mechanisms read a story artifact today. story_parser.parse reads it
+    structurally, guided by schemas/story.schema.json, and gates the run at
+    pre-flight. context_assembler.extract_section scans line prefixes to slice
+    the acceptance_criteria block out of raw text, and that slice is what the
+    coordinator injects into the verifier prompt. story_coordinator._complete
+    scans lines a third way for `title:` to build the completion report and the
+    commit message.
+
+    The verifier is the stage that decides whether a story passes, and it
+    evaluates against the output of the weakest of the three readers — a view of
+    the criteria that nothing validated. The two readings are already capable of
+    diverging: extract_section returns the raw indented text block, so it carries
+    YAML syntax the verifier has to interpret, and it terminates at the first
+    unindented line rather than at a structural boundary.
+
+    This story makes the pre-flight parse the run's single reading of the
+    artifact. The parse result is returned rather than discarded, threaded into
+    context assembly, and used to build every structural value the coordinator
+    derives from a story. {{story}} stays deliberately raw — the agents are meant
+    to read the artifact as authored. When this story is done, exactly one
+    mechanism reads a story artifact.
+
+tasks:
+  - Replace story_coordinator.story_problems with read_story, returning a
+    StoryReading dataclass carrying the parsed story and the problem list, so
+    the pre-flight parse is returned rather than discarded.
+  - Thread the parsed story from run_story into context_assembler.build_context
+    as a new required keyword-only argument, alongside the raw story text.
+  - Build the acceptance_criteria placeholder from the parsed list of strings,
+    rendered as dash-prefixed lines, and delete extract_section.
+  - Read the completion report title and commit message subject from the parsed
+    story instead of scanning lines for a `title:` prefix.
+  - Update the existing tests that call story_problems, build_context, or
+    extract_section, retargeting the single-mechanism assertion rather than
+    removing it.
+  - Add tests covering what the verifier now receives, including the cases where
+    the two readers previously diverged.
+
+acceptance_criteria:
+  - story_coordinator exposes read_story(story_text, harness_root=None)
+    returning a StoryReading dataclass with a parsed field (the parsed story, or
+    None when parsing failed) and a problems field (the list of problem
+    messages); story_problems no longer exists on the module.
+  - read_story performs the same parse-then-validate work story_problems
+    performed: it loads the story schema, parses with story_parser.parse, and
+    validates the result against that same schema. A StoryParseError yields a
+    single line-numbered message; a structural failure yields one message per
+    offending path.
+  - run_story calls read_story exactly once per run, above run-directory
+    creation and above the branch checkout, and still exits 1 printing each
+    problem when problems is non-empty, leaving no run directory, no state.json,
+    no log, and no new branch.
+  - context_assembler.build_context takes a required keyword-only story
+    parameter holding the parsed story artifact, in addition to story_text.
+  - The story context value is the raw artifact text, byte-identical to the file
+    on disk, so {{story}} renders exactly as authored.
+  - The acceptance_criteria context value is built from the parsed list of
+    strings as one dash-prefixed line per criterion ("- " followed by the
+    criterion), carrying no YAML indentation and no surrounding quotes.
+  - build_context renders acceptance_criteria as None when the parsed story
+    carries no acceptance_criteria key, rather than raising, matching the
+    optional-placeholder convention.
+  - context_assembler.extract_section no longer exists, and no line-prefix scan
+    of story text remains anywhere in orchestration/.
+  - story_coordinator._complete reads the story title from the parsed story
+    rather than scanning lines for a `title:` prefix, and the completion report
+    and commit message subject are unchanged in content for a valid story.
+  - A criterion containing a colon (for example "- A test demonstrates the
+    one-file-edit property: editing only prompts/harness-layer.md changes all
+    three rendered stage prompts.") reaches the rendered verifier prompt whole,
+    as one criterion.
+  - A hand-wrapped criterion spanning multiple source lines reaches the rendered
+    verifier prompt as a single joined criterion on one line.
+  - A full-line comment written inside the acceptance_criteria block does not
+    appear in the rendered verifier prompt, where the previous line-prefix
+    reader would have carried it through.
+  - The rendered verifier prompt contains every criterion of the story it was
+    rendered from; no criterion present in the artifact is missing from the
+    prompt.
+  - The single-mechanism test in tests/test_story_coordinator.py still asserts
+    that one mechanism reads a story artifact: it counts the read_story call
+    site, and additionally asserts that extract_section is absent from
+    context_assembler and that no `title:` line scan remains in
+    story_coordinator.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q, including
+    the corpus test that globs .harness/stories/*.yaml.
+
+technical_plan:
+  implementation_steps:
+    - In story_coordinator, add a frozen StoryReading dataclass with fields
+      parsed (dict or None) and problems (list of str). Rename story_problems to
+      read_story, keeping its body, and return StoryReading(parsed, problems) —
+      StoryReading(None, [str(error)]) on StoryParseError, and
+      StoryReading(parsed, schema_validator.validate(parsed, schema)) otherwise.
+    - In run_story, replace the story_problems call with a single read_story
+      call, keep the exit-1 refusal path keyed on reading.problems, and hold the
+      parsed story for the rest of the run.
+    - Pass the parsed story into every build_context call in the stage loop, and
+      into _complete.
+    - In context_assembler, delete extract_section. Add build_context's required
+      keyword-only story parameter and a small helper that renders a list of
+      criteria as dash-prefixed lines, returning None for an absent or empty
+      list. Set the acceptance_criteria context value from it; leave the story
+      context value as story_text.
+    - In _complete, take the parsed story and read story["story"]["title"]. The
+      schema marks title required and the run cannot reach _complete without
+      having passed validation, so no fallback is needed — a missing title is a
+      loud failure, not a silent empty string.
+    - Update existing tests to the new names and signature: story_problems call
+      sites in tests/test_story_coordinator.py,
+      tests/test_story_004_validation.py, and tests/test_story_005_validation.py
+      become read_story with .problems; build_context call sites gain story=,
+      parsed from the fixture story text with story_parser.parse under the story
+      schema. Delete test_extract_section_pulls_one_block along with the
+      function it covers.
+    - Retarget test_exactly_one_mechanism_validates_a_story_artifact to count
+      read_story and to assert extract_section and the title line scan are gone.
+    - Add the new tests for the divergence cases: colon criterion, hand-wrapped
+      criterion, in-block comment, absent acceptance_criteria, raw {{story}}
+      fidelity, and the completion-report title source.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      reason: read_story replaces story_problems and returns the parse; the
+        parsed story is threaded into build_context and _complete; the `title:`
+        line scan is removed.
+    - file: orchestration/context_assembler.py
+      reason: extract_section is deleted; build_context takes the parsed story
+        and renders acceptance_criteria from it.
+    - file: tests/test_context_assembler.py
+      reason: extract_section test removed; build_context call sites updated;
+        new tests for the rendered criteria block.
+    - file: tests/test_story_coordinator.py
+      reason: story_problems call sites updated; the single-mechanism assertion
+        retargeted and extended.
+    - file: tests/test_story_004_validation.py
+      reason: story_problems and build_context call sites updated.
+    - file: tests/test_story_005_validation.py
+      reason: story_problems call sites updated.
+    - file: tests/test_harness_layer_extraction.py
+      reason: build_context call sites gain the parsed story argument.
+    - file: tests/test_story_006_validation.py
+      reason: New tests for the single-reader property and the divergence cases
+        the previous reader could get wrong.
+
+scope:
+  modify:
+    - orchestration/context_assembler.py
+    - orchestration/story_coordinator.py
+    - tests/
+  do_not_modify:
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - orchestration/harness_config.py
+    - schemas/
+    - prompts/
+    - workflows/
+    - rules/
+    - scripts/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm from the source that exactly one mechanism reads a story artifact:
+    story_parser.parse, reached through read_story. Confirm extract_section is
+    absent from context_assembler and that neither module scans story text by
+    line prefix any longer.
+  - Confirm read_story is called exactly once in a run, and that the pre-flight
+    refusal still happens before any run directory, state file, log, or branch
+    exists.
+  - Confirm by inspecting a rendered verifier prompt that the acceptance
+    criteria block carries every criterion of the story, one per line, with no
+    YAML indentation or quoting, and that {{story}} is still the raw artifact.
+  - Confirm the verifier lost no information relative to the previous reader:
+    for each committed story under .harness/stories/, every criterion the old
+    line-prefix slice would have carried is present in the new rendered block.
+  - Confirm the existing single-mechanism test was retargeted rather than
+    deleted or weakened, and that no other existing assertion was relaxed to
+    make the suite pass.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
+  - Confirm .harness/docs/ARCHITECTURE.md no longer states that story artifacts
+    are read by two mechanisms deliberately, and instead records the single
+    reader and why {{story}} stays raw. This is documenter work, not implementer
+    scope.
+
+constraints:
+  - The verifier must not lose information it receives today. Every acceptance
+    criterion that reaches the prompt now must still reach it.
+  - {{story}} stays the raw artifact text, unparsed and unreformatted. Agents
+    are meant to read the story as authored.
+  - The story dialect is not YAML. Do not introduce yaml.safe_load or any
+    conforming YAML library; story_parser stays the only parser.
+  - Pre-flight refusal behavior is unchanged: a bad story exits 1 with one
+    message per problem and leaves no run directory, no state.json, no log, and
+    no new branch.
+  - No new placeholders are added to any prompt template, and no prompt template
+    is edited. The verifier's injection surface is otherwise identical to today.
+  - Tests must not weaken or skip existing assertions to pass; a test deleted
+    because the function it covered was deleted is not a weakening, but a
+    surviving assertion must keep its strength.
+  - Standard library only, Python 3.10+, type hints on public functions, and
+    dataclasses for structured values.

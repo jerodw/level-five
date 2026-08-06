@@ -356,7 +356,7 @@ def reject(target_root: Path, harness_root: Path, story_text: str) -> int:
 
 
 def test_a_valid_story_reports_no_problems_and_still_runs(target_root, harness_root):
-    assert story_coordinator.story_problems(VALID_STORY) == []
+    assert story_coordinator.read_story(VALID_STORY).problems == []
     story_file(target_root).write_text(VALID_STORY, encoding="utf-8")
     calls: list[str] = []
 
@@ -442,7 +442,7 @@ def test_pre_flight_validates_against_the_schema_file_on_disk(tmp_path):
         "required": ["story", "invented_section"],
         "properties": {"story": {"type": "object"}},
     }), encoding="utf-8")
-    problems = story_coordinator.story_problems("story:\n  id: x\n", tmp_path)
+    problems = story_coordinator.read_story("story:\n  id: x\n", tmp_path).problems
     assert any("invented_section" in problem for problem in problems)
 
 

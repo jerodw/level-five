@@ -3,6 +3,12 @@ from pathlib import Path
 
 import context_assembler
 import harness_config
+import schema_validator
+import story_parser
+
+
+def parsed_story(story_text: str) -> dict:
+    return story_parser.parse(story_text, schema_validator.load_schema("story"))
 
 
 def test_render_replaces_placeholders_and_defaults_to_none():
@@ -11,13 +17,6 @@ def test_render_replaces_placeholders_and_defaults_to_none():
     assert "the story" in rendered
     assert "Retry state:\nNone" in rendered
     assert "{{" not in rendered
-
-
-def test_extract_section_pulls_one_block():
-    story = "story:\n  id: x\nacceptance_criteria:\n  - a\n  - b\nscope:\n  modify: []\n"
-    section = context_assembler.extract_section(story, "acceptance_criteria")
-    assert section == "  - a\n  - b"
-    assert context_assembler.extract_section(story, "missing_key") is None
 
 
 def test_real_templates_render_without_leftover_placeholders(target_root, harness_root):
@@ -29,6 +28,7 @@ def test_real_templates_render_without_leftover_placeholders(target_root, harnes
 
     context = context_assembler.build_context(
         story_text=story_text,
+        story=parsed_story(story_text),
         run_dir=run_dir,
         target_root=target_root,
         harness_root=harness_root,
@@ -65,6 +65,7 @@ def test_both_changed_files_records_injected_separately(target_root, harness_roo
 
     context = context_assembler.build_context(
         story_text=story_text,
+        story=parsed_story(story_text),
         run_dir=run_dir,
         target_root=target_root,
         harness_root=harness_root,
@@ -86,6 +87,7 @@ def test_tester_changed_files_renders_none_when_absent(target_root, harness_root
 
     context = context_assembler.build_context(
         story_text=story_text,
+        story=parsed_story(story_text),
         run_dir=run_dir,
         target_root=target_root,
         harness_root=harness_root,
@@ -118,7 +120,7 @@ def test_harness_layer_is_single_source_of_truth(target_root, harness_root, tmp_
 
     def render_stages():
         context = context_assembler.build_context(
-            story_text=story_text, run_dir=run_dir, target_root=target_root,
+            story_text=story_text, story=parsed_story(story_text), run_dir=run_dir, target_root=target_root,
             harness_root=fake_root, config=config, rules=rules, retry_count=0,
         )
         return {
@@ -152,6 +154,7 @@ def _context(target_root, harness_root):
     run_dir.mkdir(parents=True, exist_ok=True)
     return context_assembler.build_context(
         story_text=story_text,
+        story=parsed_story(story_text),
         run_dir=run_dir,
         target_root=target_root,
         harness_root=harness_root,
