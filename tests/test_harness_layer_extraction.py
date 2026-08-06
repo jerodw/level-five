@@ -10,8 +10,14 @@ independently of how the extraction was implemented.
 """
 import context_assembler
 import harness_config
+import schema_validator
+import story_parser
 
 STAGE_TEMPLATES = ("implementer.md", "tester.md", "documenter.md")
+
+
+def parsed_story(story_text: str) -> dict:
+    return story_parser.parse(story_text, schema_validator.load_schema("story"))
 
 # The shared block whose duplication story-003 removes. Matched exactly,
 # including the {{blocked_paths}} placeholder line.
@@ -36,6 +42,7 @@ def _build(target_root, harness_root):
     run_dir.mkdir(parents=True, exist_ok=True)
     context = context_assembler.build_context(
         story_text=story_text,
+        story=parsed_story(story_text),
         run_dir=run_dir,
         target_root=target_root,
         harness_root=harness_root,
@@ -125,7 +132,7 @@ def test_one_file_edit_changes_every_stage(target_root, harness_root, tmp_path):
 
     def render_all():
         context = context_assembler.build_context(
-            story_text=story_text, run_dir=run_dir, target_root=target_root,
+            story_text=story_text, story=parsed_story(story_text), run_dir=run_dir, target_root=target_root,
             harness_root=fake_root, config=config, rules=rules, retry_count=0,
         )
         return {
@@ -162,7 +169,7 @@ def test_harness_layer_renders_none_when_partial_absent(target_root, harness_roo
     run_dir.mkdir(parents=True, exist_ok=True)
 
     context = context_assembler.build_context(
-        story_text=story_text, run_dir=run_dir, target_root=target_root,
+        story_text=story_text, story=parsed_story(story_text), run_dir=run_dir, target_root=target_root,
         harness_root=fake_root, config=config, rules=rules, retry_count=0,
     )
     assert context.get("harness_layer") is None

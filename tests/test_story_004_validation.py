@@ -16,6 +16,7 @@ from pathlib import Path
 import context_assembler
 import schema_validator
 import story_coordinator
+import story_parser
 from agent_runner import AgentResult
 
 SHIPPED_SCHEMAS = {
@@ -379,7 +380,7 @@ def test_enforced_story_sections_are_unchanged_and_schema_derived(harness_root):
         json.loads((harness_root / "schemas" / "story.schema.json").read_text())["required"]
     )
     assert required == ORIGINAL_STORY_SECTIONS
-    problems = story_coordinator.story_problems("story:\n  id: x\n")
+    problems = story_coordinator.read_story("story:\n  id: x\n").problems
     missing = {
         problem.split(":")[0].removeprefix("$.")
         for problem in problems
@@ -396,7 +397,7 @@ def test_the_section_list_tracks_the_schema_file_rather_than_a_constant(tmp_path
     _write(schemas / "story.schema.json",
            {"type": "object", "required": ["story", "sentinel_section"],
             "properties": {"story": {"type": "object"}}})
-    assert story_coordinator.story_problems("story:\n  id: x\n", tmp_path) == [
+    assert story_coordinator.read_story("story:\n  id: x\n", tmp_path).problems == [
         "$.sentinel_section: expected a required property, found it missing"
     ]
 
@@ -438,8 +439,10 @@ def test_rendered_prompts_carry_the_schema_file_verbatim(
 
     run_dir = target_root / ".harness" / "runs" / "story-001"
     run_dir.mkdir(parents=True, exist_ok=True)
+    story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
     context = context_assembler.build_context(
-        story_text=(target_root / ".harness" / "stories" / "story-001.yaml").read_text(),
+        story_text=story_text,
+        story=story_parser.parse(story_text, schema_validator.load_schema("story")),
         run_dir=run_dir,
         target_root=target_root,
         harness_root=harness_root,
@@ -473,6 +476,7 @@ def test_a_missing_schemas_directory_does_not_break_context_assembly(
     (fake_root / "prompts" / "stage.md").write_text("Story:\n{{story}}\n")
     context = context_assembler.build_context(
         story_text="story:\n  id: story-001\n",
+        story={"story": {"id": "story-001"}},
         run_dir=target_root / ".harness" / "runs" / "story-001",
         target_root=target_root,
         harness_root=fake_root,

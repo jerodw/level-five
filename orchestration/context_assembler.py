@@ -41,21 +41,16 @@ def _read_files(root: Path, paths: list[str]) -> str | None:
     return "\n".join(sections) if sections else None
 
 
-def extract_section(story_text: str, key: str) -> str | None:
-    """Pull one top-level block (e.g. acceptance_criteria) out of a story."""
-    lines = story_text.splitlines()
-    collected: list[str] = []
-    inside = False
-    for line in lines:
-        if line.startswith(f"{key}:"):
-            inside = True
-            continue
-        if inside and line and not line.startswith((" ", "\t")):
-            break
-        if inside:
-            collected.append(line)
-    text = "\n".join(collected).strip("\n")
-    return text if text.strip() else None
+def _dashed_lines(items: object) -> str | None:
+    """Render a parsed list of criteria as one dash-prefixed line each.
+
+    The list comes from the parse, so each item is already one whole
+    criterion: no YAML indentation, no quoting, no hand-wrapping. An absent
+    or empty list renders as None, the optional-placeholder convention.
+    """
+    if not items:
+        return None
+    return "\n".join(f"- {item}" for item in items)
 
 
 def latest_verifier_finding(run_dir: Path) -> str | None:
@@ -66,6 +61,7 @@ def latest_verifier_finding(run_dir: Path) -> str | None:
 def build_context(
     *,
     story_text: str,
+    story: dict,
     run_dir: Path,
     target_root: Path,
     harness_root: Path,
@@ -86,9 +82,12 @@ def build_context(
             indent=2,
         )
 
+    # {{story}} stays the raw artifact, byte-identical to the file on disk, so
+    # agents read the story as authored. Every *structural* value is taken from
+    # the parse instead, so nothing reads the artifact a second way.
     context: dict[str, str | None] = {
         "story": story_text,
-        "acceptance_criteria": extract_section(story_text, "acceptance_criteria"),
+        "acceptance_criteria": _dashed_lines(story.get("acceptance_criteria")),
         "blocked_paths": "\n".join(f"- {p}" for p in rules.get("blocked_paths", [])),
         "test_command": config.get("test_command"),
         "repository_standards": standards,

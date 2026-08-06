@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import context_assembler
 import story_coordinator
 from agent_runner import AgentResult
 
@@ -228,9 +229,13 @@ def test_an_unparseable_story_is_rejected_with_a_line_number(target_root, harnes
     assert "tab" in err
 
 
-def test_story_problems_are_empty_for_a_valid_story(target_root):
+def test_read_story_reports_no_problems_and_returns_the_parse_for_a_valid_story(
+    target_root,
+):
     story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
-    assert story_coordinator.story_problems(story_text) == []
+    reading = story_coordinator.read_story(story_text)
+    assert reading.problems == []
+    assert reading.parsed["story"]["title"] == "Sample story for coordinator tests"
 
 
 def test_pre_flight_reads_the_schema_file_rather_than_a_constant(tmp_path):
@@ -240,7 +245,7 @@ def test_pre_flight_reads_the_schema_file_rather_than_a_constant(tmp_path):
     write_json(schemas / "story.schema.json",
                {"type": "object", "required": ["story", "sentinel_section"],
                 "properties": {"story": {"type": "object"}}})
-    problems = story_coordinator.story_problems("story:\n  id: x\n", tmp_path)
+    problems = story_coordinator.read_story("story:\n  id: x\n", tmp_path).problems
     assert problems == ["$.sentinel_section: expected a required property, found it missing"]
 
 
@@ -260,14 +265,28 @@ def test_l5_run_exits_1_on_a_rejected_story_without_invoking_an_agent(target_roo
     assert "story/story-001" not in branches(target_root)
 
 
-def test_exactly_one_mechanism_validates_a_story_artifact():
-    """The line-prefix helpers are gone; nothing checks a story a second way."""
+def test_exactly_one_mechanism_reads_a_story_artifact():
+    """One reader, everywhere: no line-prefix helper survives in either module.
+
+    The pre-flight parse reached through read_story is the run's only reading
+    of a story artifact. The coordinator no longer scans for `title:`, and
+    context_assembler no longer slices acceptance_criteria out of raw text.
+    """
     source = Path(story_coordinator.__file__).read_text()
     for obsolete in ("missing_story_sections", "load_required_story_sections",
-                     "REQUIRED_STORY_SECTIONS"):
+                     "REQUIRED_STORY_SECTIONS", "story_problems"):
         assert obsolete not in source, obsolete
         assert not hasattr(story_coordinator, obsolete), obsolete
-    assert source.count("story_problems(") == 2   # the definition and its one call
+    assert source.count("read_story(") == 2   # the definition and its one call
+
+    # The second and third readers this story removed.
+    assert not hasattr(context_assembler, "extract_section")
+    assembler_source = Path(context_assembler.__file__).read_text()
+    assert "extract_section" not in assembler_source
+    for line_scan in ('startswith("title:")', "startswith('title:')",
+                      "story_text.splitlines()"):
+        assert line_scan not in source, line_scan
+        assert line_scan not in assembler_source, line_scan
 
 
 class InvalidArtifactRunner(FakeRunner):
