@@ -20,12 +20,10 @@ Do not:
 
 When you finish, write these files to the run directory at {{run_dir}}:
 
-changed-files.json:
-{
-  "modified": ["<path>", "..."],
-  "created": ["<path>", "..."],
-  "deleted": ["<path>", "..."]
-}
+changed-files.json, your record of every repository file this stage
+touched. It must satisfy this schema:
+
+{{changed_files_schema}}
 
 implementation-summary.md: a concise summary of what you changed, the
 decisions you made, and the result of running the existing test suite.

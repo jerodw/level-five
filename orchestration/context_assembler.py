@@ -106,6 +106,16 @@ def build_context(
         "testing_standards": _read(standards_dir / "testing.md"),
     }
 
+    # Artifact schemas are injected rather than restated inline in prompts, so
+    # the definition an agent is asked to satisfy is the same file the
+    # coordinator enforces. schemas/verification-result.schema.json becomes
+    # {{verification_result_schema}}.
+    for schema_path in sorted((harness_root / "schemas").glob("*.schema.json")):
+        stem = schema_path.name[: -len(".schema.json")]
+        context[stem.replace("-", "_") + "_schema"] = schema_path.read_text(
+            encoding="utf-8"
+        )
+
     # Two-pass render: resolve the shared harness-layer partial (including its
     # own {{blocked_paths}} placeholder) against the assembled context before
     # injecting it, because render() is single-pass and does not re-scan

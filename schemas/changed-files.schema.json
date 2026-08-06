@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "changed-files",
+  "description": "A writing stage's record of the repository files it touched. Shared verbatim by the implementer's changed-files.json and the tester's tester-changed-files.json.",
+  "type": "object",
+  "required": ["modified", "created", "deleted"],
+  "properties": {
+    "modified": {
+      "type": "array",
+      "description": "Repository-relative paths of files this stage changed in place.",
+      "items": { "type": "string" }
+    },
+    "created": {
+      "type": "array",
+      "description": "Repository-relative paths of files this stage added.",
+      "items": { "type": "string" }
+    },
+    "deleted": {
+      "type": "array",
+      "description": "Repository-relative paths of files this stage removed.",
+      "items": { "type": "string" }
+    }
+  }
+}

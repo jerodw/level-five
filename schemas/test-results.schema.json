@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "test-results",
+  "description": "The tester stage's structured result: what validation was written, what was run, and what failed.",
+  "type": "object",
+  "required": ["status"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "description": "Whether the executed suite passed.",
+      "enum": ["passed", "failed"]
+    },
+    "tests_written": {
+      "type": "integer",
+      "description": "Number of new tests this stage authored."
+    },
+    "tests_run": {
+      "type": "integer",
+      "description": "Number of tests executed."
+    },
+    "tests_passed": {
+      "type": "integer",
+      "description": "Number of tests that passed."
+    },
+    "tests_failed": {
+      "type": "integer",
+      "description": "Number of tests that failed."
+    },
+    "failures": {
+      "type": "array",
+      "description": "One entry per failing test.",
+      "items": {
+        "type": "object",
+        "required": ["test", "issue"],
+        "properties": {
+          "test": {
+            "type": "string",
+            "description": "Name of the failing test."
+          },
+          "issue": {
+            "type": "string",
+            "description": "What the failure shows."
+          }
+        }
+      }
+    }
+  }
+}

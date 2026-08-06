@@ -5,18 +5,29 @@
       "name": "implementer",
       "prompt": "implementer.md",
       "outputs": ["changed-files.json", "implementation-summary.md"],
-      "changed_files": "changed-files.json"
+      "changed_files": "changed-files.json",
+      "schemas": {
+        "changed-files.json": "changed-files"
+      }
     },
     {
       "name": "tester",
       "prompt": "tester.md",
       "outputs": ["test-results.json", "tester-changed-files.json"],
-      "changed_files": "tester-changed-files.json"
+      "changed_files": "tester-changed-files.json",
+      "schemas": {
+        "test-results.json": "test-results",
+        "tester-changed-files.json": "changed-files"
+      }
     },
     {
       "name": "verifier",
       "prompt": "verifier.md",
       "outputs": ["verification-result.json"],
+      "schemas": {
+        "verification-result.json": "verification-result",
+        "retry-guidance.json": "retry-guidance"
+      },
       "on_failure": {
         "retry_stage": "implementer",
         "max_retries": 2

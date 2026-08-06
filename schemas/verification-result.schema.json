@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "verification-result",
+  "description": "The verifier stage's verdict. The coordinator routes the workflow on status and retry_recommended, so both are required.",
+  "type": "object",
+  "required": ["status", "retry_recommended"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "description": "The verdict the coordinator routes on.",
+      "enum": ["passed", "failed"]
+    },
+    "blocking_issues": {
+      "type": "array",
+      "description": "Evidence-backed findings that block acceptance.",
+      "items": {
+        "type": "object",
+        "required": ["severity", "issue", "location", "required_behavior"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "description": "How badly the finding blocks acceptance.",
+            "enum": ["high", "medium", "low"]
+          },
+          "issue": {
+            "type": "string",
+            "description": "What failed."
+          },
+          "location": {
+            "type": "string",
+            "description": "File or area the finding applies to."
+          },
+          "required_behavior": {
+            "type": "string",
+            "description": "What must be true for the finding to clear."
+          }
+        }
+      }
+    },
+    "unverified": {
+      "type": "array",
+      "description": "What could not be verified, and why.",
+      "items": { "type": "string" }
+    },
+    "retry_recommended": {
+      "type": "boolean",
+      "description": "Whether the coordinator should route a bounded retry."
+    }
+  }
+}

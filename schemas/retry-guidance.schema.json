@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "retry-guidance",
+  "description": "The verifier's conditional guidance for a bounded retry, written only when verification failed and a retry is recommended.",
+  "type": "object",
+  "required": ["current_focus", "preserve_behavior", "retry_scope"],
+  "properties": {
+    "current_focus": {
+      "type": "array",
+      "description": "The specific things the retry must fix.",
+      "items": { "type": "string" }
+    },
+    "preserve_behavior": {
+      "type": "array",
+      "description": "Accepted behavior the retry must not change.",
+      "items": { "type": "string" }
+    },
+    "retry_scope": {
+      "type": "array",
+      "description": "Files or areas the retry may modify.",
+      "items": { "type": "string" }
+    }
+  }
+}

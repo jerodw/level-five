@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
 
@@ -183,3 +184,129 @@ def test_missing_story_sections_reports_each_absent_key():
     text = "story:\n  id: x\ntasks:\n  - t\nscope:\n  modify: []\n"
     missing = story_coordinator.missing_story_sections(text)
     assert missing == ["acceptance_criteria", "verification_requirements", "constraints"]
+
+
+def test_required_story_sections_come_from_the_schema():
+    assert story_coordinator.REQUIRED_STORY_SECTIONS == (
+        "story",
+        "tasks",
+        "acceptance_criteria",
+        "scope",
+        "verification_requirements",
+        "constraints",
+    )
+    assert story_coordinator.REQUIRED_STORY_SECTIONS == tuple(
+        schema_validator.load_schema("story")["required"]
+    )
+
+
+class InvalidArtifactRunner(FakeRunner):
+    """Corrupts one artifact after the stage that owns it writes it."""
+
+    def __init__(self, *args, corrupt_stage: str, artifact: str, payload, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.corrupt_stage = corrupt_stage
+        self.artifact = artifact
+        self.payload = payload
+
+    def __call__(self, prompt, *, stage, **kwargs):
+        result = super().__call__(prompt, stage=stage, **kwargs)
+        if stage == self.corrupt_stage:
+            path = self.run_dir / self.artifact
+            if isinstance(self.payload, str):
+                path.write_text(self.payload, encoding="utf-8")
+            else:
+                write_json(path, self.payload)
+        return result
+
+
+def test_schema_invalid_artifact_escalates_immediately(target_root, harness_root):
+    runner = InvalidArtifactRunner(
+        target_root, "story-001", [PASS],
+        corrupt_stage="implementer",
+        artifact="changed-files.json",
+        payload={"modified": ["src/app.py"], "created": []},   # no "deleted"
+    )
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 2
+    state = read_state(target_root)
+    assert state["status"] == "escalated"
+    assert state["retry_count"] == 0
+    assert runner.calls == ["implementer"]
+
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    events = (run_dir / "events.log").read_text()
+    summary = (run_dir / "escalation-summary.md").read_text()
+    for text in (events, summary):
+        assert "changed-files.json" in text
+        assert "$.deleted" in text
+        assert "required" in text
+        assert "missing" in text
+
+
+def test_schema_validation_runs_before_the_blocked_paths_check(target_root, harness_root):
+    """A changed-files.json the blocked-paths check could not read escalates as
+    a validation error, not as an exception out of that check."""
+    runner = InvalidArtifactRunner(
+        target_root, "story-001", [PASS],
+        corrupt_stage="implementer",
+        artifact="changed-files.json",
+        payload={"modified": "rules/execution-rules.json", "created": [], "deleted": []},
+    )
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 2
+    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    assert "$.modified" in summary
+    assert "expected type array" in summary
+    assert "blocked path" not in summary
+
+
+def test_unparseable_artifact_escalates_with_the_decode_error(target_root, harness_root):
+    runner = InvalidArtifactRunner(
+        target_root, "story-001", [PASS],
+        corrupt_stage="tester",
+        artifact="test-results.json",
+        payload="{ this is not json",
+    )
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 2
+    assert read_state(target_root)["retry_count"] == 0
+    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    assert "test-results.json" in summary
+    assert "not parseable as JSON" in summary
+
+
+def test_invalid_verifier_artifact_escalates_without_a_retry(target_root, harness_root):
+    runner = InvalidArtifactRunner(
+        target_root, "story-001", [FAIL, PASS],
+        corrupt_stage="verifier",
+        artifact="retry-guidance.json",
+        payload={"current_focus": ["fix it"], "preserve_behavior": []},  # no retry_scope
+    )
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 2
+    assert read_state(target_root)["retry_count"] == 0
+    assert runner.calls == ["implementer", "tester", "verifier"]
+    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    assert "retry-guidance.json" in summary
+    assert "$.retry_scope" in summary
+
+
+def test_absent_retry_guidance_is_not_a_validation_failure(target_root, harness_root):
+    """The happy path never writes retry-guidance.json; that is not an error."""
+    runner = FakeRunner(target_root, "story-001", [PASS])
+    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    assert code == 0
+    run_dir = target_root / ".harness" / "runs" / "story-001"
+    assert not (run_dir / "retry-guidance.json").exists()
+    assert read_state(target_root)["status"] == "completed"
+
+
+def test_valid_artifacts_leave_routing_unchanged(tmp_path):
+    """_schema_violation is silent for artifacts that satisfy their schemas."""
+    write_json(tmp_path / "changed-files.json",
+               {"modified": ["src/app.py"], "created": [], "deleted": [],
+                "note": "an extra key is tolerated"})
+    stage = {"schemas": {"changed-files.json": "changed-files",
+                         "retry-guidance.json": "retry-guidance"}}
+    assert story_coordinator._schema_violation(tmp_path, stage) is None
