@@ -1,0 +1,134 @@
+story:
+  id: story-016
+  title: Assert the coordinator's output shapes directly instead of against a historical implementation
+  description: |
+    Six tests in tests/test_story_011_validation.py load the pre-story-011
+    coordinator out of git history, run it beside the current one, and assert
+    the two produce identical output - the same events.log, the same
+    state.json, the same escalation summary, and the same run-directory
+    contents. They were the right instrument for story-011, whose whole
+    constraint was that adding execution-history.json changed nothing else.
+
+    Once merged they stopped saying that. What they say now is that the
+    coordinator's output may never differ from what one implementation
+    produced on a particular day, measured against whatever workflow ships
+    today. That is not a requirement anyone holds. story-012 adds
+    retry-history.json and story-014 adds clean-clone-result.json, and each
+    legitimately changes the run directory and appends an event. story-014
+    hit this and escalated: nine failures, every one of them this comparison,
+    and the file sits in that story's do_not_modify so no bounded retry could
+    resolve it.
+
+    The instrument also has a shelf life. The historical coordinator is run
+    against today's workflow, schemas and config, a pairing that grows more
+    artificial with each story until the old implementation cannot run at
+    all - not because anything broke, but because it is old.
+
+    This story replaces equality-with-the-past with direct assertions about
+    the shapes the harness wants now. A shape stated outright can be read,
+    argued with, and deliberately changed by a later story that means to
+    change it. Equality with a frozen implementation can only be broken.
+
+    The line format is already pinned directly and stays: line 174 asserts
+    every events.log line equals "[" + entry timestamp + "] " + entry
+    message over a full run. l5-status has its own coverage in
+    tests/test_run_status.py and tests/test_l5_status_cli.py, driven by
+    synthetic event logs, so nothing about it depends on the comparison
+    being removed.
+
+    The one guarantee genuinely lost is that state.json's shape and the
+    escalation summary's text have not drifted. Nothing else asserts them
+    today. This story does not drop that guarantee - it restates it as what
+    the shapes are, rather than as what they once equalled.
+
+tasks:
+  - Add tests/test_coordinator_contract.py holding the standing assertions about the coordinator's output shapes, in a file that is not a per-story execution record, because these are continuing guarantees rather than one story's evidence.
+  - Assert state.json's contract - the exact field set, each field's type, and the status values the coordinator writes - against a real run rather than against a hand-built dictionary.
+  - Assert escalation-summary.md's contract - that it names the story, reports the escalated status, carries the reason, names the stage and retry count where execution stopped, and points at events.log and the verification directory.
+  - Assert the events.log line format directly, as a pattern, so the format is pinned by a statement of what it is rather than only by its correspondence to a history entry.
+  - Assert the run directory contains the artifacts a completed run must produce, as a required subset rather than an exact set, so a later story adding an artifact does not fail an unrelated assertion.
+  - Remove the six tests in tests/test_story_011_validation.py that compare the current coordinator against the historical one, and the fixtures and helpers that exist only to serve them.
+  - Keep the baseline resolution the surviving prompt-scope assertion depends on, removing only what becomes unreachable.
+
+acceptance_criteria:
+  - tests/test_coordinator_contract.py exists and holds every assertion this story adds. It is not named for a story and does not record one story's evidence.
+  - The state.json contract is asserted against the file a real coordinator run wrote, not a dictionary constructed in the test.
+  - The state.json assertion names the exact field set the coordinator writes and fails when a field is added, removed, or renamed.
+  - The state.json assertion pins each field's type and pins the status values a run can end in.
+  - The escalation-summary.md assertion is driven by a real escalated run and fails if any of its five parts is missing - the story-titled heading, the escalated status, the reason, the stage and retry count where execution stopped, and the pointer to events.log and the verification directory.
+  - The events.log format is asserted as a pattern that fails when the timestamp format, the bracketing, or the separator changes.
+  - The run-directory assertion requires the artifacts a completed run must produce and permits others, so adding an artifact in a later story does not fail it.
+  - Each new assertion is shown to fail when the shape it names is violated, so none of them passes regardless of what the coordinator writes.
+  - The six comparison tests are gone from tests/test_story_011_validation.py - the events.log equality, the run-directory difference, both l5-status comparisons, the state.json equality, and the escalation-summary equality.
+  - The fixtures and helpers that existed only for those tests are gone with them, and no code in tests/ loads a coordinator implementation out of git history any longer.
+  - tests/test_story_011_validation.py's prompt-scope assertion still passes, and the baseline resolution it depends on is intact and still guarded.
+  - Every assertion in tests/test_story_011_validation.py that does not depend on the historical coordinator is unchanged - the log-line-to-history correspondence, the ordering and retry-stream checks, and the schema conformance of a run's history.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+  - The full suite still passes when a new artifact is added to a run directory and a new event is appended, demonstrated in the test rather than argued, since that is the change this story exists to permit.
+
+technical_plan:
+  implementation_steps:
+    - Write tests/test_coordinator_contract.py. Drive it from the existing fake-runner fixtures that already produce a completed run and an escalated run without invoking a model, so the assertions read real coordinator output.
+    - Assert state.json by comparing the parsed file's key set against the field names of the coordinator's RunState, read from the dataclass rather than typed out, so the assertion cannot drift from the definition it describes.
+    - Assert the status values by exercising the runs that reach them, so the pinned set is the set the coordinator can actually write.
+    - Assert the events.log format with a compiled pattern applied to every line of a full run, checking the timestamp shape, the brackets, and the single space before the message.
+    - Assert the escalation summary by locating each of its five parts in the text of a real escalated run.
+    - Assert the run directory as a required subset - the artifacts a completed run must contain - and add the demonstration that an extra file present alongside them does not fail it.
+    - Remove from tests/test_story_011_validation.py the both_implementations fixture and the six tests that take it, then the legacy_coordinator fixture, the variant loader, and the pre-story coordinator source helper, which have no other callers.
+    - Keep pre_story_revision, the revision-to-source reader it uses, story_revision, and the tests that guard them - the prompt-scope assertion still depends on that resolution.
+    - Confirm by search that no module under tests/ still reads a coordinator implementation out of git history.
+  likely_file_changes:
+    - file: tests/test_coordinator_contract.py
+      stage: implementer
+      reason: The standing shape assertions, which are this story's deliverable rather than validation of it, and which need the granted stage exception.
+    - file: tests/test_story_011_validation.py
+      stage: implementer
+      reason: Removes the six comparison tests and the machinery that served only them, keeping everything that does not depend on the historical coordinator.
+    - file: tests/test_story_016_validation.py
+      stage: tester
+      reason: Independent validation - that each new assertion can fail, that the removals took only what was unreachable, and that a run gaining an artifact and an event no longer fails anything.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records where the coordinator's output contract is asserted, and the decision to state shapes directly rather than compare against a historical implementation.
+
+scope:
+  modify:
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - workflows/
+    - schemas/
+    - rules/
+    - scripts/
+    - prompts/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .github/workflows/tests.yml
+    - tests/test_run_status.py
+    - tests/test_l5_status_cli.py
+
+verification_requirements:
+  - Confirm each new assertion fails when the shape it names is violated, by violating it. An assertion that passes regardless of what the coordinator writes is the defect this story exists to remove, and reproducing it would be the worst possible outcome.
+  - Confirm the run-directory assertion permits an artifact it does not name, since that permission is the whole point - story-012 and story-014 both add one.
+  - Confirm the state.json field set is read from the coordinator's own definition rather than typed into the test, so it cannot silently disagree with the dataclass.
+  - Confirm no module under tests/ loads a coordinator implementation out of git history, by search rather than by inspection.
+  - Confirm the surviving assertions in tests/test_story_011_validation.py are unchanged other than the removals - read the diff and confirm no remaining assertion's subject or strictness moved.
+  - Confirm the prompt-scope assertion in that file still passes and still fails when a prompt is changed inside story-011's own commit range.
+  - Confirm no file under orchestration/, workflows/, schemas/, rules/, scripts/ or prompts/ changed.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - This story must land before story-014 is re-run. story-014 escalated on exactly these six assertions, and re-running it before they are replaced reproduces the same escalation.
+  - Removing a test is not weakening it when the guarantee it carried is restated directly and shown to fail on violation. Every guarantee the six comparisons carried must be present in the new file before they are removed - the state.json shape, the escalation summary's parts, the events.log format, and the run directory's required contents.
+  - Do not assert the run directory as an exact set. Requiring exactly the artifacts that exist today reproduces the friction this story removes, one story later.
+  - Do not restate what is already covered. The line format's correspondence to the history entry stays where it is, and l5-status is covered by tests/test_run_status.py and tests/test_l5_status_cli.py, neither of which this story touches.
+  - tests/test_story_011_validation.py is an execution record and this story edits it deliberately, as its deliverable. Take only the six comparison tests and the code that served only them; leave every other assertion's subject and strictness exactly as written.
+  - The new file is not a per-story validation file. It holds continuing guarantees about the coordinator's output and is expected to be edited by any later story that means to change one of those shapes.
+  - Standard library only, Python 3.10+, type hints on public functions.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/
+    reason: This story's deliverable is tests/test_coordinator_contract.py - the direct shape assertions that replace the removed comparisons. The file is the implementation, not validation of it, in the same way a story whose deliverable is a check needs the filesystem rule lifted. Independence is preserved - the tester still writes tests/test_story_016_validation.py and validates that each new assertion can fail and that the removals took only unreachable code.
