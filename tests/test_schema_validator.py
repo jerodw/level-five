@@ -15,6 +15,9 @@ SHIPPED = (
     "verification-result",
     "retry-guidance",
     "story",
+    # Coordinator-written rather than stage-written, so no workflow stage maps
+    # to it; it is shipped and validator-checked like every other schema.
+    "execution-history",
 )
 
 OBJECT_SCHEMA = {
@@ -132,7 +135,7 @@ def test_unknown_type_name_raises():
         schema_validator.validate("x", {"type": "text"})
 
 
-def test_shipped_schemas_are_exactly_the_five_named():
+def test_shipped_schemas_are_exactly_the_named_ones():
     names = sorted(p.name for p in schema_validator.schemas_dir().glob("*"))
     assert names == sorted(f"{name}.schema.json" for name in SHIPPED)
 

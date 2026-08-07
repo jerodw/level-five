@@ -115,10 +115,68 @@ def load_state(run_dir: Path) -> RunState | None:
     return RunState(**json.loads(path.read_text(encoding="utf-8")))
 
 
-def append_event(run_dir: Path, message: str) -> None:
+def _history_path(run_dir: Path) -> Path:
+    return run_dir / "execution-history.json"
+
+
+def load_history(run_dir: Path) -> list[dict]:
+    """The run's structured history so far, empty before the first event."""
+    path = _history_path(run_dir)
+    if not path.is_file():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def append_event(
+    run_dir: Path,
+    message: str,
+    *,
+    kind: str = "note",
+    stage: str | None = None,
+    artifacts: list[str] | None = None,
+    duration_seconds: float | None = None,
+    verifier_outcome: str | None = None,
+    retry_decision: str | None = None,
+    retry_reason: str | None = None,
+) -> None:
+    """Append one event in both renderings, from one call.
+
+    events.log stays exactly what it was — one `[timestamp] message` line,
+    written from the prose message alone — because it is the format l5-status
+    reads and the appendix documents. The structured keyword fields feed
+    execution-history.json, the same events rendered for a reader that wants
+    to route a query rather than read a stream. One write path is the point:
+    a second one, however correct, is drift waiting to happen.
+
+    History is evidence, never state. Nothing here is read back to make a
+    routing decision; state.json remains the coordinator's only routing
+    source.
+    """
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(run_dir / "events.log", "a", encoding="utf-8") as log:
         log.write(f"[{stamp}] {message}\n")
+
+    history = load_history(run_dir)
+    entry: dict = {
+        "sequence": len(history) + 1,
+        "timestamp": stamp,
+        "event": kind,
+        "message": message,
+    }
+    optional = {
+        "stage": stage,
+        "artifacts": artifacts,
+        "duration_seconds": duration_seconds,
+        "verifier_outcome": verifier_outcome,
+        "retry_decision": retry_decision,
+        "retry_reason": retry_reason,
+    }
+    entry.update({key: value for key, value in optional.items() if value is not None})
+    history.append(entry)
+    _history_path(run_dir).write_text(
+        json.dumps(history, indent=2) + "\n", encoding="utf-8"
+    )
+
     print(f"[{stamp}] {message}")
 
 
@@ -255,10 +313,23 @@ def _refuse(story_path: Path, problems: list[str]) -> int:
     return 1
 
 
-def _escalate(run_dir: Path, state: RunState, reason: str) -> int:
+def _escalate(run_dir: Path, state: RunState, reason: str, **event_fields) -> int:
+    """End the run, recording the escalation in both renderings.
+
+    A run that failed must be as reconstructable as one that passed, so the
+    history ends with this entry. Callers forward whatever structured fields
+    the escalation has — the stage's elapsed time, the verifier's outcome,
+    the decision that routed here — through event_fields.
+    """
     state.status = "escalated"
     save_state(run_dir, state)
-    append_event(run_dir, f"escalated: {reason}")
+    append_event(
+        run_dir,
+        f"escalated: {reason}",
+        kind="escalated",
+        stage=state.current_stage or None,
+        **event_fields,
+    )
     summary = (
         f"# {state.story_id} Escalation Summary\n\n"
         f"## Status\nEscalated\n\n"
@@ -294,7 +365,11 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
     _git(target_root, "add", "-A")
     _git(target_root, "commit", "-m", f"{state.story_id}: {title}\n\nImplemented by the l5 harness story workflow.")
-    append_event(run_dir, f"story completed on branch {state.branch}")
+    append_event(
+        run_dir,
+        f"story completed on branch {state.branch}",
+        kind="story-completed",
+    )
     return 0
 
 
@@ -346,14 +421,31 @@ def run_story(
         )
         return 1
     if state:
-        append_event(run_dir, f"resumed at stage {state.current_stage}")
+        append_event(
+            run_dir,
+            f"resumed at stage {state.current_stage}",
+            kind="resumed",
+            stage=state.current_stage,
+        )
     else:
         branch = config.get("branch_prefix", "story/") + story_id
         state = RunState(story_id=story_id, branch=branch, current_stage=stage_names[0])
         save_state(run_dir, state)
-        append_event(run_dir, f"workflow started for {story_id}")
+        append_event(
+            run_dir, f"workflow started for {story_id}", kind="workflow-started"
+        )
 
     _checkout_story_branch(target_root, state.branch)
+
+    # Stage timing: started where the stage-started event is appended, read at
+    # whichever event ends the stage, so a completed stage carries an elapsed
+    # duration the log only made derivable.
+    stage_started_at: float | None = None
+
+    def elapsed() -> float | None:
+        if stage_started_at is None:
+            return None
+        return round(time.monotonic() - stage_started_at, 3)
 
     index = stage_names.index(state.current_stage)
     while index < len(stages):
@@ -361,7 +453,8 @@ def run_story(
         name = stage["name"]
         state.current_stage = name
         save_state(run_dir, state)
-        append_event(run_dir, f"{name} stage started")
+        stage_started_at = time.monotonic()
+        append_event(run_dir, f"{name} stage started", kind="stage-started", stage=name)
 
         context = context_assembler.build_context(
             story_text=story_text,
@@ -388,21 +481,38 @@ def run_story(
             allowed_tools=config.get("allowed_tools"),
         )
         if not result.ok:
-            return _escalate(run_dir, state, f"{name} agent process failed")
+            return _escalate(
+                run_dir, state, f"{name} agent process failed", duration_seconds=elapsed()
+            )
 
         missing = [out for out in stage.get("outputs", []) if not (run_dir / out).is_file()]
         if missing:
-            return _escalate(run_dir, state, f"{name} did not produce required artifacts: {', '.join(missing)}")
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} did not produce required artifacts: {', '.join(missing)}",
+                duration_seconds=elapsed(),
+            )
 
         violation = _schema_violation(run_dir, stage)
         if violation:
-            return _escalate(run_dir, state, f"{name} wrote an invalid artifact: {violation}")
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} wrote an invalid artifact: {violation}",
+                duration_seconds=elapsed(),
+            )
 
         record_name = stage.get("changed_files")
         if record_name:
             violation = _blocked_violation(run_dir, record_name, rules.get("blocked_paths", []))
             if violation:
-                return _escalate(run_dir, state, f"{name} modified blocked path: {violation}")
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"{name} modified blocked path: {violation}",
+                    duration_seconds=elapsed(),
+                )
 
             # Stage output ownership, read from the workflow definition the
             # way blocked paths are read from the rules. A story may lift a
@@ -415,6 +525,8 @@ def run_story(
                     append_event(
                         run_dir,
                         f"stage exception applied: {name} may create {granted}",
+                        kind="stage-exception-applied",
+                        stage=name,
                     )
             ownership = _ownership_violation(run_dir, record_name, enforced)
             if ownership:
@@ -423,6 +535,7 @@ def run_story(
                     state,
                     f"{name} created {ownership.path}, which it declared it "
                     f"must not create under {ownership.prefix}",
+                    duration_seconds=elapsed(),
                 )
 
         if name == "verifier":
@@ -430,8 +543,19 @@ def run_story(
             state.verification_iterations += 1
             archive = run_dir / "verification" / f"iteration-{state.verification_iterations}.json"
             archive.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+            # The artifacts an entry names come off the stage's declared
+            # outputs in the loaded workflow, never a list written here.
+            outputs = stage.get("outputs", [])
             if verdict.get("status") == "passed":
-                append_event(run_dir, "verification passed")
+                append_event(
+                    run_dir,
+                    "verification passed",
+                    kind="verification-passed",
+                    stage=name,
+                    artifacts=outputs,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict["status"],
+                )
             elif verdict.get("retry_recommended") and state.retry_count < rules["max_retries"]:
                 # Archive before the retry begins, while the root artifacts
                 # still describe the attempt that just failed. The attempt
@@ -447,15 +571,48 @@ def run_story(
                     run_dir,
                     f"verification failed; retry {state.retry_count} of "
                     f"{rules['max_retries']} rerouted to {stage['on_failure']['retry_stage']}",
+                    kind="verification-failed",
+                    stage=name,
+                    artifacts=outputs,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="retry",
+                    retry_reason=(
+                        "the verifier recommended a retry and the retry ceiling "
+                        "was not reached"
+                    ),
                 )
                 index = stage_names.index(stage["on_failure"]["retry_stage"])
                 continue
             elif verdict.get("retry_recommended"):
-                return _escalate(run_dir, state, "verification failed and retries are exhausted")
+                return _escalate(
+                    run_dir,
+                    state,
+                    "verification failed and retries are exhausted",
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason=f"the retry ceiling of {rules['max_retries']} was reached",
+                )
             else:
-                return _escalate(run_dir, state, "verification failed and the verifier did not recommend a retry")
+                return _escalate(
+                    run_dir,
+                    state,
+                    "verification failed and the verifier did not recommend a retry",
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason="the verifier did not recommend a retry",
+                )
         else:
-            append_event(run_dir, f"{name} stage completed")
+            append_event(
+                run_dir,
+                f"{name} stage completed",
+                kind="stage-completed",
+                stage=name,
+                artifacts=stage.get("outputs", []),
+                duration_seconds=elapsed(),
+            )
 
         index += 1
 
