@@ -132,16 +132,42 @@ def _git_argument_list(node: ast.Call) -> list[ast.expr] | None:
     return list(first.elts)
 
 
-def _targets_the_repository_root(node: ast.Call, elements: list[ast.expr]) -> bool:
-    """Through `-C <root>` in the argument list, or `cwd=<root>`."""
+def _declared_target(node: ast.Call, elements: list[ast.expr]) -> ast.expr | None:
+    """The expression naming where this git call runs, or None if it names none.
+
+    `-C <path>` in the argument list, or the `cwd=` keyword. Which of the two
+    is used does not matter; that a target was stated at all does.
+    """
     for index, element in enumerate(elements[:-1]):
-        if _literal_text(element) == "-C" and _names_the_repository_root(
-                elements[index + 1]):
-            return True
-    return any(
-        keyword.arg == "cwd" and _names_the_repository_root(keyword.value)
-        for keyword in node.keywords
-    )
+        if _literal_text(element) == "-C":
+            return elements[index + 1]
+    for keyword in node.keywords:
+        if keyword.arg == "cwd":
+            return keyword.value
+    return None
+
+
+def _targets_the_repository_root(node: ast.Call, elements: list[ast.expr]) -> bool:
+    """Whether this git call runs against the repository under test.
+
+    Three cases, and the third is why this is not simply "does it say
+    REPO_ROOT". A call that states no target inherits the parent process's
+    working directory — that is what `subprocess` does, not a guess about
+    what the author meant — and pytest runs this suite from the repository
+    root. So saying nothing is not neutral: it names this repository by
+    default, and the check must read it that way or the dishonest baseline
+    the whole module exists to catch simply moves one keyword away.
+
+    The scan never evaluates an expression or reasons about what a variable
+    holds. It asks only whether a target was stated, and if so whether it is
+    written as one of the two names that stand for this repository. A stated
+    target that is anything else is somebody's throwaway repository and is
+    not this check's business.
+    """
+    target = _declared_target(node, elements)
+    if target is None:
+        return True
+    return _names_the_repository_root(target)
 
 
 def _head_derived(text: str) -> bool:
@@ -185,11 +211,45 @@ def flagged_calls(source: str, module: str) -> list[Flag]:
     return flags
 
 
+def undeclared_targets(source: str, module: str) -> list[Flag]:
+    """Every git invocation in one module that does not say where it runs.
+
+    A second, independent rule, and a stricter one: it does not care what the
+    call asks for. An implicit target is the ambiguity that let the baseline
+    check above be evaded by deleting a keyword, and the same ambiguity would
+    return through any other subcommand. Requiring the target to be stated
+    removes the question rather than answering it each time.
+
+    No module is exempt. The baseline exemption exists because comparing the
+    working tree against HEAD is *correct* in exactly one place; there is
+    nowhere that leaving the target unsaid is correct.
+    """
+    flags = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not _is_subprocess_call(node):
+            continue
+        elements = _git_argument_list(node)
+        if elements is None or _declared_target(node, elements) is not None:
+            continue
+        flags.append(Flag(
+            module=module, line=node.lineno,
+            reason=("runs git without saying where: no `-C` and no `cwd=`, so "
+                    "it inherits the process working directory, which is this "
+                    "repository"),
+        ))
+    return flags
+
+
 def scanned_modules() -> list[Path]:
     """Discovered by globbing, never by naming, so a new module is covered
     the moment it lands."""
     return [path for path in sorted(TESTS_DIR.glob("*.py"))
             if path.name not in EXEMPT_MODULES]
+
+
+def all_modules() -> list[Path]:
+    """Every module, including the one the baseline check exempts."""
+    return sorted(TESTS_DIR.glob("*.py"))
 
 
 # --------------------------------------------------------------------------
@@ -221,6 +281,53 @@ def test_no_module_in_the_suite_resolves_a_dishonest_baseline():
         for flag in flagged_calls(path.read_text(encoding="utf-8"), path.name)
     ]
     assert flags == [], "\n".join(str(flag) for flag in flags)
+
+
+def test_no_module_runs_git_without_saying_where():
+    """The stricter companion rule, over every module including the exempt one.
+
+    This is what closes the evasion the baseline check had: a call stating no
+    target inherits the process working directory, so `git diff HEAD` without
+    a `cwd=` asked about this repository while reading as though it asked
+    about nothing.
+    """
+    flags = [
+        flag
+        for path in all_modules()
+        for flag in undeclared_targets(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert flags == [], "\n".join(str(flag) for flag in flags)
+
+
+def test_an_undeclared_target_is_flagged_whatever_the_call_asks_for():
+    """The rule is about the missing target, not about the subcommand.
+
+    Both sources below are dishonest in the same way and neither names a
+    revision, so the baseline check has nothing to say about them; this one
+    does.
+    """
+    benign = "import subprocess\nsubprocess.run(['git', 'status'])\n"
+    assert len(undeclared_targets(benign, "probe.py")) == 1
+    assert flagged_calls(benign, "probe.py") == []
+
+    declared = "import subprocess\nsubprocess.run(['git', 'status'], cwd=tmp)\n"
+    assert undeclared_targets(declared, "probe.py") == []
+
+
+def test_an_undeclared_target_carrying_head_is_caught_by_both_rules():
+    """The hole this closes, stated as a test.
+
+    Before the target became three-valued, dropping `cwd=REPO_ROOT` from a
+    `git diff HEAD` call made it invisible to the baseline check while
+    changing nothing about what it did.
+    """
+    evasion = "import subprocess\nsubprocess.run(['git', 'diff', 'HEAD'])\n"
+    assert len(flagged_calls(evasion, "probe.py")) == 1
+    assert len(undeclared_targets(evasion, "probe.py")) == 1
+
+    elsewhere = ("import subprocess\n"
+                 "subprocess.run(['git', 'diff', 'HEAD'], cwd=tmp_path)\n")
+    assert flagged_calls(elsewhere, "probe.py") == []
 
 
 @pytest.mark.parametrize("name", [
@@ -515,7 +622,7 @@ def test_the_resolution_raises_when_the_history_does_not_reach_far_enough(tmp_pa
     shallow = tmp_path / "shallow"
     subprocess.run(
         ["git", "clone", "--depth", "1", "-q", root.as_uri(), str(shallow)],
-        capture_output=True, text=True, check=True,
+        cwd=tmp_path, capture_output=True, text=True, check=True,
     )
     validation_file = shallow / "tests" / "test_story_009_validation.py"
     assert validation_file.is_file()
