@@ -1,0 +1,9 @@
+{
+  "story_id": "story-014",
+  "branch": "story/story-014",
+  "status": "escalated",
+  "current_stage": "verifier",
+  "retry_count": 0,
+  "verification_iterations": 1,
+  "artifacts": []
+}

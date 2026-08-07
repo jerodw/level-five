@@ -1,0 +1,45 @@
+{
+  "status": "failed",
+  "tests_written": 49,
+  "tests_run": 475,
+  "tests_passed": 466,
+  "tests_failed": 9,
+  "failures": [
+    {
+      "test": "tests/test_story_011_validation.py::test_events_log_lines_are_byte_identical_to_the_pre_story_format[happy_path]",
+      "issue": "The differential fixture drives the pre-story-011 coordinator and the current one over the repository's shipped workflow, which now declares clean_clone on the verifier stage. The legacy coordinator predates that key and never runs the check, so the current run's log carries one extra line - 'clean-clone suite passed with the story committed' at index 13 - and the equality on the full message list fails. The line format itself is unchanged: every line still matches the frozen '[%Y-%m-%d %H:%M:%S] <message>' pattern, which messages() asserts line by line and which passes."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_events_log_lines_are_byte_identical_to_the_pre_story_format[retry_then_pass]",
+      "issue": "Same cause as the happy_path case: one extra 'clean-clone suite passed with the story committed' line in the current run's events.log, absent from the legacy run because the legacy coordinator cannot honour the clean_clone declaration. Only the shapes that reach a passing verifier fail; the escalated and escalated_without_a_retry parameters pass, because no clean-clone check runs there."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_the_legacy_run_wrote_no_history_and_this_one_did[happy_path]",
+      "issue": "assert names(current_root) - names(legacy_root) == {'execution-history.json'} fails with 'clean-clone-result.json' as the extra item. The assertion says no story may ever add a run-directory artifact again; story-014 adds the coordinator's clean-clone record, which its acceptance criteria require to exist in the run directory after any run that reached a passing verifier."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_the_legacy_run_wrote_no_history_and_this_one_did[retry_then_pass]",
+      "issue": "Same extra item, 'clean-clone-result.json', on the retry_then_pass shape."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_l5_status_renders_a_run_identically_before_and_after[happy_path]",
+      "issue": "run_status.format_detail tails events.log, so the extra clean-clone line makes the current run's rendering differ from the legacy run's. run_status itself is unchanged and reads the same two files in the same way; what differs is the content of the log it renders."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_l5_status_renders_a_run_identically_before_and_after[retry_then_pass]",
+      "issue": "Same cause on the retry_then_pass shape."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_l5_status_through_the_script_is_unchanged[happy_path]",
+      "issue": "The same rendering difference observed end to end through scripts/l5-status rather than through the module behind it. The entry point is unchanged; the tailed log carries one more line."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_l5_status_through_the_script_is_unchanged[retry_then_pass]",
+      "issue": "Same cause on the retry_then_pass shape."
+    },
+    {
+      "test": "tests/test_story_011_validation.py::test_a_run_whose_history_keeps_disappearing_routes_identically",
+      "issue": "The run whose execution-history.json is deleted before every stage still routes identically - runner.calls and state.json both compare equal, and those assertions pass - but the test then compares the two implementations' full log message lists and fails at index 13 on the same extra clean-clone line."
+    }
+  ]
+}

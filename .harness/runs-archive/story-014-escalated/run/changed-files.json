@@ -1,0 +1,17 @@
+{
+  "modified": [
+    "orchestration/story_coordinator.py",
+    "orchestration/context_assembler.py",
+    "workflows/story-workflow.json",
+    "schemas/execution-history.schema.json",
+    "prompts/implementer.md",
+    "tests/test_schema_validator.py",
+    "tests/test_story_004_validation.py",
+    "tests/test_story_009_validation.py",
+    "tests/test_story_010_validation.py"
+  ],
+  "created": [
+    "schemas/clean-clone-result.schema.json"
+  ],
+  "deleted": []
+}

@@ -1,0 +1,64 @@
+[
+  {
+    "sequence": 1,
+    "timestamp": "2026-08-07 12:55:21",
+    "event": "workflow-started",
+    "message": "workflow started for story-014"
+  },
+  {
+    "sequence": 2,
+    "timestamp": "2026-08-07 12:55:21",
+    "event": "stage-started",
+    "message": "implementer stage started",
+    "stage": "implementer"
+  },
+  {
+    "sequence": 3,
+    "timestamp": "2026-08-07 13:07:51",
+    "event": "stage-completed",
+    "message": "implementer stage completed",
+    "stage": "implementer",
+    "artifacts": [
+      "changed-files.json",
+      "implementation-summary.md"
+    ],
+    "duration_seconds": 749.085
+  },
+  {
+    "sequence": 4,
+    "timestamp": "2026-08-07 13:07:51",
+    "event": "stage-started",
+    "message": "tester stage started",
+    "stage": "tester"
+  },
+  {
+    "sequence": 5,
+    "timestamp": "2026-08-07 13:16:14",
+    "event": "stage-completed",
+    "message": "tester stage completed",
+    "stage": "tester",
+    "artifacts": [
+      "test-results.json",
+      "tester-changed-files.json"
+    ],
+    "duration_seconds": 503.643
+  },
+  {
+    "sequence": 6,
+    "timestamp": "2026-08-07 13:16:14",
+    "event": "stage-started",
+    "message": "verifier stage started",
+    "stage": "verifier"
+  },
+  {
+    "sequence": 7,
+    "timestamp": "2026-08-07 13:19:56",
+    "event": "escalated",
+    "message": "escalated: verification failed and the verifier did not recommend a retry",
+    "stage": "verifier",
+    "duration_seconds": 222.272,
+    "verifier_outcome": "failed",
+    "retry_decision": "escalate",
+    "retry_reason": "the verifier did not recommend a retry"
+  }
+]
