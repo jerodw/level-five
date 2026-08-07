@@ -11,13 +11,23 @@ import sys
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import context_assembler  # noqa: E402
 
 
 def main() -> None:
     if len(sys.argv) < 2:
         sys.exit(__doc__.strip())
     request = " ".join(sys.argv[1:])
-    planner_prompt = (HARNESS_ROOT / "prompts" / "planner.md").read_text(encoding="utf-8")
+    # The planner is not a workflow stage, so no coordinator renders its
+    # template. Render it here against the same schema context the coordinator
+    # builds, so the story contract reaches the planner as the schema file
+    # itself rather than as a copy of it that can drift.
+    template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
+    planner_prompt = context_assembler.render(
+        template, context_assembler.schema_context(HARNESS_ROOT)
+    )
     os.execvp(
         "claude",
         [

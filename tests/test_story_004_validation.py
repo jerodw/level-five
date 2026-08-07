@@ -427,7 +427,11 @@ def test_each_prompt_injects_the_schema_for_every_artifact_it_must_write(harness
 
 
 def test_prompts_this_story_leaves_alone_carry_no_schema_placeholders(harness_root):
-    for name in ("planner.md", "assist.md", "documenter.md", "harness-layer.md"):
+    # planner.md left this list in story-008, which injects {{story_schema}}
+    # there deliberately; tests/test_story_008_validation.py holds that
+    # property now. The assertion is unchanged for the prompts still without
+    # schema injection.
+    for name in ("assist.md", "documenter.md", "harness-layer.md"):
         text = (harness_root / "prompts" / name).read_text()
         assert "_schema}}" not in text, name
 
