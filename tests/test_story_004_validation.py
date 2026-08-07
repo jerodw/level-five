@@ -25,6 +25,9 @@ SHIPPED_SCHEMAS = {
     "verification-result",
     "retry-guidance",
     "story",
+    # story-011: the coordinator's own execution-history.json. No stage maps
+    # to it, and the inventory below stays exact.
+    "execution-history",
 }
 
 ORIGINAL_STORY_SECTIONS = (
@@ -114,7 +117,7 @@ def test_the_validation_step_hard_codes_no_artifact_or_schema_name():
 # --------------------------------------------------------------------------
 
 
-def test_schemas_directory_holds_exactly_the_five_named_schemas(harness_root):
+def test_schemas_directory_holds_exactly_the_named_schemas(harness_root):
     present = {p.name for p in (harness_root / "schemas").iterdir()}
     assert present == {f"{name}.schema.json" for name in SHIPPED_SCHEMAS}
 

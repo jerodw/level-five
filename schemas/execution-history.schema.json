@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "execution-history",
+  "description": "The coordinator's structured rendering of a run's events, one entry per line appended to events.log, in the same order. History is evidence, never state: no routing decision reads it. The coordinator writes it and does not validate its own write at run time; conformance is checked by the story's tests.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "description": "One event. sequence, timestamp, event and message are present on every entry; the remaining fields appear only on the events that have them.",
+    "required": ["sequence", "timestamp", "event", "message"],
+    "properties": {
+      "sequence": {
+        "type": "integer",
+        "description": "1-based position in the stream, matching the line number in events.log."
+      },
+      "timestamp": {
+        "type": "string",
+        "description": "Wall-clock time the event was appended, in the same YYYY-MM-DD HH:MM:SS form events.log uses."
+      },
+      "event": {
+        "type": "string",
+        "description": "What kind of event this is.",
+        "enum": [
+          "workflow-started",
+          "resumed",
+          "stage-started",
+          "stage-completed",
+          "stage-exception-applied",
+          "verification-passed",
+          "verification-failed",
+          "escalated",
+          "story-completed",
+          "note"
+        ]
+      },
+      "message": {
+        "type": "string",
+        "description": "The prose line as it was written to events.log, without the timestamp prefix."
+      },
+      "stage": {
+        "type": "string",
+        "description": "The workflow stage the event belongs to. Absent on events that belong to the run rather than a stage."
+      },
+      "artifacts": {
+        "type": "array",
+        "description": "The artifacts the stage produced, taken from that stage's declared outputs in the workflow definition.",
+        "items": { "type": "string" }
+      },
+      "duration_seconds": {
+        "type": "number",
+        "description": "Elapsed seconds since the stage started, on the event that ends a stage."
+      },
+      "verifier_outcome": {
+        "type": "string",
+        "description": "The verifier's verdict, on events that carry one.",
+        "enum": ["passed", "failed"]
+      },
+      "retry_decision": {
+        "type": "string",
+        "description": "The routing decision taken after a failed verification.",
+        "enum": ["retry", "escalate"]
+      },
+      "retry_reason": {
+        "type": "string",
+        "description": "Why that retry decision was taken."
+      }
+    }
+  }
+}
