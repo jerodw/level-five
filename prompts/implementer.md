@@ -77,5 +77,9 @@ Most recent verifier finding:
 Retry guidance:
 {{retry_guidance}}
 
+Clean-clone result — the suite run in a fresh clone with the story
+committed into it. When it failed, this is what the retry must resolve:
+{{clean_clone_result}}
+
 Retry state:
 {{retry_state}}

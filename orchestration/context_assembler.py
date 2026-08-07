@@ -161,6 +161,10 @@ def build_context(
         "verification_result": _read(run_dir / "verification-result.json"),
         "latest_verifier_finding": latest_verifier_finding(run_dir),
         "retry_guidance": _read(run_dir / "retry-guidance.json"),
+        # A clean-clone retry has no verifier finding behind it — the verifier
+        # passed — so this is how the retried implementer receives the
+        # evidence, rather than the coordinator fabricating retry-guidance.json.
+        "clean_clone_result": _read(run_dir / "clean-clone-result.json"),
         "retry_state": retry_state,
         "testing_standards": _read(standards_dir / "testing.md"),
     }

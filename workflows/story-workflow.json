@@ -29,6 +29,7 @@
         "verification-result.json": "verification-result",
         "retry-guidance.json": "retry-guidance"
       },
+      "clean_clone": "clean-clone-result.json",
       "on_failure": {
         "retry_stage": "implementer",
         "max_retries": 2

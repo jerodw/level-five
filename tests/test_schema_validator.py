@@ -18,6 +18,9 @@ SHIPPED = (
     # Coordinator-written rather than stage-written, so no workflow stage maps
     # to it; it is shipped and validator-checked like every other schema.
     "execution-history",
+    # story-014: the coordinator's clean-clone record, coordinator-written for
+    # the same reason. The inventory below stays exact.
+    "clean-clone-result",
 )
 
 OBJECT_SCHEMA = {

@@ -28,6 +28,8 @@ SHIPPED_SCHEMAS = {
     # story-011: the coordinator's own execution-history.json. No stage maps
     # to it, and the inventory below stays exact.
     "execution-history",
+    # story-014: the coordinator's own clean-clone-result.json, same reason.
+    "clean-clone-result",
 }
 
 ORIGINAL_STORY_SECTIONS = (

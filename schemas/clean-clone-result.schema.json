@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "clean-clone-result",
+  "description": "The coordinator's record of the clean-clone check: the configured test command run a second time in a fresh clone of the repository with the story committed into it, after the verifier passes and before the documenter runs. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a reader can tell the check ran rather than inferring it from a pass. Optional fields are expressed by absence rather than by null, as execution-history does: a check that refused to run has no exit code to report.",
+  "type": "object",
+  "required": ["ran", "command", "python"],
+  "properties": {
+    "ran": {
+      "type": "boolean",
+      "description": "Whether the suite actually ran in the clone. False when the check refused to run, in which case reason says why and exit_code, output_tail and python_version are absent."
+    },
+    "command": {
+      "type": "string",
+      "description": "The command executed with the clone as its working directory, taken from the target repository's configured test_command with its interpreter replaced by the one named below."
+    },
+    "python": {
+      "type": "string",
+      "description": "The interpreter the run used: .harness/config.yaml's clean_clone_python when that key is set, and test_command's own interpreter otherwise."
+    },
+    "python_version": {
+      "type": "string",
+      "description": "The version that interpreter reported, so a reader can tell which Python the check exercised rather than assuming it matched CI. Absent when the interpreter reported no recognizable version, which is what a test command that is not a Python interpreter does."
+    },
+    "clone_path": {
+      "type": "string",
+      "description": "Where the clone was built, under a temporary directory outside the target repository. The directory is removed once the run completes, so this identifies the run rather than naming a path to visit. Absent when no clone was built."
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "The suite's exit status in the clone. Zero advances the run to the documenter; non-zero reroutes to the verifier's declared retry stage. Absent when ran is false."
+    },
+    "output_tail": {
+      "type": "string",
+      "description": "The tail of the run's combined stdout and stderr, enough to identify what failed. Absent when ran is false."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why the check did not run, naming what was missing. Absent when ran is true."
+    }
+  }
+}

@@ -8,9 +8,12 @@ decision here is a rule applied to a recorded fact.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -301,6 +304,325 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
     return archived
 
 
+# --------------------------------------------------------------------------
+# The clean-clone check
+#
+# The verifier runs the suite in the working tree, which is the one
+# environment where the story's own commit does not exist yet: _complete
+# commits the tree after every check the workflow performs. Everything below
+# runs the same suite once more where the code actually ships — a fresh clone
+# of the repository with the story committed into it — after the verifier
+# passes and before the documenter runs.
+# --------------------------------------------------------------------------
+
+#: How much of the run's combined output the record keeps. Enough to identify
+#: what failed; not the whole log, which the run directory is not a home for.
+CLEAN_CLONE_OUTPUT_TAIL = 8000
+
+_VERSION_PROBE = "import platform; print(platform.python_version())"
+_VERSION = re.compile(r"\d+\.\d+\.\d+\S*")
+
+
+@dataclass(frozen=True)
+class CleanCloneResult:
+    """What the clean-clone check did, as it is recorded in the run directory.
+
+    Optional fields are expressed by absence in the written record rather than
+    by null, matching the execution-history convention: a check that refused to
+    run has no exit code and no output to report, only a reason.
+    """
+
+    ran: bool
+    command: str
+    python: str
+    python_version: str | None = None
+    clone_path: str | None = None
+    exit_code: int | None = None
+    output_tail: str | None = None
+    reason: str | None = None
+
+    def as_record(self) -> dict:
+        record: dict = {"ran": self.ran, "command": self.command, "python": self.python}
+        optional = {
+            "python_version": self.python_version,
+            "clone_path": self.clone_path,
+            "exit_code": self.exit_code,
+            "output_tail": self.output_tail,
+            "reason": self.reason,
+        }
+        record.update({key: value for key, value in optional.items() if value is not None})
+        return record
+
+
+def _resolve_interpreter(target_root: Path, interpreter: str) -> Path | None:
+    """The interpreter as something runnable, or None when it does not exist.
+
+    A path is read relative to the target repository, the way the configured
+    test command already reads it; a bare name is looked up on PATH.
+    """
+    candidate = Path(interpreter)
+    if not candidate.is_absolute():
+        candidate = target_root / candidate
+    if candidate.is_file():
+        return candidate
+    found = shutil.which(interpreter)
+    return Path(found) if found else None
+
+
+def _interpreter_version(interpreter: Path) -> str | None:
+    """What the interpreter reports its version to be, or None.
+
+    None is not a failure: the configured test command need not be a Python
+    interpreter at all, and a record with no version is honest about that. A
+    *configured* clean_clone_python that does not exist is a different case,
+    handled by the caller, because a check quietly testing the wrong version
+    is worse than one that refuses.
+    """
+    try:
+        result = subprocess.run(
+            [str(interpreter), "-c", _VERSION_PROBE],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    version = result.stdout.strip()
+    return version if result.returncode == 0 and _VERSION.fullmatch(version) else None
+
+
+def _build_clone(target_root: Path, clone: Path) -> None:
+    """Clone the target locally and commit its working tree into the clone.
+
+    A clone, not a tree copy: the point of the check is that the story is
+    present as a *commit*, which is the state a test resolving a baseline out
+    of git history actually sees. The source is a filesystem path, so no
+    network access is possible by construction.
+
+    Files .gitignore excludes reach the clone by neither route — the clone
+    carries committed files and the two applications below carry tracked edits
+    and untracked-but-not-ignored files — so the clone holds the same set of
+    files _complete's `git add -A` would commit. The target repository is only
+    read: every write happens inside the clone.
+    """
+    result = subprocess.run(
+        ["git", "clone", "--quiet", "--no-hardlinks", str(target_root), str(clone)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not clone {target_root}: {result.stderr.strip()}")
+
+    diff = _git(target_root, "diff", "--binary", "HEAD").stdout
+    if diff.strip():
+        applied = subprocess.run(
+            ["git", "-C", str(clone), "apply", "--whitespace=nowarn", "-"],
+            input=diff,
+            capture_output=True,
+            text=True,
+        )
+        if applied.returncode != 0:
+            raise RuntimeError(
+                f"Could not apply the working tree to {clone}: {applied.stderr.strip()}"
+            )
+
+    untracked = _git(
+        target_root, "ls-files", "--others", "--exclude-standard", "-z"
+    ).stdout.split("\0")
+    for rel in filter(None, untracked):
+        source = target_root / rel
+        if not source.is_file():
+            continue
+        destination = clone / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    _git(clone, "add", "-A")
+    commit = _git(
+        clone,
+        "-c",
+        "user.email=harness@l5.local",
+        "-c",
+        "user.name=l5 harness",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "the story's working tree, committed for the clean-clone check",
+    )
+    if commit.returncode != 0:
+        raise RuntimeError(
+            f"Could not commit the working tree in {clone}: {commit.stderr.strip()}"
+        )
+
+
+def _link_interpreter_roots(target_root: Path, clone: Path, interpreters: list[str]) -> None:
+    """Link the directories the configured interpreters live in into the clone.
+
+    A virtualenv is gitignored and therefore absent from the clone, so the
+    configured path would not resolve there. The directory names come from the
+    configured paths rather than being written here, so a repository that names
+    its environments differently needs no change.
+
+    The links are made after the commit and excluded inside the clone, so the
+    environment the suite needs is present without the clone's working tree
+    reporting anything the target's does not. A `.gitignore` entry for a
+    directory does not cover a symlink standing in its place.
+    """
+    linked = []
+    for interpreter in interpreters:
+        path = Path(interpreter)
+        if path.is_absolute() or len(path.parts) < 2:
+            continue
+        source, destination = target_root / path.parts[0], clone / path.parts[0]
+        if source.is_dir() and not destination.exists():
+            destination.symlink_to(source, target_is_directory=True)
+            linked.append(path.parts[0])
+    if linked:
+        exclude = clone / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with open(exclude, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(["", *linked]) + "\n")
+
+
+def run_clean_clone(
+    target_root: Path,
+    test_command: str,
+    clean_clone_python: str | None,
+    destination: Path,
+) -> CleanCloneResult:
+    """Run the configured test command in a fresh clone with the story committed.
+
+    The command is the target repository's own `test_command`; nothing about
+    it is written here. Only its interpreter is substituted, and only when the
+    configuration names a `clean_clone_python`, so the check can exercise the
+    oldest supported Python rather than whichever one the developer works in.
+    The caller owns `destination` and removes it whatever the result.
+    """
+    argv = shlex.split(test_command)
+    interpreter = clean_clone_python or argv[0]
+    command = shlex.join([interpreter, *argv[1:]])
+
+    resolved = _resolve_interpreter(target_root, interpreter)
+    if clean_clone_python and resolved is None:
+        return CleanCloneResult(
+            ran=False,
+            command=command,
+            python=interpreter,
+            reason=(
+                f"clean_clone_python names {clean_clone_python}, which is not an "
+                f"interpreter that exists under {target_root}"
+            ),
+        )
+
+    clone = destination / "clone"
+    _build_clone(target_root, clone)
+    _link_interpreter_roots(target_root, clone, [argv[0], interpreter])
+
+    result = subprocess.run(
+        [interpreter, *argv[1:]],
+        cwd=clone,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    return CleanCloneResult(
+        ran=True,
+        command=command,
+        python=interpreter,
+        python_version=_interpreter_version(resolved) if resolved else None,
+        clone_path=str(clone),
+        exit_code=result.returncode,
+        output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
+    )
+
+
+def clean_clone_check(
+    run_dir: Path, target_root: Path, config: dict, artifact: str
+) -> CleanCloneResult:
+    """Run the check in a scratch directory and record what it did.
+
+    The clone is built under a temporary directory outside the target
+    repository and removed once the run of the suite completes, whatever its
+    result. The record stays: a reader can tell the check ran rather than
+    inferring it from a pass.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
+    try:
+        result = run_clean_clone(
+            target_root,
+            config["test_command"],
+            config.get("clean_clone_python"),
+            scratch,
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    (run_dir / artifact).write_text(
+        json.dumps(result.as_record(), indent=2) + "\n", encoding="utf-8"
+    )
+    return result
+
+
+def _clean_clone_passed(run_dir: Path, stage_name: str, artifact: str) -> None:
+    append_event(
+        run_dir,
+        "clean-clone suite passed with the story committed",
+        kind="clean-clone-passed",
+        stage=stage_name,
+        artifacts=[artifact],
+    )
+
+
+def _clean_clone_failed(
+    run_dir: Path,
+    stage: dict,
+    artifact: str,
+    retry_count: int,
+    max_retries: int,
+    duration_seconds: float | None,
+) -> None:
+    """The reroute event, at module level rather than inline.
+
+    Not only for reading length. tests/test_story_011_validation.py proves its
+    own non-vacuity by deleting the first `retry_decision="retry",` line at the
+    verification-failed branch's indentation; an inline clean-clone branch
+    nests deeper, its own line contains that same indented text, and it sits
+    earlier in the file, so the mutation would silently land here instead of
+    where it was aimed.
+    """
+    append_event(
+        run_dir,
+        f"clean-clone suite failed; retry {retry_count} of {max_retries} "
+        f"rerouted to {stage['on_failure']['retry_stage']}",
+        kind="clean-clone-failed",
+        stage=stage["name"],
+        artifacts=[artifact],
+        duration_seconds=duration_seconds,
+        retry_decision="retry",
+        retry_reason=(
+            "the suite failed in a clean clone with the story committed and "
+            "the retry ceiling was not reached"
+        ),
+    )
+
+
+def _clean_clone_failures(output: str) -> str:
+    """The failing tests named in the run's output, collapsed to one line.
+
+    events.log's line format is frozen at one line, so the evidence is
+    summarized rather than pasted. `FAILED` is the marker the output carries,
+    not the command that produced it; when nothing in the output is
+    recognizable the last non-empty line stands in, so the reason is never
+    empty.
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    failures = [line for line in lines if line.startswith("FAILED")]
+    if not failures:
+        return lines[-1] if lines else "the run produced no output"
+    if len(failures) > 5:
+        return "; ".join(failures[:5]) + f"; and {len(failures) - 5} more"
+    return "; ".join(failures)
+
+
 def _refuse(story_path: Path, problems: list[str]) -> int:
     """The one pre-flight refusal path: exit 1, one message per problem."""
     print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
@@ -564,6 +886,55 @@ def run_story(
                     duration_seconds=elapsed(),
                     verifier_outcome=verdict["status"],
                 )
+
+                # The suite passed where the verifier stood; run it once more
+                # where the code ships. The artifact name comes off the loaded
+                # workflow definition, so removing that declaration disables
+                # the check with no change here.
+                artifact = stage.get("clean_clone")
+                if artifact:
+                    clean = clean_clone_check(run_dir, target_root, config, artifact)
+                    if not clean.ran:
+                        return _escalate(
+                            run_dir,
+                            state,
+                            f"the clean-clone check could not run: {clean.reason}",
+                            duration_seconds=elapsed(),
+                        )
+                    if clean.exit_code != 0:
+                        failures = _clean_clone_failures(clean.output_tail or "")
+                        if state.retry_count >= rules["max_retries"]:
+                            return _escalate(
+                                run_dir,
+                                state,
+                                f"the clean-clone check failed and retries are "
+                                f"exhausted: {failures}",
+                                duration_seconds=elapsed(),
+                                retry_decision="escalate",
+                                retry_reason=(
+                                    f"the retry ceiling of {rules['max_retries']} "
+                                    f"was reached"
+                                ),
+                            )
+                        # The same retry path a failed verification takes:
+                        # archive above the increment, so the attempt number
+                        # names the attempt that just ended.
+                        archive_attempt(
+                            run_dir, archivable_artifacts(stages), state.retry_count + 1
+                        )
+                        state.retry_count += 1
+                        save_state(run_dir, state)
+                        _clean_clone_failed(
+                            run_dir,
+                            stage,
+                            artifact,
+                            state.retry_count,
+                            rules["max_retries"],
+                            elapsed(),
+                        )
+                        index = stage_names.index(stage["on_failure"]["retry_stage"])
+                        continue
+                    _clean_clone_passed(run_dir, name, artifact)
             elif verdict.get("retry_recommended") and state.retry_count < rules["max_retries"]:
                 # Archive before the retry begins, while the root artifacts
                 # still describe the attempt that just failed. The attempt
