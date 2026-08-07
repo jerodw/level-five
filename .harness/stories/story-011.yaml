@@ -1,0 +1,203 @@
+story:
+  id: story-011
+  title: Add execution-history.json written from the same path as events.log
+  description: |
+    The coordinator's history of a run exists only as events.log, a
+    human-readable stream. Workflow state captures the current condition
+    of execution; execution history captures what happened during it. The
+    coordinator routes from state, while developers and assist agents
+    debug from history - and an agent reading this run's history today has
+    to parse log lines to do it.
+
+    This story adds execution-history.json to the run directory alongside
+    events.log, not replacing it. It is the structured rendering of the
+    same events. Each entry carries the stage transition, its timing, the
+    verifier outcome where the event has one, the retry decision and its
+    reason where the event has one, and the artifacts the stage produced.
+
+    Both renderings come from one write path so they cannot drift apart.
+    append_event gains structured keyword fields: the prose message stays
+    the first positional argument and events.log's line format is
+    untouched, while the same call appends one structured entry to the new
+    artifact. events.log's format is what l5-status reads and what the
+    appendix documents, so freezing it is a requirement rather than a
+    preference.
+
+    The artifact is coordinator-written rather than stage-written, so it
+    does not fit the workflow's per-stage schemas mapping. It still gets a
+    schema, because a schema is how this harness defines a shape it routes
+    on or hands to an agent, and because schema_context makes any schema
+    file an injectable placeholder for the consumers that come later. The
+    coordinator does not validate its own write at run time; the story's
+    tests validate what a run produced.
+
+    This story follows story-010, which stopped a retry from overwriting
+    the artifacts a history entry names.
+
+tasks:
+  - Change append_event to take the prose message positionally as it does
+    today and accept structured values as keyword arguments - the stage,
+    an event kind, the artifacts the stage produced, the verifier outcome,
+    the retry decision and its reason, and the elapsed duration - so one
+    call writes both renderings.
+  - Append a structured entry to execution-history.json on every
+    append_event call, in the same order the lines are appended to
+    events.log.
+  - Record stage timing. Capture the start at the existing stage-started
+    event and close it at the event that ends the stage, so each completed
+    stage entry carries a duration the log only made derivable.
+  - Supply structured values at every existing call site - stage started,
+    stage completed, verification passed, verification failed with a retry
+    rerouted, escalated, resumed, story completed, and the stage-exception
+    applied event.
+  - Add schemas/execution-history.schema.json describing the artifact,
+    written inside the subset schema_validator supports.
+
+acceptance_criteria:
+  - Every event appended to events.log during a run has a corresponding
+    entry in execution-history.json, with matching stage and matching
+    order, asserted over a full retry-then-pass run rather than a single
+    call.
+  - events.log's line format is byte-identical to what it was before this
+    story - same timestamp format, same prefix, same message text for
+    every existing call site - and l5-status renders a run identically
+    before and after.
+  - Each stage-completion entry names the artifacts that stage produced,
+    taken from the stage's declared outputs in the workflow definition,
+    not from a list written in orchestration code.
+  - Each stage entry carries timing, and a completed stage's entry carries
+    an elapsed duration rather than only a timestamp.
+  - The entry for a failed verification carries the verifier outcome, and
+    the entry for a rerouted retry carries the retry decision and the
+    reason it was taken.
+  - execution-history.json is valid against
+    schemas/execution-history.schema.json after a happy-path run, after a
+    retry-then-pass run, and after an escalated run.
+  - schemas/execution-history.schema.json uses only the keywords
+    schema_validator supports - type, required, properties, items, enum -
+    so schema_validator.validate does not raise on it. Optional fields are
+    expressed by absence from required, not by a union keyword.
+  - No routing decision reads execution-history.json. state.json remains
+    the coordinator's only routing source, and every routing path behaves
+    exactly as it did before this story.
+  - Adding a schema file changes what context_assembler.schema_context
+    returns; confirm every existing prompt still renders with no leftover
+    placeholder and no existing test breaks on the new entry.
+  - A run that escalates still writes its history, ending with the
+    escalation entry, so a run that failed is as reconstructable as one
+    that passed.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Add schemas/execution-history.schema.json - a top-level array whose
+      items are entry objects. Require the fields present on every entry
+      (a sequence number, the timestamp, the event kind and the message);
+      leave stage, artifacts, duration, verifier outcome and retry
+      decision optional, since not every event has them.
+    - Change append_event's signature to keep message positional and add
+      keyword-only structured fields with defaults, so a call site that
+      has nothing extra to say is unchanged. Write the events.log line
+      exactly as before from the message alone, then read the existing
+      execution-history.json, append the entry, and write it back.
+    - Add the stage start time to the coordinator's loop, captured where
+      the stage-started event is already appended, and pass the elapsed
+      duration at the event that ends the stage.
+    - Pass structured values at each existing append_event call site,
+      taking the artifact list for a stage from that stage's outputs in
+      the loaded workflow definition.
+  likely_file_changes:
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: New schema for the artifact, the single definition of its
+        shape.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: append_event gains structured fields and the second output;
+        the loop records stage timing and every call site supplies values.
+    - file: tests/test_story_011_validation.py
+      stage: tester
+      reason: All new validation for this story - the line-for-entry
+        correspondence over a full run, the frozen events.log format, the
+        schema conformance of a happy-path, retried and escalated run,
+        and the unchanged routing. New test files are the tester's output
+        and this story keeps every new assertion in this one file.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records execution-history.json in the run-directory anatomy,
+        the one-write-path rule, and the decision that a
+        coordinator-written artifact gets a schema validated by tests
+        rather than by a new runtime check.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/execution-history.schema.json
+    - tests/
+  do_not_modify:
+    - workflows/
+    - schemas/changed-files.schema.json
+    - schemas/test-results.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/retry-guidance.schema.json
+    - schemas/story.schema.json
+    - orchestration/context_assembler.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - prompts/
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm over a full retry-then-pass run that events.log and
+    execution-history.json describe the same events in the same order, one
+    entry per line, with matching stages. A per-call assertion does not
+    demonstrate the guarantee; the guarantee is that the two cannot drift.
+  - Confirm events.log's lines are byte-identical to the pre-story format
+    for every existing call site, and confirm l5-status output is
+    unchanged.
+  - Confirm the artifacts named on a stage-completion entry come from the
+    workflow's declared outputs for that stage and are not written into
+    orchestration code.
+  - Confirm execution-history.json validates against its schema for a
+    happy-path run, a retry-then-pass run, and an escalated run, and that
+    schema_validator.validate does not raise an unsupported-keyword error
+    on the schema itself.
+  - Confirm no routing decision reads execution-history.json, by reading
+    the coordinator, and confirm retry_count, verification_iterations, the
+    retry ceiling and every escalation path are unchanged.
+  - Confirm the new schema file does not disturb any prompt render -
+    every stage template still resolves every placeholder it uses.
+  - Confirm tests/test_story_011_validation.py was created by the tester
+    stage, and that the implementer's changed-files record lists no file
+    under tests/ at all.
+
+constraints:
+  - This story must not start until story-010 has merged. Both edit
+    run_story's retry handling, and this story's entries name artifacts
+    story-010 stops a retry from overwriting.
+  - Standard library only, Python 3.10+, type hints on public functions.
+  - events.log's existing line format does not change. It is the format
+    l5-status reads and the appendix documents; a structured record is
+    added beside it, never in place of it.
+  - History is evidence, never state. No routing decision may read
+    execution-history.json.
+  - Both renderings are written by one call. A second write path for the
+    structured record - even a correct one - is the drift this story
+    exists to prevent.
+  - The coordinator does not validate its own write at run time. The
+    schema is the definition and the story's tests are what check
+    conformance; a self-check against a shape the coordinator itself
+    produces buys nothing at run time.
+  - Per-stage log files under .harness/logs/ are out of scope. This
+    harness writes one log per story, matching the appendix, and that
+    stays.
+  - retry-history.json is a separate artifact and a separate story
+    (story-012). The retry decision appearing here as one entry in a
+    chronological stream is expected overlap, not a substitute for it.

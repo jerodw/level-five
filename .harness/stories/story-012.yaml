@@ -1,0 +1,188 @@
+story:
+  id: story-012
+  title: Add retry-history.json, the backward-looking record of each attempt
+  description: |
+    The harness writes retry-guidance.json, which looks forward: it tells
+    the next implementer attempt what to fix. Nothing looks backward. When
+    a run has retried twice, no artifact says what each attempt tried and
+    why it failed.
+
+    This story adds retry-history.json to the run directory: one entry per
+    retry taken, naming the attempt, the blocking issues that failed it,
+    the stage execution was rerouted to, the guidance that attempt's
+    failure produced for the next one, and the attempts/attempt-N/
+    directory holding that attempt's own artifacts. Its named consumers
+    are the documenter, the assist agent during recovery, and the
+    adjudicator later.
+
+    It is not retry-guidance.json - forward-looking instruction against
+    backward-looking record. It is not the attempts/ archive story-010
+    added either: that archive is the evidence itself, the actual
+    artifacts each attempt produced, while this is the summary record of
+    what was tried and why it failed. Neither replaces the other.
+
+    Everything an entry needs is already in hand at the retry decision
+    point: the attempt number, the verdict that failed it, the stage
+    rerouted to, and the guidance written for the next attempt. This is
+    the third and last story of the retry-branch cluster.
+
+tasks:
+  - Write retry-history.json in the coordinator's retry branch, appending
+    one entry each time a retry is actually taken.
+  - Build the entry from what the retry decision point already holds - the
+    attempt number that just failed, the blocking issues from that
+    attempt's verification-result.json, the retry stage from the workflow
+    definition's on_failure block, the retry-guidance.json written for the
+    next attempt, and the attempts/attempt-N/ path story-010 created for
+    that attempt.
+  - Leave a run that never retries without the file. The artifact is
+    created at the first retry, never in advance.
+  - Add schemas/retry-history.schema.json describing the artifact, written
+    inside the subset schema_validator supports.
+
+acceptance_criteria:
+  - A run that retries twice and then escalates produces
+    retry-history.json with exactly two entries, one per retry, each
+    naming the attempt number, the blocking issues that failed that
+    attempt, and the stage execution was routed to.
+  - A run that retries once and then passes produces exactly one entry.
+  - A run that completes without retrying does not produce
+    retry-history.json at all - the absence is asserted, not merely
+    unobserved.
+  - A verification failure where the verifier does not recommend a retry
+    escalates without writing an entry, because no retry was taken. A
+    verification failure at the retry ceiling likewise adds no entry - the
+    two retries that did happen are the two entries.
+  - Each entry names the attempts/attempt-N/ directory holding that
+    attempt's archived artifacts, with N matching the attempt the entry
+    describes and the directory actually present in the run.
+  - Each entry carries the blocking issues as recorded by the verifier -
+    issue, severity, location and required_behavior preserved - rather
+    than a prose summary of them.
+  - Each entry carries the retry guidance written for the following
+    attempt.
+  - retry-history.json is valid against
+    schemas/retry-history.schema.json after a retry-then-pass run and
+    after a retries-exhausted run.
+  - schemas/retry-history.schema.json uses only the keywords
+    schema_validator supports - type, required, properties, items, enum -
+    so schema_validator.validate does not raise on it.
+  - retry-guidance.json is unchanged - same content, same location, same
+    schema, still written by the verifier for the next attempt only.
+  - No routing decision reads retry-history.json. state.json remains the
+    coordinator's only routing source, and retry_count, the retry ceiling
+    and every escalation path behave exactly as before.
+  - execution-history.json continues to record the retry decision as one
+    entry in its chronological stream. The overlap is expected; this
+    artifact is the retry-scoped record its named consumers read directly.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Add schemas/retry-history.schema.json - a top-level array whose
+      items are entry objects requiring the attempt number, the blocking
+      issues, the stage rerouted to, and the archive directory, with the
+      guidance optional so an entry stands even where none was written.
+    - Add a helper to story_coordinator that appends one entry to
+      retry-history.json, creating the file on the first call, and reads
+      its inputs from the artifacts already present in the run directory.
+    - Call it from the retry branch on the path that actually reroutes -
+      not from the two escalation paths, which take no retry.
+    - Take the attempt number the entry describes from state.retry_count
+      before the increment, so it matches the attempts/attempt-N/
+      directory and the rendered prompt of the same attempt.
+  likely_file_changes:
+    - file: schemas/retry-history.schema.json
+      stage: implementer
+      reason: New schema for the artifact, the single definition of its
+        shape.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The retry branch appends an entry when a retry is taken.
+    - file: tests/test_story_012_validation.py
+      stage: tester
+      reason: All new validation for this story - one entry per retry on a
+        retry-then-pass and a retries-exhausted run, the file's absence on
+        a non-retrying run, the no-entry cases for the two escalation
+        paths, the archive-directory correspondence, and schema
+        conformance. New test files are the tester's output and this story
+        keeps every new assertion in this one file.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records retry-history.json in the run-directory anatomy and
+        the distinction between it, retry-guidance.json, and the
+        attempts/ archive, so the three are not confused later.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/retry-history.schema.json
+    - tests/
+  do_not_modify:
+    - workflows/
+    - schemas/changed-files.schema.json
+    - schemas/test-results.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/retry-guidance.schema.json
+    - schemas/story.schema.json
+    - schemas/execution-history.schema.json
+    - orchestration/context_assembler.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - prompts/
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm from a retries-exhausted run that retry-history.json holds
+    exactly two entries and from a retry-then-pass run that it holds
+    exactly one.
+  - Confirm a completing run with no retry leaves no retry-history.json,
+    and that the absence is asserted.
+  - Confirm no entry is written on either escalation path, since neither
+    takes a retry.
+  - Confirm each entry's attempt number matches the attempts/attempt-N/
+    directory it names and that the directory exists in the run.
+  - Confirm the blocking issues in an entry match the verifier's recorded
+    issues field for field, not in summary.
+  - Confirm retry-guidance.json is unchanged in content, location and
+    schema.
+  - Confirm retry-history.json validates against its schema for both
+    retrying runs, and that schema_validator.validate does not raise an
+    unsupported-keyword error on the schema itself.
+  - Confirm no routing decision reads retry-history.json, and that
+    retry_count, verification_iterations, the retry ceiling and the
+    escalation paths are unchanged.
+  - Confirm tests/test_story_012_validation.py was created by the tester
+    stage, and that the implementer's changed-files record lists no file
+    under tests/ at all.
+
+constraints:
+  - This story must not start until story-010 and story-011 have merged.
+    All three edit the coordinator's retry branch, and this story's
+    entries reference the attempts/attempt-N/ directory story-010 creates.
+  - Standard library only, Python 3.10+, type hints on public functions.
+  - History is evidence, never state. No routing decision may read
+    retry-history.json.
+  - The artifact exists only for runs that retried. A run that never
+    retries produces no empty file and no empty array.
+  - retry-guidance.json is untouched. The two artifacts are distinct in
+    direction - the guidance tells the next attempt what to fix, this
+    records what the last one tried and why it failed - and neither
+    absorbs the other.
+  - The attempts/ archive is not duplicated here. An entry references the
+    archive directory; it does not copy its contents.
+  - Overlap with execution-history.json is expected rather than a defect.
+    That artifact records the retry decision as one event among all
+    events; this is the retry-scoped record its named consumers read
+    directly. Landing second, this story states the distinction rather
+    than restating that artifact's purpose.
+  - Rendering retry history into escalation-summary.md is out of scope.
+    That belongs to the escalation-summary story, which consumes this
+    artifact.

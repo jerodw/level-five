@@ -1,0 +1,189 @@
+story:
+  id: story-010
+  title: Archive superseded stage artifacts under attempts/attempt-N/
+  description: |
+    A retry regenerates the implementer's and tester's artifacts under
+    their canonical names, and the coordinator's write path has no branch
+    that would preserve the earlier copies. The verifier's verdict is the
+    one exception: it is archived to verification/iteration-N.json before
+    the next iteration overwrites the root copy. Every other stage
+    artifact - changed-files.json, implementation-summary.md,
+    test-results.json, tester-changed-files.json, retry-guidance.json -
+    is silently replaced.
+
+    That contradicts the principle the harness already enforces at the run
+    boundary: the run directory holds evidence, and evidence does not get
+    silently overwritten. Retries must not erase execution history.
+
+    This story extends the verifier's treatment to the rest. Before a
+    retry begins, the coordinator copies the superseded attempt's stage
+    artifacts into attempts/attempt-N/ in the run directory, keeping their
+    canonical filenames. The live copies at the run-directory root always
+    describe the current attempt, so no existing reader changes.
+
+    The defect is latent rather than observed - all nine runs under
+    .harness/runs/ are retry_count 0, so no run has yet exercised a retry.
+    It is read off the write path, not off a damaged run.
+
+    This is the first of three stories sharing the coordinator's retry
+    branch. It comes first because the two history artifacts that follow
+    record what each attempt produced, and those records are only truthful
+    once the artifacts they name stop being overwritten.
+
+tasks:
+  - Derive the archivable artifact list from the loaded workflow
+    definition rather than naming artifacts in code - the union of every
+    stage's outputs, changed_files, and schemas keys. The coordinator's
+    existing checks already read artifact names from the workflow, and
+    this follows the same rule, so a workflow that adds a stage artifact
+    gets it archived with no code change.
+  - Archive in the coordinator's retry branch, before retry_count is
+    incremented, so the archive is one point in the code rather than a
+    branch in each of four write paths.
+  - Number the archive directory with the attempt number already in use
+    for rendered prompts, so prompt-implementer-attempt-1.md and
+    attempts/attempt-1/ describe one attempt.
+  - Copy rather than move - the live copy at the run-directory root stays
+    where every current reader expects it.
+
+acceptance_criteria:
+  - A run that fails verification once and passes on the second attempt
+    produces attempts/attempt-1/ containing that attempt's
+    changed-files.json, implementation-summary.md, test-results.json,
+    tester-changed-files.json, verification-result.json and
+    retry-guidance.json under their canonical filenames, with contents
+    matching what attempt 1 produced.
+  - After that run, the copies at the run-directory root describe attempt
+    2, not attempt 1.
+  - A run that completes without retrying produces no attempts/ directory
+    at all. The directory is created at the first retry, never in advance,
+    so its absence means no retry occurred.
+  - A run that exhausts its retries and escalates produces both
+    attempts/attempt-1/ and attempts/attempt-2/, each holding its own
+    attempt's artifacts.
+  - The archived filenames are the canonical ones - no suffixed variant
+    such as changed-files-attempt-1.json appears anywhere.
+  - The artifact list is derived from the workflow definition, not written
+    in orchestration code - a workflow whose stage declares an additional
+    artifact has that artifact archived without any change to
+    orchestration/story_coordinator.py, and a test demonstrates this with
+    a workflow the repository does not ship.
+  - An artifact a stage did not write is skipped rather than failing the
+    archive, the way _schema_violation already skips an absent
+    conditional artifact.
+  - verification/iteration-N.json continues to be written exactly as
+    before, and the root verification-result.json remains the routing
+    source. The new archive adds to the evidence, it does not replace the
+    verifier's existing one.
+  - orchestration/context_assembler.py is unchanged, and every stage still
+    reads changed-files.json, implementation-summary.md,
+    test-results.json, tester-changed-files.json and retry-guidance.json
+    from the run-directory root.
+  - Routing is unchanged - retry_count, verification_iterations, the retry
+    ceiling, and every escalation path behave exactly as they did before
+    this story.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Add a helper to story_coordinator that collects the archivable
+      artifact names from the workflow's stages - the union of each
+      stage's outputs list, its changed_files value, and the keys of its
+      schemas map - returning them sorted so the archive is deterministic.
+      No artifact name is written in the function.
+    - Add a second helper that, given the run directory, the artifact
+      names, and an attempt number, creates attempts/attempt-N/ and copies
+      into it every named artifact present at the run-directory root.
+      Absent artifacts are skipped.
+    - Call the archive from the verifier's retry branch in run_story,
+      above the retry_count increment, passing state.retry_count + 1 as
+      the attempt number so the archive and the rendered prompts agree.
+    - Leave the verification/iteration-N.json write, the root artifact
+      writes, and every routing decision untouched.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Gains the workflow-derived artifact list and the archive
+        step in the retry branch.
+    - file: tests/test_story_010_validation.py
+      stage: tester
+      reason: All new validation for this story - the retry-then-pass
+        archive contents, the root copies describing the current attempt,
+        the absence of attempts/ on a non-retrying run, both directories
+        on an exhausted-retries run, and the workflow-derived list proved
+        with a workflow the repository does not ship. New test files are
+        the tester's output and this story keeps every new assertion in
+        this one file.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the attempts/ archive in the run-directory anatomy
+        and the decision that live copies stay at the root so no reader
+        changes.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+  do_not_modify:
+    - workflows/
+    - schemas/
+    - orchestration/context_assembler.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - prompts/
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm from a retry-then-pass run that attempts/attempt-1/ holds the
+    six artifacts named above under canonical filenames, and that each
+    file's contents are attempt 1's rather than attempt 2's.
+  - Confirm from the same run that the run-directory root copies are
+    attempt 2's.
+  - Confirm a completing run with no retry leaves no attempts/ directory,
+    and that this is asserted rather than merely unobserved.
+  - Confirm an exhausted-retries run produces attempt-1 and attempt-2 with
+    their own contents.
+  - Confirm by reading orchestration/story_coordinator.py that no stage
+    artifact filename is written into the archive code, and confirm the
+    test that proves it uses a workflow definition the repository does not
+    ship.
+  - Confirm the archive happens before the retry begins - that is, before
+    retry_count is incremented - and that the attempt number matches the
+    number used for the rendered prompt of the same attempt.
+  - Confirm orchestration/context_assembler.py is byte-for-byte unchanged
+    and that no reader was pointed at the archive.
+  - Confirm tests/test_story_010_validation.py was created by the tester
+    stage, and that the implementer's changed-files record lists no file
+    under tests/ at all.
+
+constraints:
+  - This story is the first of the retry-branch cluster. story-011
+    (execution-history.json) and story-012 (retry-history.json) both edit
+    the same branch of run_story and must not start until this story has
+    merged.
+  - Standard library only, Python 3.10+, type hints on public functions.
+  - The archive is evidence, never state. No routing decision may read
+    anything under attempts/, and state.json remains the coordinator's
+    only routing source.
+  - Live artifact copies stay at the run-directory root under their
+    canonical names. This story adds files; it moves none.
+  - Canonical filenames are preserved inside the archive directory.
+    Suffixed variants would mint new filenames per attempt and multiply
+    the name set the artifact-naming contract exists to keep small.
+  - No stage artifact name and no stage name appears in the archive code.
+    Both come from the loaded workflow definition, matching how blocked
+    paths, ownership prefixes and schema mappings are already read.
+  - The workflow definition is loaded once at run start, so a workflow
+    change takes effect for runs started after it merges. This story
+    changes no workflow, but the derived list is read from whatever
+    definition the run loaded.
+  - events.log's line format is unchanged. Adding events for the archive
+    is not part of this story - the two history artifacts that follow own
+    that question.
