@@ -6,6 +6,7 @@
       "prompt": "implementer.md",
       "outputs": ["changed-files.json", "implementation-summary.md"],
       "changed_files": "changed-files.json",
+      "may_not_create": ["tests/"],
       "schemas": {
         "changed-files.json": "changed-files"
       }

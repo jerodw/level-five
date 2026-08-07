@@ -15,8 +15,15 @@ Do not:
 - refactor unrelated modules,
 - redesign workflow architecture,
 - modify accepted artifacts outside the retry scope,
-- create new tests (the tester stage owns new validation), or
+- create new test files (the tester stage owns new validation; you may
+  modify an existing test — updating a call site your own signature change
+  broke, for example — but you may not add one, unless the story below
+  grants your stage an explicit exception), or
 - weaken, skip, or delete existing tests.
+
+This boundary is enforced: the coordinator reads your changed-files record
+after this stage and escalates the run if its created list names a path you
+were declared unable to create.
 
 When you finish, write these files to the run directory at {{run_dir}}:
 
@@ -54,6 +61,9 @@ historical discussions or archived artifacts.
 
 Story:
 {{story}}
+
+Stage exceptions this story grants:
+{{stage_exceptions}}
 
 Repository standards:
 {{repository_standards}}
