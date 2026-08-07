@@ -20,6 +20,7 @@ out of git history, and that every surviving assertion in
 """
 import ast
 import functools
+import os
 import shutil
 import subprocess
 import sys
@@ -82,7 +83,14 @@ def run_contract(root: Path, names: tuple[str, ...] = ()) -> tuple[int, str]:
                "-q", "-p", "no:cacheprovider"]
     if names:
         command += ["-k", " or ".join(names)]
-    result = subprocess.run(command, cwd=root, capture_output=True, text=True)
+    # Pin the width pytest formats its summary to. Left to the environment it
+    # is the developer's terminal locally and the runner's in CI, so the same
+    # failure prints differently in the two places and anything reading this
+    # output diverges between them. A fixed wide value makes a local run print
+    # what CI prints.
+    env = {**os.environ, "COLUMNS": "240"}
+    result = subprocess.run(command, cwd=root, capture_output=True, text=True,
+                            env=env)
     return result.returncode, result.stdout + result.stderr
 
 
