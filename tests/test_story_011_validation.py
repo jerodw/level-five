@@ -7,10 +7,18 @@ what it was before this story, that the artifacts an entry names come from
 the workflow definition, that the artifact validates against its schema for
 a passing, a retried and an escalated run, and that nothing routes on it.
 
-The frozen-format checks are differential: the pre-story coordinator is
-loaded out of git history and run against a clone of the same fixture, so
-"unchanged" means measured against the previous implementation rather than
-against a transcript copied into this file.
+The frozen-format checks were originally differential: the pre-story
+coordinator was loaded out of git history and run beside this one, so
+"unchanged" meant measured against the previous implementation. story-016
+removed those six comparisons. Merged, they no longer said "this story
+changed nothing else" — they said the coordinator's output may never differ
+from what one implementation produced on one day, which failed every later
+story that legitimately adds an artifact or an event. The guarantees they
+carried are stated directly in tests/test_coordinator_contract.py. What
+survives here is what never depended on the historical coordinator: the
+log-line-to-history correspondence, the ordering and retry-stream checks,
+the schema conformance of a run's history, and the prompt-scope assertion
+with the baseline resolution it needs.
 """
 import ast
 import json
@@ -245,9 +253,8 @@ def test_an_escalated_runs_history_ends_with_its_escalation(escalated):
 def load_variant(source: str, path: Path, name: str):
     """Load a coordinator source as its own module, leaving the real one alone.
 
-    Used for the pre-story coordinator read out of git history, and for the
-    deliberate mutants the non-vacuity checks run against. Nothing here writes
-    to orchestration/.
+    Used for the deliberate mutants the non-vacuity checks run against.
+    Nothing here writes to orchestration/.
     """
     path.write_text(source, encoding="utf-8")
     spec = importlib.util.spec_from_file_location(name, path)
@@ -331,21 +338,6 @@ def pre_story_coordinator_source(repo: Path = REPO_ROOT) -> str:
     return coordinator_source_at(pre_story_revision(repo), repo)
 
 
-@pytest.fixture(scope="session")
-def legacy_coordinator(tmp_path_factory):
-    """The pre-story coordinator, loaded from git history as its own module.
-
-    Comparing against the previous implementation is the only way to say
-    "byte-identical" about a format rather than about a transcript someone
-    pasted into a test.
-    """
-    return load_variant(
-        pre_story_coordinator_source(),
-        tmp_path_factory.mktemp("legacy") / "legacy_story_coordinator.py",
-        "legacy_story_coordinator",
-    )
-
-
 def test_the_comparison_baseline_is_not_this_implementation():
     """Guards the resolution itself: whatever revision it picked, the source
     it returned is the old coordinator and not the one under test."""
@@ -411,113 +403,6 @@ def test_the_baseline_resolution_fails_loudly_when_there_is_nothing_older(
     repo = synthetic_history(tmp_path / "story-all-the-way-down", [COORDINATOR_SOURCE])
     with pytest.raises(AssertionError, match="nothing to compare against"):
         pre_story_coordinator_source(repo)
-
-
-def clone_target(target_root: Path, tmp_path: Path) -> Path:
-    """A pristine copy of the fixture target, git history included."""
-    destination = tmp_path / "legacy-target"
-    shutil.copytree(target_root, destination)
-    return destination
-
-
-SHAPES = {
-    "happy_path": ([PASS], 0),
-    "retry_then_pass": ([FAIL, PASS], 0),
-    "escalated": ([FAIL, FAIL, FAIL], 2),
-    "escalated_without_a_retry": ([FAIL_NO_RETRY], 2),
-}
-
-
-@pytest.fixture(params=sorted(SHAPES))
-def both_implementations(request, target_root, harness_root, tmp_path,
-                         legacy_coordinator):
-    """The same run shape driven through HEAD's coordinator and this one."""
-    verdicts, expected_code = SHAPES[request.param]
-    legacy_root = clone_target(target_root, tmp_path)
-
-    legacy_runner = HistoryRunner(legacy_root, verdicts)
-    assert legacy_coordinator.run_story(
-        "story-001", harness_root, legacy_root, legacy_runner) == expected_code
-
-    runner = HistoryRunner(target_root, verdicts)
-    assert story_coordinator.run_story(
-        "story-001", harness_root, target_root, runner) == expected_code
-
-    return legacy_root, target_root
-
-
-def test_events_log_lines_are_byte_identical_to_the_pre_story_format(
-    both_implementations,
-):
-    """Every existing call site writes the same prefix and the same message.
-
-    Only the wall-clock stamp may differ between the two runs; the format of
-    that stamp is asserted separately, line by line, by messages().
-    """
-    legacy_root, current_root = both_implementations
-    legacy_lines = log_lines(run_dir_of(legacy_root))
-    current_lines = log_lines(run_dir_of(current_root))
-    assert messages(current_lines) == messages(legacy_lines)
-    assert len(current_lines) == len(legacy_lines)
-
-
-def test_the_legacy_run_wrote_no_history_and_this_one_did(both_implementations):
-    """Guards the comparison itself: the two runs really are the old and the
-    new implementation, and the new artifact is the only new file."""
-    legacy_root, current_root = both_implementations
-    assert not (run_dir_of(legacy_root) / "execution-history.json").exists()
-    assert (run_dir_of(current_root) / "execution-history.json").is_file()
-
-    def names(root: Path) -> set[str]:
-        return {p.name for p in run_dir_of(root).iterdir()}
-
-    assert names(current_root) - names(legacy_root) == {"execution-history.json"}
-    assert names(legacy_root) - names(current_root) == set()
-
-
-def normalize_timestamps(text: str) -> str:
-    return re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", "<stamp>", text)
-
-
-def test_l5_status_renders_a_run_identically_before_and_after(both_implementations):
-    """run_status is what l5-status delegates to; it reads state.json and
-    events.log, and both must render exactly as they did."""
-    legacy_root, current_root = both_implementations
-    assert normalize_timestamps(run_status.format_detail(current_root, "story-001")) == \
-        normalize_timestamps(run_status.format_detail(legacy_root, "story-001"))
-    assert run_status.format_listing(current_root) == run_status.format_listing(legacy_root)
-
-
-def test_l5_status_through_the_script_is_unchanged(both_implementations):
-    """End to end through the entry point, not just the module behind it."""
-    legacy_root, current_root = both_implementations
-
-    def render(root: Path) -> str:
-        result = subprocess.run(
-            [sys.executable, str(REPO_ROOT / "scripts" / "l5-status"), "story-001"],
-            cwd=root, capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
-        return normalize_timestamps(result.stdout)
-
-    assert render(current_root) == render(legacy_root)
-
-
-def test_state_json_is_identical_to_the_pre_story_run(both_implementations):
-    """Routing is unchanged: same status, same current stage, same retry count,
-    same verification iteration count, for every run shape."""
-    legacy_root, current_root = both_implementations
-    assert read_state(run_dir_of(current_root)) == read_state(run_dir_of(legacy_root))
-
-
-def test_the_escalation_summary_is_unchanged(both_implementations):
-    legacy_root, current_root = both_implementations
-    legacy_summary = run_dir_of(legacy_root) / "escalation-summary.md"
-    current_summary = run_dir_of(current_root) / "escalation-summary.md"
-    assert current_summary.exists() == legacy_summary.exists()
-    if legacy_summary.exists():
-        assert current_summary.read_text(encoding="utf-8") == \
-            legacy_summary.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -937,24 +822,33 @@ def test_no_other_module_reads_the_history_file():
 
 
 def test_a_run_whose_history_keeps_disappearing_routes_identically(
-    target_root, harness_root, tmp_path, legacy_coordinator,
+    target_root, harness_root, tmp_path,
 ):
     """The functional proof: delete the artifact before every stage and the
     run still retries, still escalates nowhere new, and ends in the same
-    state the pre-story coordinator reached."""
-    legacy_root = clone_target(target_root, tmp_path)
-    legacy_runner = HistoryRunner(legacy_root, [FAIL, PASS])
-    assert legacy_coordinator.run_story(
-        "story-001", harness_root, legacy_root, legacy_runner) == 0
+    state a run that kept its history reached.
+
+    The control is a run of this same coordinator with the artifact left
+    alone. It used to be a run of the pre-story coordinator, loaded out of
+    git history; story-016 replaced that baseline because the guarantee is
+    "nothing routes on the history", which the control states directly, and
+    the historical implementation grows more artificial to run with every
+    story that passes.
+    """
+    control_root = tmp_path / "control-target"
+    shutil.copytree(target_root, control_root)
+    control_runner = HistoryRunner(control_root, [FAIL, PASS])
+    assert story_coordinator.run_story(
+        "story-001", harness_root, control_root, control_runner) == 0
 
     runner = HistoryRunner(target_root, [FAIL, PASS], delete_history_each_stage=True)
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, runner) == 0
 
-    assert runner.calls == legacy_runner.calls
-    assert read_state(run_dir_of(target_root)) == read_state(run_dir_of(legacy_root))
+    assert runner.calls == control_runner.calls
+    assert read_state(run_dir_of(target_root)) == read_state(run_dir_of(control_root))
     assert messages(log_lines(run_dir_of(target_root))) == \
-        messages(log_lines(run_dir_of(legacy_root)))
+        messages(log_lines(run_dir_of(control_root)))
 
 
 def test_the_retry_ceiling_and_its_counters_are_untouched(escalated):
