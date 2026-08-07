@@ -71,5 +71,18 @@ the entry unowned for the implementer to pick up.
 	constraints:
 	  - <behavior that must be preserved>
 
+A story may also carry an optional top-level stage_exceptions section,
+and most do not. It lifts a stage's may_not_create declaration for this
+story alone, so a story whose deliverable is itself a regression suite
+can let the implementer create files under tests/. Ask before adding
+one, and record why in the reason; l5-run refuses an exception naming a
+stage the workflow does not define, or granting a path that stage was
+never restricted on:
+
+	stage_exceptions:
+	  - stage: <workflow stage the grant applies to>
+	    create: <path prefix from that stage's may_not_create list>
+	    reason: <why this story needs the rule lifted>
+
 After writing the artifact, tell the developer the story id and how to
 execute it: scripts/l5-run <story-id>.
