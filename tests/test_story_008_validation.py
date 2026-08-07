@@ -212,7 +212,15 @@ def test_the_coverage_comes_from_the_injection_and_not_from_leftover_prose():
 
 @pytest.fixture
 def captured_plan_argv(tmp_path: Path) -> list[str]:
-    """Run scripts/l5-plan with a fake `claude` on PATH and capture its argv."""
+    """Run scripts/l5-plan with a fake `claude` on PATH and capture its argv.
+
+    Since story-009, l5-plan locates the target repository the way l5-run
+    does, so the fixture provides a minimal .harness/config.yaml; the
+    refusal path is covered in test_story_009_validation.py."""
+    (tmp_path / ".harness").mkdir()
+    (tmp_path / ".harness" / "config.yaml").write_text(
+        "workflow: story-workflow\n", encoding="utf-8"
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_path = tmp_path / "argv.json"
@@ -248,10 +256,16 @@ def test_l5_plan_passes_the_rendered_prompt_not_the_raw_template(captured_plan_a
     assert missing_required_names(prompt) == set()
 
 
-def test_l5_plan_needs_no_target_repository(captured_plan_argv):
-    """The fixture runs it from an empty tmp_path: the schema ships beside the
-    harness code, so rendering does not depend on where it is invoked."""
-    assert "--append-system-prompt" in captured_plan_argv
+def test_l5_plan_requires_a_target_repository(tmp_path):
+    """Superseded by story-009, which inverted this test: l5-plan now reads
+    the target's config to learn which workflow to inject, so with no
+    .harness/config.yaml here or above it refuses instead of planning."""
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"), "a story request"],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    assert result.returncode != 0
+    assert "config.yaml" in result.stderr
 
 
 def test_l5_plan_adds_no_second_substitution_implementation():

@@ -5,3 +5,4 @@ __pycache__/
 .harness/runs/
 .harness/logs/
 .pytest_cache/
+.harness/requests/

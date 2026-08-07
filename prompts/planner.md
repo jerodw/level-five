@@ -70,16 +70,35 @@ schema for the contract and the skeleton for the shape.
 	    - <path or area>
 
 	verification_requirements:
-	  - <what the verifier must confirm>
+	  - <what the verification stage must confirm>
 
 	constraints:
 	  - <behavior that must be preserved>
 
+[Workflow facts]
+The facts below are injected from the workflow definition and the
+execution rules — the same files the coordinator enforces — not copied
+into this template.
+
+Every likely_file_changes entry names a stage. These are the stages the
+workflow defines, and a plan must not name any other:
+
+{{workflow_stages}}
+
+These paths are blocked for every stage of every story — enforced
+repository-wide by the execution rules, not per story, so a story's
+do_not_modify list need not repeat them:
+
+{{blocked_paths}}
+
 The workflow definition stops some stages from creating files under some
-paths: the implementer may not create anything under tests/, because new
-validation is the tester's work. A stage_exceptions entry lifts one of
-those restrictions for one story, which is what a story whose own
-deliverable is a test suite needs.
+paths, because new validation belongs to the stage that validates rather
+than the stage being validated:
+
+{{stage_create_restrictions}}
+
+A stage_exceptions entry lifts one of those restrictions for one story,
+which is what a story whose own deliverable is a test suite needs.
 
 Do not add one without asking the developer first. The stage must be a
 stage the workflow defines, and the create path must be one that stage

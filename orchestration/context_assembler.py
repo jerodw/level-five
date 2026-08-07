@@ -50,6 +50,28 @@ def schema_context(harness_root: Path) -> dict[str, str]:
     return context
 
 
+def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
+    """Map the workflow's stage facts to injectable placeholder names.
+
+    The stage list, each stage's may_not_create prefixes, and the rules'
+    repository-wide blocked_paths are injected rather than restated in
+    prose, so the facts a planner is told are the definitions the
+    coordinator enforces. l5-plan calls this for the planner template,
+    which no coordinator renders.
+    """
+    stages = workflow["stages"]
+    restrictions = [
+        f"{stage['name']} may not create files under {prefix}"
+        for stage in stages
+        for prefix in stage.get("may_not_create", [])
+    ]
+    return {
+        "workflow_stages": _dashed_lines([stage["name"] for stage in stages]),
+        "stage_create_restrictions": _dashed_lines(restrictions),
+        "blocked_paths": _dashed_lines(rules.get("blocked_paths")),
+    }
+
+
 def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
@@ -126,7 +148,7 @@ def build_context(
         "story": story_text,
         "acceptance_criteria": _dashed_lines(story.get("acceptance_criteria")),
         "stage_exceptions": _exception_lines(story.get("stage_exceptions")),
-        "blocked_paths": "\n".join(f"- {p}" for p in rules.get("blocked_paths", [])),
+        "blocked_paths": _dashed_lines(rules.get("blocked_paths")),
         "test_command": config.get("test_command"),
         "repository_standards": standards,
         "architecture_docs": _read_files(target_root, doc_paths),

@@ -1,0 +1,263 @@
+diff --git a/orchestration/context_assembler.py b/orchestration/context_assembler.py
+index 31115eb..d844eca 100644
+--- a/orchestration/context_assembler.py
++++ b/orchestration/context_assembler.py
+@@ -50,6 +50,29 @@ def schema_context(harness_root: Path) -> dict[str, str]:
+     return context
+ 
+ 
++def workflow_context(
++    workflow: dict, rules: dict
++) -> dict[str, str | None]:
++    """Render the workflow's own declarations as injectable context.
++
++    A prompt that restates a workflow fact drifts from it silently. These
++    are the facts a planner needs and cannot otherwise see: which stages
++    the workflow defines, which of them are restricted from creating files
++    under which prefixes, and the repository-wide blocked paths.
++    """
++    stages = workflow.get("stages", [])
++    restrictions = [
++        f"{stage['name']} may not create anything under {prefix}"
++        for stage in stages
++        for prefix in stage.get("may_not_create", [])
++    ]
++    return {
++        "workflow_stages": _dashed_lines([stage["name"] for stage in stages]),
++        "stage_create_restrictions": _dashed_lines(restrictions),
++        "blocked_paths": _dashed_lines(rules.get("blocked_paths", [])),
++    }
++
++
+ def _read(path: Path) -> str | None:
+     return path.read_text(encoding="utf-8") if path.is_file() else None
+ 
+@@ -126,7 +149,7 @@ def build_context(
+         "story": story_text,
+         "acceptance_criteria": _dashed_lines(story.get("acceptance_criteria")),
+         "stage_exceptions": _exception_lines(story.get("stage_exceptions")),
+-        "blocked_paths": "\n".join(f"- {p}" for p in rules.get("blocked_paths", [])),
++        "blocked_paths": _dashed_lines(rules.get("blocked_paths", [])),
+         "test_command": config.get("test_command"),
+         "repository_standards": standards,
+         "architecture_docs": _read_files(target_root, doc_paths),
+diff --git a/orchestration/harness_config.py b/orchestration/harness_config.py
+index 26edd38..53d021a 100644
+--- a/orchestration/harness_config.py
++++ b/orchestration/harness_config.py
+@@ -7,9 +7,22 @@ directly keeps the harness free of third-party dependencies.
+ from __future__ import annotations
+ 
+ import json
++import sys
+ from pathlib import Path
+ 
+ 
++def find_target_root(start: Path) -> Path:
++    """Walk up from `start` to the nearest repository carrying a harness.
++
++    Every script needs the same lookup, so it lives here once rather than
++    once per script. Exits non-zero when there is nothing to find.
++    """
++    for candidate in [start, *start.parents]:
++        if (candidate / ".harness" / "config.yaml").is_file():
++            return candidate
++    sys.exit("No .harness/config.yaml found here or above. Run l5-init first.")
++
++
+ def _unquote(value: str) -> str:
+     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+         return value[1:-1]
+diff --git a/prompts/planner.md b/prompts/planner.md
+index 286e31b..6b04c1d 100644
+--- a/prompts/planner.md
++++ b/prompts/planner.md
+@@ -70,16 +70,30 @@ schema for the contract and the skeleton for the shape.
+ 	    - <path or area>
+ 
+ 	verification_requirements:
+-	  - <what the verifier must confirm>
++	  - <what verification must confirm>
+ 
+ 	constraints:
+ 	  - <behavior that must be preserved>
+ 
+-The workflow definition stops some stages from creating files under some
+-paths: the implementer may not create anything under tests/, because new
+-validation is the tester's work. A stage_exceptions entry lifts one of
+-those restrictions for one story, which is what a story whose own
+-deliverable is a test suite needs.
++Every likely_file_changes entry names the workflow stage expected to make
++that change. The workflow this repository runs defines exactly these
++stages, and a plan naming any other one is a planning error:
++
++{{workflow_stages}}
++
++The scope you write is not the only boundary. The harness execution rules
++(execution-rules.json) block these paths repository-wide, for every stage
++of every story, rather than per story through a do_not_modify list:
++
++{{blocked_paths}}
++
++The workflow definition also stops some stages from creating files under
++some paths, because the work belongs to a later stage:
++
++{{stage_create_restrictions}}
++
++A stage_exceptions entry lifts one of those restrictions for one story,
++which is what a story whose own deliverable is a test suite needs.
+ 
+ Do not add one without asking the developer first. The stage must be a
+ stage the workflow defines, and the create path must be one that stage
+diff --git a/scripts/l5-plan b/scripts/l5-plan
+index 5c0749e..1d8bd0c 100755
+--- a/scripts/l5-plan
++++ b/scripts/l5-plan
+@@ -4,7 +4,8 @@
+ Usage: l5-plan "<story request>"
+ Starts an interactive Claude Code session carrying the planner prompt.
+ The planner interviews you, iterates on the plan, and writes the approved
+-story artifact to .harness/stories/.
++story artifact to .harness/stories/. The target repository is found by
++walking up from the current directory to the nearest .harness/config.yaml.
+ """
+ import os
+ import sys
+@@ -14,6 +15,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+ 
+ import context_assembler  # noqa: E402
++import harness_config  # noqa: E402
+ 
+ 
+ def main() -> None:
+@@ -21,13 +23,20 @@ def main() -> None:
+         sys.exit(__doc__.strip())
+     request = " ".join(sys.argv[1:])
+     # The planner is not a workflow stage, so no coordinator renders its
+-    # template. Render it here against the same schema context the coordinator
+-    # builds, so the story contract reaches the planner as the schema file
+-    # itself rather than as a copy of it that can drift.
+-    template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
+-    planner_prompt = context_assembler.render(
+-        template, context_assembler.schema_context(HARNESS_ROOT)
++    # template. Render it here against the same context the coordinator
++    # builds, so the story contract and the workflow's own declarations
++    # reach the planner as the files themselves rather than as copies of
++    # them that can drift.
++    target_root = harness_config.find_target_root(Path.cwd())
++    config = harness_config.load_config(target_root)
++    workflow = harness_config.load_workflow(HARNESS_ROOT, config["workflow"])
++    rules = harness_config.load_rules(HARNESS_ROOT)
++    context: dict[str, str | None] = dict(
++        context_assembler.schema_context(HARNESS_ROOT)
+     )
++    context.update(context_assembler.workflow_context(workflow, rules))
++    template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
++    planner_prompt = context_assembler.render(template, context)
+     os.execvp(
+         "claude",
+         [
+diff --git a/scripts/l5-run b/scripts/l5-run
+index d6fc9cb..3b2f7cf 100755
+--- a/scripts/l5-run
++++ b/scripts/l5-run
+@@ -11,21 +11,15 @@ from pathlib import Path
+ HARNESS_ROOT = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+ 
++import harness_config  # noqa: E402
+ import story_coordinator  # noqa: E402
+ 
+ 
+-def find_target_root(start: Path) -> Path:
+-    for candidate in [start, *start.parents]:
+-        if (candidate / ".harness" / "config.yaml").is_file():
+-            return candidate
+-    sys.exit("No .harness/config.yaml found here or above. Run l5-init first.")
+-
+-
+ def main() -> int:
+     if len(sys.argv) != 2:
+         print(__doc__.strip(), file=sys.stderr)
+         return 1
+-    target_root = find_target_root(Path.cwd())
++    target_root = harness_config.find_target_root(Path.cwd())
+     return story_coordinator.run_story(sys.argv[1], HARNESS_ROOT, target_root)
+ 
+ 
+diff --git a/tests/test_story_007_validation.py b/tests/test_story_007_validation.py
+index 60db435..3148e05 100644
+--- a/tests/test_story_007_validation.py
++++ b/tests/test_story_007_validation.py
+@@ -352,11 +352,18 @@ def test_a_workflow_declaring_nothing_enforces_nothing(target_root, harness_root
+ 
+ 
+ def test_no_path_prefix_is_named_in_orchestration_code():
+-    """tests/ is a fact about this workflow, not about the harness."""
++    """tests/ is a fact about this workflow, not about the harness.
++
++    The prefix itself is named nowhere. `may_not_create` has two readers, both
++    of which pass the declaration through without restating it:
++    story_coordinator enforces it, and context_assembler (story-009) renders it
++    for the planner prompt.
++    """
++    readers = {"story_coordinator.py", "context_assembler.py"}
+     for module in sorted(ORCHESTRATION.glob("*.py")):
+         body = executable_source(module.read_text(encoding="utf-8"))
+         assert "tests/" not in body, module.name
+-        assert "may_not_create" not in body or module.name == "story_coordinator.py"
++        assert "may_not_create" not in body or module.name in readers
+ 
+ 
+ def test_the_ownership_check_names_no_stage(target_root, harness_root):
+diff --git a/tests/test_story_008_validation.py b/tests/test_story_008_validation.py
+index b05be04..67cb217 100644
+--- a/tests/test_story_008_validation.py
++++ b/tests/test_story_008_validation.py
+@@ -211,8 +211,13 @@ def test_the_coverage_comes_from_the_injection_and_not_from_leftover_prose():
+ 
+ 
+ @pytest.fixture
+-def captured_plan_argv(tmp_path: Path) -> list[str]:
+-    """Run scripts/l5-plan with a fake `claude` on PATH and capture its argv."""
++def captured_plan_argv(tmp_path: Path, target_root: Path) -> list[str]:
++    """Run scripts/l5-plan with a fake `claude` on PATH and capture its argv.
++
++    Invoked from inside a target repository: story-009 gave l5-plan the
++    walk-up lookup, because it now reads the target's configured workflow as
++    well as the schemas that ship beside the harness.
++    """
+     bin_dir = tmp_path / "bin"
+     bin_dir.mkdir()
+     argv_path = tmp_path / "argv.json"
+@@ -227,7 +232,7 @@ def captured_plan_argv(tmp_path: Path) -> list[str]:
+     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+     result = subprocess.run(
+         [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"), "a story request"],
+-        env=env, capture_output=True, text=True, cwd=tmp_path,
++        env=env, capture_output=True, text=True, cwd=target_root,
+     )
+     assert result.returncode == 0, result.stderr
+     return json.loads(argv_path.read_text(encoding="utf-8"))
+@@ -248,10 +253,16 @@ def test_l5_plan_passes_the_rendered_prompt_not_the_raw_template(captured_plan_a
+     assert missing_required_names(prompt) == set()
+ 
+ 
+-def test_l5_plan_needs_no_target_repository(captured_plan_argv):
+-    """The fixture runs it from an empty tmp_path: the schema ships beside the
+-    harness code, so rendering does not depend on where it is invoked."""
+-    assert "--append-system-prompt" in captured_plan_argv
++def test_the_injected_schema_comes_from_the_harness_not_the_target(
++    captured_plan_argv, target_root
++):
++    """story-008's property, restated for story-009's lookup: l5-plan now
++    locates a target repository, but the story contract it injects is still the
++    schema shipped beside the harness code. The target carries no schemas/ of
++    its own, and the prompt carries the harness copy verbatim."""
++    assert not (target_root / "schemas").exists()
++    prompt = captured_plan_argv[captured_plan_argv.index("--append-system-prompt") + 1]
++    assert STORY_SCHEMA_PATH.read_text(encoding="utf-8") in prompt
+ 
+ 
+ def test_l5_plan_adds_no_second_substitution_implementation():
