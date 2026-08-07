@@ -39,6 +39,7 @@ tasks:
   - Update the two schema inventory assertions (tests/test_schema_validator.py and tests/test_story_004_validation.py) to include the new file, keeping both asserting exact set equality rather than relaxing them to a subset.
   - Declare the check on the verifier stage in workflows/story-workflow.json with a clean_clone key naming the artifact, so the artifact name comes off the loaded workflow definition and not out of orchestration code.
   - Add the clean-clone run to orchestration/story_coordinator.py, executed inside the existing verifier branch in the status == "passed" case, gated on the stage's clean_clone declaration.
+  - Let the clean-clone run target a different interpreter than the harness runs under, through a clean_clone_python key in .harness/config.yaml, so the check exercises the oldest supported Python rather than the newest one installed. The developer's venv is 3.14 while CI tests 3.10, 3.11 and 3.12, so nothing local exercises a version CI does; the width bug that reached CI on story-016 was this same class of gap on a different axis.
   - Build the environment as a clone rather than a tree copy - git clone the target repository locally, apply the uncommitted working tree into the clone, commit it there, and run the configured test command with the clone as the working directory.
   - Route a clean-clone failure the way a verification failure routes - archive the attempt, increment retry_count, reroute to the stage named by the verifier's on_failure.retry_stage, and escalate when the retry ceiling is reached.
   - Inject the clean-clone result into the retried implementer's prompt through a new {{clean_clone_result}} placeholder in orchestration/context_assembler.py and prompts/implementer.md, so the retry receives evidence without the coordinator fabricating retry-guidance.json.
@@ -50,6 +51,9 @@ acceptance_criteria:
   - The clone is built with git clone from the local target repository, never over the network, and the uncommitted working tree is applied and committed into that clone so the story is present there as a commit rather than as pending edits.
   - Files ignored by .gitignore are not carried into the clone, so .venv/ and .harness/runs/ are absent from it, matching the set of files _complete's git add -A would commit.
   - The test command executed in the clone is read from the target repository's .harness/config.yaml test_command; no test command string appears in orchestration code.
+  - The clean-clone run uses the interpreter named by a new .harness/config.yaml key, clean_clone_python, and falls back to the test_command's own interpreter when that key is absent, so the check can be pointed at the oldest supported Python rather than at whichever one the developer happens to work in.
+  - clean-clone-result.json records the interpreter the run actually used and its version, so a reader can tell which Python the check exercised rather than assuming it matched CI.
+  - When clean_clone_python names an interpreter that does not exist, the run escalates with a reason naming the missing interpreter rather than silently falling back to the developer's, because a check that quietly tests the wrong version is worse than one that refuses.
   - The clone is created under a temporary directory outside the target repository and is removed after the run of the suite completes, whatever its result.
   - The run directory contains clean-clone-result.json after any run that reached a passing verifier, recording that the run happened, the command executed, its exit code, and enough captured output to identify what failed.
   - clean-clone-result.json satisfies schemas/clean-clone-result.schema.json.
@@ -136,6 +140,8 @@ verification_requirements:
   - Confirm the ceiling case escalates rather than looping, with an escalation reason naming the clean-clone check.
   - Confirm no routing, retry counting, or escalation path other than the new one changed - the existing verification-failed and escalation branches behave exactly as before.
   - Confirm the clone construction leaves the target repository unmodified - no commit, no branch, no index change, no stash - by comparing git status and the current HEAD before and after.
+  - Confirm the clean-clone run uses the interpreter clean_clone_python names, by pointing it at an interpreter that is not the one the harness is running under and observing that the recorded version is that one and not the harness's.
+  - Confirm a clean_clone_python naming an interpreter that does not exist escalates and names it, rather than falling back to the harness's own.
   - Confirm no network access occurs during the check, by construction rather than by observation - the clone source is a local filesystem path.
   - Confirm the scratch clone is removed after the check, including after a failing run.
   - Confirm the artifact name comes off the workflow definition by running against a workflow whose verifier stage omits the clean_clone key and observing the check does not run.
