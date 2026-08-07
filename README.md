@@ -9,11 +9,37 @@ A **level 3 agentic harness** built by following *Agentic Programming* by Jerod 
 
 ## Companion to the book
 
-This repository is the harness built step by step in **Appendix A, "Building a Sample Level 3 Harness,"** of *Agentic Programming*. Part 3 (Chapters 12–19) explains how an agentic harness works; the appendix builds this one from an empty directory to a working system, including the real escalations that happened along the way.
+This repository tracks *Agentic Programming* through level 3. Part 3 (Chapters 12–19) explains how an agentic harness works, and **Appendix A, "Building a Sample Level 3 Harness,"** builds this one from an empty directory to a working system, including the real escalations that happened along the way.
 
 The book is at **[agenticprogrammingbook.com](https://agenticprogrammingbook.com)**.
 
-This repo is a **stable reference that tracks the book** — a teaching artifact meant to match what the appendix describes, not an actively evolving product. It is intended to be read, run, and adapted for a harness of your own.
+The appendix is the starting point, not the finish line. It stops at a deliberately small harness so the essential structure stays readable, and then hands you a roadmap: harden first, following Chapter 18, then scale, following Chapter 19. This repository is walking that roadmap. Every improvement arrives the way the book says it should — as a story the harness plans, executes, verifies, and documents itself.
+
+### The appendix state
+
+The exact harness Appendix A describes is tagged **`appendix-a`**. If you are reading the appendix and want to check your own build against it, or want to start where the appendix stops, use that tag:
+
+    git clone https://github.com/jerodw/level-five.git
+    cd level-five
+    git checkout appendix-a
+
+`main` has moved past it. The appendix's code excerpts — the workflow definition, the implementer prompt, the coordinator's routing loop — match the tag, and the differences on `main` are the point rather than drift.
+
+### What has changed since
+
+Each story below is a step the book's roadmap calls for. The stories themselves are in `.harness/stories/`, and each one's run — every rendered prompt, every verdict, every escalation — is preserved under `.harness/runs/`.
+
+| Story | Change | Where the book argues for it |
+| --- | --- | --- |
+| 001–002 | `l5-status`; per-stage changed-files records | Appendix A (`appendix-a`) |
+| 003 | One shared harness layer, injected into every stage template | Ch. 16, prompt layering |
+| 004 | Machine-readable schemas for structured artifacts | Ch. 14, artifact contracts |
+| 005 | Schema-directed story parser and full pre-flight validation | Ch. 18, deterministic when behavior is known |
+| 006 | One reader of a story artifact | Ch. 18, hardening |
+
+Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, hooks in place of a static `allowed_tools` allowlist, an adjudicator, an inspector, resumable escalated runs, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
+
+The harness stays at level 3. Epics and products (Chapters 20–22) are a different unit of coordination, and the book is explicit that the story workflow earns that step through a track record rather than a feature list.
 
 ## Prerequisites
 
@@ -72,7 +98,7 @@ The Story Coordinator is deterministic and fully unit-tested without any model c
 
 ## Contributing and feedback
 
-This repository tracks the book, so it stays close to what Appendix A describes. Small fixes — genuine bugs, or errors in the code and its docs — are welcome via pull request. Larger changes that would take it beyond the book are out of scope here.
+This repository tracks the book through level 3, so its scope is what Part 3 and Appendix A describe. Small fixes — genuine bugs, or errors in the code and its docs — are welcome via pull request. Improvements the book's roadmap calls for are welcome as issues; they are best planned and executed through the harness itself, which is the whole point of it. Changes that would take the harness past level 3, or in a direction the book does not argue for, are out of scope here.
 
 Found a bug in the harness code? Open a GitHub issue. For anything about the **book's content** — typos, unclear passages, errata — please use the feedback form at [agenticprogrammingbook.com/feedback](https://agenticprogrammingbook.com/feedback) rather than GitHub Issues.
 
