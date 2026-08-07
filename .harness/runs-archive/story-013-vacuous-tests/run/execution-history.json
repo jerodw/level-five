@@ -1,0 +1,89 @@
+[
+  {
+    "sequence": 1,
+    "timestamp": "2026-08-07 09:31:01",
+    "event": "workflow-started",
+    "message": "workflow started for story-013"
+  },
+  {
+    "sequence": 2,
+    "timestamp": "2026-08-07 09:31:01",
+    "event": "stage-started",
+    "message": "implementer stage started",
+    "stage": "implementer"
+  },
+  {
+    "sequence": 3,
+    "timestamp": "2026-08-07 09:33:08",
+    "event": "stage-completed",
+    "message": "implementer stage completed",
+    "stage": "implementer",
+    "artifacts": [
+      "changed-files.json",
+      "implementation-summary.md"
+    ],
+    "duration_seconds": 126.795
+  },
+  {
+    "sequence": 4,
+    "timestamp": "2026-08-07 09:33:08",
+    "event": "stage-started",
+    "message": "tester stage started",
+    "stage": "tester"
+  },
+  {
+    "sequence": 5,
+    "timestamp": "2026-08-07 09:38:03",
+    "event": "stage-completed",
+    "message": "tester stage completed",
+    "stage": "tester",
+    "artifacts": [
+      "test-results.json",
+      "tester-changed-files.json"
+    ],
+    "duration_seconds": 295.224
+  },
+  {
+    "sequence": 6,
+    "timestamp": "2026-08-07 09:38:03",
+    "event": "stage-started",
+    "message": "verifier stage started",
+    "stage": "verifier"
+  },
+  {
+    "sequence": 7,
+    "timestamp": "2026-08-07 09:39:47",
+    "event": "verification-passed",
+    "message": "verification passed",
+    "stage": "verifier",
+    "artifacts": [
+      "verification-result.json"
+    ],
+    "duration_seconds": 104.442,
+    "verifier_outcome": "passed"
+  },
+  {
+    "sequence": 8,
+    "timestamp": "2026-08-07 09:39:47",
+    "event": "stage-started",
+    "message": "documenter stage started",
+    "stage": "documenter"
+  },
+  {
+    "sequence": 9,
+    "timestamp": "2026-08-07 09:41:20",
+    "event": "stage-completed",
+    "message": "documenter stage completed",
+    "stage": "documenter",
+    "artifacts": [
+      "documentation-report.md"
+    ],
+    "duration_seconds": 92.96
+  },
+  {
+    "sequence": 10,
+    "timestamp": "2026-08-07 09:41:21",
+    "event": "story-completed",
+    "message": "story completed on branch story/story-013"
+  }
+]

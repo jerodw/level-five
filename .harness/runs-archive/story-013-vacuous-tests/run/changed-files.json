@@ -1,0 +1,11 @@
+{
+  "modified": [
+    "orchestration/schema_validator.py",
+    "tests/test_schema_validator.py",
+    "tests/test_story_004_validation.py"
+  ],
+  "created": [
+    "schemas/manifest.json"
+  ],
+  "deleted": []
+}

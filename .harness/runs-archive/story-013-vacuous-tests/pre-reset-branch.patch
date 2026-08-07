@@ -1,0 +1,974 @@
+From d1a946dac918377549246a2bc1c6a49754c99ca9 Mon Sep 17 00:00:00 2001
+From: "jerod.wilkerson" <30474318+jerodw@users.noreply.github.com>
+Date: Fri, 7 Aug 2026 09:41:20 -0600
+Subject: [PATCH] story-013: Move the schema inventory out of tests/ into
+ schemas/manifest.json
+
+Implemented by the l5 harness story workflow.
+---
+ .harness/docs/ARCHITECTURE.md      |  15 +-
+ .harness/stories/story-013.yaml    | 237 ++++++++++++++
+ orchestration/schema_validator.py  |  39 +++
+ schemas/manifest.json              |  10 +
+ tests/test_schema_validator.py     |  22 +-
+ tests/test_story_004_validation.py |  20 +-
+ tests/test_story_013_validation.py | 505 +++++++++++++++++++++++++++++
+ 7 files changed, 822 insertions(+), 26 deletions(-)
+ create mode 100644 .harness/stories/story-013.yaml
+ create mode 100644 schemas/manifest.json
+ create mode 100644 tests/test_story_013_validation.py
+
+diff --git a/.harness/docs/ARCHITECTURE.md b/.harness/docs/ARCHITECTURE.md
+index 01a6994..eb9b73c 100644
+--- a/.harness/docs/ARCHITECTURE.md
++++ b/.harness/docs/ARCHITECTURE.md
+@@ -30,13 +30,19 @@ A stage may also declare an optional `schemas` map from artifact filename to sch
+ 
+ ### Artifact schemas (`schemas/`)
+ 
+-One JSON Schema (draft 2020-12) per structured artifact at the harness root: `changed-files`, `test-results`, `verification-result`, `retry-guidance`, `story`, `execution-history`. The first five are the single source of truth for the shapes the harness routes on; each is injected into the prompt that asks an agent to produce the artifact *and* read by the coordinator to check what the agent produced, so the two can never drift.
++One JSON Schema (draft 2020-12) per structured artifact at the harness root, named by `schemas/manifest.json`: `changed-files`, `test-results`, `verification-result`, `retry-guidance`, `story`, `execution-history`. The first five are the single source of truth for the shapes the harness routes on; each is injected into the prompt that asks an agent to produce the artifact *and* read by the coordinator to check what the agent produced, so the two can never drift.
+ 
+ `execution-history.schema.json` is the exception that clarifies the rule. Its artifact is coordinator-written rather than stage-written, so it appears in no stage's `schemas` map and no stage is asked to satisfy it, and the coordinator does not validate its own write at run time — a self-check against a shape the same code just produced buys nothing. It gets a schema anyway, because a schema is how this harness defines a shape it routes on *or hands to an agent*, and because `schema_context` makes any file in `schemas/` an injectable placeholder for the consumers that come later. The schema is the definition; the story's tests are what check conformance.
+ 
+-The schemas directory is an *inventory* two tests assert set equality over (`tests/test_schema_validator.py` and `tests/test_story_004_validation.py`). Adding a schema file necessarily fails both, by design — the inventory exists so a new shape cannot appear unnoticed. Expect to update both in the same story, and keep them asserting exact equality rather than relaxing them to a subset.
++`schemas/manifest.json` is the one *declared* inventory: a JSON object with a single `schemas` key holding the sorted list of shipped schema names as kebab-case stems without the `.schema.json` suffix, matching how `load_schema` already names them. It is read through `schema_validator.shipped_schemas()`, and the two inventory tests (`tests/test_schema_validator.py` and `tests/test_story_004_validation.py`) assert exact set equality between the manifest and the directory — both directions bite: a schema file with no manifest entry fails, and a manifest entry with no schema file fails. The inventory exists so a new shape cannot appear unnoticed, so **keep it exact equality; never relax it to a subset or a containment check.** Adding a schema means editing `schemas/` and its manifest, and nothing under `tests/`.
+ 
+-Schemas ship with the harness code (like the orchestration modules), not with per-repository `.harness/` config, so `schema_validator` resolves them relative to its own module rather than a caller-supplied root. `load_schema` accepts an optional override for callers that need one; `context_assembler` still globs the `harness_root` it is passed.
++That placement is the point, not a detail. Before story-013 the inventory was two hand-maintained literals *inside* the test files, which collided head-on with the standing story requirement that the implementer touch no file under `tests/`. story-011 is where the collision landed: it added `execution-history.schema.json`, its `changed-files.json` named three paths under `tests/`, and the verifier raised it as a blocking issue the retry could only record as a deviation. Moving the declaration beside the schemas it declares makes adding a schema entirely implementer territory and lets the `tests/`-independence sentence hold verbatim for every future story. The tests stopped being where the fact is *stored* and became where it is *checked*, which is what a test should be — and the duplicate copy dissolved as a side effect, since both files now read the one manifest.
++
++The manifest is written and read by the same stage, which is weaker than a list a different stage maintains. That is accepted deliberately: it is a flat list of filename stems with a one-line diff, and every name it carries still has to pass the draft-2020-12, unsupported-keyword and no-`additionalProperties` checks parametrized over it, so a bogus entry fails loudly rather than silently widening the inventory. `shipped_schemas` raises on a missing or malformed manifest rather than returning an empty or partial tuple, because an empty inventory would make those parametrized checks silently vacuous.
++
++The inventory globs `*.schema.json` so the manifest is not counted as a schema. The coverage the older `glob("*")` gave for free is preserved by a companion assertion in the same tests: `schemas/` contains nothing except `*.schema.json` files plus `manifest.json`, so a stray file still cannot appear unnoticed. `context_assembler.schema_context` already globs `*.schema.json`, so `manifest.json` is no injectable placeholder and no `{{manifest_schema}}` appears in any rendered prompt. Nothing in orchestration routes on the manifest; `shipped_schemas` has no caller inside `orchestration/`.
++
++Schemas ship with the harness code (like the orchestration modules), not with per-repository `.harness/` config, so `schema_validator` resolves them relative to its own module rather than a caller-supplied root. `schemas_dir`, `load_schema`, and `shipped_schemas` each accept the same optional `harness_root` override for callers that need one — `shipped_schemas` resolves the manifest *through* `schemas_dir`, so the override behaves identically across all three, and a test can stand up a throwaway harness root with its own schemas and manifest. `context_assembler` still globs the `harness_root` it is passed.
+ 
+ `story.schema.json` describes the full story shape — nested story fields, typed arrays, `technical_plan` as a known optional property — and the whole of it is consumed: it both *drives* the parse in `story_parser` and validates the parsed result. It is the one place the ambiguity YAML cannot resolve is resolved: whether `- some criterion: with a colon` is a string or a mapping is decided by `items.type` at the schema node being read, not by the syntax of the line.
+ 
+@@ -64,7 +70,7 @@ The drift source that paragraph used to name is closed: `planner.md` no longer s
+ 
+ - `story_coordinator.py` — the Story Coordinator. Loads the workflow definition, story artifact, and rules; creates the story branch and run directory; loops: determine stage → assemble context → render prompt → invoke agent → save artifacts → update state → route (advance, retry, or escalate). Post-stage checks run in a fixed order: required artifacts present → declared artifacts match their schemas → changed-files record clear of blocked paths → stage output ownership. Schema validation sits in the middle deliberately, so a malformed `changed-files.json` escalates with a validation error naming the field rather than raising out of the blocked-paths check that reads the same file. Ownership runs last, on the same record, after that record is known to be well-formed and clear of blocked paths. `_ownership_violation` returns a frozen `OwnershipViolation(path, prefix)`, and the escalation reason names stage, path, and prefix in both `events.log` and `escalation-summary.md`. `_granted_prefixes` subtracts the story's grants from the enforced list at check time, and each applied grant is appended to `events.log` as `stage exception applied: <stage> may create <prefix>`, so routing stays reconstructable from the log alone. Pre-flight story reading is one function, `read_story(story_text)`: load `story.schema.json`, parse with it, validate against it, and return a frozen `StoryReading` carrying both the `parsed` story (`None` when parsing failed) and the `problems` list. It runs above the run-directory creation and the branch checkout, so a rejection is an exit-1 refusal leaving no run directory, no `state.json`, no log, and no new branch — and no agent invoked. It is called exactly once per run, and the parse it returns is the run's only reading of the artifact: `reading.parsed` is threaded into every `build_context` call and into `_complete`, which takes the completion-report title and commit-message subject from `story["story"]["title"]` rather than scanning lines. A missing title is a loud `KeyError`; the schema marks it required and the run cannot reach `_complete` without having validated. `read_story` stays schema conformance only. Whether a story's `stage_exceptions` mean anything against the workflow *this run loaded* is a separate question the schema cannot answer, so it is a separate function — `stage_exception_problems(story, stages)`, called from `run_story` beside `read_story` and above the run-directory creation. It refuses an exception naming a stage the workflow does not define, and one granting a prefix that stage was never restricted on: an exception that grants nothing is a planning error, not a harmless one. Matching is exact — a grant must name a prefix appearing verbatim in the stage's `may_not_create` list, so `create: tests` against a declared `tests/` refuses rather than silently granting part of it. Both refusals print through one extracted `_refuse(story_path, problems)`, so the refusal shape (exit 1, one message per problem, nothing created) is a single code path rather than two copies of one. The retry branch archives before it increments: `archive_attempt(run_dir, archivable_artifacts(stages), state.retry_count + 1)` copies the superseded attempt's artifacts under `attempts/attempt-N/` — see the archive decisions below. `append_event(run_dir, message, *, kind, stage, artifacts, duration_seconds, verifier_outcome, retry_decision, retry_reason)` is the run's single event write path: the prose message stays positional and is what the `events.log` line is built from, and the *same call* appends one structured entry to `execution-history.json`. `load_history(run_dir)` is the read side, called only by `append_event` for the next sequence number. `run_story` captures `stage_started_at = time.monotonic()` at the stage-started event and reads it through a local `elapsed()` at every event that ends a stage, so a completed stage's entry carries a duration the log only made derivable; `_escalate` forwards whatever structured fields an escalation has and tags its entry `escalated`.
+ - `story_parser.py` — lexer plus schema-directed interpreter for the story artifact. **The story dialect is not YAML**; see the module docstring before reaching for `yaml.safe_load`, which reads committed artifacts differently and wrongly. The lexer produces line/indent/content records, drops blank lines and full-line comments, consumes a `key: |` block scalar body whole (so blank and `#`-shaped lines *inside* it survive), and rejects tab indentation. The interpreter dispatches on the schema node's `type`, consulting structure only where the schema is silent. Under `items.type == "string"` a `- ` item is the verbatim remainder of its line, colons included; under `items.type == "object"` the same syntax parses into key/value pairs. Scalars are never coerced — every value is a `str`. A single `StoryParseError` carries line, expectation, and finding, rendering as `line 12: expected …, found …`.
+-- `schema_validator.py` — `load_schema`, `unsupported_keywords`, and `validate(instance, schema) -> list[str]`. A deliberately small JSON Schema subset — `type`, `required`, `properties`, `items`, `enum` — because the harness is standard library only. `validate` walks the whole schema first and raises `ValueError` if any keyword outside that subset appears anywhere in it, so a schema can never claim a constraint the validator silently drops. Errors carry a tracked JSON path, the expectation, and the found value: `$.blocking_issues[0].severity: expected one of ["high", "medium", "low"], found string ("critical")`.
++- `schema_validator.py` — `schemas_dir`, `load_schema`, `shipped_schemas`, `unsupported_keywords`, and `validate(instance, schema) -> list[str]`. `shipped_schemas(harness_root=None) -> tuple[str, ...]` reads `schemas/manifest.json` (filename and key held in the module constants `MANIFEST_NAME` and `MANIFEST_KEY`, so no test spells them itself) and raises `ValueError` on every degradation path — unreadable file, unparseable JSON, a payload that is not an object with a `schemas` array, or a non-string/empty entry — rather than degrading to an empty inventory. A deliberately small JSON Schema subset — `type`, `required`, `properties`, `items`, `enum` — because the harness is standard library only. `validate` walks the whole schema first and raises `ValueError` if any keyword outside that subset appears anywhere in it, so a schema can never claim a constraint the validator silently drops. Errors carry a tracked JSON path, the expectation, and the found value: `$.blocking_issues[0].severity: expected one of ["high", "medium", "low"], found string ("critical")`.
+ - `context_assembler.py` — builds each stage's runtime context from the story artifact, prior stage artifacts, retry state, and architecture documents, and renders it into the prompt template. `build_context` takes both the raw `story_text` and the required keyword-only `story` (the parsed artifact from `read_story`); it never reads the artifact itself. `{{story}}` is `story_text` verbatim, and `{{acceptance_criteria}}` comes from the parsed list via `_dashed_lines`, which renders one `- `-prefixed criterion per line and returns `None` for an absent or empty list. `{{stage_exceptions}}` follows the same convention through `_exception_lines`: one dash-prefixed line per grant naming the stage, the granted path, and the reason, `None` when the story declares none. `render()` is single-pass: `re.sub` does not re-scan substituted text, so a placeholder injected by one substitution is not itself resolved. `build_context` therefore resolves the shared `prompts/harness-layer.md` partial as a **two-pass render** — it renders that partial (including the partial's own `{{blocked_paths}}` placeholder) against the assembled context first, then stores the already-resolved text as the `harness_layer` context value for injection into stage templates. When the partial is absent, `harness_layer` is left unset and renders as `None`. The schema placeholders come from `schema_context(harness_root) -> dict[str, str]`, a public function of the same module: it globs `harness_root/schemas/*.schema.json` and exposes each file's text under the stem with hyphens replaced by underscores plus `_schema` (`verification-result.schema.json` → `{{verification_result_schema}}`). `build_context` merges it with `update` at the point the inline loop used to run, before the two-pass render, so the values are available to any template. A new schema file becomes an injectable placeholder with no code change. The glob appears exactly once in the module because it has two callers: `build_context` for workflow stages, and `l5-plan` for the planner template, which no coordinator renders. `workflow_context(workflow, rules) -> dict[str, str | None]` sits beside `schema_context` for the same reason: it maps the loaded workflow's stage names to `{{workflow_stages}}`, each stage's `may_not_create` declarations to `{{stage_create_restrictions}}` (`"<stage> may not create files under <prefix>"`, one line per pair), and the rules' `blocked_paths` to `{{blocked_paths}}`, all through the shared `_dashed_lines` helper — `build_context`'s own `blocked_paths` rendering goes through the same helper, so the harness-layer partial and the planner render the list identically. `_dashed_lines` returns `None` for an empty list, and `render()` maps `None` to the literal `None`, so the empty-list edge changes no rendered prompt.
+ - `agent_runner.py` — invokes `claude -p` headlessly (`--permission-mode acceptEdits --output-format stream-json --verbose`, prompt on stdin), streams raw output to the run's log, and returns the agent's final result text.
+ - `harness_config.py` — loads `.harness/config.yaml` (a deliberately small YAML subset parsed directly, keeping the harness dependency-free), workflow definitions, and execution rules. Also owns `find_target_root(start) -> Path`: the walk-up from a starting directory to the nearest ancestor containing `.harness/config.yaml`, exiting 1 with `No .harness/config.yaml found here or above. Run l5-init first.` when none exists. That loop appears exactly once in the repository — `l5-run`, `l5-plan`, and `l5-status` all call it (story-009 extracted it from `l5-run`, which `l5-status` had copied byte-for-byte). `l5-init`'s config check is a different thing: a non-walking existence probe on a directory it was explicitly given.
+@@ -140,6 +146,7 @@ The files at the root always describe the *current* attempt. `attempts/attempt-N
+ - `{{story}}` stays the raw artifact text, unparsed and unreformatted, even though the parse is available. Agents are meant to read the story as authored — comments, block scalars, and all. The parse feeds the values the harness routes on; the raw text feeds the values an agent reads.
+ - The parser adapts to how stories are already written; stories do not adapt to the parser. Every committed artifact parses unedited, quoting never becomes mandatory, and a trailing `# comment` on a value line stays part of the value because a string item is taken verbatim. Any change here must be checked against the corpus test that globs `.harness/stories/*.yaml` — it discovers the files rather than naming them, and a companion test asserts the glob is non-empty so it cannot pass on zero files.
+ - Committed story artifacts are execution records and are never edited to satisfy a contract written after them. When the story schema gains a required field, the corpus tests instead bump `FIRST_SCHEMA_ERA_STORY` (defined in `tests/test_story_parser.py` and `tests/test_story_005_validation.py` — both must move together) to the story that introduced the field: artifacts at or after it are validated, earlier ones are scoped out of validation while a companion assertion still requires them to *parse*. story-007 moved it from `story-003` to `story-007` when `technical_plan.likely_file_changes` gained its required `stage` field. The era constant is the reason a new required field is a cheap change rather than a corpus rewrite; the cost is that each bump narrows what the corpus test proves, so bump it for a genuinely new contract, not to quiet a failure.
++- A declared fact belongs with the thing it describes, and *which* thing that is decides which stage owns it. The schema inventory is a fact about what the harness **ships**, so it lives in `schemas/manifest.json` and is implementer territory. `FIRST_SCHEMA_ERA_STORY` is a fact about which committed story artifacts the corpus tests **validate** — test-only — so it stays under `tests/`, deliberately not moved by story-013. Different classes of fact, different homes, on purpose. When a stage-ownership rule and a source-of-truth location contradict each other, the location is usually what is wrong: story-013 removed that collision by moving a definition, not by weakening the `may_not_create` enforcement or rewording the `tests/`-independence requirement, and it declined to route the inventory edit to the tester instead — that would leave the suite red between the implementer and tester stages and treat a misplaced source of truth as a routing problem. A story that must delete a misplaced definition cannot itself carry the requirement it is protecting; write the narrower true requirement for that one story rather than relaxing the standing one.
+ - A prompt that restates a contract the harness enforces elsewhere will drift, and the drift is silent until a run refuses. The fix is injection, not vigilance: the contract lives in one file, the prompt carries a placeholder, and adding a field is a one-file edit. story-004 established this for workflow-stage templates, story-008 extended it to `planner.md` — which needed the extra step of teaching a script to render; a template with no coordinator behind it is exactly where a copy accumulates — and story-009 finished the job for the same template's *workflow* facts (stage names, `may_not_create`, `blocked_paths`), which required `l5-plan` to locate a target repository at all. What the injection cannot supply is what should stay in prose: a dialect illustration and role guidance are not schema content, and stripping them in the name of "no normative prose" would lose the planner more than the drift cost.
+ - A coverage assertion over an injected contract needs a negative control. `tests/test_story_008_validation.py` asserts that every property named in a `required` list at any depth of `schemas/story.schema.json` appears in the rendered planner prompt — an assertion that would pass just as happily against leftover prose. Its companion renders the same template with `{{story_schema}}` removed and asserts the coverage collapses (all fifteen names absent). That works because the schema supplies the names in quoted JSON form (`"do_not_modify"`) and the skeleton, written in the story dialect, does not. Without the control the test proves the prose was thorough, not that the injection happened. story-009's workflow-facts coverage carries the same control, with one wrinkle worth knowing: a stripped render still contains "implementer" and "verifier", because those words appear in description strings inside the injected `story.schema.json`. The control therefore holds on *full-stage* coverage collapsing ("tester" and "documenter" vanish, along with the restriction line and every blocked path), not on every stage name individually — a reminder that two injections into one template can alias each other's evidence, and the control must assert on what only the stripped placeholder supplied.
+ - The run directory holds evidence, and a retry does not erase it. Until story-010 only the verifier's verdict survived a retry (`verification/iteration-N.json`); every other stage artifact was regenerated over its canonical name. `archive_attempt` extends that treatment to the rest, and it does so **by copying, never moving** — the live copy stays at the run-directory root where every reader already looks, so `context_assembler` and every stage prompt were unchanged by the story. The archive keeps canonical filenames one directory down rather than minting suffixed variants (`changed-files-attempt-1.json`), which would grow the name set per attempt that the artifact-naming contract exists to keep small.
+diff --git a/.harness/stories/story-013.yaml b/.harness/stories/story-013.yaml
+new file mode 100644
+index 0000000..6c2eddb
+--- /dev/null
++++ b/.harness/stories/story-013.yaml
+@@ -0,0 +1,237 @@
++story:
++  id: story-013
++  title: Move the schema inventory out of tests/ into schemas/manifest.json
++  description: |
++    Adding a file to schemas/ currently forces the implementer to hand-edit
++    two exact-equality inventories inside tests/ - SHIPPED in
++    tests/test_schema_validator.py and SHIPPED_SCHEMAS in
++    tests/test_story_004_validation.py. Every story since story-008 has
++    forbidden the implementer from touching any file under tests/. Both
++    rules are correct and they cannot both be satisfied. story-011 is where
++    they collided: it added schemas/execution-history.schema.json, its
++    changed-files.json named three paths under tests/, and the verifier
++    raised it as a blocking issue that the retry accepted as a recorded
++    deviation rather than closed.
++
++    The inventory's value is that declaring a new schema must be a
++    deliberate, noticed act. Nothing about that requires the declaration to
++    live in a test file. This story moves it beside the schemas it declares:
++    schemas/manifest.json becomes the one declared inventory, and the two
++    tests stop being the place the fact is stored and become the place it is
++    checked, which is what a test should be. Adding a schema then means
++    editing schemas/ and its manifest, both implementer territory, and the
++    tests/ requirement holds verbatim for every future story.
++
++    The duplication dissolves as a side effect. Both test files read one
++    manifest instead of each maintaining a copy, so the two-files-that-must-
++    move-together problem goes away without a separate consolidation story.
++
++    This is the one story that cannot carry the requirement it is
++    protecting. Deleting the two inventory definitions means editing two
++    files under tests/. Those are modifications, so may_not_create permits
++    them and the coordinator will not escalate, but this story deliberately
++    does not write the usual touches-no-file-under-tests sentence into its
++    verification requirements. It writes the narrower true thing instead.
++
++tasks:
++  - Add schemas/manifest.json, a flat declarative list of the six shipped
++    schema names, as the single source of truth for the schema inventory.
++  - Add schema_validator.shipped_schemas(harness_root) returning the
++    manifest's names as a tuple, raising loudly on a missing or malformed
++    manifest rather than degrading to an empty or partial inventory.
++  - Delete the SHIPPED tuple from tests/test_schema_validator.py and the
++    SHIPPED_SCHEMAS set from tests/test_story_004_validation.py, repointing
++    every use in both files at shipped_schemas().
++  - Narrow the inventory globs to *.schema.json so the manifest is not
++    counted as a schema, and add the companion assertion that schemas/
++    contains nothing except *.schema.json files plus manifest.json, so a
++    stray file still cannot appear unnoticed.
++
++acceptance_criteria:
++  - schemas/manifest.json exists and names exactly the six schemas the
++    harness ships today - changed-files, execution-history, retry-guidance,
++    story, test-results, verification-result - with no schema added and none
++    removed by this story.
++  - schema_validator.shipped_schemas() returns those names, accepts an
++    optional harness_root override like load_schema and schemas_dir do, and
++    carries type hints on its signature.
++  - A missing schemas/manifest.json, or one that is not parseable as the
++    declared shape, raises rather than returning an empty or partial
++    inventory.
++  - Exactly one declared inventory of schema names survives in the
++    repository, established by search rather than by inspection - no literal
++    list of schema names remains anywhere under tests/ or orchestration/.
++  - Both inventory tests still assert exact set equality between the
++    directory and the manifest, not a subset relation. Neither is relaxed,
++    weakened, or converted to a containment check.
++  - Adding a file to schemas/ without adding its manifest entry fails a
++    test, and removing a manifest entry without removing its file fails a
++    test. Both directions are asserted.
++  - The story's central property is demonstrated rather than argued: a test
++    adds a throwaway schema in a temporary harness root, adds its manifest
++    line, and shows every inventory check passes - so the only paths a new
++    schema requires editing are under schemas/, and none are under tests/.
++  - Adding a stray non-schema file to schemas/ still fails a test. Narrowing
++    the inventory glob to *.schema.json does not open a hole the previous
++    glob("*") closed.
++  - The per-schema parametrized checks still run over every shipped schema
++    read from the manifest - draft-2020-12 declaration, no unsupported
++    keywords, no additionalProperties - so a bogus manifest entry fails
++    loudly instead of silently widening the inventory.
++  - No coordinator behavior changes. Nothing in orchestration routes on the
++    manifest, no stage prompt is re-rendered because of it, and
++    story_coordinator is not edited by this story.
++  - The injected schema placeholder set is unchanged. schema_context globs
++    *.schema.json, so manifest.json becomes no placeholder and no
++    {{manifest_schema}} appears in any rendered prompt.
++  - The implementer's edits under tests/ are confined to deleting the two
++    inventory definitions and repointing their assertions at
++    shipped_schemas(). It adds no test file, adds no test function, and
++    changes no assertion other than those bound to the inventory.
++  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
++
++technical_plan:
++  implementation_steps:
++    - Write schemas/manifest.json as a JSON object with one key holding the
++      sorted list of shipped schema names, kebab-case stems without the
++      .schema.json suffix, matching how load_schema already names them.
++    - Add shipped_schemas(harness_root=None) to schema_validator beside
++      schemas_dir and load_schema, resolving the manifest the same way those
++      resolve the directory so the harness_root override behaves identically.
++    - In tests/test_schema_validator.py replace the SHIPPED tuple with a
++      module-level call to shipped_schemas() so the parametrized cases still
++      expand at collection time, and narrow the directory glob in
++      test_shipped_schemas_are_exactly_the_named_ones to *.schema.json.
++    - In tests/test_story_004_validation.py replace SHIPPED_SCHEMAS the same
++      way, keeping every existing use - the workflow schema-map check, the
++      required-is-a-property walk, the unsupported-keyword walk, and the
++      directory equality assertion - reading from the one manifest.
++    - Add the companion assertion that schemas/ holds only *.schema.json
++      files and manifest.json, replacing the coverage the old glob("*") gave
++      for free.
++  likely_file_changes:
++    - file: schemas/manifest.json
++      stage: implementer
++      reason: The new single declared inventory, the whole point of the
++        story.
++    - file: orchestration/schema_validator.py
++      stage: implementer
++      reason: shipped_schemas() reads the manifest and is what both test
++        files import instead of holding copies.
++    - file: tests/test_schema_validator.py
++      stage: implementer
++      reason: Deletes the SHIPPED tuple and repoints its assertions. This is
++        a modification, not a creation, and it is deliberately the
++        implementer's because the story's deliverable is moving this
++        definition out of the file.
++    - file: tests/test_story_004_validation.py
++      stage: implementer
++      reason: Deletes the second copy, SHIPPED_SCHEMAS, and repoints its
++        assertions for the same reason.
++    - file: tests/test_story_013_validation.py
++      stage: tester
++      reason: All new validation for this story - the single-inventory
++        search, both failure directions, the stray-file assertion, the
++        throwaway-schema demonstration that no tests/ edit is required, and
++        the unchanged placeholder set. Every new assertion this story adds
++        lives in this one file.
++    - file: .harness/docs/ARCHITECTURE.md
++      stage: documenter
++      reason: The schemas-directory paragraph currently records the two
++        copies as a manual-sync rule a human has to remember, and names both
++        test files. That is stale the moment this lands and must be replaced
++        with the manifest as the inventory and the tests as its check.
++
++scope:
++  modify:
++    - schemas/manifest.json
++    - orchestration/schema_validator.py
++    - tests/
++    - .harness/docs/ARCHITECTURE.md
++  do_not_modify:
++    - schemas/changed-files.schema.json
++    - schemas/test-results.schema.json
++    - schemas/verification-result.schema.json
++    - schemas/retry-guidance.schema.json
++    - schemas/story.schema.json
++    - schemas/execution-history.schema.json
++    - workflows/
++    - prompts/
++    - scripts/
++    - orchestration/story_coordinator.py
++    - orchestration/context_assembler.py
++    - orchestration/story_parser.py
++    - orchestration/harness_config.py
++    - orchestration/agent_runner.py
++    - orchestration/run_status.py
++    - .harness/config.yaml
++    - .harness/stories/
++    - .harness/requests/
++
++verification_requirements:
++  - Confirm by search rather than inspection that exactly one declared
++    inventory of schema names survives, and that no literal list of schema
++    names remains under tests/ or orchestration/.
++  - Confirm both inventory tests still assert exact set equality rather than
++    a subset, and that neither was relaxed to make the move work.
++  - Confirm the story's central property directly: that adding a schema file
++    now requires edits only under schemas/ and none under tests/,
++    demonstrated by a test that actually adds a throwaway schema rather than
++    by reading the code and reasoning about it.
++  - Confirm both failure directions still bite - a schema file with no
++    manifest entry fails, a manifest entry with no schema file fails - and
++    that a stray non-schema file in schemas/ still fails a test despite the
++    narrowed glob.
++  - Confirm a missing or malformed manifest raises rather than yielding an
++    empty inventory that would make the parametrized per-schema checks
++    silently vacuous.
++  - Confirm no coordinator behavior changed - orchestration/
++    story_coordinator.py is untouched, nothing routes on the manifest, and
++    the injected {{..._schema}} placeholder set is exactly what it was.
++  - Confirm the implementer's edits under tests/ are confined to deleting
++    the two inventory definitions and repointing their assertions at the
++    shared accessor. The implementer must have created no file under tests/,
++    added no test function, and changed no assertion unrelated to the
++    inventory. This story deliberately does not require the implementer's
++    changed-files record to be free of tests/ paths, because removing those
++    two definitions is the deliverable.
++  - Confirm tests/test_story_013_validation.py was created by the tester
++    stage and holds every new assertion this story adds.
++  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
++
++constraints:
++  - This story should land before story-012, which is planned but not yet
++    run and adds schemas/retry-history.schema.json. Without the manifest
++    that story reproduces exactly this collision, since its own verification
++    requires the implementer's changed-files record to list no file under
++    tests/ at all.
++  - Do not relax the inventory to a subset. Exact equality is the feature -
++    the inventory exists so a new artifact shape cannot enter the harness
++    unnoticed, and every acceptance criterion here assumes it holds.
++  - Do not relax or reword the standing tests/-independence requirement for
++    future stories. The manifest exists precisely so that sentence keeps
++    holding verbatim. prompts/planner.md is untouched by this story.
++  - Do not route the inventory edit to the tester as an alternative. That
++    leaves the suite red between the implementer and tester stages and
++    treats a misplaced source of truth as a routing problem.
++  - The manifest is written and read by the same stage, which is weaker than
++    a list a different stage maintains. This is accepted deliberately rather
++    than by default. It is bought down by the manifest being a flat list of
++    filenames with a one-line diff, and by every schema it names still
++    having to pass the draft-2020-12, unsupported-keyword and no-
++    additionalProperties checks parametrized over it.
++  - FIRST_SCHEMA_ERA_STORY is deliberately not moved by this story. It is a
++    fact about which committed story artifacts the corpus tests validate -
++    test-only - so tests/conftest.py is its correct home, and the open
++    request proposing that move stays open and unblocked. The schema
++    inventory is a fact about what the harness ships, so it moves out of
++    tests/ entirely. Different classes of fact, different homes, on purpose.
++  - No schema is added, removed, or edited by this story, and
++    schema_validator's supported-keyword subset is unchanged.
++  - The may_not_create enforcement in the coordinator and the workflow
++    definition is unchanged. This story removes the collision by moving a
++    definition, not by weakening a rule.
++  - The per-story validation test files stay one per story. Consolidating
++    them is out of scope, and story-008, story-009 and story-011 are
++    execution records that are never retroactively edited.
++  - Standard library only, Python 3.10+, type hints on public functions.
+diff --git a/orchestration/schema_validator.py b/orchestration/schema_validator.py
+index e92b0a9..eb41353 100644
+--- a/orchestration/schema_validator.py
++++ b/orchestration/schema_validator.py
+@@ -23,6 +23,11 @@ from pathlib import Path
+ # module rather than to a caller-supplied root.
+ HARNESS_ROOT = Path(__file__).resolve().parents[1]
+ 
++# The one declared inventory of shipped schema names lives beside the schemas
++# it declares, not in a test file.
++MANIFEST_NAME = "manifest.json"
++MANIFEST_KEY = "schemas"
++
+ SUPPORTED_KEYWORDS = frozenset({"type", "required", "properties", "items", "enum"})
+ 
+ # Annotations carry no constraint, so ignoring them ignores nothing.
+@@ -49,6 +54,40 @@ def load_schema(name: str, harness_root: Path | None = None) -> dict:
+     return json.loads(path.read_text(encoding="utf-8"))
+ 
+ 
++def shipped_schemas(harness_root: Path | None = None) -> tuple[str, ...]:
++    """The declared inventory of schema names, read from schemas/manifest.json.
++
++    The manifest is the single source of truth for which schemas the harness
++    ships; the tests are where that declaration is checked against the
++    directory. A missing or malformed manifest raises rather than yielding an
++    empty or partial inventory, which would make those checks vacuous.
++    """
++    path = schemas_dir(harness_root) / MANIFEST_NAME
++    try:
++        text = path.read_text(encoding="utf-8")
++    except OSError as error:
++        raise ValueError(f"{path}: schema manifest is missing or unreadable") from error
++    try:
++        manifest = json.loads(text)
++    except json.JSONDecodeError as error:
++        raise ValueError(f"{path}: schema manifest is not parseable as JSON") from error
++    if not isinstance(manifest, dict) or not isinstance(
++        manifest.get(MANIFEST_KEY), list
++    ):
++        raise ValueError(
++            f"{path}: schema manifest must be an object with a "
++            f"{MANIFEST_KEY!r} array of schema names"
++        )
++    names = manifest[MANIFEST_KEY]
++    for name in names:
++        if not isinstance(name, str) or not name:
++            raise ValueError(
++                f"{path}: every {MANIFEST_KEY} entry must be a non-empty string, "
++                f"found {name!r}"
++            )
++    return tuple(names)
++
++
+ def unsupported_keywords(schema: dict) -> list[str]:
+     """Every keyword anywhere in the schema that this validator cannot honor."""
+     found: list[str] = []
+diff --git a/schemas/manifest.json b/schemas/manifest.json
+new file mode 100644
+index 0000000..867eec5
+--- /dev/null
++++ b/schemas/manifest.json
+@@ -0,0 +1,10 @@
++{
++  "schemas": [
++    "changed-files",
++    "execution-history",
++    "retry-guidance",
++    "story",
++    "test-results",
++    "verification-result"
++  ]
++}
+diff --git a/tests/test_schema_validator.py b/tests/test_schema_validator.py
+index 8c51fde..a8edcd6 100644
+--- a/tests/test_schema_validator.py
++++ b/tests/test_schema_validator.py
+@@ -9,16 +9,10 @@ import pytest
+ 
+ import schema_validator
+ 
+-SHIPPED = (
+-    "changed-files",
+-    "test-results",
+-    "verification-result",
+-    "retry-guidance",
+-    "story",
+-    # Coordinator-written rather than stage-written, so no workflow stage maps
+-    # to it; it is shipped and validator-checked like every other schema.
+-    "execution-history",
+-)
++# The inventory is declared once, in schemas/manifest.json. This module is
++# where it is checked, not where it is stored. Read at collection time so the
++# per-schema cases below still parametrize over it.
++SHIPPED = schema_validator.shipped_schemas()
+ 
+ OBJECT_SCHEMA = {
+     "type": "object",
+@@ -136,8 +130,14 @@ def test_unknown_type_name_raises():
+ 
+ 
+ def test_shipped_schemas_are_exactly_the_named_ones():
+-    names = sorted(p.name for p in schema_validator.schemas_dir().glob("*"))
++    directory = schema_validator.schemas_dir()
++    names = sorted(p.name for p in directory.glob("*.schema.json"))
+     assert names == sorted(f"{name}.schema.json" for name in SHIPPED)
++    # The narrowed glob would ignore a stray file the old glob("*") caught, so
++    # the directory itself is still held to schemas plus the manifest.
++    assert sorted(p.name for p in directory.iterdir()) == sorted(
++        names + [schema_validator.MANIFEST_NAME]
++    )
+ 
+ 
+ @pytest.mark.parametrize("name", SHIPPED)
+diff --git a/tests/test_story_004_validation.py b/tests/test_story_004_validation.py
+index f57accd..26a7b8a 100644
+--- a/tests/test_story_004_validation.py
++++ b/tests/test_story_004_validation.py
+@@ -19,16 +19,9 @@ import story_coordinator
+ import story_parser
+ from agent_runner import AgentResult
+ 
+-SHIPPED_SCHEMAS = {
+-    "changed-files",
+-    "test-results",
+-    "verification-result",
+-    "retry-guidance",
+-    "story",
+-    # story-011: the coordinator's own execution-history.json. No stage maps
+-    # to it, and the inventory below stays exact.
+-    "execution-history",
+-}
++# Declared once in schemas/manifest.json; this module checks that declaration
++# against the directory rather than holding a second copy of it.
++SHIPPED_SCHEMAS = set(schema_validator.shipped_schemas())
+ 
+ ORIGINAL_STORY_SECTIONS = (
+     "story",
+@@ -118,8 +111,13 @@ def test_the_validation_step_hard_codes_no_artifact_or_schema_name():
+ 
+ 
+ def test_schemas_directory_holds_exactly_the_named_schemas(harness_root):
+-    present = {p.name for p in (harness_root / "schemas").iterdir()}
++    directory = harness_root / "schemas"
++    present = {p.name for p in directory.glob("*.schema.json")}
+     assert present == {f"{name}.schema.json" for name in SHIPPED_SCHEMAS}
++    # Nothing else may sit in schemas/ except the manifest that declares them.
++    assert {p.name for p in directory.iterdir()} == present | {
++        schema_validator.MANIFEST_NAME
++    }
+ 
+ 
+ def test_every_required_field_is_also_a_declared_property(harness_root):
+diff --git a/tests/test_story_013_validation.py b/tests/test_story_013_validation.py
+new file mode 100644
+index 0000000..1ff1b98
+--- /dev/null
++++ b/tests/test_story_013_validation.py
+@@ -0,0 +1,505 @@
++"""story-013: the schema inventory moves out of tests/ into schemas/manifest.json.
++
++The story's claim is that the inventory can live beside the schemas it
++declares without losing what made it valuable: adding an artifact shape to
++the harness still cannot happen unnoticed. These tests hold that claim to
++its two halves.
++
++The declaration half is checked directly - the manifest names exactly the
++six shipped schemas, the accessor reads it, and every degradation path
++raises instead of handing back an empty inventory that would make the
++per-schema parametrized checks silently vacuous.
++
++The enforcement half is checked by mutation rather than by reading the
++assertions and reasoning about them. A copy of the harness is made in a
++temporary directory, one thing is changed in it - a schema file with no
++manifest entry, a manifest entry with no schema file, a stray non-schema
++file - and the repository's own inventory tests are run against that copy
++to show they fail. The same machinery demonstrates the story's central
++property: adding a schema together with its manifest line turns the suite
++green again while every file under tests/ stays byte-identical, so the
++paths a new schema requires editing are all under schemas/ and none are
++under tests/.
++"""
++import ast
++import json
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++import context_assembler
++import schema_validator
++
++REPO_ROOT = Path(schema_validator.__file__).resolve().parents[1]
++
++# Named here, not read from the manifest: this is the story's own statement
++# of what the harness ships today, and it is the thing the manifest is
++# checked against. Reading it from the manifest would check nothing.
++EXPECTED_SCHEMAS = (
++    "changed-files",
++    "execution-history",
++    "retry-guidance",
++    "story",
++    "test-results",
++    "verification-result",
++)
++
++# The two tests that hold the directory to the declared inventory. Both are
++# run against mutated copies of the harness below.
++INVENTORY_TESTS = (
++    "tests/test_schema_validator.py::test_shipped_schemas_are_exactly_the_named_ones",
++    "tests/test_story_004_validation.py::test_schemas_directory_holds_exactly_the_named_schemas",
++)
++
++INVENTORY_TEST_FILES = ("tests/test_schema_validator.py",
++                        "tests/test_story_004_validation.py")
++
++# A well-formed schema in the subset the validator supports, so a mutation
++# test fails because of the inventory and never because the file it added is
++# a bad schema.
++THROWAWAY_SCHEMA = {
++    "$schema": "https://json-schema.org/draft/2020-12/schema",
++    "title": "throwaway",
++    "description": "A schema added by a test to exercise the inventory.",
++    "type": "object",
++    "required": ["note"],
++    "properties": {"note": {"type": "string", "description": "anything"}},
++}
++
++COPIED = ("orchestration", "schemas", "tests", "workflows", "prompts",
++          "scripts", "rules")
++
++
++# --------------------------------------------------------------------------
++# The manifest is the declaration
++# --------------------------------------------------------------------------
++
++
++def test_manifest_names_exactly_the_six_shipped_schemas():
++    """No schema added and none removed by this story."""
++    manifest = json.loads(
++        (REPO_ROOT / "schemas" / "manifest.json").read_text(encoding="utf-8"))
++    assert sorted(manifest[schema_validator.MANIFEST_KEY]) == sorted(EXPECTED_SCHEMAS)
++
++
++def test_every_named_schema_has_a_file_and_every_file_is_named():
++    directory = REPO_ROOT / "schemas"
++    assert {p.name for p in directory.glob("*.schema.json")} == \
++        {f"{name}.schema.json" for name in EXPECTED_SCHEMAS}
++
++
++def test_shipped_schemas_returns_the_declared_names():
++    assert sorted(schema_validator.shipped_schemas()) == sorted(EXPECTED_SCHEMAS)
++    assert isinstance(schema_validator.shipped_schemas(), tuple)
++
++
++def test_shipped_schemas_accepts_a_harness_root_override(tmp_path: Path):
++    """The override behaves like load_schema's and schemas_dir's: the caller's
++    root, not the module's."""
++    (tmp_path / "schemas").mkdir()
++    (tmp_path / "schemas" / "manifest.json").write_text(
++        json.dumps({schema_validator.MANIFEST_KEY: ["only-this-one"]}),
++        encoding="utf-8")
++    assert schema_validator.shipped_schemas(tmp_path) == ("only-this-one",)
++    # And the default root is untouched by the override.
++    assert sorted(schema_validator.shipped_schemas()) == sorted(EXPECTED_SCHEMAS)
++
++
++def test_shipped_schemas_carries_type_hints():
++    annotations = schema_validator.shipped_schemas.__annotations__
++    assert "harness_root" in annotations
++    assert "return" in annotations
++    source = ast.parse((REPO_ROOT / "orchestration" / "schema_validator.py")
++                       .read_text(encoding="utf-8"))
++    function = next(node for node in source.body
++                    if isinstance(node, ast.FunctionDef)
++                    and node.name == "shipped_schemas")
++    assert ast.unparse(function.returns) == "tuple[str, ...]"
++    argument = function.args.args[0]
++    assert argument.arg == "harness_root" and argument.annotation is not None
++
++
++# --------------------------------------------------------------------------
++# A degraded manifest raises rather than emptying the inventory
++# --------------------------------------------------------------------------
++
++
++@pytest.mark.parametrize("payload", [
++    pytest.param(None, id="missing-file"),
++    pytest.param("{ not json", id="unparseable"),
++    pytest.param('["changed-files"]', id="top-level-array"),
++    pytest.param('"changed-files"', id="top-level-string"),
++    pytest.param("{}", id="no-schemas-key"),
++    pytest.param('{"schemas": "changed-files"}', id="schemas-not-a-list"),
++    pytest.param('{"schemas": ["changed-files", 7]}', id="entry-not-a-string"),
++    pytest.param('{"schemas": ["changed-files", ""]}', id="empty-entry"),
++])
++def test_a_degraded_manifest_raises(tmp_path: Path, payload):
++    """An empty or partial inventory would make the per-schema parametrized
++    checks expand over nothing and pass vacuously, which is worse than the
++    loud failure."""
++    (tmp_path / "schemas").mkdir()
++    if payload is not None:
++        (tmp_path / "schemas" / "manifest.json").write_text(payload, encoding="utf-8")
++    with pytest.raises(Exception) as raised:
++        schema_validator.shipped_schemas(tmp_path)
++    assert not isinstance(raised.value, AssertionError)
++
++
++def test_an_empty_inventory_is_never_returned_for_a_degraded_manifest(tmp_path: Path):
++    """The failure mode this guards is silence, so state it as its own fact."""
++    (tmp_path / "schemas").mkdir()
++    try:
++        result = schema_validator.shipped_schemas(tmp_path)
++    except Exception:
++        return
++    raise AssertionError(f"missing manifest yielded {result!r} instead of raising")
++
++
++# --------------------------------------------------------------------------
++# Exactly one declared inventory survives, established by search
++# --------------------------------------------------------------------------
++
++
++# A collection naming this many of the six is claiming to be the inventory.
++# Not two: tests legitimately name the pair of schemas one prompt injects,
++# or the pair of artifacts one stage writes, and those are references to
++# particular schemas rather than a statement of what the harness ships.
++INVENTORY_THRESHOLD = 4
++
++SCHEMA_NAME_LITERALS = set(EXPECTED_SCHEMAS) | {
++    f"{name}.schema.json" for name in EXPECTED_SCHEMAS}
++
++
++def _python_inventories(tree: ast.AST) -> list[tuple[int, list[str]]]:
++    """Every collection literal in the tree that reads as a schema inventory."""
++    found = []
++    for node in ast.walk(tree):
++        elements = None
++        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
++            elements = node.elts
++        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
++                and node.func.id in {"set", "frozenset", "tuple", "list"} \
++                and len(node.args) == 1 \
++                and isinstance(node.args[0], (ast.List, ast.Tuple, ast.Set)):
++            elements = node.args[0].elts
++        if elements is None:
++            continue
++        literals = [e.value for e in elements
++                    if isinstance(e, ast.Constant) and e.value in SCHEMA_NAME_LITERALS]
++        if len(literals) >= INVENTORY_THRESHOLD:
++            found.append((node.lineno, literals))
++    return found
++
++
++def _json_inventories(payload) -> list[list[str]]:
++    found = []
++    if isinstance(payload, list):
++        literals = [v for v in payload
++                    if isinstance(v, str) and v in SCHEMA_NAME_LITERALS]
++        if len(literals) >= INVENTORY_THRESHOLD:
++            found.append(literals)
++        for item in payload:
++            found.extend(_json_inventories(item))
++    elif isinstance(payload, dict):
++        keys = [k for k in payload if k in SCHEMA_NAME_LITERALS]
++        if len(keys) >= INVENTORY_THRESHOLD:
++            found.append(keys)
++        for value in payload.values():
++            found.extend(_json_inventories(value))
++    return found
++
++
++def test_no_literal_inventory_of_schema_names_remains_in_tests_or_orchestration():
++    """By search, not by inspection: nowhere under tests/ or orchestration/
++    does a collection of schema names still exist."""
++    offenders = {}
++    for directory in ("tests", "orchestration"):
++        for path in sorted((REPO_ROOT / directory).rglob("*.py")):
++            if path.name == Path(__file__).name:
++                continue    # this module names them on purpose, as the check
++            tree = ast.parse(path.read_text(encoding="utf-8"))
++            for lineno, literals in _python_inventories(tree):
++                offenders[f"{path.relative_to(REPO_ROOT)}:{lineno}"] = literals
++    assert offenders == {}
++
++
++def test_the_two_inventory_constants_are_gone_by_name():
++    """The exact statement of the deletion, alongside the fuzzier search
++    above: no module anywhere still binds a collection literal to a name
++    that reads as a shipped-schema inventory."""
++    survivors = {}
++    for directory in ("tests", "orchestration"):
++        for path in sorted((REPO_ROOT / directory).rglob("*.py")):
++            if path.name == Path(__file__).name:
++                continue
++            tree = ast.parse(path.read_text(encoding="utf-8"))
++            for node in ast.walk(tree):
++                if not isinstance(node, ast.Assign):
++                    continue
++                targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
++                if not any("SHIPPED" in name for name in targets):
++                    continue
++                if isinstance(node.value, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
++                    survivors[str(path.relative_to(REPO_ROOT))] = targets
++    assert survivors == {}
++
++
++def test_the_manifest_is_the_only_file_declaring_the_full_inventory():
++    """Search the whole shipped tree rather than the two files the story
++    expected: a third copy anywhere is the thing being ruled out."""
++    carriers = []
++    for directory in COPIED:
++        for path in sorted((REPO_ROOT / directory).rglob("*")):
++            if not path.is_file() or "__pycache__" in path.parts:
++                continue
++            if path.name == Path(__file__).name:
++                continue
++            try:
++                text = path.read_text(encoding="utf-8")
++            except (OSError, UnicodeDecodeError):
++                continue
++            if path.suffix == ".py":
++                if _python_inventories(ast.parse(text)):
++                    carriers.append(str(path.relative_to(REPO_ROOT)))
++            elif path.suffix == ".json":
++                if _json_inventories(json.loads(text)):
++                    carriers.append(str(path.relative_to(REPO_ROOT)))
++    assert carriers == ["schemas/manifest.json"]
++
++
++def test_both_inventory_modules_read_the_shared_accessor():
++    for relative in INVENTORY_TEST_FILES:
++        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
++        assert "shipped_schemas()" in text, relative
++
++
++# --------------------------------------------------------------------------
++# The surviving assertions are exact equality, not a subset
++# --------------------------------------------------------------------------
++
++
++def _assert_ops(path: Path, test_name: str) -> list[str]:
++    tree = ast.parse(path.read_text(encoding="utf-8"))
++    function = next(node for node in ast.walk(tree)
++                    if isinstance(node, ast.FunctionDef) and node.name == test_name)
++    operators = []
++    for node in ast.walk(function):
++        if isinstance(node, ast.Compare):
++            operators.extend(type(op).__name__ for op in node.ops)
++    return operators
++
++
++@pytest.mark.parametrize("node_id", INVENTORY_TESTS)
++def test_the_inventory_assertions_are_still_exact_equality(node_id: str):
++    """Not relaxed to a subset or a containment check to make the move work."""
++    relative, test_name = node_id.split("::")
++    operators = _assert_ops(REPO_ROOT / relative, test_name)
++    assert operators, node_id
++    assert set(operators) == {"Eq"}, (node_id, operators)
++
++
++# --------------------------------------------------------------------------
++# Mutation: the inventory tests actually bite, in both directions
++# --------------------------------------------------------------------------
++
++
++@pytest.fixture(scope="module")
++def pristine_harness(tmp_path_factory) -> Path:
++    """A copy of the shipped harness the mutation tests each clone."""
++    root = tmp_path_factory.mktemp("harness")
++    for name in COPIED:
++        shutil.copytree(REPO_ROOT / name, root / name,
++                        ignore=shutil.ignore_patterns("__pycache__"))
++    return root
++
++
++@pytest.fixture
++def harness_copy(pristine_harness: Path, tmp_path: Path) -> Path:
++    root = tmp_path / "harness"
++    shutil.copytree(pristine_harness, root)
++    return root
++
++
++def run_inventory_tests(root: Path, node_ids=INVENTORY_TESTS) -> subprocess.CompletedProcess:
++    return subprocess.run(
++        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *node_ids],
++        cwd=root, capture_output=True, text=True)
++
++
++def read_manifest(root: Path) -> dict:
++    return json.loads((root / "schemas" / "manifest.json").read_text(encoding="utf-8"))
++
++
++def write_manifest(root: Path, names) -> None:
++    (root / "schemas" / "manifest.json").write_text(
++        json.dumps({schema_validator.MANIFEST_KEY: sorted(names)}, indent=2) + "\n",
++        encoding="utf-8")
++
++
++def test_the_unmutated_copy_passes_the_inventory_tests(harness_copy: Path):
++    """The control. Without it, every failure below could be an artifact of
++    the copy rather than of the mutation."""
++    result = run_inventory_tests(harness_copy)
++    assert result.returncode == 0, result.stdout + result.stderr
++
++
++def test_a_schema_file_with_no_manifest_entry_fails_a_test(harness_copy: Path):
++    (harness_copy / "schemas" / "throwaway.schema.json").write_text(
++        json.dumps(THROWAWAY_SCHEMA, indent=2) + "\n", encoding="utf-8")
++    result = run_inventory_tests(harness_copy)
++    assert result.returncode != 0, result.stdout
++
++
++def test_a_manifest_entry_with_no_schema_file_fails_a_test(harness_copy: Path):
++    write_manifest(harness_copy,
++                   read_manifest(harness_copy)[schema_validator.MANIFEST_KEY]
++                   + ["throwaway"])
++    result = run_inventory_tests(harness_copy)
++    assert result.returncode != 0, result.stdout
++
++
++def test_removing_a_schema_file_but_not_its_manifest_entry_fails_a_test(
++        harness_copy: Path):
++    (harness_copy / "schemas" / "retry-guidance.schema.json").unlink()
++    result = run_inventory_tests(harness_copy)
++    assert result.returncode != 0, result.stdout
++
++
++def test_removing_a_manifest_entry_but_not_its_schema_file_fails_a_test(
++        harness_copy: Path):
++    names = [n for n in read_manifest(harness_copy)[schema_validator.MANIFEST_KEY]
++             if n != "retry-guidance"]
++    write_manifest(harness_copy, names)
++    result = run_inventory_tests(harness_copy)
++    assert result.returncode != 0, result.stdout
++
++
++@pytest.mark.parametrize("stray", ["README.md", "notes.json", "draft.schema.yaml"])
++def test_a_stray_non_schema_file_in_schemas_still_fails_a_test(
++        harness_copy: Path, stray: str):
++    """Narrowing the glob to *.schema.json must not open the hole glob("*")
++    closed."""
++    (harness_copy / "schemas" / stray).write_text("stray\n", encoding="utf-8")
++    result = run_inventory_tests(harness_copy)
++    assert result.returncode != 0, result.stdout
++
++
++def test_a_bogus_manifest_entry_fails_the_per_schema_checks_too(harness_copy: Path):
++    """A name in the manifest whose file is not a valid schema must fail
++    loudly rather than silently widening the inventory."""
++    (harness_copy / "schemas" / "throwaway.schema.json").write_text(
++        json.dumps({"type": "object", "additionalProperties": False}) + "\n",
++        encoding="utf-8")
++    write_manifest(harness_copy,
++                   read_manifest(harness_copy)[schema_validator.MANIFEST_KEY]
++                   + ["throwaway"])
++    result = run_inventory_tests(
++        harness_copy,
++        node_ids=(*INVENTORY_TESTS,
++                  "tests/test_story_004_validation.py"
++                  "::test_no_schema_constrains_a_field_the_validator_cannot_check"))
++    assert result.returncode != 0, result.stdout
++
++
++# --------------------------------------------------------------------------
++# The central property, demonstrated rather than argued
++# --------------------------------------------------------------------------
++
++
++def test_adding_a_schema_requires_edits_only_under_schemas(harness_copy: Path):
++    """Add a throwaway schema and its manifest line, touch nothing else, and
++    show every inventory check passes - including the per-schema parametrized
++    ones, which now expand over it. Then show tests/ is byte-identical to the
++    shipped tree, so no path under tests/ was among the edits."""
++    (harness_copy / "schemas" / "throwaway.schema.json").write_text(
++        json.dumps(THROWAWAY_SCHEMA, indent=2) + "\n", encoding="utf-8")
++    write_manifest(harness_copy,
++                   read_manifest(harness_copy)[schema_validator.MANIFEST_KEY]
++                   + ["throwaway"])
++
++    result = run_inventory_tests(harness_copy, node_ids=INVENTORY_TEST_FILES)
++    assert result.returncode == 0, result.stdout + result.stderr
++    # The per-schema cases parametrize over the manifest, so the new schema
++    # was actually checked rather than merely tolerated.
++    parametrized = run_inventory_tests(
++        harness_copy,
++        node_ids=("tests/test_schema_validator.py", "tests/test_story_004_validation.py",
++                  "-k", "throwaway"))
++    assert parametrized.returncode == 0, parametrized.stdout
++    assert "no tests ran" not in parametrized.stdout, parametrized.stdout
++
++    differences = subprocess.run(
++        ["diff", "-r", "-x", "__pycache__", str(REPO_ROOT / "tests"),
++         str(harness_copy / "tests")],
++        capture_output=True, text=True)
++    assert differences.stdout == "", differences.stdout
++    assert differences.returncode == 0
++
++
++# --------------------------------------------------------------------------
++# Nothing else moved
++# --------------------------------------------------------------------------
++
++
++def test_the_injected_schema_placeholder_set_is_unchanged():
++    """schema_context globs *.schema.json, so the manifest becomes no
++    placeholder."""
++    context = context_assembler.schema_context(REPO_ROOT)
++    assert set(context) == {name.replace("-", "_") + "_schema"
++                            for name in EXPECTED_SCHEMAS}
++    assert "manifest_schema" not in context
++    assert "manifest" not in " ".join(context)
++
++
++def test_no_prompt_template_references_a_manifest_placeholder():
++    for path in sorted((REPO_ROOT / "prompts").glob("*.md")):
++        assert "{{manifest" not in path.read_text(encoding="utf-8"), path.name
++
++
++def test_nothing_in_orchestration_routes_on_the_manifest():
++    """shipped_schemas has no caller inside orchestration/, and no module
++    other than schema_validator names the manifest at all."""
++    for path in sorted((REPO_ROOT / "orchestration").glob("*.py")):
++        if path.name == "schema_validator.py":
++            continue
++        text = path.read_text(encoding="utf-8")
++        assert "manifest" not in text, path.name
++        assert "shipped_schemas" not in text, path.name
++
++
++def test_the_coordinator_is_untouched_by_this_story():
++    result = subprocess.run(
++        ["git", "-C", str(REPO_ROOT), "diff", "HEAD", "--",
++         "orchestration/story_coordinator.py", "workflows/", "prompts/",
++         "rules/", "scripts/"],
++        capture_output=True, text=True, check=True)
++    assert result.stdout.strip() == ""
++
++
++def test_no_shipped_schema_was_edited_by_this_story():
++    result = subprocess.run(
++        ["git", "-C", str(REPO_ROOT), "diff", "HEAD", "--", "schemas/"],
++        capture_output=True, text=True, check=True)
++    assert result.stdout.strip() == ""
++    assert schema_validator.SUPPORTED_KEYWORDS == frozenset(
++        {"type", "required", "properties", "items", "enum"})
++
++
++def test_the_implementer_added_no_test_file_and_no_test_function():
++    """Its edits under tests/ are the two deletions and their repointing."""
++    status = subprocess.run(
++        ["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--", "tests/"],
++        capture_output=True, text=True, check=True).stdout.splitlines()
++    added = sorted(line[3:] for line in status if line[:2] in {"??", "A "})
++    assert added == [f"tests/{Path(__file__).name}"], added
++
++    diff = subprocess.run(
++        ["git", "-C", str(REPO_ROOT), "diff", "HEAD", "--", *INVENTORY_TEST_FILES],
++        capture_output=True, text=True, check=True).stdout
++    added_lines = [line[1:] for line in diff.splitlines()
++                   if line.startswith("+") and not line.startswith("+++")]
++    assert not [line for line in added_lines if line.startswith("def test")], added_lines
+-- 
+2.54.0
+

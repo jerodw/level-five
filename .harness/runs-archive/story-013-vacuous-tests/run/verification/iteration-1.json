@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "blocking_issues": [],
+  "unverified": [
+    ".harness/docs/ARCHITECTURE.md still records the two-copy manual-sync rule and names both test files. That file is assigned to the documenter stage in the technical plan, so it is expected to be stale at the verifier stage and is noted here rather than raised as a blocking finding.",
+    "The mutation tests in tests/test_story_013_validation.py assert a non-zero pytest exit code from the mutated harness copy rather than asserting which specific assertion failed. The control test test_the_unmutated_copy_passes_the_inventory_tests passes, so the non-zero codes are attributable to the mutations and not to the copy, but the precise failing assertion in each mutated run was not confirmed independently."
+  ],
+  "retry_recommended": false
+}
