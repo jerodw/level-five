@@ -1,0 +1,174 @@
+story:
+  id: story-015
+  title: A test that cannot fail must not count as validation
+  description: |
+    Five stories have shipped "X is unchanged" tests that stop checking
+    anything the moment their own story merges. Each was written to assert
+    that its own story changed nothing outside its scope, and each resolved
+    the baseline as `git diff HEAD` - the working tree against the last
+    commit. The coordinator commits the working tree in _complete, so on the
+    finished branch that diff is empty for every path in the repository. The
+    assertion holds no matter what the story did.
+
+    Demonstrated rather than argued: story-009's
+    test_the_definitions_this_story_injects_are_unchanged asserts schemas/ is
+    unchanged and passes on a branch that adds schemas/manifest.json.
+
+    This story does three things. It adds one honest baseline resolution
+    shared by the suite, resolving a story's own run commit as the commit
+    that added that story's validation file and the baseline as that commit's
+    parent - which stays pre-story after a commit, a rebase, or a squash, and
+    degrades correctly to the working tree while a story is still in flight.
+    It repairs the four merged instances to use it, and shows each repaired
+    assertion failing when its subject is violated. And it adds a mechanical
+    check that flags a git baseline resolved as HEAD or as the working tree
+    against the repository root, because prose guidance has been tried here
+    and failed: .harness/docs/ARCHITECTURE.md already recorded the specific
+    rule, .harness/config.yaml injects that document into every stage, and
+    the tester wrote `git diff HEAD` four times anyway.
+
+    This is not a story-013 defect. The idiom has been accumulating since
+    story-007 and was written five times by five tester runs. It is a
+    standing pattern the harness permits, not a lapse.
+
+    Pairs with story-014, which makes the verification environment honest.
+    This one makes the assertions honest. A clean clone catches story-013's
+    failing test but not its vacuous ones - those pass everywhere, which is
+    the problem.
+
+tasks:
+  - Add a shared baseline resolution to tests/conftest.py that resolves a per-story validation file's run commit as the commit that added it and the baseline as that commit's parent, raising loudly when history does not reach far enough, and falling back to HEAD against the working tree while the file is still uncommitted.
+  - Give that resolution a repository parameter so it can be exercised against a synthetic history in which the story is already committed - the condition the repository under test cannot be in while these tests decide whether it commits.
+  - Repair tests/test_story_007_validation.py's test_no_committed_story_artifact_was_edited to resolve its baseline through the shared helper.
+  - Repair tests/test_story_008_validation.py's _unchanged_against_head helper and its three callers.
+  - Repair tests/test_story_009_validation.py's _unchanged_against_head helper and its parametrized callers over workflows/, rules/ and schemas/.
+  - Repair tests/test_story_010_validation.py's test_context_assembler_is_unchanged and its parametrized callers over workflows/, schemas/, rules/ and prompts/.
+  - Restrict the two tests named test_no_committed_story_artifact_was_edited (in story-007's and story-008's files) to modifications and deletions, because each story's own artifact was added in its own run commit and an addition was never an edit. This is the only change to any assertion's subject or strictness in this story, and it is what the tests' own names already claim.
+  - Add tests/test_baseline_honesty.py, an AST scan over every module in tests/ that flags a git invocation targeting the repository root and carrying a HEAD-derived revision or a working-tree status query.
+  - Show the mechanical check flagging all five known instances, using the pre-repair files recovered from git history and story-013's archived copy under .harness/runs-archive/, so the regression set is committed evidence rather than a constructed fixture.
+  - Show each repaired assertion failing when its subject is violated, by violating it against a synthetic history.
+  - Add negative-control guidance for absence assertions to prompts/tester.md and the corresponding requirement to prompts/verifier.md.
+  - Update .harness/docs/ARCHITECTURE.md with the baseline resolution, the mechanical check, and what the check does and does not cover.
+
+acceptance_criteria:
+  - tests/conftest.py exposes one baseline resolution used by every repaired assertion; no repaired file carries its own copy of the resolution logic.
+  - The resolution takes a repository path parameter, so the same code path can be exercised against a synthetic history.
+  - Given a per-story validation file that is committed, the resolution returns the parent of the commit that added that file, and that commit is the story's own run commit rather than any earlier planning or hotfix commit on the same story.
+  - Given a per-story validation file that is not yet committed, the resolution falls back to comparing the working tree against HEAD, which is the correct pre-story baseline while a story is in flight.
+  - When the repository's history does not reach the commit that added the file, the resolution raises with a message saying the comparison has nothing to compare against, rather than silently returning a baseline that makes the assertion vacuous.
+  - Every assertion in tests/test_story_007_validation.py, tests/test_story_008_validation.py, tests/test_story_009_validation.py and tests/test_story_010_validation.py that previously compared against HEAD now compares its story's own commit range through the shared resolution.
+  - Each repaired assertion keeps the subject and the strictness it was written with. The only exception is the two tests named test_no_committed_story_artifact_was_edited, which are narrowed to modifications and deletions so that the addition of the story's own artifact does not read as an edit.
+  - Each repaired assertion passes on the current repository.
+  - Each repaired assertion can be shown to fail - violating the property it names, against a synthetic history, produces a failure rather than a pass.
+  - tests/test_baseline_honesty.py flags a subprocess git invocation that targets the repository root - through -C with the repository root or through cwd set to it - and carries a literal HEAD, a HEAD-prefixed revision such as HEAD:path or HEAD~1, or a working-tree status query such as status --porcelain.
+  - The check flags all four pre-repair versions of the merged files, recovered from git history, and the archived pre-reset copy of story-013's validation file under .harness/runs-archive/story-013-vacuous-tests/.
+  - The check does not flag any test that operates on a repository it builds itself under tmp_path, and the existing throwaway-repository tests in tests/conftest.py and in stories 005, 006, 007 and tests/test_story_coordinator.py continue to pass unflagged.
+  - The check does not flag tests/test_story_011_validation.py, whose HEAD reference is a positive guard passed to a local helper rather than a literal in a git argument list, and that file's baseline resolution is unchanged by this story.
+  - The check exempts exactly one module - the one in which the shared resolution lives - and the exemption is stated in the check rather than inferred.
+  - The check discovers the modules it scans by globbing tests/ rather than naming them, and a companion assertion requires the discovered set to be non-empty so it cannot pass on zero files.
+  - prompts/tester.md states that an assertion claiming an absence needs a negative control demonstrating it can fail, and distinguishes that class from positive assertions which fail loudly on their own.
+  - prompts/verifier.md states that an absence assertion without a demonstration of failure is a finding.
+  - The guidance is present in the rendered tester and verifier prompts, confirmed by rendering the templates through orchestration/context_assembler.py rather than by reading the template files.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Add the resolution to tests/conftest.py. Resolve the run commit with git log --diff-filter=A --format=%H -- <validation file>, taking the oldest such commit; the baseline is that commit's parent and the endpoint is the commit itself. When the file has no adding commit it is uncommitted, so the baseline is HEAD and the endpoint is the working tree.
+    - Model the raise on tests/test_story_011_validation.py's pre_story_revision, which already fails loudly rather than degrading when no revision qualifies.
+    - Repair story-007's file first, since it is the single-call case, then stories 008 and 009 whose _unchanged_against_head helpers each have several callers, then story-010's two call sites.
+    - Narrow the two test_no_committed_story_artifact_was_edited assertions with --diff-filter=MD. Confirmed by inspection before planning - .harness/stories/story-007.yaml was added in 06eaa47 and .harness/stories/story-008.yaml in 14f47ea, both the stories' own run commits, so without this narrowing those two assertions repair into a red state. Every other repaired assertion is empty under the honest baseline and needs no narrowing.
+    - Write tests/test_baseline_honesty.py using ast over each module's source. Walk Call nodes for subprocess.run and subprocess.check_output, read the first positional argument when it is a list literal beginning with "git", and decide whether the call targets the repository root by looking for -C followed by a repository-root expression or for a cwd keyword naming the repository root.
+    - Flag such a call when its argument list contains a string that is HEAD or begins with HEAD: or HEAD~, or when the subcommand is status and the argument list carries --porcelain.
+    - Recover the regression set with git show <commit>:<path> for the four merged files at their pre-repair commits, and read story-013's archived copy from .harness/runs-archive/story-013-vacuous-tests/pre-reset-test_story_013_validation.py. Feed each to the same scanning function the check uses on the live suite and assert it flags each one.
+    - Add the negative-control paragraph to the role or stage layer of prompts/tester.md and the corresponding requirement to prompts/verifier.md, in prose - there is no contract file to inject here, and this is role guidance rather than schema content.
+    - Update .harness/docs/ARCHITECTURE.md - the shared resolution and where it lives, the mechanical check and the narrow class it covers, the exemption, and the standing note that the check catches this idiom and not the whole class of vacuous assertions.
+  likely_file_changes:
+    - file: tests/conftest.py
+      stage: implementer
+      reason: Holds the one shared baseline resolution every repaired assertion uses.
+    - file: tests/test_story_007_validation.py
+      stage: implementer
+      reason: Repairs test_no_committed_story_artifact_was_edited's baseline and narrows it to edits.
+    - file: tests/test_story_008_validation.py
+      stage: implementer
+      reason: Repairs the _unchanged_against_head helper and its three callers.
+    - file: tests/test_story_009_validation.py
+      stage: implementer
+      reason: Repairs the _unchanged_against_head helper and its parametrized callers.
+    - file: tests/test_story_010_validation.py
+      stage: implementer
+      reason: Repairs two call sites, one of them parametrized over four paths.
+    - file: tests/test_baseline_honesty.py
+      stage: implementer
+      reason: The mechanical check, which is this story's central deliverable and needs the granted stage exception.
+    - file: prompts/tester.md
+      stage: implementer
+      reason: Adds the negative-control requirement for absence assertions.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: Adds the corresponding verifier requirement.
+    - file: tests/test_story_015_validation.py
+      stage: tester
+      reason: Independent validation of the resolution, the repairs, the regression set, and the rendered prompts.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the baseline resolution, the mechanical check, and its deliberate narrowness.
+
+scope:
+  modify:
+    - tests/conftest.py
+    - tests/test_story_007_validation.py
+    - tests/test_story_008_validation.py
+    - tests/test_story_009_validation.py
+    - tests/test_story_010_validation.py
+    - tests/test_baseline_honesty.py
+    - tests/
+    - prompts/tester.md
+    - prompts/verifier.md
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - workflows/
+    - schemas/
+    - scripts/
+    - prompts/implementer.md
+    - prompts/planner.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - prompts/assist.md
+    - tests/test_story_011_validation.py
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm all five known instances are detected by the mechanical check - the four recovered from git history and story-013's archived copy. That is the regression set, and it is committed evidence rather than a constructed fixture.
+  - Confirm each repaired assertion now fails when its subject is violated, by violating it. The guarantee is not that the test passes but that it can fail.
+  - Confirm a well-written absence assertion with a negative control survives the check, so the mechanism distinguishes the two rather than flagging every absence assertion in the suite.
+  - Confirm no repaired assertion changed its subject or its strictness other than the two narrowings this story authorizes, by reading the diff of each repaired file against its pre-repair version.
+  - Confirm the two narrowed assertions are still meaningful - each fails when a previously committed story artifact is modified or deleted in the story's own commit range.
+  - Confirm tests that build their own repository under tmp_path are unflagged and unmodified.
+  - Confirm tests/test_story_011_validation.py is unflagged and unchanged.
+  - Confirm the shared resolution raises rather than degrading when history does not reach the adding commit, exercised against a shallow or truncated synthetic repository.
+  - Confirm the resolution's uncommitted fallback is correct by exercising it against a synthetic repository in which the validation file is present but not yet committed.
+  - Confirm the guidance reaches the tester and the verifier by rendering the prompts through orchestration/context_assembler.py, not by reading the templates.
+  - Confirm no file under orchestration/, workflows/, schemas/ or scripts/ changed.
+  - Confirm the full suite passes.
+
+constraints:
+  - This story must not start until story-014 has merged. Story-014 adds the clean-clone run of the suite after the verifier passes, and this story's entire subject is assertions that behave differently once the story commits - so its own repairs must be executed under the check that exercises that state. Run before story-014, this story would verify its repairs only in the working tree, the one environment where the defect it fixes is invisible.
+  - Every per-story validation file is an execution record. Change only the baseline resolution and leave each assertion's subject and strictness exactly as written, with the single authorized exception of narrowing the two test_no_committed_story_artifact_was_edited assertions to modifications and deletions.
+  - Repair does not mean deletion. Each of these tests carries a real guarantee; they simply stopped enforcing it.
+  - A repair that silently swaps one always-true comparison for another has achieved nothing. Every repaired assertion must be shown failing when its subject is violated.
+  - tests/test_story_013_validation.py is not in the working tree - that run was archived to .harness/runs-archive/story-013-vacuous-tests/ and only its story artifact is on main, awaiting a re-run. Its instance is not repaired here; the mechanical check this story adds will catch it when story-013 runs again. Do not restore or edit the archived copy, which is read-only evidence and this story's regression fixture.
+  - The mechanical check is deliberately narrow. It catches this idiom and not the whole class of vacuous assertions. Say so where it is defined rather than implying broader coverage.
+  - The check must not ship with exemptions for the cases that motivated it. Exactly one module is exempt - the one holding the shared resolution - and every per-story validation file is subject to the check.
+  - No change to orchestration/schema_validator.py, the workflow definition, the execution rules, or any routing.
+  - Tests that build their own throwaway repository are unaffected and must not be rewritten.
+  - No test may be weakened or skipped to make the check or the repairs pass.
+  - Prompt guidance is added for the wider class but is not relied on as the enforcement. A written rule in an injected document was already tried here and failed five times.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/
+    reason: This story's central deliverable is tests/test_baseline_honesty.py, the mechanical check that no test resolves a git baseline against the working tree. The check is the implementation, not validation of it, in the same way a story whose deliverable is a regression suite needs the filesystem rule lifted. Independence is preserved - the tester still writes tests/test_story_015_validation.py independently and validates the check, the shared resolution, and the four repairs.

@@ -1,0 +1,159 @@
+story:
+  id: story-014
+  title: Verify the suite in a clean clone before the story commits
+  description: |
+    The verifier runs the test suite in the working tree, which is the one
+    environment where the story's own commit does not yet exist. The
+    coordinator's last act is to commit that tree: _complete
+    (orchestration/story_coordinator.py) sets status, writes the completion
+    report, then runs git add -A and commits, after the documenter and after
+    every check the workflow performs. The state the code actually ships in
+    is created after the last thing that could object to it. Nothing runs the
+    suite there.
+
+    Three failures across two stories have lived in that gap and every one of
+    them reported green to the verifier. story-011's differential test
+    resolved its baseline as `git show HEAD:orchestration/story_coordinator.py`,
+    which is the pre-story coordinator only while the change is uncommitted;
+    419 passed uncommitted against 394 passed, 25 errors committed. story-013
+    shipped a test asserting `git status --porcelain -- tests/` lists the
+    tester's new files, true mid-run and false once _complete commits them,
+    on a run that reported 460/460 and passed verification on its first
+    iteration.
+
+    This story gives the coordinator a second run of the suite, in a fresh
+    clone of the branch with the story committed into it, executed after the
+    verifier passes and before the documenter runs. A failure reroutes to the
+    implementer as a retry. The result is written to the run directory as
+    clean-clone-result.json so a reader can tell the check ran rather than
+    inferring it from a pass.
+
+    This is not verifier leniency and a stricter verifier would not close it.
+    The suite genuinely passes where the verifier is standing. The bug is the
+    absent check, not a missed one. It does not replace CI, which remains the
+    final word; it moves the discovery earlier, so a story is not reported
+    complete and committed before the failure is known.
+
+tasks:
+  - Add schemas/clean-clone-result.schema.json describing the coordinator-written record of the clean-clone run - whether it ran, the exit code, the command, the clone path, and the captured output tail.
+  - Update the two schema inventory assertions (tests/test_schema_validator.py and tests/test_story_004_validation.py) to include the new file, keeping both asserting exact set equality rather than relaxing them to a subset.
+  - Declare the check on the verifier stage in workflows/story-workflow.json with a clean_clone key naming the artifact, so the artifact name comes off the loaded workflow definition and not out of orchestration code.
+  - Add the clean-clone run to orchestration/story_coordinator.py, executed inside the existing verifier branch in the status == "passed" case, gated on the stage's clean_clone declaration.
+  - Build the environment as a clone rather than a tree copy - git clone the target repository locally, apply the uncommitted working tree into the clone, commit it there, and run the configured test command with the clone as the working directory.
+  - Route a clean-clone failure the way a verification failure routes - archive the attempt, increment retry_count, reroute to the stage named by the verifier's on_failure.retry_stage, and escalate when the retry ceiling is reached.
+  - Inject the clean-clone result into the retried implementer's prompt through a new {{clean_clone_result}} placeholder in orchestration/context_assembler.py and prompts/implementer.md, so the retry receives evidence without the coordinator fabricating retry-guidance.json.
+  - Record the outcome through append_event so both events.log and execution-history.json carry it, with no second write path for either file.
+  - Update .harness/docs/ARCHITECTURE.md with the check, its placement in the post-verifier order, the clone construction, and the decision to reroute rather than escalate.
+
+acceptance_criteria:
+  - After the verifier writes a passing verification-result.json and before the documenter stage begins, the coordinator runs the configured test command a second time in a fresh clone of the repository that has the story's working tree committed into it.
+  - The clone is built with git clone from the local target repository, never over the network, and the uncommitted working tree is applied and committed into that clone so the story is present there as a commit rather than as pending edits.
+  - Files ignored by .gitignore are not carried into the clone, so .venv/ and .harness/runs/ are absent from it, matching the set of files _complete's git add -A would commit.
+  - The test command executed in the clone is read from the target repository's .harness/config.yaml test_command; no test command string appears in orchestration code.
+  - The clone is created under a temporary directory outside the target repository and is removed after the run of the suite completes, whatever its result.
+  - The run directory contains clean-clone-result.json after any run that reached a passing verifier, recording that the run happened, the command executed, its exit code, and enough captured output to identify what failed.
+  - clean-clone-result.json satisfies schemas/clean-clone-result.schema.json.
+  - When the clean-clone suite exits non-zero and retry_count is below max_retries, the coordinator archives the attempt, increments retry_count, and reroutes execution to the stage named by the verifier stage's on_failure.retry_stage, and the documenter does not run.
+  - When the clean-clone suite exits non-zero and retry_count has reached max_retries, the coordinator escalates with a reason naming the clean-clone check and the failing tests.
+  - The coordinator never writes retry-guidance.json itself; the retried implementer receives the clean-clone evidence through the {{clean_clone_result}} placeholder instead.
+  - When the clean-clone suite exits zero, the run advances to the documenter with retry_count unchanged and every existing event and artifact unchanged.
+  - The artifact name the check writes is read from the verifier stage's clean_clone declaration in the loaded workflow definition; removing that declaration disables the check with no change to orchestration code.
+  - Both the clean-clone pass and the clean-clone failure append an event through append_event, so each appears in events.log and as a structured entry in execution-history.json with no second write path.
+  - The events.log line format is unchanged - "[%Y-%m-%d %H:%M:%S] <message>", built from the prose message alone.
+  - schemas/clean-clone-result.schema.json uses only the keyword subset schema_validator supports, so validate() does not raise ValueError on it.
+  - The schema inventory assertions in tests/test_schema_validator.py and tests/test_story_004_validation.py include the new schema and still assert exact set equality.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/clean-clone-result.schema.json, staying inside the type/required/properties/items/enum subset schema_validator supports and expressing optional fields by absence rather than by null, as the execution-history schema already does.
+    - Update the two inventory assertions in the same change, since adding a schema file necessarily fails both by design.
+    - Add "clean_clone" - "clean-clone-result.json" to the verifier stage in workflows/story-workflow.json, beside the existing outputs and schemas keys.
+    - Add a module-level function to orchestration/story_coordinator.py that takes the target root, the test command, and a destination, builds the clone, runs the suite, and returns a frozen result - clone, apply working tree, commit, symlink .venv from the target so the configured .venv/bin/python resolves, run, capture.
+    - Build the working tree into the clone from git diff HEAD applied with git apply, plus the untracked-but-not-ignored files from git ls-files --others --exclude-standard, then git add -A and commit in the clone. Never mutate the target repository.
+    - Call it from the verifier branch of run_story inside the verdict status == "passed" case, gated on stage.get("clean_clone"), writing the returned result to the run directory under the declared artifact name.
+    - On a zero exit code, append the pass event and fall through to the existing advance.
+    - On a non-zero exit code, reuse the retry path the verification-failed branch already takes - archive_attempt above the increment, then increment, save, append the event, and set index to the retry stage - and take the existing escalation path when the ceiling has been reached.
+    - Add clean_clone_result to the context built by orchestration/context_assembler.py, rendering None when the artifact is absent, and add the placeholder to prompts/implementer.md's runtime state layer.
+    - Update .harness/docs/ARCHITECTURE.md - the post-verifier check, the clone construction and why it is a clone rather than a copy, the reroute decision, and the note that story-014's own run is not governed by the check it adds.
+  likely_file_changes:
+    - file: schemas/clean-clone-result.schema.json
+      stage: implementer
+      reason: New coordinator-written artifact; the schema is how this harness defines a shape it records.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Declares the check on the verifier stage so the artifact name is not hard-coded in orchestration.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Builds the clone, runs the suite, writes the artifact, and routes on the result.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Injects the clean-clone result into the retried implementer's prompt.
+    - file: prompts/implementer.md
+      stage: implementer
+      reason: Adds the {{clean_clone_result}} placeholder to the runtime state layer.
+    - file: tests/test_schema_validator.py
+      stage: implementer
+      reason: The schema inventory set-equality assertion must include the new file.
+    - file: tests/test_story_004_validation.py
+      stage: implementer
+      reason: The second schema inventory set-equality assertion, same reason.
+    - file: tests/test_story_014_validation.py
+      stage: tester
+      reason: Validation for this story's acceptance criteria, written independently of the implementation.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the new post-verifier check, the clone construction, and the routing decision.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - schemas/
+    - prompts/implementer.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .github/workflows/tests.yml
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - tests/test_story_011_validation.py
+    - prompts/verifier.md
+    - prompts/tester.md
+    - prompts/planner.md
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm a story whose suite passes in the working tree and fails once committed does not reach the documenter. The HEAD-baseline bug is recorded in story-011's attempt-1 artifacts and can be reconstructed as a fixture, so this is reproducible without invoking a model.
+  - Confirm the same fixture, once its baseline resolution is corrected, advances to the documenter unchanged - the check distinguishes the two rather than failing everything.
+  - Confirm the clean-clone result appears in the run directory as a structured artifact after a passing verification, so a reader can tell the check ran rather than inferring it from a pass.
+  - Confirm the artifact validates against schemas/clean-clone-result.schema.json using orchestration/schema_validator.py.
+  - Confirm a story that is genuinely green in both environments advances with retry_count unchanged and with no event or artifact altered other than the clean-clone record.
+  - Confirm the clean-clone failure path increments retry_count exactly once, archives the superseded attempt under attempts/attempt-N/ with the same N the rendered prompts use, and reroutes to the workflow's declared retry stage.
+  - Confirm the ceiling case escalates rather than looping, with an escalation reason naming the clean-clone check.
+  - Confirm no routing, retry counting, or escalation path other than the new one changed - the existing verification-failed and escalation branches behave exactly as before.
+  - Confirm the clone construction leaves the target repository unmodified - no commit, no branch, no index change, no stash - by comparing git status and the current HEAD before and after.
+  - Confirm no network access occurs during the check, by construction rather than by observation - the clone source is a local filesystem path.
+  - Confirm the scratch clone is removed after the check, including after a failing run.
+  - Confirm the artifact name comes off the workflow definition by running against a workflow whose verifier stage omits the clean_clone key and observing the check does not run.
+  - Confirm the events.log line format is unchanged and that each new event has a matching structured entry in execution-history.json.
+  - Confirm the full suite passes.
+
+constraints:
+  - story-014's own run is not governed by the check it adds. The coordinator process imports its own module at start and loads the workflow definition at run start, so the declaration this story writes is not in the definition the running coordinator already loaded. Enforcement begins with the next story. This is the same staleness story-007 hit with may_not_create and is expected, not a defect.
+  - CI remains the final word. This check moves discovery earlier; it does not replace .github/workflows/tests.yml, which is out of scope and already carries fetch-depth 0.
+  - The check builds a full clone with the story committed. Reproducing a shallow clone is out of scope - fetch-depth 0 closed that gap in CI, and a correctly written history-walking test raises in a depth-1 clone by design.
+  - No network access of any kind during verification. The clone source is the local target repository.
+  - The target repository is never mutated by the check. All construction happens inside the scratch clone.
+  - The clean-clone run is unconditional for every story that reaches a passing verifier. It is not triggered by a heuristic about what the story touched - "the story touched tests that read git" is exactly the kind of heuristic that fails on the next unforeseen environment difference.
+  - No test command string is written into orchestration code; it is read from config, as the request requires.
+  - The coordinator does not write retry-guidance.json. That artifact is the verifier's, written only by the verifier, and deterministic code must not fabricate an agent's judgement.
+  - No new RunState field and no new retry axis. The clean-clone failure reuses retry_count and the existing archive, increment, reroute and escalate paths.
+  - events.log's line format is frozen. New fields go on the execution-history entry, not into the log line.
+  - Both events.log and execution-history.json are written only through append_event. A second write path for either is the drift the design exists to prevent.
+  - Adding a schema file necessarily fails the two inventory set-equality assertions. Update both in this story and keep them asserting exact equality rather than relaxing them to a subset.
+  - schemas/clean-clone-result.schema.json must stay inside the keyword subset schema_validator supports, and express optional fields by absence rather than by null.
+  - Existing tests must not be weakened or skipped to pass.
