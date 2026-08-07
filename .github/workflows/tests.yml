@@ -13,6 +13,12 @@ jobs:
         python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone. The differential tests
+          # resolve their pre-story baseline by walking a file's own history
+          # (tests/test_story_011_validation.py), and a one-commit checkout has
+          # no revision older than the change under test.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
