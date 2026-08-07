@@ -27,6 +27,8 @@
           "stage-exception-applied",
           "verification-passed",
           "verification-failed",
+          "clean-clone-passed",
+          "clean-clone-failed",
           "escalated",
           "story-completed",
           "note"

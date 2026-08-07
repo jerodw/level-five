@@ -393,9 +393,63 @@ def test_l5_run_still_finds_the_target_root_from_a_subdirectory(target_root):
 # --------------------------------------------------------------------------
 
 
-def _unchanged_against_head(rel: str) -> bool:
+#: Where this story's change landed, and the feature it introduced there.
+#: Used to find this story's own commit, not to read the working tree.
+STORY_MARKER_PATH = "orchestration/context_assembler.py"
+STORY_MARKER = "def workflow_context"
+
+
+def _revision_introducing(path: str, marker: str) -> str | None:
+    """The oldest committed revision of `path` whose blob carries `marker`.
+
+    None while the change is still uncommitted. Walks the file's own history
+    rather than pinning a SHA, so a rebase or a squash merge does not move the
+    answer.
+    """
+    revisions = subprocess.run(
+        ["git", "log", "--format=%H", "--", path],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    for revision in reversed(revisions):
+        blob = subprocess.run(
+            ["git", "show", f"{revision}:{path}"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if blob.returncode == 0 and marker in blob.stdout:
+            return revision
+    return None
+
+
+def _unchanged_by_this_story(rel: str) -> bool:
+    """Whether *this story's own change* left `rel` alone.
+
+    Not `git diff HEAD`. That asks whether the working tree is dirty here,
+    which is a question about whoever is working right now: it goes vacuously
+    green the moment anything is committed, and red for every later story that
+    legitimately edits one of these paths — the same over-broad scope defect
+    commit 3b05b99 fixed in story-011's prompt-scope assertion. Bound the
+    comparison at both ends instead: find this story's own commit and diff it
+    against its parent. While the story is still uncommitted there is no such
+    commit and the working tree is the end bound, which is the original
+    comparison.
+    """
+    revision = _revision_introducing(STORY_MARKER_PATH, STORY_MARKER)
+    if revision is None:
+        result = subprocess.run(
+            ["git", "diff", "HEAD", "--stat", "--", rel],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip() == ""
+    # The positive guard the bound needs: the parent really predates this
+    # story's feature, so the diff below is this story's own and the assertion
+    # is comparing something.
+    before = subprocess.run(
+        ["git", "show", f"{revision}^:{STORY_MARKER_PATH}"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    assert STORY_MARKER not in before, "the resolved bound is not this story's commit"
     result = subprocess.run(
-        ["git", "diff", "HEAD", "--stat", "--", rel],
+        ["git", "diff", f"{revision}^", revision, "--stat", "--", rel],
         cwd=REPO_ROOT, capture_output=True, text=True, check=True,
     )
     return result.stdout.strip() == ""
@@ -403,4 +457,4 @@ def _unchanged_against_head(rel: str) -> bool:
 
 @pytest.mark.parametrize("rel", ["workflows/", "rules/", "schemas/"])
 def test_the_definitions_this_story_injects_are_unchanged(rel):
-    assert _unchanged_against_head(rel)
+    assert _unchanged_by_this_story(rel)
