@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import story_diff
+
 import context_assembler
 import harness_config
 import schema_validator
@@ -709,13 +711,20 @@ def test_every_pre_era_story_still_parses():
 
 
 def test_no_committed_story_artifact_was_edited():
-    """Execution records are never rewritten to satisfy a later contract."""
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "diff", "HEAD", "--name-only", "--",
-         ".harness/stories/"],
-        capture_output=True, text=True, check=True,
+    """Execution records are never rewritten to satisfy a later contract.
+
+    Scoped to modifications and deletions, which is what "edited" has always
+    meant here: this story's own commit *added* `.harness/stories/story-007.yaml`,
+    and an addition was never an edit. The baseline is this story's own run
+    commit against its parent, resolved by `conftest.story_commit_range` —
+    not `git diff HEAD`, which asks whether the working tree is dirty and
+    goes vacuously green the moment the story commits.
+    """
+    edited = story_diff(
+        [".harness/stories/"], validation_file=Path(__file__),
+        diff_filter="MD", options=("--name-only",),
     )
-    assert result.stdout.strip() == ""
+    assert edited.strip() == ""
 
 
 def test_this_storys_own_artifact_parses_and_validates_under_the_new_schema():

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import story_diff
+
 import context_assembler
 import story_coordinator
 from agent_runner import AgentResult
@@ -423,66 +425,22 @@ def test_archive_attempt_creates_nothing_it_was_not_asked_for(tmp_path: Path):
 # --------------------------------------------------------------------------
 
 
-#: Where this story's change landed, and the feature it introduced there.
-#: Used to find this story's own commit, not to read the working tree.
-STORY_MARKER_PATH = "orchestration/story_coordinator.py"
-STORY_MARKER = "def archive_attempt"
-
-
-def _revision_introducing(path: str, marker: str) -> str | None:
-    """The oldest committed revision of `path` whose blob carries `marker`.
-
-    None while the change is still uncommitted. Walks the file's own history
-    rather than pinning a SHA, so a rebase or a squash merge does not move the
-    answer.
-    """
-    revisions = subprocess.run(
-        ["git", "log", "--format=%H", "--", path],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    ).stdout.split()
-    for revision in reversed(revisions):
-        blob = subprocess.run(
-            ["git", "show", f"{revision}:{path}"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
-        )
-        if blob.returncode == 0 and marker in blob.stdout:
-            return revision
-    return None
-
-
 def _unchanged_by_this_story(rel: str) -> bool:
     """Whether *this story's own change* left `rel` alone.
 
     Not `git diff HEAD`. That asks whether the working tree is dirty here,
     which is a question about whoever is working right now: it goes vacuously
     green the moment anything is committed, and red for every later story that
-    legitimately edits one of these paths — the same over-broad scope defect
-    commit 3b05b99 fixed in story-011's prompt-scope assertion. Bound the
-    comparison at both ends instead: find this story's own commit and diff it
-    against its parent. While the story is still uncommitted there is no such
-    commit and the working tree is the end bound, which is the original
-    comparison.
+    legitimately edits one of these paths. Bound the comparison at both ends
+    instead — this story's own run commit against its parent.
+
+    Since story-015 the resolution lives once in `tests/conftest.py` rather
+    than being restated here, and it keys on this validation file's own
+    adding commit rather than on a marker planted in the story's source: the
+    commit that added `tests/test_story_010_validation.py` *is* story-010's
+    run commit.
     """
-    revision = _revision_introducing(STORY_MARKER_PATH, STORY_MARKER)
-    if revision is None:
-        result = subprocess.run(
-            ["git", "diff", "HEAD", "--", rel],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        )
-        return result.stdout.strip() == ""
-    # The positive guard the bound needs: the parent really predates this
-    # story's feature, so the diff below is this story's own and the assertion
-    # is comparing something.
-    before = subprocess.run(
-        ["git", "show", f"{revision}^:{STORY_MARKER_PATH}"],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    ).stdout
-    assert STORY_MARKER not in before, "the resolved bound is not this story's commit"
-    result = subprocess.run(
-        ["git", "diff", f"{revision}^", revision, "--", rel],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    )
-    return result.stdout.strip() == ""
+    return story_diff([rel], validation_file=Path(__file__)).strip() == ""
 
 
 def test_context_assembler_is_unchanged():

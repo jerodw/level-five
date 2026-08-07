@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import story_diff
+
 import context_assembler
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -339,24 +341,33 @@ def test_build_context_still_resolves_every_stage_schema_placeholder(
 # --------------------------------------------------------------------------
 
 
-def _unchanged_against_head(rel: str) -> bool:
-    result = subprocess.run(
-        ["git", "diff", "HEAD", "--stat", "--", rel],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    )
-    return result.stdout.strip() == ""
+def _unchanged_by_this_story(rel: str, *, diff_filter: str | None = None) -> bool:
+    """Whether *this story's own change* left `rel` alone.
+
+    Not `git diff HEAD`, which was what this helper asked before story-015.
+    That asks whether the working tree is dirty here — a question about
+    whoever is working right now, answered "clean" for every path the moment
+    the coordinator commits the story. The baseline resolution lives in
+    `tests/conftest.py`: this story's own run commit against its parent.
+    """
+    return story_diff(
+        [rel], validation_file=Path(__file__), diff_filter=diff_filter,
+        options=("--stat",),
+    ).strip() == ""
 
 
 def test_l5_assist_is_unchanged():
-    assert _unchanged_against_head("scripts/l5-assist")
+    assert _unchanged_by_this_story("scripts/l5-assist")
 
 
 def test_the_story_schema_is_unchanged():
-    assert _unchanged_against_head("schemas/story.schema.json")
+    assert _unchanged_by_this_story("schemas/story.schema.json")
 
 
 def test_no_committed_story_artifact_was_edited():
-    assert _unchanged_against_head(".harness/stories")
+    """Modifications and deletions only: this story's own run commit added
+    `.harness/stories/story-008.yaml`, and an addition was never an edit."""
+    assert _unchanged_by_this_story(".harness/stories", diff_filter="MD")
 
 
 def test_every_committed_story_artifact_still_parses():
