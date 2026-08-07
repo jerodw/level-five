@@ -33,7 +33,9 @@ Write the approved story exactly in this shape. The shape is a
 contract: the harness extracts acceptance_criteria by its top-level
 key and injects it into the verifier prompt, and l5-run refuses to
 execute a story artifact that is missing any required top-level
-section.
+section. Every likely_file_changes entry needs a stage: a new test
+file is the tester's, so name the tester there rather than leaving
+the entry unowned for the implementer to pick up.
 
 	story:
 	  id: story-NNN
@@ -54,6 +56,7 @@ section.
 	    - <step>
 	  likely_file_changes:
 	    - file: <path>
+	      stage: <the workflow stage expected to change it>
 	      reason: <why>
 
 	scope:
