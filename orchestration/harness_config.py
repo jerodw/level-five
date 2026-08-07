@@ -7,7 +7,15 @@ directly keeps the harness free of third-party dependencies.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+
+def find_target_root(start: Path) -> Path:
+    for candidate in [start, *start.parents]:
+        if (candidate / ".harness" / "config.yaml").is_file():
+            return candidate
+    sys.exit("No .harness/config.yaml found here or above. Run l5-init first.")
 
 
 def _unquote(value: str) -> str:

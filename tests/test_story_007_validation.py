@@ -352,11 +352,16 @@ def test_a_workflow_declaring_nothing_enforces_nothing(target_root, harness_root
 
 
 def test_no_path_prefix_is_named_in_orchestration_code():
-    """tests/ is a fact about this workflow, not about the harness."""
+    """tests/ is a fact about this workflow, not about the harness. The
+    mechanism key may appear where the declaration is enforced
+    (story_coordinator, this story) and where it is rendered for the planner
+    (context_assembler, story-009); no module may name the prefix itself."""
+    allowed_to_read_the_key = ("story_coordinator.py", "context_assembler.py")
     for module in sorted(ORCHESTRATION.glob("*.py")):
         body = executable_source(module.read_text(encoding="utf-8"))
         assert "tests/" not in body, module.name
-        assert "may_not_create" not in body or module.name == "story_coordinator.py"
+        assert ("may_not_create" not in body
+                or module.name in allowed_to_read_the_key), module.name
 
 
 def test_the_ownership_check_names_no_stage(target_root, harness_root):

@@ -14,20 +14,28 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
 import context_assembler  # noqa: E402
+import harness_config  # noqa: E402
 
 
 def main() -> None:
     if len(sys.argv) < 2:
         sys.exit(__doc__.strip())
     request = " ".join(sys.argv[1:])
-    # The planner is not a workflow stage, so no coordinator renders its
-    # template. Render it here against the same schema context the coordinator
-    # builds, so the story contract reaches the planner as the schema file
-    # itself rather than as a copy of it that can drift.
-    template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
-    planner_prompt = context_assembler.render(
-        template, context_assembler.schema_context(HARNESS_ROOT)
+    target_root = harness_config.find_target_root(Path.cwd())
+    config = harness_config.load_config(target_root)
+    workflow = harness_config.load_workflow(
+        HARNESS_ROOT, config.get("workflow", "story-workflow")
     )
+    rules = harness_config.load_rules(HARNESS_ROOT)
+    # The planner is not a workflow stage, so no coordinator renders its
+    # template. Render it here against the same schema and workflow context
+    # the coordinator builds from, so the story contract and the workflow's
+    # stage rules reach the planner as the enforced files themselves rather
+    # than as copies of them that can drift.
+    template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
+    context = context_assembler.schema_context(HARNESS_ROOT)
+    context.update(context_assembler.workflow_context(workflow, rules))
+    planner_prompt = context_assembler.render(template, context)
     os.execvp(
         "claude",
         [

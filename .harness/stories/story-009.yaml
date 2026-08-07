@@ -1,0 +1,209 @@
+story:
+  id: story-009
+  title: Inject the workflow's stage rules into the planner prompt
+  description: |
+    story-008 made schemas/story.schema.json the planner's authority on the
+    story shape, injected rather than copied. One paragraph lower in the
+    same file, prompts/planner.md still states a workflow fact in prose:
+    that the implementer may not create anything under tests/. The real
+    declaration is may_not_create on the implementer stage in
+    workflows/story-workflow.json. It is the same copy, in the same
+    template, with the same failure mode — change the workflow and the
+    planner keeps telling developers the old rule, silently, until a story
+    escalates for a reason the plan did not predict.
+
+    planner.md also names workflow stages nowhere the workflow can correct.
+    Every likely_file_changes entry requires a stage, and a plan naming a
+    stage the workflow does not define is a planning error the planner has
+    no way to check.
+
+    The same trip that reads the workflow can read rules/execution-rules.json,
+    so the planner also learns the repository-wide blocked_paths it has been
+    hand-copying into do_not_modify story after story.
+
+    Reading a workflow means knowing which repository is being planned for.
+    l5-plan does not currently locate one — it is the only script that
+    doesn't, though .harness/docs/ARCHITECTURE.md already claims they all
+    do. It gains that lookup here, and fails the way l5-run fails when there
+    is no .harness/config.yaml to find. A planner that cannot see the
+    project cannot list .harness/stories/ to choose its own story number
+    either, so starting without one was never really working.
+
+tasks:
+  - Move find_target_root out of scripts/l5-run into harness_config and call
+    it from l5-run, l5-plan and l5-status, so the lookup has one
+    implementation rather than a second copy in a story about removing
+    copies. l5-status carries the same loop and the same exit message as
+    l5-run; leaving it behind would leave the duplication the story exists
+    to remove.
+  - Add a function to context_assembler that renders the workflow's stage
+    names, the stages' may_not_create prefixes, and the rules' blocked_paths
+    as injectable context.
+  - Replace planner.md's prose statement of the implementer's tests/
+    restriction with injected placeholders, and give the planner the stage
+    list and the blocked paths it currently has no way to see.
+  - Change l5-plan to locate the target repository, load its configured
+    workflow and the execution rules, and render planner.md against the
+    schema context plus the new workflow context.
+
+acceptance_criteria:
+  - prompts/planner.md names no workflow stage and no may_not_create prefix
+    of its own; both reach the planner through injection. The skeleton's
+    "stage: <the workflow stage expected to change it>" is a field
+    description rather than a stage name and stays.
+  - The rendered planner prompt names every stage defined in
+    workflows/story-workflow.json — implementer, tester, verifier,
+    documenter — and every may_not_create prefix any of those stages
+    declares.
+  - The rendered planner prompt lists every path in blocked_paths from
+    rules/execution-rules.json, and says these are enforced repository-wide
+    rather than per story.
+  - A negative control demonstrates the coverage comes from injection and
+    not from leftover prose - rendering a copy of planner.md with the new
+    placeholders removed does not satisfy the two criteria above.
+  - The rendered planner prompt contains no leftover {{placeholder}}.
+  - find_target_root lives in orchestration/harness_config.py and is called
+    by scripts/l5-run, scripts/l5-plan and scripts/l5-status; the walk-up
+    loop appears once in the repository.
+  - scripts/l5-plan exits non-zero with the no-config message when no
+    .harness/config.yaml exists in the current directory or above it, and
+    starts no interactive session.
+  - scripts/l5-run and scripts/l5-status behave exactly as before the
+    extraction, including the no-config message and its exit status.
+  - The instruction not to add a stage_exceptions entry without asking the
+    developer first stays in planner.md, along with the explanation of what
+    an exception is for; only the statement of which stage is restricted on
+    which path is replaced by injection.
+  - build_context's behavior is unchanged - every workflow stage's prompt
+    resolves the same placeholders to the same text as before.
+  - workflows/story-workflow.json, rules/execution-rules.json, and
+    schemas/ are unchanged, and every committed story artifact still parses.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Add find_target_root(start) to harness_config, moving the loop from
+      l5-run unchanged, and have l5-run, l5-plan and l5-status all call it.
+      The message and exit behavior stay identical for every caller;
+      l5-status's copy is byte-identical to l5-run's, so replacing it with
+      the call changes no behavior.
+    - Add workflow_context(workflow, rules) to context_assembler, beside
+      schema_context, returning the stage list, the per-stage create
+      restrictions, and the blocked paths as dash-prefixed text. Reuse the
+      existing _dashed_lines helper so build_context's blocked_paths and the
+      planner's are rendered by one function.
+    - Replace the hardcoded sentence in planner.md with the injected
+      restrictions, and add the stage list and blocked paths where the
+      planner needs them - the stage list beside the likely_file_changes
+      guidance, the blocked paths beside the scope guidance.
+    - Change l5-plan to find the target root, load the config, load the
+      workflow the config names, load the rules, and render the template
+      against schema_context merged with workflow_context.
+  likely_file_changes:
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: Gains find_target_root, moved from l5-run.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Gains workflow_context beside schema_context.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Locates the target repository and injects the workflow facts.
+    - file: scripts/l5-run
+      stage: implementer
+      reason: Calls the extracted find_target_root instead of its own copy.
+    - file: scripts/l5-status
+      stage: implementer
+      reason: Carries a third copy of the same walk-up loop with the same
+        exit message. Calls the extracted find_target_root instead, so the
+        loop appears once.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The workflow facts are injected; the prose copy comes out.
+    - file: tests/test_story_009_validation.py
+      stage: tester
+      reason: All new validation for this story - the injection, the stage
+        and blocked-path coverage, its negative control, the l5-plan
+        no-config exit, and l5-run's unchanged behavior. New test files are
+        the tester's output and this story keeps every new assertion in this
+        one file.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the workflow injection and the shared find_target_root,
+        and makes the claim that every script locates the target repository
+        true of l5-plan.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - scripts/l5-plan
+    - scripts/l5-run
+    - scripts/l5-status
+    - orchestration/harness_config.py
+    - orchestration/context_assembler.py
+    - tests/
+  do_not_modify:
+    - workflows/
+    - schemas/
+    - orchestration/story_coordinator.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - prompts/assist.md
+    - scripts/l5-assist
+    - scripts/l5-init
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm by reading prompts/planner.md that no workflow stage name and no
+    may_not_create prefix is stated there outside an injected placeholder.
+  - Confirm the rendered planner prompt names every stage the workflow
+    defines, every may_not_create prefix it declares, and every blocked
+    path in the rules, with no leftover placeholder.
+  - Confirm the negative control - the same template with the new
+    placeholders removed - fails that coverage. A coverage assertion that
+    passes against a stripped template proves nothing.
+  - Confirm the walk-up loop that finds .harness/config.yaml appears exactly
+    once in the repository, and that the no-config message and exit status
+    of l5-run and l5-status are byte-for-byte what they were before the
+    move.
+  - Confirm l5-plan exits non-zero and starts no session when run with no
+    .harness/config.yaml above the working directory.
+  - Confirm build_context still resolves every placeholder each workflow
+    stage template uses, to the same text as before.
+  - Confirm no committed story artifact was edited and all still parse.
+  - Confirm tests/test_story_009_validation.py was created by the tester
+    stage, and that the implementer's changed-files record lists no file
+    under tests/ at all.
+
+constraints:
+  - This story depends on story-008 and must not start until story-008 has
+    merged. Both edit prompts/planner.md, scripts/l5-plan, and
+    orchestration/context_assembler.py, and this story builds directly on
+    the render path story-008 introduced.
+  - Standard library only, Python 3.10+, type hints on public functions.
+  - Scripts stay thin. The lookup, the loading, and the rendering all belong
+    in orchestration; l5-plan wires them together and nothing more.
+  - The implementer touches no file under tests/, neither creating nor
+    modifying. All new validation for this story is the tester's, in one
+    file.
+  - Injection replaces the statement of which stage is restricted on which
+    path. It does not replace the planner's judgement about stage
+    exceptions - the ask-the-developer-first rule is role guidance and stays
+    written in the template.
+  - The planner session stays interactive and quick to start; reading a
+    config, a workflow, and a rules file is acceptable, extra round trips
+    are not.
+  - This story edits context_assembler, so the prompts stored under
+    .harness/runs/story-009/ for later stages are rendered by the module
+    version loaded at run start. Judge them as stale and confirm behavior
+    from a fresh process.

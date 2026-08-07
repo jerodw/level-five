@@ -1,0 +1,13 @@
+{
+  "status": "failed",
+  "tests_written": 34,
+  "tests_run": 322,
+  "tests_passed": 321,
+  "tests_failed": 1,
+  "failures": [
+    {
+      "test": "tests/test_story_009_validation.py::test_the_walk_up_loop_appears_once_in_the_repository",
+      "issue": "The acceptance criterion 'the walk-up loop appears once in the repository' is not met. The loop that finds .harness/config.yaml appears twice: orchestration/harness_config.py:20-23 and scripts/l5-status:19-23. l5-run and l5-plan both call the extracted harness_config.find_target_root, so the story's named callers are correct, but l5-status still carries its own copy - the same loop with the same sys.exit message. scripts/l5-status is on this story's do_not_modify list, so the implementer left it and flagged it; the criterion as written is still unsatisfied. Every other story-009 criterion passes, including the injection coverage and its negative control."
+    }
+  ]
+}
