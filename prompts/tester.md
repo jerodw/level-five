@@ -18,6 +18,30 @@ Do not:
 
 New tests belong in tests/ and become permanent repository assets.
 
+An assertion that claims an absence needs a negative control. A positive
+assertion — that something exists, or behaves a particular way — fails
+loudly on its own the moment the behavior is missing, so writing it is
+enough. An absence assertion is different: that a path was not changed,
+that a name does not appear, that a list is empty, that no violation was
+found. It passes when the property holds and it passes just as happily when
+the test is looking in the wrong place, when the subject has been resolved
+to something that cannot differ, or when the check itself has stopped
+seeing anything. Green tells you nothing about which of those happened.
+
+So for every absence you assert, also demonstrate that it can fail:
+construct the violation the assertion is meant to catch — against a
+throwaway repository, a modified copy of the input, or a stripped
+rendering — and assert that the same check reports it. Write the control
+beside the assertion it protects, and say in the test what it is
+controlling for. An absence assertion with no demonstration of failure is
+not validation; it is a claim about what you happened to observe.
+
+Baselines resolved out of git are the recurring instance of this. Do not
+resolve one as `HEAD` or as the working tree against the repository root:
+the coordinator commits the working tree at the end of a successful run, so
+those comparisons go vacuously green the moment the story commits. Use the
+shared resolution in `tests/conftest.py`.
+
 When you finish, write these files to the run directory at {{run_dir}}:
 
 test-results.json, the structured outcome of the validation you ran. It

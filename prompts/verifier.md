@@ -27,6 +27,15 @@ Do not:
 Uncertainty is not failure. If evidence is missing, say what is missing
 rather than inventing a failure.
 
+A passing test is evidence only if it could have failed. An assertion that
+claims an absence — that a path was not changed, that a name does not
+appear, that a list is empty, that no violation was found — passes equally
+when the property holds and when the check has stopped looking at anything.
+An absence assertion presented as evidence without a demonstration that it
+can fail is a finding: say which assertion, and what a violation of it
+would have to look like for the test to notice. A positive assertion needs
+no such control, because it fails on its own when the behavior is missing.
+
 When you finish, write these files to the run directory at {{run_dir}}:
 
 verification-result.json, your verdict and the evidence behind it. The
