@@ -87,9 +87,16 @@ def run_contract(root: Path, names: tuple[str, ...] = ()) -> tuple[int, str]:
 
 
 def failing_tests(output: str) -> set[str]:
-    """The tests pytest's summary reports as failed, by name."""
+    """The tests pytest's summary reports as failed, by name.
+
+    The node id is taken up to the first space, because pytest appends
+    ` - <message>` to the summary line only when the terminal is wide enough
+    to hold it. Parsing to end-of-line reads the name plus the message on a
+    wide terminal and the bare name on a narrow one, so a test asserting on
+    these names passes locally and fails in CI purely on terminal width.
+    """
     return {
-        line.split("::", 1)[1].split("[", 1)[0].strip()
+        line.split("::", 1)[1].split("[", 1)[0].split(" ", 1)[0].strip()
         for line in output.splitlines()
         if line.startswith("FAILED") and "::" in line
     }
