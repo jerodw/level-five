@@ -28,6 +28,28 @@ def load_template(harness_root: Path, prompt_file: str) -> str:
     return (harness_root / "prompts" / prompt_file).read_text(encoding="utf-8")
 
 
+def schema_context(harness_root: Path) -> dict[str, str]:
+    """Map every artifact schema to its injectable placeholder name.
+
+    Artifact schemas are injected rather than restated inline in prompts, so
+    the definition an agent is asked to satisfy is the same file the
+    coordinator enforces. schemas/verification-result.schema.json becomes
+    {{verification_result_schema}}. A new schema file becomes an injectable
+    placeholder with no code change.
+
+    This is the one place the glob lives: build_context calls it for workflow
+    stages, and l5-plan calls it for the planner template, which no
+    coordinator renders.
+    """
+    context: dict[str, str] = {}
+    for schema_path in sorted((harness_root / "schemas").glob("*.schema.json")):
+        stem = schema_path.name[: -len(".schema.json")]
+        context[stem.replace("-", "_") + "_schema"] = schema_path.read_text(
+            encoding="utf-8"
+        )
+    return context
+
+
 def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
@@ -121,15 +143,7 @@ def build_context(
         "testing_standards": _read(standards_dir / "testing.md"),
     }
 
-    # Artifact schemas are injected rather than restated inline in prompts, so
-    # the definition an agent is asked to satisfy is the same file the
-    # coordinator enforces. schemas/verification-result.schema.json becomes
-    # {{verification_result_schema}}.
-    for schema_path in sorted((harness_root / "schemas").glob("*.schema.json")):
-        stem = schema_path.name[: -len(".schema.json")]
-        context[stem.replace("-", "_") + "_schema"] = schema_path.read_text(
-            encoding="utf-8"
-        )
+    context.update(schema_context(harness_root))
 
     # Two-pass render: resolve the shared harness-layer partial (including its
     # own {{blocked_paths}} placeholder) against the assembled context before

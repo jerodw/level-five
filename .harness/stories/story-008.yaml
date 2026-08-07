@@ -1,0 +1,187 @@
+story:
+  id: story-008
+  title: Inject the story schema into the planner prompt
+  description: |
+    prompts/planner.md restates the story artifact format inline, but
+    schemas/story.schema.json is the contract l5-run enforces. The two
+    drift. story-007 changed the contract twice — stage became required on
+    likely_file_changes items, and an optional stage_exceptions section was
+    added — and planner.md was in that story's do_not_modify list, so it
+    learned about neither. Both were patched afterward, in separate commits.
+    Between the merge and the first patch, the planner wrote stories l5-run
+    refused at pre-flight.
+
+    story-004 solved this class of problem for workflow-stage templates:
+    schemas live in schemas/, are injected through placeholders, and adding
+    a field is a one-file edit. The planner never got that treatment because
+    it is not a workflow stage and no coordinator renders its prompt —
+    scripts/l5-plan reads the template raw and passes it to
+    --append-system-prompt.
+
+    The fix is to make the schema the planner's authority rather than a copy
+    of it. An illustrative skeleton may stay, because the planner writes the
+    story dialect rather than JSON and a shape is easier to follow than a
+    schema, but nothing normative lives in planner.md any more.
+
+    One drift source of the same kind is deliberately left alone. planner.md
+    also states the workflow's may_not_create rule in prose — that the
+    implementer may not create under tests/ — and that fact lives in
+    workflows/story-workflow.json. Injecting it would require l5-plan to
+    locate and load a workflow, which is a second mechanism and a later
+    story. This story closes the schema copy only.
+
+tasks:
+  - Add a {{story_schema}} placeholder to prompts/planner.md and remove the
+    prose that states which sections and fields are required, leaving the
+    skeleton as an illustration and the injected schema as the contract.
+  - Extract the schemas glob in context_assembler into a reusable function
+    so a template rendered outside the workflow gets the same schema context
+    the coordinator builds, from one implementation rather than two.
+  - Render planner.md in scripts/l5-plan before passing it as the appended
+    system prompt, reusing context_assembler's render rather than adding a
+    second substitution implementation.
+  - Close the stale "Open:" entry in .harness/docs/ARCHITECTURE.md that says
+    planner.md's example predates the required stage field, which the
+    skeleton already carries.
+
+acceptance_criteria:
+  - prompts/planner.md states no required top-level section and no required
+    field of its own; every such statement reaches the planner through the
+    injected schema.
+  - The illustrative skeleton stays in planner.md, labeled as an
+    illustration rather than as the contract, and names no field absent from
+    schemas/story.schema.json.
+  - The instruction not to add a stage_exceptions entry without asking the
+    developer first stays in planner.md; it is planner role guidance rather
+    than schema content, and removing it is an over-application of the first
+    criterion.
+  - scripts/l5-plan renders the template and passes the rendered text to
+    --append-system-prompt; the rendered prompt contains no leftover
+    {{placeholder}}.
+  - Every property named in a required list in schemas/story.schema.json —
+    at the top level and within nested objects, including story.id,
+    story.title, story.description, scope.modify, scope.do_not_modify,
+    likely_file_changes file/reason/stage, and stage_exceptions
+    stage/create/reason — appears in the rendered planner prompt.
+  - A negative control demonstrates that coverage comes from the injection
+    and not from leftover prose: rendering a copy of planner.md with the
+    {{story_schema}} placeholder removed does not satisfy the coverage
+    assertion above.
+  - context_assembler exposes one function that builds the schema context,
+    called both by build_context and by l5-plan; the schemas glob appears
+    once in the module.
+  - build_context's behavior is unchanged — the same {{..._schema}}
+    placeholders resolve to the same text for every workflow stage.
+  - The stale "Open:" entry about planner.md's example and the required
+    stage field is gone from .harness/docs/ARCHITECTURE.md.
+  - scripts/l5-assist is unchanged; sharing the render path with it is a
+    later story, not this one.
+  - schemas/story.schema.json is unchanged, l5-run behavior is unchanged,
+    and every committed story artifact still parses.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Extract the schemas glob loop in context_assembler.build_context into
+      schema_context(harness_root) -> dict[str, str], and call it from
+      build_context so the mapping is produced in one place. A new schema
+      file still needs no code change.
+    - Replace planner.md's normative format prose with the injected schema
+      under a {{story_schema}} placeholder, keeping the skeleton and marking
+      it an illustration, and keeping the ask-first guidance on
+      stage_exceptions.
+    - Change l5-plan to load the template, render it against
+      schema_context(HARNESS_ROOT), and pass the rendered text to
+      --append-system-prompt. The script stays a thin entry point and still
+      needs no target repository, because the schema lives beside the
+      harness code.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The schema is injected; the normative prose comes out.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Renders the template instead of reading it raw.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Extracts the schema context so l5-plan and build_context share
+        one implementation.
+    - file: tests/test_story_008_validation.py
+      stage: tester
+      reason: All new validation for this story — the injection, the
+        rendered prompt, the required-field coverage, and its negative
+        control. New test files are the tester's output, and this story
+        keeps every new assertion in this one file.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the planner's schema injection and removes the stale
+        Open entry about the example and the required stage field.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - scripts/l5-plan
+    - orchestration/context_assembler.py
+    - tests/
+  do_not_modify:
+    - schemas/
+    - orchestration/story_coordinator.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - orchestration/harness_config.py
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - prompts/assist.md
+    - scripts/l5-run
+    - scripts/l5-assist
+    - scripts/l5-init
+    - scripts/l5-status
+    - workflows/
+    - rules/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm no required section or field is stated in planner.md outside the
+    injected schema, by reading the template rather than by running it.
+  - Confirm the skeleton and the stage_exceptions ask-first guidance both
+    survive, and that the skeleton names no field the schema does not.
+  - Confirm the rendered planner prompt carries the schema text and has no
+    leftover placeholder.
+  - Confirm the required-field coverage assertion holds against the rendered
+    prompt, and that its negative control — the same template with
+    {{story_schema}} removed — fails that assertion. The control is the
+    evidence that the coverage comes from injection; an assertion that
+    passes against a stripped template proves nothing.
+  - Confirm the schemas glob appears once in context_assembler and that
+    build_context still resolves the stage schema placeholders unchanged.
+  - Confirm scripts/l5-plan still starts an interactive session and still
+    passes the prompt through --append-system-prompt.
+  - Confirm no committed story artifact was edited and all still parse.
+  - Confirm tests/test_story_008_validation.py was created by the tester
+    stage, not the implementer, and that the implementer's changed-files
+    record lists no test file at all.
+
+constraints:
+  - Standard library only, Python 3.10+, type hints on public functions.
+  - The story dialect is not YAML; nothing here may imply it is. The
+    injected schema is JSON, and the skeleton is what shows the planner the
+    dialect it writes in.
+  - Scripts stay thin. Rendering logic belongs in orchestration.
+  - The implementer touches no file under tests/, neither creating nor
+    modifying. All new validation for this story is the tester's, in one
+    file, so the story-006 shape — two files covering one plan, arrived at
+    by two stages — cannot recur through modification instead of creation.
+  - This is the first story the may_not_create rule actually governs, since
+    the coordinator loads the workflow at run start and story-007's
+    declaration was not in memory for its own run.
+  - The planner session stays interactive and quick to start; a larger
+    system prompt is acceptable, extra round trips are not.
+  - This story edits context_assembler, so the prompts stored under
+    .harness/runs/story-008/ for later stages are rendered by the module
+    version loaded at run start. Judge them as stale and confirm behavior
+    from a fresh process.

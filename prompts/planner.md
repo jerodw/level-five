@@ -29,13 +29,17 @@ Do not:
    the approved artifact there as story-NNN.yaml.
 
 [Story artifact format]
-Write the approved story exactly in this shape. The shape is a
-contract: the harness extracts acceptance_criteria by its top-level
-key and injects it into the verifier prompt, and l5-run refuses to
-execute a story artifact that is missing any required top-level
-section. Every likely_file_changes entry needs a stage: a new test
-file is the tester's, so name the tester there rather than leaving
-the entry unowned for the implementer to pick up.
+The contract is schemas/story.schema.json, injected below. It says which
+sections and fields a story must carry; l5-run parses and validates the
+artifact against that same file before a run starts, so a story that does
+not satisfy it is refused at pre-flight.
+
+{{story_schema}}
+
+The story dialect is not JSON and it is not YAML. The schema above says
+what must be present; the skeleton below is an illustration of how to
+write it — indentation, block scalars, and dash-prefixed items. Read the
+schema for the contract and the skeleton for the shape.
 
 	story:
 	  id: story-NNN
@@ -71,12 +75,11 @@ the entry unowned for the implementer to pick up.
 	constraints:
 	  - <behavior that must be preserved>
 
-A story may also carry an optional top-level stage_exceptions section,
-and most do not. The workflow definition stops some stages from creating
-files under some paths: the implementer may not create anything under
-tests/, because new validation is the tester's work. A stage_exceptions
-entry lifts one of those restrictions for one story, which is what a
-story whose own deliverable is a test suite needs.
+The workflow definition stops some stages from creating files under some
+paths: the implementer may not create anything under tests/, because new
+validation is the tester's work. A stage_exceptions entry lifts one of
+those restrictions for one story, which is what a story whose own
+deliverable is a test suite needs.
 
 Do not add one without asking the developer first. The stage must be a
 stage the workflow defines, and the create path must be one that stage
