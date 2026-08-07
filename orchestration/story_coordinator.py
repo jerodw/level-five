@@ -414,9 +414,17 @@ def run_story(
 
     state = load_state(run_dir)
     if state and state.status != "running":
+        # Name the branch as well as the run directory. _checkout_story_branch
+        # reuses an existing branch rather than resetting it, so deleting only
+        # the run directory re-runs the story on top of the finished work — the
+        # implementer opens a repository where the story is already done, and
+        # the run reports success having changed nothing.
         print(
             f"{story_id} already ended with status '{state.status}'. "
-            f"Inspect {run_dir} or delete it to run the story again.",
+            f"Inspect {run_dir} to review it.\n"
+            f"To run the story again, delete {run_dir} *and* reset branch "
+            f"{state.branch}, which still holds the finished work. Archive both "
+            f"first if the run is worth keeping — {run_dir} is gitignored.",
             file=sys.stderr,
         )
         return 1
