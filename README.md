@@ -36,6 +36,7 @@ Each story below is a step the book's roadmap calls for. The stories themselves 
 | 004 | Machine-readable schemas for structured artifacts | Ch. 14, artifact contracts |
 | 005 | Schema-directed story parser and full pre-flight validation | Ch. 18, deterministic when behavior is known |
 | 006 | One reader of a story artifact | Ch. 18, hardening |
+| 007 | Coordinator-enforced stage output ownership | Ch. 15, governance boundaries |
 
 Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, hooks in place of a static `allowed_tools` allowlist, an adjudicator, an inspector, resumable escalated runs, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
 
