@@ -289,7 +289,8 @@ def test_the_resolution_raises_rather_than_degrading_on_a_truncated_history(
                              "schemas/")
     shallow = tmp_path / "shallow"
     subprocess.run(["git", "clone", "--depth", "1", "-q", origin.as_uri(),
-                    str(shallow)], capture_output=True, text=True, check=True)
+                    str(shallow)], cwd=tmp_path, capture_output=True,
+                   text=True, check=True)
     validation_file = shallow / "tests/test_story_042_validation.py"
     assert validation_file.is_file()
 
@@ -323,7 +324,8 @@ def test_the_raise_is_not_swallowed_by_the_diff_helper(tmp_path):
                              "schemas/")
     shallow = tmp_path / "shallow"
     subprocess.run(["git", "clone", "--depth", "1", "-q", origin.as_uri(),
-                    str(shallow)], capture_output=True, text=True, check=True)
+                    str(shallow)], cwd=tmp_path, capture_output=True,
+                   text=True, check=True)
     with pytest.raises(NothingToCompareAgainst):
         story_diff(["schemas/"],
                    validation_file=shallow / "tests/test_story_042_validation.py",
