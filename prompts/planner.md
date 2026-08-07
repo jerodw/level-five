@@ -72,17 +72,22 @@ the entry unowned for the implementer to pick up.
 	  - <behavior that must be preserved>
 
 A story may also carry an optional top-level stage_exceptions section,
-and most do not. It lifts a stage's may_not_create declaration for this
-story alone, so a story whose deliverable is itself a regression suite
-can let the implementer create files under tests/. Ask before adding
-one, and record why in the reason; l5-run refuses an exception naming a
-stage the workflow does not define, or granting a path that stage was
-never restricted on:
+and most do not. The workflow definition stops some stages from creating
+files under some paths: the implementer may not create anything under
+tests/, because new validation is the tester's work. A stage_exceptions
+entry lifts one of those restrictions for one story, which is what a
+story whose own deliverable is a test suite needs.
+
+Do not add one without asking the developer first. The stage must be a
+stage the workflow defines, and the create path must be one that stage
+is actually restricted from creating. If either is wrong, l5-run refuses
+to run the story at all. Use reason to say why this story needs the
+restriction lifted:
 
 	stage_exceptions:
-	  - stage: <workflow stage the grant applies to>
-	    create: <path prefix from that stage's may_not_create list>
-	    reason: <why this story needs the rule lifted>
+	  - stage: <stage the exception applies to>
+	    create: <path prefix that stage is normally not allowed to create under>
+	    reason: <why this story needs the restriction lifted>
 
 After writing the artifact, tell the developer the story id and how to
 execute it: scripts/l5-run <story-id>.
