@@ -8,6 +8,7 @@ decision here is a rule applied to a recorded fact.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -201,6 +202,47 @@ def _schema_violation(run_dir: Path, stage: dict) -> str | None:
     return None
 
 
+def archivable_artifacts(stages: list[dict]) -> list[str]:
+    """Collect every stage artifact name the loaded workflow declares.
+
+    The union of each stage's outputs, its changed_files record, and the keys
+    of its schemas map — the same three places the coordinator already reads
+    artifact names from. No artifact name is written here, so a workflow that
+    adds a stage artifact gets it archived with no code change. Sorted, so
+    the archive is deterministic.
+    """
+    names: set[str] = set()
+    for stage in stages:
+        names.update(stage.get("outputs", []))
+        record = stage.get("changed_files")
+        if record:
+            names.add(record)
+        names.update(stage.get("schemas", {}))
+    return sorted(names)
+
+
+def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[str]:
+    """Copy the superseded attempt's artifacts into attempts/attempt-N/.
+
+    Evidence is not silently overwritten. The live copies stay at the
+    run-directory root under their canonical names, where every reader
+    expects them; the archive keeps those same names one directory down.
+    An artifact the attempt did not write is skipped, the way an absent
+    conditional artifact is skipped by _schema_violation. Returns the names
+    actually archived.
+    """
+    destination = run_dir / "attempts" / f"attempt-{attempt}"
+    destination.mkdir(parents=True, exist_ok=True)
+    archived = []
+    for artifact in artifacts:
+        source = run_dir / artifact
+        if not source.is_file():
+            continue
+        shutil.copy2(source, destination / artifact)
+        archived.append(artifact)
+    return archived
+
+
 def _refuse(story_path: Path, problems: list[str]) -> int:
     """The one pre-flight refusal path: exit 1, one message per problem."""
     print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
@@ -391,6 +433,14 @@ def run_story(
             if verdict.get("status") == "passed":
                 append_event(run_dir, "verification passed")
             elif verdict.get("retry_recommended") and state.retry_count < rules["max_retries"]:
+                # Archive before the retry begins, while the root artifacts
+                # still describe the attempt that just failed. The attempt
+                # number is the one the rendered prompts already use, so
+                # prompt-implementer-attempt-1.md and attempts/attempt-1/
+                # describe one attempt.
+                archive_attempt(
+                    run_dir, archivable_artifacts(stages), state.retry_count + 1
+                )
                 state.retry_count += 1
                 save_state(run_dir, state)
                 append_event(
