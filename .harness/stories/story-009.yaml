@@ -160,6 +160,8 @@ scope:
     - scripts/l5-init
     - .harness/config.yaml
     - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
 
 verification_requirements:
   - Confirm by reading prompts/planner.md that no workflow stage name and no
