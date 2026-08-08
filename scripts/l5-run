@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Execute an approved story through the story workflow.
 
-Usage: l5-run <story-id>
+Usage: l5-run <story-id> [--stage <stage>]
 The target repository is found by walking up from the current directory
 to the nearest .harness/config.yaml.
+
+A run whose state.json says it escalated resumes at the recorded stage.
+--stage overrides that with a stage the loaded workflow defines; the
+coordinator refuses one it does not.
 """
 import sys
 from pathlib import Path
@@ -16,11 +20,17 @@ import story_coordinator  # noqa: E402
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    argv = sys.argv[1:]
+    stage = None
+    if len(argv) == 3 and argv[1] == "--stage":
+        argv, stage = argv[:1], argv[2]
+    if len(argv) != 1:
         print(__doc__.strip(), file=sys.stderr)
         return 1
     target_root = harness_config.find_target_root(Path.cwd())
-    return story_coordinator.run_story(sys.argv[1], HARNESS_ROOT, target_root)
+    return story_coordinator.run_story(
+        argv[0], HARNESS_ROOT, target_root, start_stage=stage
+    )
 
 
 if __name__ == "__main__":

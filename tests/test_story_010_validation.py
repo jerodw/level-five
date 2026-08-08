@@ -475,6 +475,12 @@ def test_no_reader_was_pointed_at_the_archive():
     assembler = Path(context_assembler.__file__).read_text(encoding="utf-8")
     assert "attempts" not in assembler
     coordinator = Path(story_coordinator.__file__).read_text(encoding="utf-8")
+    # story-020 gave the directory its own helper, because the resume has to
+    # refuse an attempt directory that already exists and naming it a second
+    # time is how one fact ends up in two places. The guarantee is unchanged
+    # and now exact: one literal in the module, in the helper both the archive
+    # and the resume derive the directory from.
     body = _archive_code_body("archive_attempt")
     assert coordinator.count('"attempts"') == 1
-    assert "attempts" in body
+    assert "attempts" in _archive_code_body("attempt_dir")
+    assert "attempt_dir(" in body
