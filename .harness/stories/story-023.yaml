@@ -1,0 +1,153 @@
+story:
+  id: story-023
+  title: l5-plan commits and pushes the artifact it caused to be written
+  description: |
+    prompts/planner.md tells the planner agent to commit the story artifact it
+    wrote. That is guidance to an agent - the mechanism this repository has
+    watched fail repeatedly - and it does not push, so the commit sits local
+    until something else carries it. Make it the script's job: scripts/l5-plan
+    commits the artifact it caused to be written, and pushes it, without an
+    agent being asked to remember.
+
+    Determinism matters here specifically because story-021 is planned on the
+    assumption that this already happens. Its constraint declines to exempt the
+    story artifact's path from the clean-tree check, reasoning that l5-plan
+    already commits the artifact; its acceptance criterion then makes an
+    uncommitted artifact refuse the run. Without this story the harness makes a
+    deterministic refusal conditional on a probabilistic commit, and when the
+    planner forgets, the developer meets a refusal and commits by hand - the
+    manual step this removes.
+
+    Pushing removes a divergence observed three times. The planner commits on
+    main locally, the story branch is cut from that commit, the PR rebases it to
+    a new sha, and git pull --ff-only afterwards refuses with local main ahead 1,
+    behind 2. Seen on story-017, story-020 and story-022, each needing a
+    diagnosis and a git reset --hard origin/main to clear. If the artifact is on
+    origin/main before the run starts, the branch is cut from a commit already
+    upstream and no duplicate is created.
+
+    The obstacle is why this is a story rather than an edit. scripts/l5-plan ends
+    in os.execvp, which replaces the script's process with the interactive claude
+    session, so nothing in the script runs afterwards. Regaining control is the
+    change, and it is a change to how an interactive command runs. This is the
+    same obstacle 11-plan-time-validation.md names and the reason story-018
+    reached for a separate scripts/l5-validate entry point; solving the process
+    model once serves both, and that request decides separately whether it still
+    needs l5-validate. This story does not validate anything.
+
+tasks:
+  - Replace the os.execvp at the end of scripts/l5-plan with a child process that inherits stdio, so the script regains control when the interactive session ends.
+  - Add orchestration/plan_commit.py holding the decision - which new artifacts appeared, how they are committed, and how the push resolves its remote - so the script stays wiring and the logic is testable without spawning claude.
+  - Snapshot the configured stories_dir before the session and commit the files that appeared under it afterwards, staging those paths and nothing else.
+  - Push the resulting commit to the current branch's upstream remote, falling back to origin, reporting rather than failing when there is no remote or the push is rejected, and never unwinding the commit.
+  - Commit nothing and say so when the session produced no new artifact, deciding from what appeared on disk rather than from the session's exit status.
+  - Propagate the interactive session's exit status, and treat an interrupted or non-zero session the same as any other end for the purpose of committing what it wrote.
+  - Replace the commit instruction in prompts/planner.md with a statement that the harness commits and pushes the artifact, so one act has one mechanism.
+  - Record in the architecture document that l5-plan no longer execs, what it commits and pushes, and why that half of story-021's assumption now holds.
+
+acceptance_criteria:
+  - A planning session whose prompt does not mention committing ends with the artifact it wrote committed on the branch the developer was on.
+  - The commit contains that one file and nothing else, demonstrated with unrelated uncommitted changes present in the tree at the time.
+  - No git add -A, and no staging of any path the session did not add under the configured stories_dir, appears anywhere in the code this story adds.
+  - A session that produces no new artifact under stories_dir creates no commit, attempts no push, and reports on stdout that it committed nothing.
+  - A session that edits an existing story artifact without adding a new one is treated the same way - nothing is committed, because the script commits only files it caused to appear.
+  - The decision to commit is made from a new file appearing under stories_dir, not from the session exiting zero - a session that wrote an artifact and exited non-zero still commits it.
+  - The commit is pushed to the remote the current branch tracks, and to origin when the branch tracks nothing.
+  - A repository with no remote configured, and a push that is rejected, both leave the commit intact, report the failure naming the remote and the branch, and do not roll back or amend anything.
+  - An artifact that does not parse is still committed; the parse feeds the commit message only and is not a gate.
+  - The commit subject names the story - Plan story-NNN, carrying the artifact's title when it can be read - and a session that produced more than one new artifact commits them together in one commit naming each id.
+  - The interactive session still behaves - the developer's terminal is inherited, the session's exit status is the script's exit status, and Ctrl-C ends the session and still commits an artifact already written, exiting 130.
+  - No second commit mechanism survives - prompts/planner.md no longer asks the planner to commit, and states that the harness does it.
+  - scripts/l5-plan contains no orchestration logic beyond wiring - the snapshot, the commit, the push and the remote resolution live in orchestration/plan_commit.py.
+  - Everything the script did before the exec is unchanged - target-root discovery, config loading, workflow and rules loading, the rendered planner prompt, and the arguments passed to claude.
+  - The full test suite passes, in the working tree and in a clean clone.
+
+technical_plan:
+  implementation_steps:
+    - Add orchestration/plan_commit.py with small functions - the pre-session snapshot of the configured stories_dir, the set of paths that appeared afterwards, the commit of exactly those paths, and the push with its remote resolution - each returning what happened rather than printing it, so the script decides what to say.
+    - Resolve the push remote from the current branch's configured upstream, falling back to origin when the branch tracks nothing, and report without attempting when neither exists.
+    - Run git push <remote> HEAD, so a branch with no upstream is pushed under its own name without writing tracking configuration into the developer's repository as a side effect of planning.
+    - Replace os.execvp in scripts/l5-plan with a subprocess call that inherits stdin, stdout and stderr, keeping the argument list byte for byte what the exec passed.
+    - Take the snapshot before the session starts and read the difference after it ends, so the artifact is identified by having appeared rather than by name.
+    - Handle the session ending by interrupt the same as any other end - the artifact already on disk is committed and the script exits 130 - so a Ctrl-C does not silently discard a written plan.
+    - Build the commit subject from the story id in the filename, adding the title read through the existing story parse when it can be read, and falling back to the id alone on any parse failure.
+    - Exit with the session's own status when it is non-zero, and with a non-zero status of its own when the commit succeeded but the push did not, so a failed push is loud without unwinding anything.
+    - Replace step 5 of prompts/planner.md with a statement that the harness commits and pushes the approved artifact after the session ends, keeping the surrounding process steps and the rest of the template unchanged.
+  likely_file_changes:
+    - file: orchestration/plan_commit.py
+      stage: implementer
+      reason: New module holding the snapshot, the commit of exactly the new artifacts, the push and its remote resolution.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Replaces the terminal os.execvp with a child process it can outlive, and wires the new module around the session.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Step 5 stops asking the planner to commit and states that the harness does it, so one act has one mechanism.
+    - file: tests/test_story_023_validation.py
+      stage: tester
+      reason: Independent validation - the commit and its contents with a dirty tree present, the no-artifact case, the push and its two failure modes, exit-status propagation, and the interrupt case, driven by a stub claude on PATH and a bare repository as the remote.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that l5-plan no longer ends in exec, what it commits and pushes and what it does not, and that story-021's assumption about the artifact being committed now holds deterministically.
+
+scope:
+  modify:
+    - scripts/l5-plan
+    - orchestration/plan_commit.py
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - scripts/l5-run
+    - scripts/l5-init
+    - scripts/l5-assist
+    - scripts/l5-status
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/assist.md
+    - prompts/harness-layer.md
+    - schemas/
+    - workflows/
+    - .harness/stories/
+    - .harness/config.yaml
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm by running a planning session with a stub claude whose prompt says nothing about committing, that the artifact it writes is committed - the commit is made by the script, not by an agent.
+  - Confirm the commit contains exactly that one file, with unrelated uncommitted changes present in the tree during the session, and that those changes are still uncommitted afterwards.
+  - Confirm by search that no git add -A, and no staging of a path outside the new artifacts, exists in the code this story adds.
+  - Confirm a session producing no new artifact commits nothing, pushes nothing, and says so, by the absence of a new commit rather than by the message alone.
+  - Confirm a session that only edits an existing artifact likewise commits nothing.
+  - Confirm the commit happens on a session that wrote an artifact and exited non-zero, which is what distinguishes deciding from the disk rather than from the exit status.
+  - Confirm the push reaches a bare repository used as the remote, both when the branch has an upstream and when it has none.
+  - Confirm both push failures - no remote configured, and a rejected push - leave the commit present and reachable, report the failure naming the remote and branch, and change nothing else in the repository.
+  - Confirm an unparseable artifact is still committed, with the fallback subject.
+  - Confirm the interactive behaviour under a pty - the session's exit status becomes the script's, and a SIGINT ends the session, commits an artifact already written, and exits 130.
+  - Confirm prompts/planner.md no longer instructs the planner to commit, and that no other prompt or script does either.
+  - Confirm everything l5-plan did before the exec is unchanged, by comparing the arguments and the rendered prompt against what the script passed before this story.
+  - Confirm the full suite passes, in the working tree and in the clean clone.
+  - Any assertion this story adds about an absence must carry a negative control demonstrating it can fail.
+  - Terminal resize behaviour under the new process model is confirmed by the developer by hand and is not asserted by a test, because a test of it here would assert something it cannot observe. Say so rather than claiming it was verified.
+
+constraints:
+  - Do not validate the story artifact. That is 11-plan-time-validation.md and story-018; this story commits whatever the session wrote, parseable or not.
+  - Do not change the clean-tree pre-flight or anything else story-021 defines. This story makes that story's assumption true and does not change its behaviour.
+  - Do not choose, create or switch branches. The script commits on whatever branch the developer is on, as the planner does today.
+  - Do not change the process model of l5-run, l5-status, l5-assist or l5-init.
+  - Do not use git add -A, and do not stage any path other than the artifacts the session added.
+  - Do not roll back, amend or reset the commit when the push fails. The artifact being local is the situation today, so falling back to it is no worse than the status quo; refusing or unwinding would be worse.
+  - Do not treat a session that produced no artifact as a failure. Committing nothing and saying so is the correct outcome.
+  - Do not leave two mechanisms for one act. If the script commits, the prompt must not also ask the planner to.
+  - Do not change the arguments passed to claude, the rendered planner prompt, or any of the target-root, config, workflow and rules loading that precedes the session.
+  - Do not put the commit, push or snapshot logic in scripts/l5-plan itself. Scripts are thin entry points; the logic belongs in orchestration.
+  - Do not add a flag, environment variable or configuration key to skip the commit or the push.
+  - No test may be weakened or skipped, and an existing test that goes red on landing is repointed rather than relaxed.
