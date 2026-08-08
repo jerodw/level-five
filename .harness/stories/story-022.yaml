@@ -1,0 +1,146 @@
+story:
+  id: story-022
+  title: A stage's required outputs must be written by the attempt that ran
+  description: |
+    After a stage runs, the coordinator checks that its declared outputs
+    exist. It does not check that the stage just wrote them. The check is
+    missing = [out for out in stage.get("outputs", []) if not (run_dir /
+    out).is_file()] - presence only - so on a retry a required artifact left
+    at the run-directory root by a superseded attempt satisfies it silently,
+    and the run finishes carrying a record of an attempt that no longer
+    describes it.
+
+    Observed, not hypothetical. story-020's shipped test-results.json records
+    status "failed", 927 run, 923 passed, 4 failed, on a run whose
+    verification-result.json and clean-clone-result.json both record 930
+    passed, 0 failed, exit code 0. The write times settle it: test-results.json
+    at 13:54 is attempt 1's tester (13:39-13:54), while attempt 2's tester ran
+    14:22-14:26 and left it untouched. It is intermittent rather than
+    consistent, which is worse - story-012 also retried and its
+    test-results.json is current, so a reader cannot tell from the artifact
+    which attempt it describes, and nothing in the run directory says.
+
+    It matters more than a stale file usually would. test-results.json is the
+    tester's verdict, and a reader reaching for "did the tests pass" reaches
+    for it before the verifier's prose. It also weakens retry-history.json and
+    execution-history.json, whose entries name the artifacts a stage produced:
+    an entry naming test-results.json for attempt 2 points at attempt 1's
+    content.
+
+    The harness already knows this, in writing, in the same file.
+    artifact_signatures's docstring states that presence is a useless test of
+    whether this attempt wrote a file, that a before/after signature is the
+    test that holds, and that it names no artifact because the caller passes
+    whichever the loaded workflow declares. story-012 wrote that for
+    retry-guidance.json and applied it to conditional artifacts only. Every
+    word of it is true of required outputs, and nothing about the reasoning was
+    specific to the conditional set. So this story introduces no new concept
+    and adds no second comparison: it widens the set the existing pre-stage
+    snapshot covers and reads the result where missing is checked today.
+
+    A stale required output escalates, and the escalation is provisional. Under
+    the settled retry-routing contract this is a mechanical failure, and
+    mechanical failures self-route - the failed stage runs again in place,
+    bounded by that stage's own ceiling. That mechanism does not exist yet, and
+    inventing it here would need an attempt number that retry_count cannot
+    supply: incrementing it names a run in which only one stage re-ran and
+    makes attempts/attempt-N/ archive a set no single attempt produced, while
+    not incrementing it overwrites prompt-<stage>-attempt-N.md, destroying
+    exactly the evidence this story protects. A second counter is one fact in
+    two places. So escalation is the answer that invents nothing rather than
+    the better outcome, recovery already exists one level up in resume, and the
+    detection is written so that changing its destination later is a routing
+    change rather than a rewrite.
+
+    The reason names a stale artifact as a previous attempt's rather than as
+    missing. The two look identical to anyone reading the run directory
+    afterwards, and that indistinguishability is what let story-020's shipped
+    record survive unnoticed.
+
+tasks:
+  - Read the artifacts a stage is required to produce off the loaded workflow definition, the way conditional_artifacts already reads the ones it may produce - the stage's outputs plus its changed_files record, with no artifact name written in orchestration code.
+  - Widen the snapshot taken immediately before a stage agent is invoked to cover those required artifacts alongside the conditional ones it already covers, as one snapshot feeding one comparison function.
+  - Decide, where missing is checked today, that a required artifact present but unchanged since that snapshot was taken was not written by this attempt, and escalate.
+  - Word the escalation so it says the named artifacts are a previous attempt's and distinguishes that from an artifact that is absent, in both events.log and escalation-summary.md.
+  - Keep the detection separate from where it routes, so the retry-routing story changes a destination rather than rewriting the check.
+  - Record in the architecture document that the freshness test generalizes from conditional artifacts to required ones, what the signature does and does not catch, and that the escalation destination is provisional.
+
+acceptance_criteria:
+  - A stage that runs on a retry and leaves a required output untouched escalates, and the run does not advance past that stage.
+  - The escalation reason names the stale artifacts and says they are a previous attempt's, not that they are missing, in events.log and in escalation-summary.md.
+  - An escalation for a stale required output leaves retry_count unchanged, so the rendered prompt filenames and the attempts/attempt-N/ directory names are untouched by it.
+  - A required artifact that is genuinely absent still escalates with the existing missing-artifacts reason, which stays distinguishable from the stale one.
+  - A first attempt is unaffected - an artifact absent before the stage and present after is a fresh write, because an artifact that does not exist has no signature entry.
+  - A stage that rewrites a required output with byte-identical content is not flagged, because the signature is (mtime_ns, size) and a rewrite moves the modification time.
+  - The check applies to every stage's own required artifacts, read off that stage's declaration, with no stage name and no artifact name appearing in orchestration code.
+  - A workflow declaring an output the shipped one does not is covered with no change to orchestration code.
+  - Exactly one signature snapshot is taken per stage invocation and exactly one comparison function reads it; no second before/after comparison is added.
+  - Conditional artifacts behave exactly as they do today - retry-history.json's guidance field, and the artifacts named on a retry, are unchanged, by the tests story-012 already wrote.
+  - A run in which every stage writes its outputs is unaffected in every observable way - same artifacts, same events, same routing, same commit.
+  - The full test suite passes, in the working tree and in a clean clone.
+
+technical_plan:
+  implementation_steps:
+    - Add required_artifacts(stage) beside conditional_artifacts(stage), returning the stage's outputs plus its changed_files record, sorted, reading the same places the coordinator already reads artifact names from.
+    - Widen the pre-stage snapshot in run_story to cover the union of that stage's conditional and required artifacts in one dict. artifacts_written_since already narrows by the name list its caller passes, so the two existing conditional call sites read the same dict unchanged.
+    - Add a small helper that returns the required artifacts present but unchanged since the snapshot, and call it at the point missing is checked, after the missing case so an absent artifact keeps its own reason.
+    - Escalate through the existing _escalate, which does not touch retry_count, matching the ownership and revert-check refusals it sits beside.
+    - Word the reason to name the stale artifacts and state they are a previous attempt's; keep the missing reason as it is.
+    - Leave the conditional-artifact handling, the archive, prompt rendering and every routing decision alone.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: required_artifacts, the widened snapshot, the staleness helper and the escalation at the point missing is checked.
+    - file: tests/test_story_022_validation.py
+      stage: tester
+      reason: Independent validation of the stale retry case and its control, the first attempt, the identical-content rewrite, the missing-versus-stale distinction, retry_count and the evidence filenames being untouched, and conditional artifacts still behaving as story-012 asserts.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the freshness test generalizes from conditional to required artifacts, what the signature catches and what it deliberately does not, that the escalation does not consume an attempt number, and that its destination is provisional pending retry routing.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/
+    - workflows/
+    - schemas/
+    - prompts/
+    - scripts/
+    - orchestration/context_assembler.py
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .harness/config.yaml
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm the defect and the fix with a positive and a negative control against this implementation - a fake runner that skips one required write on its second call escalates, and the same fixture that does write completes. Do not resolve a coordinator implementation out of git history to demonstrate the before state; no module under tests/ does that any longer, and the control pair carries the same non-vacuity guarantee.
+  - Confirm the escalation reason distinguishes a stale artifact from a missing one, by asserting on both reasons rather than on the presence of one.
+  - Confirm retry_count, the rendered prompt filenames and the attempts/attempt-N/ directories are exactly what they were before the escalation, since an escalation that quietly consumed an attempt number would be the failure this story's design rejects.
+  - Confirm a first attempt is unaffected, as the common path, and that the case is exercised rather than argued.
+  - Confirm the identical-content rewrite is not flagged, which is the false-positive case a reader will raise as "the tester re-ran and its results were the same".
+  - Confirm the coverage comes off the loaded workflow by driving a run against a workflow definition the repository does not ship, the way the archive's coverage is proven.
+  - Confirm exactly one snapshot and one comparison exist, by reading the code as well as by behaviour.
+  - Confirm conditional artifacts are untouched by re-running story-012's assertions unchanged.
+  - Confirm a run whose stages all write their outputs produces the same artifacts, events and routing it did before.
+  - Confirm the full suite passes, in the working tree and in the clean clone.
+  - Any assertion this story adds about an absence must carry a negative control demonstrating it can fail.
+
+constraints:
+  - Do not fix this by telling a stage to rewrite its outputs. Prompt guidance is the mechanism that has failed repeatedly here, and the check is deterministic.
+  - Do not add a second before/after comparison. The snapshot and artifacts_written_since already exist; this story widens what the snapshot covers and adds a reader, nothing else.
+  - Do not change how conditional artifacts are handled. That mechanism works and story-012's tests hold it.
+  - Do not change the attempts/attempt-N/ archive, which correctly preserved attempt 1's copy in the run that produced this defect.
+  - Do not increment retry_count on this escalation, and do not add a second counter, a new RunState field or a new retry axis. Incrementing names a run in which only one stage re-ran; a second counter is one fact in two places.
+  - Do not implement stage-local re-invocation or any form of self-routing here. The destination is provisional and belongs to the retry-routing story; this story makes the stale case detectable at all, which is what routing has nothing to route on without.
+  - Do not change what any stage is asked to produce - no new output, no new artifact, no new schema, no schema change and no workflow declaration.
+  - Do not re-run or re-verify story-020, whose work is verified twice over by fresh evidence - the verifier's own suite run and the clean-clone check.
+  - This story's own run is not governed by the check it adds. The coordinator process imports its module at start, so the running coordinator carries the old check; enforcement begins with the next run. Expected, as it was for may_not_create, clean_clone, revert_check and the pre-stage baseline, and not a defect.
+  - No test may be weakened or skipped, and an existing test that goes red on landing is repointed rather than relaxed.
