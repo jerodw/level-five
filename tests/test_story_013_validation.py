@@ -129,6 +129,39 @@ def _blob(revision: str, rel: str) -> str:
     ).stdout
 
 
+def _endpoint_listing(directory: str) -> set[str]:
+    """The file names one directory held when this story finished.
+
+    Its own run commit once the story is committed, and the working tree while
+    it is still in flight. A later story that legitimately adds a file to the
+    same directory changes the working tree but not this story's endpoint, so
+    an assertion about what *this* story did stays bounded at both ends.
+    """
+    endpoint = story_commit_range(Path(__file__)).endpoint
+    if endpoint is None:
+        return {path.name for path in (REPO_ROOT / directory).iterdir()}
+    return _listing(endpoint, directory)
+
+
+def _endpoint_text(rel: str) -> str:
+    """One file's content when this story finished.
+
+    The endpoint counterpart of `_blob(_baseline(), rel)`, for the same reason
+    `_endpoint_listing` exists: comparing a baseline blob against today's
+    working tree asks what the repository looks like *now*, which a later
+    story changes without this story having done anything.
+    """
+    endpoint = story_commit_range(Path(__file__)).endpoint
+    if endpoint is None:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+    return _blob(endpoint, rel)
+
+
+def _schema_stems(names: set[str]) -> set[str]:
+    suffix = ".schema.json"
+    return {name[: -len(suffix)] for name in names if name.endswith(suffix)}
+
+
 def _listing(revision: str, directory: str) -> set[str]:
     """The file names one directory held at `revision`."""
     out = subprocess.run(
@@ -307,7 +340,12 @@ def test_the_search_finds_the_inventory_it_is_looking_for(tmp_path):
     before = _blob(_baseline(), "tests/test_schema_validator.py")
     hits = literal_inventories(before, "test_schema_validator.py")
     assert hits, "the pre-story file was expected to hold a literal inventory"
-    assert any(set(names) == set(SHIPPED) for _, names in hits), hits
+    # The inventory it held was the one that revision shipped, resolved from
+    # the same revision rather than from today's `SHIPPED` — a later story
+    # that adds a schema does not make this file's old copy wrong.
+    shipped_then = _schema_stems(_listing(_baseline(), "schemas"))
+    assert shipped_then
+    assert any(set(names) == shipped_then for _, names in hits), hits
 
     # And the file as it stands now holds none.
     after = (TESTS_DIR / "test_schema_validator.py").read_text(encoding="utf-8")
@@ -539,7 +577,7 @@ def test_no_schema_was_added_removed_or_edited_and_only_the_manifest_appeared():
     """Resolved by listing rather than by diff, so it holds both before and
     after the coordinator commits: a diff cannot see an untracked addition."""
     before = _listing(_baseline(), "schemas")
-    after = {path.name for path in SCHEMAS_DIR.iterdir()}
+    after = _endpoint_listing("schemas")
     assert {name for name in before if name.endswith(".schema.json")} == \
         {name for name in after if name.endswith(".schema.json")}
     assert after - before == {"manifest.json"}
@@ -608,12 +646,16 @@ def test_the_injected_placeholder_set_is_exactly_what_it_was():
     assert set(context) == expected
     assert "manifest_schema" not in context
 
-    # The set is unchanged from before the story: same schema files, so same
-    # placeholders. Resolved from history rather than restated here.
-    before = {name[: -len(".schema.json")].replace("-", "_") + "_schema"
-              for name in _listing(_baseline(), "schemas")
-              if name.endswith(".schema.json")}
-    assert set(context) == before
+    # The set is unchanged *by this story*: same schema files at both ends of
+    # its commit range, so same placeholders. Resolved from history rather
+    # than restated here, and bounded at the story's own endpoint so a later
+    # story that ships a schema is not reported as this story's doing.
+    def placeholders(names: set[str]) -> set[str]:
+        return {stem.replace("-", "_") + "_schema" for stem in _schema_stems(names)}
+
+    before = placeholders(_listing(_baseline(), "schemas"))
+    assert before
+    assert placeholders(_endpoint_listing("schemas")) == before
 
 
 def test_the_manifest_is_no_placeholder_because_of_its_name_not_by_luck(tmp_path):
@@ -661,11 +703,22 @@ def _functions(source: str) -> dict[str, str]:
 
 def test_the_implementer_created_no_file_under_tests():
     """The only file this story adds under `tests/` is this one, written by
-    the tester stage. Listing, not diff, so an untracked addition is seen."""
-    before = _listing(_baseline(), "tests")
-    after = {path.name for path in TESTS_DIR.glob("*.py")}
+    the tester stage. Listing, not diff, so an untracked addition is seen.
+
+    The "after" side is this story's own endpoint rather than today's working
+    tree: a later story that legitimately adds its own validation file under
+    `tests/` moves the working tree and not this story's commit, and this
+    assertion is about what *this* story added.
+    """
+    before = _python_names(_listing(_baseline(), "tests"))
+    after = _python_names(_endpoint_listing("tests"))
+    assert before, "the pre-story revision was expected to hold test modules"
     assert after - before == {"test_story_013_validation.py"}
     assert before - after == set()
+
+
+def _python_names(names: set[str]) -> set[str]:
+    return {name for name in names if name.endswith(".py")}
 
 
 @pytest.mark.parametrize("rel", sorted(IMPLEMENTER_TEST_EDITS))
@@ -697,10 +750,18 @@ def test_the_implementer_changed_only_the_inventory_bound_assertions(rel):
 
 def test_every_file_differing_under_tests_is_accounted_for():
     """Three files the implementer edited, two the tester wrote. Anything
-    else changing under `tests/` is unexplained and this says so."""
+    else changing under `tests/` is unexplained and this says so.
+
+    Both ends are this story's own: the pre-story revision against this
+    story's endpoint. Read against today's working tree it would instead
+    report every file any later story touches, which is not what its name
+    asks.
+    """
+    names = _python_names(_endpoint_listing("tests"))
+    assert names, "the endpoint was expected to hold test modules"
     differing = set()
-    for path in sorted(TESTS_DIR.glob("*.py")):
-        rel = f"tests/{path.name}"
+    for name in sorted(names):
+        rel = f"tests/{name}"
         if rel in TESTER_TEST_EDITS:
             continue
         try:
@@ -708,7 +769,7 @@ def test_every_file_differing_under_tests_is_accounted_for():
         except subprocess.CalledProcessError:
             differing.add(rel)
             continue
-        if before != path.read_text(encoding="utf-8"):
+        if before != _endpoint_text(rel):
             differing.add(rel)
     assert differing == set(IMPLEMENTER_TEST_EDITS)
 

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "retry-history",
+  "description": "The backward-looking record of a run's retries: one entry per retry actually taken, naming the attempt that failed, why it failed, where execution was routed, and where that attempt's artifacts were archived. It is not retry-guidance.json, which tells the next attempt what to fix, and it is not the attempts/ archive, which holds the evidence itself. The file exists only for runs that retried; a run that never retries produces no empty file and no empty array. The coordinator writes it and does not validate its own write at run time; conformance is checked by the story's tests. History is evidence, never state: no routing decision reads it.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "description": "One retry that was taken. The guidance is optional because a retry can be routed without a verifier writing any — a clean-clone failure follows a passing verdict.",
+    "required": ["attempt", "blocking_issues", "retry_stage", "archive_directory"],
+    "properties": {
+      "attempt": {
+        "type": "integer",
+        "description": "The 1-based attempt this entry describes: the one that just failed, matching the attempts/attempt-N/ directory and the rendered prompts of the same attempt."
+      },
+      "blocking_issues": {
+        "type": "array",
+        "description": "The blocking issues as the verifier recorded them in that attempt's verification-result.json, field for field rather than in summary. Empty when the verdict carried none.",
+        "items": {
+          "type": "object",
+          "required": ["severity", "issue", "location", "required_behavior"],
+          "properties": {
+            "severity": {
+              "type": "string",
+              "description": "How badly the finding blocks acceptance.",
+              "enum": ["high", "medium", "low"]
+            },
+            "issue": {
+              "type": "string",
+              "description": "What failed."
+            },
+            "location": {
+              "type": "string",
+              "description": "File or area the finding applies to."
+            },
+            "required_behavior": {
+              "type": "string",
+              "description": "What must be true for the finding to clear."
+            }
+          }
+        }
+      },
+      "retry_stage": {
+        "type": "string",
+        "description": "The workflow stage execution was rerouted to, taken from the failing stage's on_failure block."
+      },
+      "archive_directory": {
+        "type": "string",
+        "description": "Run-directory-relative path of the attempts/attempt-N/ directory holding that attempt's archived artifacts."
+      },
+      "guidance": {
+        "type": "object",
+        "description": "The retry-guidance.json written for the following attempt, as it stood when the retry was routed. Absent when no guidance was written.",
+        "properties": {
+          "current_focus": {
+            "type": "array",
+            "description": "The specific things the retry must fix.",
+            "items": { "type": "string" }
+          },
+          "preserve_behavior": {
+            "type": "array",
+            "description": "Accepted behavior the retry must not change.",
+            "items": { "type": "string" }
+          },
+          "retry_scope": {
+            "type": "array",
+            "description": "Files or areas the retry may modify.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -4,6 +4,7 @@
     "clean-clone-result",
     "execution-history",
     "retry-guidance",
+    "retry-history",
     "story",
     "test-results",
     "verification-result"
