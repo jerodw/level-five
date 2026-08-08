@@ -803,7 +803,22 @@ def test_the_scope_assertion_above_can_fail(tmp_path):
 
 
 def test_the_archived_story_013_copy_was_not_restored_or_edited():
-    assert not (TESTS_DIR / "test_story_013_validation.py").exists()
+    """Held by content rather than by the path's absence.
+
+    This was written as `not (TESTS_DIR / "test_story_013_validation.py")
+    .exists()` while story-013 was reset and awaiting a re-run. That re-run
+    has since landed and legitimately writes that path, so the absence form
+    asserted something this story never meant: the property is that the
+    *archived vacuous copy* was not put back, not that story-013 may never
+    have validation again. Comparing content says the same thing and keeps
+    saying it after the re-run.
+    """
+    archived = ARCHIVED_INSTANCE.read_text(encoding="utf-8")
+    for path in sorted(TESTS_DIR.glob("*.py")):
+        assert path.read_text(encoding="utf-8") != archived, path.name
+    # The comparison is against a genuinely vacuous subject: this story's own
+    # check still flags it.
+    assert check.flagged_calls(archived, ARCHIVED_INSTANCE.name)
     assert ARCHIVED_INSTANCE.is_file()
     assert story_diff([str(ARCHIVED_INSTANCE.relative_to(REPO_ROOT))],
                       validation_file=Path(__file__)).strip() == ""

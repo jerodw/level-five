@@ -9,19 +9,9 @@ import pytest
 
 import schema_validator
 
-SHIPPED = (
-    "changed-files",
-    "test-results",
-    "verification-result",
-    "retry-guidance",
-    "story",
-    # Coordinator-written rather than stage-written, so no workflow stage maps
-    # to it; it is shipped and validator-checked like every other schema.
-    "execution-history",
-    # story-014: the coordinator's clean-clone record, coordinator-written for
-    # the same reason. The inventory below stays exact.
-    "clean-clone-result",
-)
+# story-013: the inventory is declared in schemas/manifest.json, beside the
+# schemas it names. This file is where it is *checked*, not where it lives.
+SHIPPED = schema_validator.shipped_schemas()
 
 OBJECT_SCHEMA = {
     "type": "object",
@@ -139,8 +129,13 @@ def test_unknown_type_name_raises():
 
 
 def test_shipped_schemas_are_exactly_the_named_ones():
-    names = sorted(p.name for p in schema_validator.schemas_dir().glob("*"))
+    directory = schema_validator.schemas_dir()
+    names = sorted(p.name for p in directory.glob("*.schema.json"))
     assert names == sorted(f"{name}.schema.json" for name in SHIPPED)
+    # The narrowed glob would ignore a stray file the old glob("*") caught,
+    # so the directory itself still holds nothing but schemas and the manifest.
+    present = sorted(p.name for p in directory.iterdir())
+    assert present == sorted(names + [schema_validator.MANIFEST_NAME])
 
 
 @pytest.mark.parametrize("name", SHIPPED)

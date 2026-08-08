@@ -1,0 +1,11 @@
+{
+  "schemas": [
+    "changed-files",
+    "clean-clone-result",
+    "execution-history",
+    "retry-guidance",
+    "story",
+    "test-results",
+    "verification-result"
+  ]
+}

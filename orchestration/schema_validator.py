@@ -23,6 +23,10 @@ from pathlib import Path
 # module rather than to a caller-supplied root.
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 
+# The declared inventory of shipped schemas, beside the schemas it names.
+MANIFEST_NAME = "manifest.json"
+MANIFEST_KEY = "schemas"
+
 SUPPORTED_KEYWORDS = frozenset({"type", "required", "properties", "items", "enum"})
 
 # Annotations carry no constraint, so ignoring them ignores nothing.
@@ -47,6 +51,35 @@ def load_schema(name: str, harness_root: Path | None = None) -> dict:
     """Read schemas/<name>.schema.json. Missing or malformed schemas raise."""
     path = schemas_dir(harness_root) / f"{name}.schema.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def shipped_schemas(harness_root: Path | None = None) -> tuple[str, ...]:
+    """The declared inventory of schema names, read from schemas/manifest.json.
+
+    The manifest is the single source of truth for what the harness ships;
+    the tests that assert set equality against the directory are the check,
+    not the declaration. A missing or malformed manifest raises rather than
+    degrading to an empty or partial inventory, which would silently widen
+    what an inventory test accepts.
+    """
+    path = schemas_dir(harness_root) / MANIFEST_NAME
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"{path} could not be read: {error}") from error
+    try:
+        manifest = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path} is not parseable as JSON: {error}") from error
+    if not isinstance(manifest, dict):
+        raise ValueError(f"{path}: expected an object, found {type(manifest).__name__}")
+    names = manifest.get(MANIFEST_KEY)
+    if not isinstance(names, list) or not names:
+        raise ValueError(f"{path}: {MANIFEST_KEY!r} must be a non-empty array of names")
+    for name in names:
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{path}: every entry of {MANIFEST_KEY!r} must be a name")
+    return tuple(names)
 
 
 def unsupported_keywords(schema: dict) -> list[str]:
