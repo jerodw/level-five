@@ -112,12 +112,53 @@ def _names_the_repository_root(node: ast.AST) -> bool:
     )
 
 
-def _is_subprocess_call(node: ast.Call) -> bool:
+#: The call names that spawn a process. Matched on the name alone, never on
+#: what it is qualified by: `subprocess.run`, `sp.run` under an aliased
+#: import, and a bare `run` under `from subprocess import run` are the same
+#: call, and requiring the module to be spelled a particular way made the
+#: check evadable by an import statement. What identifies these calls is the
+#: literal "git" at the head of their argument list, which _git_argument_list
+#: already insists on, so matching the tail loses nothing.
+SPAWNING_CALLS = ("run", "check_output", "Popen", "call", "check_call")
+
+
+def _imported_spawners(tree: ast.Module) -> frozenset[str]:
+    """Names this module bound directly from `subprocess`.
+
+    Read off the import statements, which is a fact stated in the source, not
+    a value anything has to resolve. `from subprocess import run` binds `run`;
+    `from subprocess import run as sh` binds `sh`.
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            names.update(alias.asname or alias.name for alias in node.names
+                         if alias.name in SPAWNING_CALLS)
+    return frozenset(names)
+
+
+def _is_subprocess_call(node: ast.Call, imported: frozenset[str]) -> bool:
+    """Whether this call spawns a process, however subprocess was imported.
+
+    Two forms, and the asymmetry between them is deliberate.
+
+    A qualified call matches on the attribute alone, whatever qualifies it:
+    `subprocess.run` and `sp.run` under an aliased import are the same call,
+    and requiring the module to be spelled one way made the check evadable by
+    an import statement.
+
+    A bare call matches only when the module imported that name from
+    `subprocess`. Matching every bare `run(...)` would flag the legitimate
+    `run = functools.partial(subprocess.run, cwd=root)` idiom, where the
+    target *is* declared — one line above the call. Chasing that binding
+    means following assignments, and this check does not evaluate or track
+    values; it reads what the source states. Imports are stated. A local
+    rebinding is not, and is left uncovered rather than guessed at.
+    """
     func = node.func
-    return (isinstance(func, ast.Attribute)
-            and func.attr in ("run", "check_output")
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "subprocess")
+    if isinstance(func, ast.Attribute):
+        return func.attr in SPAWNING_CALLS
+    return isinstance(func, ast.Name) and func.id in imported
 
 
 def _git_argument_list(node: ast.Call) -> list[ast.expr] | None:
@@ -199,8 +240,10 @@ def flagged_calls(source: str, module: str) -> list[Flag]:
     same function the live suite is held to.
     """
     flags = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call) or not _is_subprocess_call(node):
+    tree = ast.parse(source)
+    imported = _imported_spawners(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_subprocess_call(node, imported):
             continue
         elements = _git_argument_list(node)
         if elements is None or not _targets_the_repository_root(node, elements):
@@ -225,8 +268,10 @@ def undeclared_targets(source: str, module: str) -> list[Flag]:
     nowhere that leaving the target unsaid is correct.
     """
     flags = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call) or not _is_subprocess_call(node):
+    tree = ast.parse(source)
+    imported = _imported_spawners(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_subprocess_call(node, imported):
             continue
         elements = _git_argument_list(node)
         if elements is None or _declared_target(node, elements) is not None:
@@ -312,6 +357,51 @@ def test_an_undeclared_target_is_flagged_whatever_the_call_asks_for():
 
     declared = "import subprocess\nsubprocess.run(['git', 'status'], cwd=tmp)\n"
     assert undeclared_targets(declared, "probe.py") == []
+
+
+@pytest.mark.parametrize("source", [
+    pytest.param("import subprocess\nsubprocess.run(['git', 'diff', 'HEAD'])\n",
+                 id="plain-import"),
+    pytest.param("import subprocess as sp\nsp.run(['git', 'diff', 'HEAD'])\n",
+                 id="aliased-module"),
+    pytest.param("from subprocess import run\nrun(['git', 'diff', 'HEAD'])\n",
+                 id="imported-name"),
+    pytest.param("from subprocess import run as sh\nsh(['git', 'diff', 'HEAD'])\n",
+                 id="imported-name-aliased"),
+    pytest.param("import subprocess\nsubprocess.check_output(['git', 'diff', 'HEAD'])\n",
+                 id="check_output"),
+    pytest.param("import subprocess\nsubprocess.Popen(['git', 'diff', 'HEAD'])\n",
+                 id="popen"),
+])
+def test_the_spawn_is_recognized_however_subprocess_was_imported(source):
+    """An import statement must not be able to hide a call from the check.
+
+    Matching only `subprocess.run` meant renaming the import was enough to
+    disappear; every form below spawns the same process.
+    """
+    assert len(flagged_calls(source, "probe.py")) == 1
+    assert len(undeclared_targets(source, "probe.py")) == 1
+
+
+def test_a_partial_bound_runner_is_not_flagged():
+    """The target is declared on the partial, one line above the call.
+
+    Reading it would mean following an assignment, and this check does not
+    track values. `tests/test_story_016_validation.py` uses this idiom, so the
+    case is real rather than hypothetical — and treating a bare `run(...)` as
+    a spawn regardless of imports would flag it wrongly.
+    """
+    source = ("import functools, subprocess\n"
+              "run = functools.partial(subprocess.run, cwd=root)\n"
+              "run(['git', 'diff', 'HEAD'])\n")
+    assert undeclared_targets(source, "probe.py") == []
+    assert flagged_calls(source, "probe.py") == []
+
+    # The same module *also* importing run from subprocess binds the name, and
+    # then the call is a spawn by the module's own declaration.
+    declared = ("from subprocess import run\n"
+                "run(['git', 'diff', 'HEAD'])\n")
+    assert len(undeclared_targets(declared, "probe.py")) == 1
 
 
 def test_an_undeclared_target_carrying_head_is_caught_by_both_rules():
