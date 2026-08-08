@@ -304,6 +304,116 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
     return archived
 
 
+def conditional_artifacts(stage: dict) -> list[str]:
+    """The artifacts a stage may write but is not required to.
+
+    Read off the loaded workflow the way every other artifact name the
+    coordinator handles is: a stage's schemas map names everything it may
+    write, its outputs name what it must write, and its changed_files record
+    is required too, so what remains is exactly the conditional set —
+    the verifier's retry guidance, written only on a failing verdict. Naming
+    it here instead would put an artifact name in orchestration code and give
+    the harness a second place to change when the workflow changes.
+    """
+    required = set(stage.get("outputs", []))
+    record = stage.get("changed_files")
+    if record:
+        required.add(record)
+    return sorted(set(stage.get("schemas", {})) - required)
+
+
+def artifact_signatures(run_dir: Path, artifacts: list[str]) -> dict[str, tuple]:
+    """What the named artifacts looked like at this moment, for comparison.
+
+    A conditional artifact is not cleared between attempts: the retry guidance
+    an attempt writes stays at the run-directory root, where the next
+    implementer's context reads it. That makes "the file is present" a useless
+    test of whether *this* attempt wrote it. Taking a signature before the
+    stage runs and comparing after is the test that holds, and it names no
+    artifact — the caller passes whichever the loaded workflow declares.
+
+    An artifact that does not exist has no entry, so its later presence is
+    itself a change.
+    """
+    signatures = {}
+    for artifact in artifacts:
+        path = run_dir / artifact
+        if path.is_file():
+            stat = path.stat()
+            signatures[artifact] = (stat.st_mtime_ns, stat.st_size)
+    return signatures
+
+
+def artifacts_written_since(
+    run_dir: Path, artifacts: list[str], before: dict[str, tuple]
+) -> list[str]:
+    """Which of the named artifacts were written after `before` was taken."""
+    now = artifact_signatures(run_dir, artifacts)
+    return [name for name, signature in now.items() if before.get(name) != signature]
+
+
+def _retry_record_file(run_dir: Path) -> Path:
+    return run_dir / "retry-history.json"
+
+
+def load_retry_records(run_dir: Path) -> list[dict]:
+    """The retries recorded so far, empty before the first one is taken."""
+    path = _retry_record_file(run_dir)
+    if not path.is_file():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def append_retry_record(
+    run_dir: Path,
+    attempt: int,
+    retry_stage: str,
+    verdict: dict,
+    guidance_artifacts: list[str],
+) -> dict:
+    """Record one retry that was taken, and return the entry appended.
+
+    The verifier's guidance looks forward — it tells the next attempt what to
+    fix. This looks backward: what the attempt that just ended tried, why it
+    failed, where execution went, and where that attempt's own artifacts were
+    archived. Neither absorbs the other, and neither replaces
+    attempts/attempt-N/, which holds the evidence itself; an entry references
+    that directory rather than copying its contents.
+
+    Everything an entry needs is in hand at the retry decision point. The
+    blocking issues are carried as the verifier recorded them, field for
+    field, rather than summarized. The guidance comes from `guidance_artifacts`,
+    which the caller has already narrowed to what *this* attempt wrote — a
+    conditional artifact is never cleared from the run root, so an attempt that
+    wrote none would otherwise inherit an earlier attempt's. It is omitted when
+    the attempt produced none — a clean-clone failure reroutes after a passing
+    verdict, which writes no guidance at all — following the
+    optional-by-absence convention the history schema already uses.
+
+    The file is created here, at the first retry, and never in advance: a run
+    that never retries has no such file, so the absence is itself evidence.
+    History is evidence, never state — nothing read back here routes anything.
+    """
+    entry: dict = {
+        "attempt": attempt,
+        "blocking_issues": verdict.get("blocking_issues", []),
+        "retry_stage": retry_stage,
+        "archive_directory": f"attempts/attempt-{attempt}",
+    }
+    for artifact in guidance_artifacts:
+        path = run_dir / artifact
+        if path.is_file():
+            entry["guidance"] = json.loads(path.read_text(encoding="utf-8"))
+            break
+
+    records = load_retry_records(run_dir)
+    records.append(entry)
+    _retry_record_file(run_dir).write_text(
+        json.dumps(records, indent=2) + "\n", encoding="utf-8"
+    )
+    return entry
+
+
 # --------------------------------------------------------------------------
 # The clean-clone check
 #
@@ -801,6 +911,12 @@ def run_story(
         attempt = state.retry_count + 1
         (run_dir / f"prompt-{name}-attempt-{attempt}.md").write_text(prompt, encoding="utf-8")
 
+        # What the stage's conditional artifacts looked like before it ran, so
+        # a retry record can tell the guidance this attempt wrote from one an
+        # earlier attempt left at the run root.
+        conditional = conditional_artifacts(stage)
+        conditional_before = artifact_signatures(run_dir, conditional)
+
         result = runner(
             prompt,
             stage=name,
@@ -922,6 +1038,15 @@ def run_story(
                         archive_attempt(
                             run_dir, archivable_artifacts(stages), state.retry_count + 1
                         )
+                        append_retry_record(
+                            run_dir,
+                            state.retry_count + 1,
+                            stage["on_failure"]["retry_stage"],
+                            verdict,
+                            artifacts_written_since(
+                                run_dir, conditional, conditional_before
+                            ),
+                        )
                         state.retry_count += 1
                         save_state(run_dir, state)
                         _clean_clone_failed(
@@ -943,6 +1068,18 @@ def run_story(
                 # describe one attempt.
                 archive_attempt(
                     run_dir, archivable_artifacts(stages), state.retry_count + 1
+                )
+                # The backward-looking record of the attempt that just failed,
+                # appended on the path that actually reroutes and on neither
+                # escalation path, which take no retry. Above the increment for
+                # the same reason the archive is: state.retry_count + 1 names
+                # the attempt that ended, matching attempts/attempt-N/.
+                append_retry_record(
+                    run_dir,
+                    state.retry_count + 1,
+                    stage["on_failure"]["retry_stage"],
+                    verdict,
+                    artifacts_written_since(run_dir, conditional, conditional_before),
                 )
                 state.retry_count += 1
                 save_state(run_dir, state)
