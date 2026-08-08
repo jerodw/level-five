@@ -7,7 +7,10 @@
       "outputs": ["changed-files.json", "implementation-summary.md"],
       "changed_files": "changed-files.json",
       "may_not_create": ["tests/"],
-      "revert_check": "revert-check-result.json",
+      "revert_check": {
+        "result": "revert-check-result.json",
+        "baseline": "stage-baseline"
+      },
       "schemas": {
         "changed-files.json": "changed-files"
       }

@@ -511,7 +511,11 @@ def _interpreter_version(interpreter: Path) -> str | None:
 
 
 def _build_clone(
-    target_root: Path, clone: Path, *, revert: list[str] | tuple[str, ...] = ()
+    target_root: Path,
+    clone: Path,
+    *,
+    revert: list[str] | tuple[str, ...] = (),
+    baseline: Path | None = None,
 ) -> None:
     """Clone the target locally and commit its working tree into the clone.
 
@@ -526,11 +530,19 @@ def _build_clone(
     files _complete's `git add -A` would commit. The target repository is only
     read: every write happens inside the clone.
 
-    `revert` names repository-relative paths to restore from HEAD *inside the
-    clone*, after the working tree has been applied and before the commit, so
-    the clone holds every change the working tree carries except those. It
-    defaults to reverting nothing, which is the clean-clone check's behavior
-    and is unchanged by its existence.
+    `revert` names repository-relative paths to restore from `baseline`
+    *inside the clone*, after the working tree has been applied and before the
+    commit, so the clone holds every change the working tree carries except
+    those. It defaults to reverting nothing, which is the clean-clone check's
+    behavior and is unchanged by its existence.
+
+    The baseline is a directory of file copies taken before the stage ran, not
+    a revision: a path the baseline holds is restored to the content it held
+    then, and a governed path the baseline does not hold is *removed* from the
+    clone, because a path absent from the baseline did not exist when the
+    stage started. Nothing here reverts to HEAD — a file an earlier stage of
+    the same run created has no HEAD version, and its pre-stage state is
+    knowable all the same.
     """
     result = subprocess.run(
         ["git", "clone", "--quiet", "--no-hardlinks", str(target_root), str(clone)],
@@ -565,12 +577,18 @@ def _build_clone(
         shutil.copy2(source, destination)
 
     if revert:
-        reverted = _git(clone, "checkout", "HEAD", "--", *revert)
-        if reverted.returncode != 0:
+        if baseline is None or not baseline.is_dir():
             raise RuntimeError(
-                f"Could not revert {', '.join(revert)} from HEAD in {clone}: "
-                f"{reverted.stderr.strip()}"
+                f"Could not revert {', '.join(revert)} in {clone}: no captured "
+                f"baseline to restore them from ({baseline})"
             )
+        for rel in revert:
+            source, destination = baseline / rel, clone / rel
+            if source.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            elif destination.is_file():
+                destination.unlink()
 
     _git(clone, "add", "-A")
     commit = _git(
@@ -626,6 +644,7 @@ def run_clean_clone(
     clean_clone_python: str | None,
     destination: Path,
     revert: list[str] | tuple[str, ...] = (),
+    baseline: Path | None = None,
 ) -> CleanCloneResult:
     """Run the configured test command in a fresh clone with the story committed.
 
@@ -635,10 +654,11 @@ def run_clean_clone(
     oldest supported Python rather than whichever one the developer works in.
     The caller owns `destination` and removes it whatever the result.
 
-    This is the single build-a-clone-and-run-the-suite path. `revert` is passed
-    through to the clone builder and defaults to reverting nothing, so the
-    clean-clone check runs exactly as it did; the revert check is this same
-    operation with the governed paths restored from HEAD rather than applied.
+    This is the single build-a-clone-and-run-the-suite path. `revert` and the
+    `baseline` it is restored from are passed through to the clone builder and
+    default to reverting nothing, so the clean-clone check runs exactly as it
+    did; the revert check is this same operation with the governed paths
+    restored to the state the stage found them in rather than applied.
     """
     argv = shlex.split(test_command)
     interpreter = clean_clone_python or argv[0]
@@ -657,7 +677,7 @@ def run_clean_clone(
         )
 
     clone = destination / "clone"
-    _build_clone(target_root, clone, revert=revert)
+    _build_clone(target_root, clone, revert=revert, baseline=baseline)
     _link_interpreter_roots(target_root, clone, [argv[0], interpreter])
 
     result = subprocess.run(
@@ -777,12 +797,83 @@ def _clean_clone_failures(output: str) -> str:
 #
 # So an edit under a prefix the stage declared it may not create is permitted
 # iff reverting it makes the suite fail. This is the clean-clone operation with
-# the governed paths restored from HEAD rather than applied.
+# the governed paths restored to the state the stage found them in rather than
+# applied.
+#
+# The state the stage found them in, not HEAD. HEAD is the right baseline only
+# for files that existed before the story: on a retry the implementer routinely
+# repairs a test the tester wrote earlier in the same run, a file with no
+# version at HEAD because the coordinator commits once, at _complete. The
+# pre-stage content of every governed prefix is therefore captured before the
+# stage agent is invoked, and the check restores from that.
 #
 # Granularity. The check reverts every governed path in one run and decides on
 # that one result — see the module docstring, which states plainly what that
 # does not catch.
 # --------------------------------------------------------------------------
+
+
+def stage_baseline_dir(
+    run_dir: Path, baseline: str, stage_name: str, attempt: int
+) -> Path:
+    """Where one stage's pre-stage content for one attempt is kept.
+
+    The directory name comes off the loaded workflow declaration; only the
+    keying by stage and attempt is written here, and it is the same attempt
+    number the rendered prompt filename and `attempts/attempt-N/` use.
+    """
+    return run_dir / baseline / f"{stage_name}-attempt-{attempt}"
+
+
+def capture_stage_baseline(
+    run_dir: Path,
+    target_root: Path,
+    baseline: str,
+    stage_name: str,
+    attempt: int,
+    prefixes: list[str],
+) -> Path:
+    """Record what the tree held under a stage's governed prefixes before it ran.
+
+    The file set is `git ls-files --cached --others --exclude-standard` under
+    each prefix — the same tracked-plus-untracked set `_build_clone` carries
+    into a clone — so a file an earlier stage of this run created and never
+    committed is captured. Tracked files alone would miss exactly that file,
+    which is the whole reason this exists.
+
+    Capture once, reuse afterwards: a directory already recorded for this stage
+    and attempt is returned untouched, so a re-entered stage is decided against
+    the state it originally found rather than against its own completed edits.
+    The directory is created even when it captures nothing, so its existence
+    answers "was a baseline taken" and its absence is a distinct, reportable
+    condition rather than an empty capture.
+
+    It names no stage and no prefix: both come from the loaded workflow. The
+    result is evidence — nothing routes on it, and it is not in state.json.
+    """
+    directory = stage_baseline_dir(run_dir, baseline, stage_name, attempt)
+    if directory.exists():
+        return directory
+    directory.mkdir(parents=True)
+    for prefix in prefixes:
+        listed = _git(
+            target_root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            prefix,
+        ).stdout
+        for rel in filter(None, listed.split("\0")):
+            source = target_root / rel
+            if not source.is_file():
+                continue
+            destination = directory / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+    return directory
 
 
 @dataclass(frozen=True)
@@ -830,6 +921,7 @@ class RevertCheckResult:
     result: CleanCloneResult
     paths: tuple[str, ...]
     permitted: bool | None
+    baseline: str | None = None
 
     def as_record(self) -> dict:
         record = {"ran": self.result.ran, "paths": list(self.paths)}
@@ -838,6 +930,8 @@ class RevertCheckResult:
         )
         if self.permitted is not None:
             record["permitted"] = self.permitted
+        if self.baseline is not None:
+            record["baseline"] = self.baseline
         return record
 
 
@@ -847,6 +941,7 @@ def revert_check(
     config: dict,
     artifact: str,
     paths: tuple[str, ...],
+    baseline: Path | None = None,
 ) -> RevertCheckResult:
     """Run the suite once with every governed path reverted, and record it.
 
@@ -856,34 +951,56 @@ def revert_check(
     the edits were needed, which is what makes them maintenance rather than
     authorship.
 
-    A clone that cannot be built at all (a governed path with no HEAD version,
-    say) is reported as a check that did not run, with the reason, rather than
-    as a permission.
+    The paths are restored to the content `baseline` holds for them, and a
+    governed path the baseline does not hold is deleted in the clone rather
+    than skipped: skipping decides nothing and would report a permission the
+    check never established.
+
+    Two things stop the check from running, and both are reported as a check
+    that did not run, with the reason, rather than as a permission: a stage
+    that declares the check with no baseline captured, and a clone that
+    cannot be built at all.
     """
-    scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
     command = config["test_command"]
-    try:
-        result = run_clean_clone(
-            target_root,
-            command,
-            config.get("clean_clone_python"),
-            scratch,
-            revert=list(paths),
-        )
-    except (RuntimeError, OSError) as error:
+    python = config.get("clean_clone_python") or shlex.split(command)[0]
+    resolved = baseline if baseline is not None and baseline.is_dir() else None
+
+    if resolved is None:
         result = CleanCloneResult(
             ran=False,
             command=command,
-            python=config.get("clean_clone_python") or shlex.split(command)[0],
-            reason=f"the clone with the edits reverted could not be built: {error}",
+            python=python,
+            reason=(
+                "no baseline was captured for the stage, so there is no state "
+                f"to revert the edits to: {baseline}"
+            ),
         )
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    else:
+        scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
+        try:
+            result = run_clean_clone(
+                target_root,
+                command,
+                config.get("clean_clone_python"),
+                scratch,
+                revert=list(paths),
+                baseline=resolved,
+            )
+        except (RuntimeError, OSError) as error:
+            result = CleanCloneResult(
+                ran=False,
+                command=command,
+                python=python,
+                reason=f"the clone with the edits reverted could not be built: {error}",
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     decided = RevertCheckResult(
         result=result,
         paths=paths,
         permitted=(result.exit_code != 0) if result.ran else None,
+        baseline=str(resolved) if resolved is not None else None,
     )
     (run_dir / artifact).write_text(
         json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
@@ -1088,6 +1205,27 @@ def run_story(
         conditional = conditional_artifacts(stage)
         conditional_before = artifact_signatures(run_dir, conditional)
 
+        # What the tree held under this stage's governed prefixes before it
+        # ran, which is the baseline the revert check below decides against.
+        # Both names come off the stage's declaration, so removing that one
+        # key disables the capture and the check together. Captured over the
+        # declared prefixes rather than the grant-subtracted list: the
+        # enforced list is computed after the stage, and capturing a superset
+        # costs a few file copies while the restore set stays narrowed.
+        declaration = stage.get("revert_check") or {}
+        baseline_dir = (
+            capture_stage_baseline(
+                run_dir,
+                target_root,
+                declaration["baseline"],
+                name,
+                attempt,
+                stage.get("may_not_create", []),
+            )
+            if declaration
+            else None
+        )
+
         result = runner(
             prompt,
             stage=name,
@@ -1160,7 +1298,9 @@ def run_story(
             # edits under those prefixes are known to be this stage's alone.
             # The artifact name comes off the loaded workflow definition, so
             # removing that declaration disables the check with no change here.
-            revert_artifact = stage.get("revert_check")
+            # It is the same declaration the baseline was captured under, read
+            # here for the other name it carries.
+            revert_artifact = declaration.get("result")
             edits = (
                 governed_edits(run_dir, record_name, enforced)
                 if revert_artifact
@@ -1170,14 +1310,19 @@ def run_story(
                 prefixes = ", ".join(edits.prefixes)
                 listed = ", ".join(edits.paths)
                 decided = revert_check(
-                    run_dir, target_root, config, revert_artifact, edits.paths
+                    run_dir,
+                    target_root,
+                    config,
+                    revert_artifact,
+                    edits.paths,
+                    baseline_dir,
                 )
                 if not decided.result.ran:
                     return _escalate(
                         run_dir,
                         state,
-                        f"the revert check on {name}'s edits under {prefixes} "
-                        f"could not run: {decided.result.reason}",
+                        f"the revert check on {name}'s edits ({listed}) under "
+                        f"{prefixes} could not run: {decided.result.reason}",
                         duration_seconds=elapsed(),
                     )
                 if not decided.permitted:

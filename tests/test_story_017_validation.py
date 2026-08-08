@@ -58,8 +58,12 @@ TESTS_DIR = REPO_ROOT / "tests"
 WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
 IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "implementer")
 #: The artifact name and the governed prefix are read off the workflow, never
-#: spelled here, for the same reason the coordinator may not spell them.
-ARTIFACT = IMPLEMENTER_STAGE.get("revert_check")
+#: spelled here, for the same reason the coordinator may not spell them. Since
+#: story-019 the declaration is an object naming both the result artifact and
+#: the baseline directory the check restores from; both names are read off it.
+DECLARATION = IMPLEMENTER_STAGE.get("revert_check")
+ARTIFACT = DECLARATION["result"]
+BASELINE = DECLARATION["baseline"]
 PREFIX = IMPLEMENTER_STAGE["may_not_create"][0]
 
 SCHEMA_STEM = "revert-check-result"
@@ -268,13 +272,6 @@ def nothing_governed(root: Path) -> dict:
     return {"modified": ["src/app.py"], "created": [], "deleted": []}
 
 
-def ghost_path(root: Path) -> dict:
-    """A governed path with no version at HEAD, so the revert cannot happen."""
-    write(root / "src" / "app.py", APP_ADDITIVE)
-    return {"modified": ["src/app.py", "tests/test_ghost.py"], "created": [],
-            "deleted": []}
-
-
 class Runner:
     """A fake agent runner: each stage writes its artifacts, and the stage
     holding an edit also makes that edit in the target's working tree."""
@@ -412,12 +409,24 @@ def builds(monkeypatch):
     built: list[tuple[str, ...]] = []
     original = story_coordinator._build_clone
 
-    def spy(target_root, clone, *, revert=()):
+    def spy(target_root, clone, *, revert=(), baseline=None):
         built.append(tuple(revert))
-        return original(target_root, clone, revert=revert)
+        return original(target_root, clone, revert=revert, baseline=baseline)
 
     monkeypatch.setattr(story_coordinator, "_build_clone", spy)
     return built
+
+
+def baseline_of(target_root: Path, scratch: Path, prefix: str = PREFIX) -> Path:
+    """The governed prefix's content as it stands now, captured the way the
+    coordinator captures it immediately before invoking a stage agent.
+
+    Since story-019 a revert is a restore from such a capture rather than a
+    checkout of HEAD, so a direct call into the clone builders needs one.
+    Taken before the edit under test, which is where the coordinator takes it.
+    """
+    return story_coordinator.capture_stage_baseline(
+        scratch, target_root, BASELINE, "stage", 1, [prefix])
 
 
 def suite_in(directory: Path) -> int:
@@ -439,11 +448,12 @@ def test_reverting_the_repair_fails_the_suite_and_reverting_nothing_passes(
     """The premise under every permitted case below. Without the second half
     of this the check could be failing the suite for some unrelated reason,
     and "permitted" would mean nothing."""
+    baseline = baseline_of(target, tmp_path / "before")
     forced_repair(target)
 
     reverted = story_coordinator.run_clean_clone(
         target, TEST_COMMAND, None, tmp_path / "with-revert",
-        revert=["tests/test_app.py"])
+        revert=["tests/test_app.py"], baseline=baseline)
     intact = story_coordinator.run_clean_clone(
         target, TEST_COMMAND, None, tmp_path / "no-revert")
 
@@ -598,7 +608,7 @@ def test_moving_the_declaration_moves_the_check(target, tmp_path):
         stage.pop("revert_check", None)
         if stage["name"] == "tester":
             stage["may_not_create"] = ["src/"]
-            stage["revert_check"] = ARTIFACT
+            stage["revert_check"] = DECLARATION
     fake_root = mirror_harness(tmp_path / "moved", workflow)
 
     # The implementer's edit under tests/ is now ungoverned; the tester's
@@ -668,13 +678,23 @@ def test_without_the_grant_the_same_record_escalates(target, harness_root):
 # --------------------------------------------------------------------------
 
 
-def test_a_governed_path_that_cannot_be_reverted_escalates_naming_why(
-    target, harness_root,
+def test_a_clone_that_cannot_be_built_escalates_naming_why(
+    target, harness_root, monkeypatch,
 ):
-    """A record naming a governed path with no version at HEAD. The clone
-    cannot be built, so there is no suite result to read - and the check says
-    so instead of letting the edits through."""
-    code, _ = run(target, harness_root, {"implementer": ghost_path})
+    """A clone the builder cannot produce, so there is no suite result to
+    read - and the check says so instead of letting the edits through.
+
+    Repointed by story-019, not relaxed. The case this drove before was a
+    governed path with no version at HEAD, and that is no longer a case at
+    all: the baseline the check restores from records such a path's pre-stage
+    state, so it is decided rather than refused. A clone that genuinely
+    cannot be built is still refused, which is what this drives directly."""
+    def unbuildable(*args, **kwargs):
+        raise RuntimeError("the clone could not be built")
+
+    monkeypatch.setattr(story_coordinator, "_build_clone", unbuildable)
+
+    code, _ = run(target, harness_root, {"implementer": forced_repair})
     assert code == 2
     record = record_of(target)
     assert record["ran"] is False
@@ -682,7 +702,7 @@ def test_a_governed_path_that_cannot_be_reverted_escalates_naming_why(
     assert record["reason"]
     _, summary = evidence(target)
     assert "could not run" in summary
-    assert "tests/test_ghost.py" in summary
+    assert "tests/test_app.py" in summary
 
 
 def test_an_unresolvable_configured_interpreter_escalates_naming_why(
@@ -722,10 +742,11 @@ def test_the_addition_in_that_set_was_not_forced_by_anything(target, tmp_path):
     """What the test above would look like if the check discriminated per
     file: reverting the addition alone leaves the suite green. The check
     reports the set it reverted rather than claiming it decided per file."""
+    baseline = baseline_of(target, tmp_path / "before")
     mixed_set(target)
     alone = story_coordinator.run_clean_clone(
         target, TEST_COMMAND, None, tmp_path / "extra-only",
-        revert=["tests/test_extra.py"])
+        revert=["tests/test_extra.py"], baseline=baseline)
     assert alone.ran is True
     assert alone.exit_code == 0
 
@@ -742,7 +763,7 @@ def test_a_single_file_mixing_a_repair_and_an_addition_is_permitted(
     assert record["paths"] == ["tests/test_app.py"]
     assert set(record) <= {"ran", "paths", "command", "python", "python_version",
                            "clone_path", "exit_code", "output_tail", "permitted",
-                           "reason"}
+                           "baseline", "reason"}
 
 
 def test_the_addition_inside_that_file_needed_no_change_to_pass(tmp_path):
@@ -850,10 +871,12 @@ def test_a_clone_built_with_the_default_carries_the_edit_and_one_reverted_does_n
     target, tmp_path,
 ):
     """The behavioral half: same builder, same tree, one parameter apart."""
+    baseline = baseline_of(target, tmp_path / "before")
     forced_repair(target)
     story_coordinator._build_clone(target, tmp_path / "default")
     story_coordinator._build_clone(target, tmp_path / "reverted",
-                                   revert=["tests/test_app.py"])
+                                   revert=["tests/test_app.py"],
+                                   baseline=baseline)
 
     assert "salute" in git(tmp_path / "default", "show",
                            "HEAD:tests/test_app.py").stdout
