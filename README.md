@@ -27,16 +27,16 @@ The exact harness Appendix A describes is tagged **`appendix-a`**. If you are re
 
 ### What has changed since
 
-Each story below is a step the book's roadmap calls for. The stories themselves are in `.harness/stories/`, and each one's run — every rendered prompt, every verdict, every escalation — is preserved under `.harness/runs/`.
+Each story below is a step the book's roadmap calls for, or a failure the build hit that the roadmap did not anticipate. The story artifacts are committed in `.harness/stories/`. Run directories are execution state rather than source, so `.harness/runs/` is gitignored and does not travel with a clone; the runs worth keeping — two escalations and a reset — are copied into `.harness/runs-archive/`.
 
 | Story | Change | Where the book argues for it |
 | --- | --- | --- |
 | 001–002 | `l5-status`; per-stage changed-files records | Appendix A (`appendix-a`) |
-| 003 | One shared harness layer, injected into every stage template | Ch. 16, prompt layering |
-| 004 | Machine-readable schemas for structured artifacts | Ch. 14, artifact contracts |
-| 005 | Schema-directed story parser and full pre-flight validation | Ch. 18, deterministic when behavior is known |
-| 006 | One reader of a story artifact | Ch. 18, hardening |
-| 007 | Coordinator-enforced stage output ownership | Ch. 15, governance boundaries |
+| 003–004 | One shared harness layer; machine-readable artifact schemas | Ch. 16, prompt layering; Ch. 14, artifact contracts |
+| 005–007 | Schema-directed story parser and pre-flight validation; one reader of a story artifact; coordinator-enforced stage output ownership | Ch. 15, governance boundaries; Ch. 18, hardening |
+| 008–009 | The story schema and the workflow's stage rules injected into the planner prompt | Ch. 16, injection over restatement |
+| 010–012 | `attempts/attempt-N/` archives, `execution-history.json`, `retry-history.json` | Ch. 17–18, retry evidence |
+| 013–017 | Verification hardening: the suite re-run in a clean clone, assertions that can be shown to fail, the schema inventory moved out of `tests/`, the coordinator's output contract asserted directly, an implementer's test edits decided by reverting them | Failures this build hit; Ch. 18 in spirit |
 
 Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, hooks in place of a static `allowed_tools` allowlist, an adjudicator, an inspector, resumable escalated runs, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
 
@@ -71,13 +71,16 @@ Example:
 ## Layout
 
     workflows/       workflow definitions (stages, artifact routes, retry rules)
+    schemas/         JSON Schemas for the structured artifacts, plus their manifest
     prompts/         reusable agent prompt templates ({{placeholder}} injection)
     orchestration/   the Story Coordinator and its supporting modules
     rules/           execution rules enforced by the coordinator
     scripts/         thin l5- entry points
-    .harness/        target-repository state: config, standards, docs, stories, runs, logs
+    templates/       starter files l5-init copies into a new target repository
+    .harness/        target-repository state: config, standards, docs, stories; plus
+                     runs and logs, which are gitignored execution state
 
-The harness pieces (`workflows/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
+The harness pieces (`workflows/`, `schemas/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`, `templates/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
 
 This repository is both the harness repository and its own first target repository. Every demo story is a real harness feature, so the harness participates in building itself from the start.
 
@@ -86,8 +89,8 @@ This repository is both the harness repository and its own first target reposito
 1. `l5-plan` runs an interactive planning session and writes an approved story artifact to `.harness/stories/`.
 2. `l5-run` hands the story to the Story Coordinator, which creates a story branch and a run directory under `.harness/runs/<story-id>/`.
 3. The coordinator advances the workflow stage by stage (implement → test → verify → document), assembling each stage's context, injecting it into the stage prompt, and invoking the agent headlessly (`claude -p`).
-4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry the implementer with structured retry guidance, or escalate.
-5. Every run leaves durable state (`state.json`), an append-only event history (`events.log`), and the artifacts each stage produced.
+4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry the implementer with structured retry guidance, or escalate. On a passing verdict it re-runs the suite in a fresh clone with the story committed, because the working tree is the one place that commit does not yet exist.
+5. Every run leaves its state (`state.json`), the same events in two renderings (`events.log` and `execution-history.json`), a record of any retry (`retry-history.json`), and the artifacts each stage produced.
 
 See `.harness/docs/ARCHITECTURE.md` for the full architecture.
 
