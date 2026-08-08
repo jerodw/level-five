@@ -758,7 +758,7 @@ MUTANTS = {
     # a stage may write, rather than the ones this attempt actually wrote.
     "the guidance read off the run root unconditionally": (
         '                            artifacts_written_since(\n'
-        '                                run_dir, conditional, conditional_before\n'
+        '                                run_dir, conditional, artifacts_before\n'
         '                            ),\n',
         '                            conditional,\n',
     ),

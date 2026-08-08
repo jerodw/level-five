@@ -397,6 +397,21 @@ def conditional_artifacts(stage: dict) -> list[str]:
     return sorted(set(stage.get("schemas", {})) - required)
 
 
+def required_artifacts(stage: dict) -> list[str]:
+    """The artifacts a stage must write, read off the loaded workflow.
+
+    The mirror of conditional_artifacts and read from the same places: a
+    stage's outputs plus its changed_files record. No artifact name is
+    written here, so a workflow declaring an output the shipped one does not
+    is covered with no change to orchestration code. Sorted, for determinism.
+    """
+    names = set(stage.get("outputs", []))
+    record = stage.get("changed_files")
+    if record:
+        names.add(record)
+    return sorted(names)
+
+
 def artifact_signatures(run_dir: Path, artifacts: list[str]) -> dict[str, tuple]:
     """What the named artifacts looked like at this moment, for comparison.
 
@@ -425,6 +440,28 @@ def artifacts_written_since(
     """Which of the named artifacts were written after `before` was taken."""
     now = artifact_signatures(run_dir, artifacts)
     return [name for name, signature in now.items() if before.get(name) != signature]
+
+
+def stale_artifacts(
+    run_dir: Path, artifacts: list[str], before: dict[str, tuple]
+) -> list[str]:
+    """Which of the named artifacts are present but a previous attempt's.
+
+    The reader that turns the pre-stage snapshot into a verdict about
+    required outputs. An artifact present now and unchanged since `before`
+    was taken was not written by the attempt that just ran. This adds no
+    second comparison: it is the same snapshot and the same freshness test
+    artifacts_written_since applies to conditional artifacts, read the other
+    way round. Absent artifacts are not stale — they are missing, which is a
+    distinct condition with its own reason.
+
+    Detection only. Where a stale artifact routes is the caller's decision,
+    so changing that destination is a routing change rather than a rewrite.
+    """
+    present = artifact_signatures(run_dir, artifacts)
+    return sorted(
+        name for name, signature in present.items() if before.get(name) == signature
+    )
 
 
 def _retry_record_file(run_dir: Path) -> Path:
@@ -1609,11 +1646,18 @@ def run_story(
         attempt = state.retry_count + 1
         (run_dir / f"prompt-{name}-attempt-{attempt}.md").write_text(prompt, encoding="utf-8")
 
-        # What the stage's conditional artifacts looked like before it ran, so
-        # a retry record can tell the guidance this attempt wrote from one an
-        # earlier attempt left at the run root.
+        # What this stage's artifacts looked like before it ran. One snapshot,
+        # covering the conditional artifacts and the required ones together,
+        # feeding one comparison function. The conditional readers ask which
+        # of them this attempt wrote — nothing clears the retry guidance
+        # between attempts — and the required reader below asks the same
+        # question of the outputs, because a retry that leaves one untouched
+        # satisfies a presence check with a superseded attempt's file.
+        # artifacts_written_since narrows by the names its caller passes, so
+        # widening what is covered here changes neither conditional reader.
         conditional = conditional_artifacts(stage)
-        conditional_before = artifact_signatures(run_dir, conditional)
+        required = required_artifacts(stage)
+        artifacts_before = artifact_signatures(run_dir, conditional + required)
 
         # What the tree held under this stage's governed prefixes before it
         # ran, which is the baseline the revert check below decides against.
@@ -1661,6 +1705,27 @@ def run_story(
                 run_dir,
                 state,
                 f"{name} did not produce required artifacts: {', '.join(missing)}",
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
+        # Present is not written. On a retry an artifact a superseded attempt
+        # left at the run root satisfies the check above, and the run finishes
+        # carrying a record of an attempt that no longer describes it. Read
+        # after the missing case so an absent artifact keeps its own reason;
+        # the two are indistinguishable to a reader of the run directory
+        # afterwards, which is what let one ship unnoticed. Escalation is
+        # provisional: this is a mechanical failure the retry-routing story
+        # will send back to the stage itself, and _escalate leaves
+        # retry_count alone, so no attempt number is consumed here.
+        stale = stale_artifacts(run_dir, required, artifacts_before)
+        if stale:
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} left required artifacts unwritten; these are a "
+                f"previous attempt's, not this one's: {', '.join(stale)}",
                 target_root=target_root,
                 harness_root=harness_root,
                 duration_seconds=elapsed(),
@@ -1827,7 +1892,7 @@ def run_story(
                             stage["on_failure"]["retry_stage"],
                             verdict,
                             artifacts_written_since(
-                                run_dir, conditional, conditional_before
+                                run_dir, conditional, artifacts_before
                             ),
                         )
                         state.retry_count += 1
@@ -1862,7 +1927,7 @@ def run_story(
                     state.retry_count + 1,
                     stage["on_failure"]["retry_stage"],
                     verdict,
-                    artifacts_written_since(run_dir, conditional, conditional_before),
+                    artifacts_written_since(run_dir, conditional, artifacts_before),
                 )
                 state.retry_count += 1
                 save_state(run_dir, state)
