@@ -17,6 +17,8 @@ class of edit, it does not audit one.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import re
 import shlex
@@ -44,6 +46,19 @@ class RunState:
     retry_count: int = 0
     verification_iterations: int = 0
     artifacts: list[str] = field(default_factory=list)
+    # Everything below is defaulted so RunState(**json) still loads a state
+    # file written before these fields existed, and empty means "not
+    # established" everywhere it is read.
+    #: The story artifact as this run first read it, so a refusal can say
+    #: whether it has been amended since. It informs a message; it authorizes
+    #: nothing.
+    story_digest: str = ""
+    #: The commit _escalate made on the story branch, empty when there was
+    #: nothing to commit. Tells an escalation the harness committed from one a
+    #: developer committed from one where nothing was committed.
+    escalation_commit: str = ""
+    #: The harness revision at the moment the run escalated.
+    harness_revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,18 @@ def read_story(story_text: str, harness_root: Path | None = None) -> StoryReadin
     except story_parser.StoryParseError as error:
         return StoryReading(None, [str(error)])
     return StoryReading(parsed, schema_validator.validate(parsed, schema))
+
+
+def story_digest(story_text: str) -> str:
+    """A digest of the story artifact exactly as the run was given it.
+
+    Taken from the same text read_story was handed, so the digest and the
+    reading describe one artifact. It is recorded on state.json at run start
+    for one purpose: a refusal to resume can say whether the story has been
+    amended since the run escalated. It never authorizes or triggers a resume —
+    an incidental edit to a story must not silently restart a run.
+    """
+    return hashlib.sha256(story_text.encode("utf-8")).hexdigest()
 
 
 def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
@@ -201,6 +228,18 @@ def _git(target_root: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _revision(root: Path, revision: str = "HEAD") -> str:
+    """The revision `root` is at, or "" when that cannot be established.
+
+    Empty is the honest answer for a directory that is not a git repository,
+    and every reader treats it as not-established rather than as a value to
+    compare — which is what keeps the resume guard from refusing on evidence
+    it does not have.
+    """
+    result = _git(root, "rev-parse", revision)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def _checkout_story_branch(target_root: Path, branch: str) -> None:
     exists = _git(target_root, "rev-parse", "--verify", branch).returncode == 0
     args = ["checkout", branch] if exists else ["checkout", "-b", branch]
@@ -292,6 +331,16 @@ def archivable_artifacts(stages: list[dict]) -> list[str]:
     return sorted(names)
 
 
+def attempt_dir(run_dir: Path, attempt: int) -> Path:
+    """Where one attempt's superseded artifacts are kept.
+
+    The one place the archive directory is named. Both readers derive it from
+    here: the archive that writes it, and the resume that refuses when it
+    already exists rather than writing over the evidence in it.
+    """
+    return run_dir / "attempts" / f"attempt-{attempt}"
+
+
 def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[str]:
     """Copy the superseded attempt's artifacts into attempts/attempt-N/.
 
@@ -302,7 +351,7 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
     conditional artifact is skipped by _schema_violation. Returns the names
     actually archived.
     """
-    destination = run_dir / "attempts" / f"attempt-{attempt}"
+    destination = attempt_dir(run_dir, attempt)
     destination.mkdir(parents=True, exist_ok=True)
     archived = []
     for artifact in artifacts:
@@ -312,6 +361,22 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
         shutil.copy2(source, destination / artifact)
         archived.append(artifact)
     return archived
+
+
+def interrupted_attempt_artifacts(stages: list[dict], attempt: int) -> list[str]:
+    """What a resumed run would write over if the interrupted attempt stayed.
+
+    The stage artifacts archive_attempt already derives from the workflow, plus
+    that attempt's rendered prompts. The prompts are the addition a resume
+    needs: a resumed run carries retry_count forward — it must, since resetting
+    it would overwrite the escalated attempt's verification iteration — so it
+    re-renders under the same attempt number and would write over the prompt
+    the interrupted stage was actually given. No stage name and no artifact
+    name is written here; both come off the loaded workflow.
+    """
+    return archivable_artifacts(stages) + [
+        f"prompt-{stage['name']}-attempt-{attempt}.md" for stage in stages
+    ]
 
 
 def conditional_artifacts(stage: dict) -> list[str]:
@@ -1021,6 +1086,216 @@ def _revert_check_permitted(
     )
 
 
+# --------------------------------------------------------------------------
+# Ending a run so it can be resumed
+#
+# A successful run's work is durable: _complete commits it. An escalated run's
+# was not, so it lived in the working tree and survived exactly until someone
+# checked out another branch — a normal thing to do while deciding what to do
+# about an escalation. Resume cannot recover what the harness did not preserve,
+# so the escalation commits too.
+#
+# It commits with the same looseness _complete has, and the limit is stated
+# rather than closed here: `git add -A` stages whatever is in the working tree,
+# not what the run produced, and an escalation does that on a tree that is by
+# definition unfinished. Closing it is a separate story, deliberately after
+# this one.
+#
+# The escalation ends in *two* commits, and the second one is not bookkeeping
+# for its own sake. Everything the escalation writes — state.json, both
+# renderings of the event stream, the summary — has to be inside the commit,
+# because a repository that tracks its run directory is otherwise left dirty by
+# the very writes that record the escalation, and the checkout this exists to
+# make safe is refused. But state.json records the sha of the commit it is
+# committed in, and no commit can contain its own sha: the content is hashed
+# into the identity being recorded. So the work is committed first, the sha of
+# that commit is written to state.json, and a second commit carries the record
+# on top. It is made even when it has nothing to add — a repository that
+# ignores its run directory has nothing to record — so the branch an escalation
+# leaves always has the same shape and the undo command named in the message
+# can name one revision.
+# --------------------------------------------------------------------------
+
+#: Leads the escalation commit's subject. _complete's subject is
+#: "<story-id>: <title>", so a subject beginning with a marker naming what the
+#: commit is cannot be read as a completion in `git log --oneline`, in a PR
+#: title, or by anyone scanning the branch.
+ESCALATION_COMMIT_MARKER = "l5 escalated:"
+
+#: How the escalation commit's changes are put back in the working tree. Named
+#: in the body, because a developer deciding what to do about an escalation
+#: should not have to work it out. Two revisions, because an escalation that
+#: commits makes two commits — the work and the record of it — and both belong
+#: back in the tree.
+ESCALATION_UNDO_COMMAND = "git reset --mixed HEAD~2"
+
+
+def escalation_commit_message(state: RunState, reason: str) -> str:
+    """The escalation commit's message: what it is, why, and how to undo it.
+
+    The subject names the stage execution stopped at. The body says outright
+    that this is a holding place rather than a decision about the work, carries
+    the escalation reason, and names the command that returns the changes to
+    the working tree.
+    """
+    stage = state.current_stage or "no stage"
+    return (
+        f"{ESCALATION_COMMIT_MARKER} {state.story_id} stopped at {stage}\n"
+        f"\n"
+        f"The run escalated and this commit is a holding place for what it "
+        f"left in the working tree, so the work survives a checkout of another "
+        f"branch. It is not a decision about that work: the story did not "
+        f"finish and nothing here has been accepted or reviewed.\n"
+        f"\n"
+        f"Escalation reason: {reason}\n"
+        f"\n"
+        f"To put these changes back in the working tree:\n"
+        f"    {ESCALATION_UNDO_COMMAND}\n"
+    )
+
+
+def commit_escalated_work(
+    target_root: Path,
+    state: RunState,
+    reason: str,
+    *,
+    run_dir: Path | None = None,
+) -> str:
+    """Open the escalation's commit of what the run left, and name it.
+
+    This is the first of the two commits an escalation makes: the run's own
+    record of the escalation — state.json, both renderings of the event stream
+    — so that the sha it returns can be written into state.json and committed,
+    with the work, by `commit_escalated_tree` on top of it. A commit cannot
+    carry its own sha, and that is the whole reason the record and the work are
+    two commits rather than one.
+
+    Returns the commit, or "" when the escalated run left nothing to commit at
+    all — an escalation with a clean tree records no commit, commits nothing
+    further, and is not an error. It establishes nothing about the tree it
+    commits, exactly as _complete does not: both stage whatever the working
+    tree holds.
+
+    `--allow-empty`, because a repository that ignores its run directory has no
+    record to commit here and must still leave the same two-commit shape: the
+    undo command named in the message names one revision and has to be right in
+    both shapes.
+    """
+    if not _git(target_root, "status", "--porcelain").stdout.strip():
+        return ""
+    if run_dir is not None:
+        _git(target_root, "add", "-A", "--", str(run_dir))
+    committed = _git(
+        target_root,
+        "commit",
+        "--allow-empty",
+        "-m",
+        escalation_commit_message(state, reason),
+    )
+    return _revision(target_root) if committed.returncode == 0 else ""
+
+
+def commit_escalated_tree(target_root: Path, state: RunState, reason: str) -> None:
+    """Commit the work the escalated run left, on top of its record.
+
+    The second of the two commits, and the branch tip an escalation leaves. It
+    carries the same message as the commit it sits on, because it is the same
+    escalation: a reader scanning the branch should meet the escalation rather
+    than a bookkeeping entry.
+    """
+    _git(target_root, "add", "-A")
+    _git(
+        target_root,
+        "commit",
+        "--allow-empty",
+        "-m",
+        escalation_commit_message(state, reason),
+    )
+
+
+def escalation_reason(run_dir: Path) -> str | None:
+    """The reason the escalation summary recorded, for a message only.
+
+    Nothing routes on this. The resume guard decides entirely from state.json,
+    and this is read afterwards so a refusal can say what the run escalated
+    for; a missing or reshaped summary costs the message a sentence and changes
+    no decision.
+    """
+    path = run_dir / "escalation-summary.md"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    if "## Reason" not in text:
+        return None
+    return text.split("## Reason", 1)[1].split("##", 1)[0].strip() or None
+
+
+def unchanged_since_escalation(
+    state: RunState, story_text: str, target_root: Path, harness_root: Path
+) -> list[str]:
+    """Evidence that resuming would reach the same point the same way.
+
+    Three comparisons, each of which must be *establishable* before it can say
+    anything: the story artifact against the digest recorded at run start, the
+    branch against the escalation commit the harness made, and the harness
+    against the revision recorded when the run escalated.
+
+    Returns the evidence only when all three are establishable and identical,
+    and an empty list otherwise. Anything the guard cannot establish counts as
+    not-the-same, so an absent digest, an escalation that committed nothing, a
+    target whose HEAD cannot be read, or a harness root that is not a git
+    repository produces no refusal rather than a false one.
+    """
+    if not state.story_digest or state.story_digest != story_digest(story_text):
+        return []
+    evidence = [
+        "the story artifact is byte for byte the one the escalated run read"
+    ]
+
+    # The escalation commit is the branch tip's parent, not the tip: the record
+    # of its sha is committed on top of it, because a commit cannot carry its
+    # own sha. A branch a developer has committed on since therefore fails this
+    # comparison, which is what it is for.
+    if (
+        not state.escalation_commit
+        or _revision(target_root, "HEAD~1") != state.escalation_commit
+    ):
+        return []
+    porcelain = _git(target_root, "status", "--porcelain")
+    if porcelain.returncode != 0 or porcelain.stdout.strip():
+        return []
+    evidence.append(
+        f"branch {state.branch} is exactly the escalation commit "
+        f"{state.escalation_commit[:12]}, with nothing uncommitted"
+    )
+
+    if not state.harness_revision or _revision(harness_root) != state.harness_revision:
+        return []
+    evidence.append(
+        f"the harness is still at revision {state.harness_revision[:12]}"
+    )
+    return evidence
+
+
+def _resume_refusal(
+    story_path: Path, run_dir: Path, state: RunState, evidence: list[str]
+) -> str:
+    reason = escalation_reason(run_dir)
+    lines = [
+        f"{state.story_id} escalated at stage {state.current_stage} and nothing "
+        f"establishable has changed since:",
+        *(f"  - {item}" for item in evidence),
+    ]
+    if reason:
+        lines.append(f"It escalated because: {reason}")
+    lines.append(
+        f"Resuming now would reach the same point the same way. Amend "
+        f"{story_path}, change the code on branch {state.branch}, or update the "
+        f"harness, then run the story again."
+    )
+    return "\n".join(lines)
+
+
 def _refuse(story_path: Path, problems: list[str]) -> int:
     """The one pre-flight refusal path: exit 1, one message per problem."""
     print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
@@ -1033,14 +1308,69 @@ def _refuse(story_path: Path, problems: list[str]) -> int:
     return 1
 
 
-def _escalate(run_dir: Path, state: RunState, reason: str, **event_fields) -> int:
+def _commits_the_tree_it_ends_on(escalate):
+    """Commit the escalated work after the escalation has finished writing.
+
+    The work commit has to be the last thing that happens: every file the
+    escalation writes — state.json, both renderings of the event stream, the
+    escalation summary — belongs inside it, or a repository that tracks its run
+    directory is left dirty by the very writes that record the escalation, and
+    the checkout this story exists to make safe is refused. Wrapping is how the
+    ordering is expressed without moving the escalation's own writing around,
+    whose last act is the summary a separate request owns.
+    """
+
+    @functools.wraps(escalate)
+    def escalate_and_commit(
+        run_dir: Path,
+        state: RunState,
+        reason: str,
+        *,
+        target_root: Path,
+        harness_root: Path,
+        **event_fields,
+    ) -> int:
+        code = escalate(
+            run_dir,
+            state,
+            reason,
+            target_root=target_root,
+            harness_root=harness_root,
+            **event_fields,
+        )
+        if state.escalation_commit:
+            commit_escalated_tree(target_root, state, reason)
+        return code
+
+    return escalate_and_commit
+
+
+@_commits_the_tree_it_ends_on
+def _escalate(
+    run_dir: Path,
+    state: RunState,
+    reason: str,
+    *,
+    target_root: Path,
+    harness_root: Path,
+    **event_fields,
+) -> int:
     """End the run, recording the escalation in both renderings.
 
     A run that failed must be as reconstructable as one that passed, so the
     history ends with this entry. Callers forward whatever structured fields
     the escalation has — the stage's elapsed time, the verifier's outcome,
     the decision that routed here — through event_fields.
+
+    The run's record of the escalation is committed here, and the sha of that
+    commit is written into state.json for the commit that follows to carry —
+    the wrapper above commits the tree once this has written everything, so
+    that the escalation's own evidence is inside the commit and the tree it
+    leaves is clean. The harness revision is recorded here too, for the same
+    reader: a resume can then tell whether the harness itself has changed
+    since.
     """
+    state.harness_revision = _revision(harness_root)
     state.status = "escalated"
     save_state(run_dir, state)
     append_event(
@@ -1050,6 +1380,11 @@ def _escalate(run_dir: Path, state: RunState, reason: str, **event_fields) -> in
         stage=state.current_stage or None,
         **event_fields,
     )
+    state.escalation_commit = commit_escalated_work(
+        target_root, state, reason, run_dir=run_dir
+    )
+    if state.escalation_commit:
+        save_state(run_dir, state)
     summary = (
         f"# {state.story_id} Escalation Summary\n\n"
         f"## Status\nEscalated\n\n"
@@ -1098,12 +1433,34 @@ def run_story(
     harness_root: Path,
     target_root: Path,
     runner=agent_runner.run_agent,
+    start_stage: str | None = None,
 ) -> int:
+    """Execute one story, from a fresh run or from where a run left off.
+
+    `start_stage` overrides where execution enters — the recorded stage on a
+    resume, the workflow's first stage on a fresh run. It is named
+    `start_stage` rather than `stage` because `stage` is the loop's name for
+    the stage being executed, and one name for two things is how this
+    repository has repeatedly confused itself.
+    """
     config = harness_config.load_config(target_root)
     workflow = harness_config.load_workflow(harness_root, config.get("workflow", "story-workflow"))
     rules = harness_config.load_rules(harness_root)
     stages = workflow["stages"]
     stage_names = [s["name"] for s in stages]
+
+    # A stage the developer named overrides where execution enters, which is
+    # what makes a resume useful: an escalation caused by an amended story is
+    # re-entered at the implementer rather than at the verifier that recorded
+    # it. Refused above everything else, in the shape the other pre-flight
+    # refusals take — exit 1, one message, nothing created and no agent run.
+    if start_stage is not None and start_stage not in stage_names:
+        print(
+            f"'{start_stage}' is not a stage the loaded workflow defines. "
+            f"{workflow['name']} defines: {', '.join(stage_names)}.",
+            file=sys.stderr,
+        )
+        return 1
 
     story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
     if not story_path.is_file():
@@ -1133,12 +1490,14 @@ def run_story(
     log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
 
     state = load_state(run_dir)
-    if state and state.status != "running":
+    if state and state.status == "completed":
         # Name the branch as well as the run directory. _checkout_story_branch
         # reuses an existing branch rather than resetting it, so deleting only
         # the run directory re-runs the story on top of the finished work — the
         # implementer opens a repository where the story is already done, and
-        # the run reports success having changed nothing.
+        # the run reports success having changed nothing. This guard is about
+        # finished work; an escalated run resumes below, because its work is
+        # not finished and its evidence is what the resume exists to keep.
         print(
             f"{story_id} already ended with status '{state.status}'. "
             f"Inspect {run_dir} to review it.\n"
@@ -1149,6 +1508,50 @@ def run_story(
         )
         return 1
     if state:
+        # A resume, of a crashed run or an escalated one. Chapter 18 treats
+        # the two identically and so does this: restore nothing, because the
+        # artifacts and the state are already here, and continue at the
+        # recorded stage. Nothing is reinitialized — retry_count and
+        # verification_iterations key the rendered prompt and verification
+        # iteration filenames, so resetting them would overwrite the evidence
+        # of the attempt being resumed.
+        if state.status == "escalated":
+            # Resuming is inferred from the recorded status and from nothing
+            # else. What the guard adds is a refusal in the one case where a
+            # resume is knowably pointless: the story, the tree and the harness
+            # are all establishably what they were when the run escalated.
+            evidence = unchanged_since_escalation(
+                state, story_text, target_root, harness_root
+            )
+            if evidence:
+                print(
+                    _resume_refusal(story_path, run_dir, state, evidence),
+                    file=sys.stderr,
+                )
+                return 1
+        if start_stage:
+            state.current_stage = start_stage
+        if state.status == "escalated":
+            # The interrupted attempt is archived before the resumed stage
+            # runs, under the attempt number it was written with. Refuse rather
+            # than overwrite: the archive is the evidence a resume exists to
+            # preserve, and story-010 recorded exactly this case as open.
+            attempt = state.retry_count + 1
+            destination = attempt_dir(run_dir, attempt)
+            if destination.exists():
+                print(
+                    f"{destination} already holds an archived attempt, and "
+                    f"resuming {story_id} would write attempt {attempt} over "
+                    f"it. Move or remove it if that attempt is not worth "
+                    f"keeping, then run the story again.",
+                    file=sys.stderr,
+                )
+                return 1
+            archive_attempt(
+                run_dir, interrupted_attempt_artifacts(stages, attempt), attempt
+            )
+            state.status = "running"
+            save_state(run_dir, state)
         append_event(
             run_dir,
             f"resumed at stage {state.current_stage}",
@@ -1157,7 +1560,14 @@ def run_story(
         )
     else:
         branch = config.get("branch_prefix", "story/") + story_id
-        state = RunState(story_id=story_id, branch=branch, current_stage=stage_names[0])
+        state = RunState(
+            story_id=story_id,
+            branch=branch,
+            current_stage=start_stage or stage_names[0],
+            # Recorded from the same text read_story was given, so the digest
+            # and the run's one reading describe one artifact.
+            story_digest=story_digest(story_text),
+        )
         save_state(run_dir, state)
         append_event(
             run_dir, f"workflow started for {story_id}", kind="workflow-started"
@@ -1237,7 +1647,12 @@ def run_story(
         )
         if not result.ok:
             return _escalate(
-                run_dir, state, f"{name} agent process failed", duration_seconds=elapsed()
+                run_dir,
+                state,
+                f"{name} agent process failed",
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
             )
 
         missing = [out for out in stage.get("outputs", []) if not (run_dir / out).is_file()]
@@ -1246,6 +1661,8 @@ def run_story(
                 run_dir,
                 state,
                 f"{name} did not produce required artifacts: {', '.join(missing)}",
+                target_root=target_root,
+                harness_root=harness_root,
                 duration_seconds=elapsed(),
             )
 
@@ -1255,6 +1672,8 @@ def run_story(
                 run_dir,
                 state,
                 f"{name} wrote an invalid artifact: {violation}",
+                target_root=target_root,
+                harness_root=harness_root,
                 duration_seconds=elapsed(),
             )
 
@@ -1266,6 +1685,8 @@ def run_story(
                     run_dir,
                     state,
                     f"{name} modified blocked path: {violation}",
+                    target_root=target_root,
+                    harness_root=harness_root,
                     duration_seconds=elapsed(),
                 )
 
@@ -1290,6 +1711,8 @@ def run_story(
                     state,
                     f"{name} created {ownership.path}, which it declared it "
                     f"must not create under {ownership.prefix}",
+                    target_root=target_root,
+                    harness_root=harness_root,
                     duration_seconds=elapsed(),
                 )
 
@@ -1323,6 +1746,8 @@ def run_story(
                         state,
                         f"the revert check on {name}'s edits ({listed}) under "
                         f"{prefixes} could not run: {decided.result.reason}",
+                        target_root=target_root,
+                        harness_root=harness_root,
                         duration_seconds=elapsed(),
                     )
                 if not decided.permitted:
@@ -1332,6 +1757,8 @@ def run_story(
                         f"{name} edited {listed} under {prefixes}, which it "
                         f"declared it must not create under, and the suite "
                         f"still passes with those edits reverted",
+                        target_root=target_root,
+                        harness_root=harness_root,
                         duration_seconds=elapsed(),
                     )
                 _revert_check_permitted(run_dir, name, revert_artifact, edits)
@@ -1367,6 +1794,8 @@ def run_story(
                             run_dir,
                             state,
                             f"the clean-clone check could not run: {clean.reason}",
+                            target_root=target_root,
+                            harness_root=harness_root,
                             duration_seconds=elapsed(),
                         )
                     if clean.exit_code != 0:
@@ -1377,6 +1806,8 @@ def run_story(
                                 state,
                                 f"the clean-clone check failed and retries are "
                                 f"exhausted: {failures}",
+                                target_root=target_root,
+                                harness_root=harness_root,
                                 duration_seconds=elapsed(),
                                 retry_decision="escalate",
                                 retry_reason=(
@@ -1457,6 +1888,8 @@ def run_story(
                     run_dir,
                     state,
                     "verification failed and retries are exhausted",
+                    target_root=target_root,
+                    harness_root=harness_root,
                     duration_seconds=elapsed(),
                     verifier_outcome=verdict.get("status"),
                     retry_decision="escalate",
@@ -1467,6 +1900,8 @@ def run_story(
                     run_dir,
                     state,
                     "verification failed and the verifier did not recommend a retry",
+                    target_root=target_root,
+                    harness_root=harness_root,
                     duration_seconds=elapsed(),
                     verifier_outcome=verdict.get("status"),
                     retry_decision="escalate",

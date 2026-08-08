@@ -1124,8 +1124,12 @@ def test_the_capture_names_no_stage_and_no_prefix():
 # The baseline is evidence, never state
 # --------------------------------------------------------------------------
 
-#: state.json's fields, written here rather than read off the dataclass that
-#: produces them — a comparison against its own source could not fail.
+#: state.json's fields as of story-019, written here rather than read off the
+#: dataclass that produces them — a comparison against its own source could not
+#: fail. A later story may add a field for its own reasons: story-020 added
+#: three so a resume can tell what has changed since a run escalated. What this
+#: story claims is narrower and is what the assertion below now states — the
+#: *baseline* added none, and none of the fields that arrived later names it.
 STATE_FIELDS = {"story_id", "branch", "status", "current_stage", "retry_count",
                 "verification_iterations", "artifacts"}
 
@@ -1135,7 +1139,9 @@ def test_state_json_gains_no_field_and_never_names_the_baseline(
 ):
     assert run(target, harness_root, RETRY_SHAPE, [FAIL, PASS])[0] == 0
     state_text = (run_dir_of(target) / "state.json").read_text()
-    assert set(json.loads(state_text)) == STATE_FIELDS
+    fields = set(json.loads(state_text))
+    assert STATE_FIELDS <= fields
+    assert [name for name in fields if "baseline" in name] == []
     assert BASELINE not in state_text
     # The control: the run this state describes did capture a baseline, so
     # the absence above is about state.json rather than about a run that

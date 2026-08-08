@@ -653,7 +653,15 @@ def test_a_run_whose_retry_history_keeps_disappearing_routes_identically(
 
     run_dir, control_dir = run_dir_of(target_root), run_dir_of(control_root)
     assert runner.calls == control.calls
-    assert read_state(run_dir) == read_state(control_dir)
+    # Every field but the escalation commit, which since story-020 records the
+    # commit each escalation makes on its own branch: these are two copies of
+    # one repository, so the two shas differ for a reason that has nothing to
+    # do with routing. Compared field by field so a new field is included by
+    # default rather than needing to be added here.
+    volatile = {"escalation_commit"}
+    assert ({k: v for k, v in read_state(run_dir).items() if k not in volatile}
+            == {k: v for k, v in read_state(control_dir).items()
+                if k not in volatile})
     assert _log_messages(run_dir) == _log_messages(control_dir)
     # And the control run did keep a full history, so the comparison above is
     # between a run missing the artifact and one that had it.

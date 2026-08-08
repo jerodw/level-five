@@ -38,6 +38,9 @@ STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 
 # Every status the coordinator may write. A run starts `running` and ends in
 # one of ENDING_STATUSES; the source check below fails if a fourth appears.
+# Ending is not the same as final: since story-020 an `escalated` run can be
+# resumed, which returns its status to `running`. `completed` is the one a
+# rerun still refuses.
 ENDING_STATUSES = {"completed", "escalated"}
 STATUSES = {"running", *ENDING_STATUSES}
 
@@ -97,6 +100,12 @@ def state_contract_problems(state: dict) -> list[str]:
         "retry_count": int,
         "verification_iterations": int,
         "artifacts": list,
+        # story-020's resume fields. Each defaults to empty, which is what a
+        # state file written before this story loads as and what every reader
+        # treats as "not established".
+        "story_digest": str,
+        "escalation_commit": str,
+        "harness_revision": str,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []
