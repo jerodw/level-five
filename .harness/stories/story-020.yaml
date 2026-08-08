@@ -1,0 +1,180 @@
+story:
+  id: story-020
+  title: Resume an escalated run, and commit its work when it escalates
+  description: |
+    A run whose state.json says escalated cannot be continued. run_story
+    refuses any story whose state is not running, so the only available
+    response to an escalation is to delete the run directory and start over -
+    discarding the verifier's findings, every rendered prompt, the attempt
+    archive and the event stream, which is the evidence the refusal exists to
+    protect. story-009 was resolved that way. Nothing was wrong with the
+    implementer's or the tester's work; a single acceptance criterion could not
+    be satisfied inside the story's own do_not_modify scope.
+
+    Chapter 18 treats a crash and an escalation as the same problem and its
+    recovery pseudocode branches on both statuses identically: restore the
+    artifacts, set current_stage from the recorded state, continue. run_story
+    already does exactly that for a run whose status is running. This story
+    extends it to escalated, which is the book's design rather than an
+    addition to it. The harness should restart where it left off, not where it
+    started.
+
+    The refusal is narrowed rather than removed. A run whose status is
+    completed still refuses, because re-running finished work onto a finished
+    branch reports success having changed nothing - that guard is about
+    finished work and it stays. Starting a story over is still expressed the
+    way it always was, by deleting the run directory, at which point there is
+    no state to resume from.
+
+    Two things make resuming a real guarantee rather than a hopeful one.
+
+    First, the work has to survive. _complete ends a successful run with git
+    add -A and a commit; _escalate writes escalation-summary.md, appends its
+    event and returns 2, committing nothing. So the one terminal state a
+    developer most needs to inspect, resume or hand to another agent is the one
+    left in the working tree, surviving exactly until someone checks out
+    another branch - a normal thing to do while deciding what to do about the
+    escalation. story-018's escalation left seven files and 1174 insertions
+    uncommitted on story/story-018, preserved by a hand-written commit
+    (e2f401d) the harness should have made. Resume cannot recover what the
+    harness did not preserve, so the commit is part of this story rather than a
+    neighbour of it.
+
+    Second, a resumed run must not overwrite the evidence it exists to
+    preserve. The counters key the filenames - prompt-<stage>-attempt-N.md and
+    verification/iteration-N.json - so preserving state is what keeps a resumed
+    run's outputs from colliding with the escalated attempt's, and the
+    interrupted attempt is archived before the stage runs again. story-010
+    recorded exactly this as an open question, noting that a resumed run whose
+    attempts/attempt-N/ already exists would overwrite it and that it mattered
+    only for resume; this story answers it.
+
+    The stage baseline story-019 lands carries the other half. A resumed run
+    re-enters at the recorded stage with that stage's work already in the
+    working tree, so a baseline captured at stage start would capture the
+    stage's own completed edits, the revert would become a no-op, the suite
+    would pass, and the revert check would report a permission it never
+    established. story-019's capture-once-reuse rule is what prevents that, and
+    this story inherits it rather than adding a second mechanism.
+
+tasks:
+  - Commit the working tree on the story branch when a run escalates, so an escalated run's changes are durable and checking out another branch carries nothing.
+  - Give the escalation commit a subject that cannot be mistaken for a completion's, and a body saying it is a holding place rather than a decision about the work, carrying the escalation reason, and naming the command that puts the changes back in the working tree.
+  - Record the escalation commit on state.json, so a resumed run can tell an escalation the harness committed from one a developer committed from one where nothing was committed.
+  - Record a digest of the story artifact on state.json at run start, so a refusal can say whether the story has been amended since the run escalated.
+  - Record the harness revision on state.json when a run escalates, so the same refusal can tell whether the harness itself has changed.
+  - Resume a run whose status is escalated instead of refusing it, restoring the recorded state and continuing at the recorded stage.
+  - Keep refusing a run whose status is completed, with its existing message about the run directory and the branch.
+  - Accept a stage argument on l5-run that overrides the recorded stage, and refuse one naming a stage the loaded workflow does not define.
+  - Carry retry_count and verification_iterations forward across a resume, so a resumed run's rendered prompts and verification iterations do not collide with the escalated attempt's.
+  - Archive the interrupted attempt - its stage artifacts and its rendered prompts - before the resumed stage runs, and refuse when that archive directory already exists rather than overwriting it.
+  - Refuse to resume when the story artifact, the target tree and the harness are all establishably unchanged since the run escalated, naming the escalation reason and what to change.
+  - Append one event recording that the run resumed and at which stage, so the routing stays reconstructable from the log alone.
+  - Assert, rather than assume, what neither terminal commit establishes about the working tree it commits.
+
+acceptance_criteria:
+  - An escalated run leaves a clean working tree and its changes committed on the story branch, demonstrated by escalating, checking out another branch, and asserting that branch is untouched.
+  - The escalation commit's subject cannot be confused with a completion commit's, asserted on its form rather than by reading it, and the body names the escalation reason and the command that puts the changes back in the working tree.
+  - An escalation with nothing to commit records no commit and does not fail.
+  - A successful run's commit is unchanged - same message, same contents, same behavior - because _complete is not what this story is fixing.
+  - A run whose status is escalated resumes at the recorded stage, and a run whose status is completed still refuses with its existing message.
+  - A resumed run continues with retry_count and verification_iterations carried forward, and the escalated attempt's rendered prompt and its verification iteration are present and unmodified after the resumed run finishes.
+  - The interrupted attempt's stage artifacts and rendered prompts are archived before the resumed stage runs, and a resume whose archive directory already exists refuses naming it rather than overwriting it.
+  - A stage argument overrides the recorded stage, and one naming a stage the loaded workflow does not define refuses, exits non-zero, and starts no agent.
+  - A resume whose story artifact, target tree and harness are all establishably unchanged since the escalation refuses, and the message names the escalation reason and says what to change.
+  - A resume refuses only on positive evidence of sameness - anything the guard cannot establish does not refuse, so a harness root that is not a git repository produces no false refusal.
+  - Amending the story artifact clears that refusal, and the digest by itself does not authorize or trigger a resume.
+  - state.json gains its new fields with defaults, and a state.json written before this story still loads.
+  - A resumed stage reuses the stage baseline recorded for that stage and attempt rather than capturing a new one, so the revert check decides against the state the stage originally found.
+  - Nothing routes on the escalation summary, the attempt archive or the stage baseline. state.json remains the coordinator's only routing source, and the resume reads the stage from it.
+  - A run resumed and carried to completion produces a completion report, a completion commit, and an event stream from which the whole run including the escalation and the resume can be reconstructed.
+  - Neither _complete nor _escalate establishes anything about the working tree it commits, and a test states that limit explicitly so the next reader finds it stated rather than discovers it.
+  - The full test suite passes, in the working tree and in a clean clone.
+
+technical_plan:
+  implementation_steps:
+    - In _escalate, run git add -A and commit on the story branch before the state is saved, so the recorded state carries the commit. Skip the commit when there is nothing to commit and leave the recorded commit empty.
+    - Build the commit subject so it cannot collide with _complete's "<story-id>: <title>" form - lead with a marker of what it is and name the stage execution stopped at. The body says it is a holding place and not a decision about the work, carries the escalation reason, and names the command that returns the changes to the working tree.
+    - Add fields to RunState for the escalation commit, the story artifact digest and the harness revision, each with a default so RunState(**json) still loads a state file written before this story.
+    - Set the story digest when the run's state is first created, from the same story text read_story was given, and set the escalation commit and harness revision in _escalate.
+    - Narrow run_story's already-ended refusal so it fires on a completed run and not on an escalated one. Keep its existing message, which is about finished work on a finished branch.
+    - On an escalated run, decide the resume before any run state is written - evaluate the unchanged guard, then set the stage, then archive the interrupted attempt, then set status back to running and save.
+    - Implement the unchanged guard as three establishable comparisons: the story artifact's digest against the recorded one, the branch's HEAD and porcelain status against the recorded escalation commit, and the harness revision against the recorded one. Refuse only when all three are establishable and identical; treat anything the guard cannot establish as not-the-same, so it produces no false refusal.
+    - Archive the interrupted attempt with the existing archive_attempt, passing the stage artifacts it already derives from the workflow plus the rendered prompt filenames for that attempt number. Refuse when the attempt directory already exists, naming it, rather than overwriting evidence.
+    - Add a stage option to scripts/l5-run and pass it through to run_story, keeping the script a thin entry point. Default to the recorded stage. Refuse a stage the loaded workflow does not define, through the same shape as the existing pre-flight refusals - exit 1, one message per problem, nothing created.
+    - Append one resumed event naming the stage, reusing the existing append_event path so events.log and execution-history.json stay two renderings of one write.
+    - Leave the escalation commit in place on a resume rather than resetting it. Nothing is discarded, so no ref is needed to preserve abandoned work, and _complete commits the delta on top.
+    - Write the test that states what neither terminal commit establishes about the tree, worded as a property of the coordinator rather than as a property of one commit, so the clean-tree story can repoint it.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The escalation commit and its recorded fields, the new RunState fields, the narrowed refusal, the resume path with its unchanged guard and attempt archive, the stage override, and the resumed event.
+    - file: scripts/l5-run
+      stage: implementer
+      reason: The stage option, parsed and passed through; the script stays a thin entry point.
+    - file: tests/test_coordinator_contract.py
+      stage: implementer
+      reason: The standing contract names state.json's fields and the statuses a run can end in; new fields and a resumable status are deliberate changes to it rather than incidental ones.
+    - file: tests/test_story_020_validation.py
+      stage: tester
+      reason: Independent validation of the escalation commit and its form, the resume at recorded and overridden stages, the carried counters, the attempt archive and its refusal, the unchanged guard in both directions, the completed-run refusal, and the stated limit on what the terminal commits establish.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the escalation commit, the resume path and its guards, the new state fields, the answer to story-010's open question about an existing attempt directory, and the limit this story states rather than closes about the tree the terminal commits stage.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - scripts/l5-run
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/
+    - workflows/
+    - schemas/
+    - prompts/
+    - orchestration/context_assembler.py
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - scripts/l5-plan
+    - scripts/l5-init
+    - scripts/l5-assist
+    - scripts/l5-status
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .harness/config.yaml
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm the property the story exists to guarantee directly - escalate, check out another branch, and assert that branch is untouched - rather than by inspecting the commit alone.
+  - Confirm the escalation commit's subject cannot be confused with a completion's by asserting on its form, and confirm a successful run's commit is unchanged.
+  - Confirm an escalation with nothing to commit records no commit and does not fail.
+  - Confirm a resumed run continues at the recorded stage, that a stage argument overrides it, and that a stage the loaded workflow does not define refuses, exits non-zero and starts no agent.
+  - Confirm the escalated attempt's rendered prompt and verification iteration are present and unmodified after a resumed run finishes, which is what carrying the counters forward buys.
+  - Confirm the interrupted attempt is archived before the resumed stage runs, and that a resume whose archive directory already exists refuses naming it. This is the case story-010 recorded as open and no test exercised.
+  - Confirm the unchanged guard refuses when the story, tree and harness are all establishably identical, and that amending the story clears it. Confirm it does not refuse when any input cannot be established, and that the digest alone neither authorizes nor triggers a resume.
+  - Confirm a state.json written before this story still loads, by loading one rather than by reading the dataclass.
+  - Confirm a completed run still refuses with its existing message about the run directory and the branch.
+  - Confirm a resumed stage reuses the stage baseline recorded for that stage and attempt rather than capturing a new one, and that the revert check on that stage therefore decides against the state the stage originally found.
+  - Confirm a run escalated and then resumed to completion can be reconstructed end to end from events.log and execution-history.json, including the escalation and the resume.
+  - Confirm state.json remains the only routing source - the resume reads its stage from it, and nothing routes on the escalation summary, the attempt archive or the stage baseline.
+  - Confirm the test stating what neither terminal commit establishes about the tree actually fails when that statement stops being true, so it is a statement about the coordinator rather than a comment.
+  - Confirm the full suite passes, in the working tree and in the clean clone.
+  - Any assertion this story adds about an absence must carry a negative control demonstrating it can fail.
+
+constraints:
+  - This story does not establish that the tree it commits is the tree the run produced. Both _complete's and _escalate's git add -A stage whatever is in the working tree, and an escalation commit does that on a tree that is by definition unfinished. .harness/requests/commit-only-what-the-run-produced.md is the story that closes it, and it lands after this one by decision. State the limit as a property of the coordinator so that story repoints the assertion rather than deleting it.
+  - Do not exempt a resumed run from a future clean-tree pre-flight, and do not write any rule about it here. The clean-tree story settles which runs the check applies to - a fresh run and a resume of an escalated run, whose tree this story leaves clean at escalation, but not a resume of a crashed run, whose dirty tree is that run's own unfinished work. Deciding it here by accident is the failure both requests were written to avoid.
+  - Do not add a second record of where execution stands. state.json already carries the stage, the retry count, the verification iterations and the branch, and the run directory already holds every stage artifact and the attempt archive. A fact state.json does not carry is added to state.json; it does not get a shadow file.
+  - Do not reinitialize state on a resume. retry_count and verification_iterations key the rendered prompt and verification iteration filenames, and a resume that reset them would overwrite the escalated attempt's evidence.
+  - Do not capture a fresh stage baseline for a stage being resumed. story-019 defines the capture-once-reuse rule and this story inherits it; a second mechanism here would put one fact in two places.
+  - Do not write a checkpoint. The requests README records checkpoints as deliberately not written, judging them possibly redundant given state.json after every stage plus the attempt archive, and this story finds that judgement holds - it resumes from the artifacts and state that already exist, which is what Chapter 18 names as the mechanism.
+  - Do not make resuming inferred from anything but the recorded status. The digest informs a refusal message; it does not authorize a resume, and an incidental edit to a story must not silently restart a run.
+  - Do not change the refusal for a completed run. Re-running finished work onto a finished branch reports success having changed nothing, and that guard is unrelated to this one.
+  - Do not change escalation-summary.md's content. Its richness is a separate request that is deliberately sequenced after this story, because written before resume exists it could only advise inspecting and re-running from the start.
+  - Do not change what _complete does. Its commit, its report and its event stay as they are.
+  - Do not add a new artifact for this story if state.json and the existing run-directory artifacts carry the facts. If one is added anyway it is declared in the workflow rather than named in orchestration, carries a schema listed in schemas/manifest.json if it has a shape, is absent from state.json, and nothing routes on it.
+  - No test may be weakened or skipped, and an existing test that goes red on landing is repointed rather than relaxed.

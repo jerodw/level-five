@@ -1,0 +1,181 @@
+story:
+  id: story-019
+  title: Revert an implementer's edits to where the stage found them, not to HEAD
+  description: |
+    The revert check reverts governed paths with git checkout HEAD -- <paths>
+    inside a clone. That is the right baseline only for files that existed
+    before the story. On a retry the implementer routinely edits a test the
+    tester created earlier in the same run - a file with no version at HEAD -
+    the checkout fails, the check reports that it could not run, and the
+    coordinator escalates.
+
+    story-018 escalated on exactly this, on the first retry after the revert
+    check shipped. Its attempt 1 is the check working as designed: two forced
+    repairs identified and permitted with no human adjudication. Its attempt 2
+    could not be decided at all, because the clean-clone failure had been a
+    defect in a test the tester wrote this run, the retry sent the implementer
+    to fix it, and fixing it put tests/test_story_018_validation.py in the
+    implementer's record. That file has no HEAD version because it was created
+    during the run and the coordinator commits only at _complete.
+
+    This is the ordinary shape of a retry, not an edge case. A clean-clone or
+    verification failure is frequently a defect in a test written this run, the
+    retry routes to the implementer, and the implementer edits that test. Every
+    such retry escalates today, so the check blocks retries generally rather
+    than only story-018's.
+
+    story-017 knew the condition and misjudged its frequency: revert_check's
+    docstring names "a governed path with no HEAD version" among the cases it
+    refuses on. Refusing was the right stance for a clone it cannot build, and
+    that stance stays. What changes is that a file created during the run stops
+    being such a case, because its pre-stage state is knowable.
+
+    So this story replaces the baseline. Each governed path is reverted to the
+    state it was in when the stage started, which is the question the check has
+    always been asking: was this edit forced? For a file that predates the
+    story that state is its HEAD content and nothing changes. For a file the
+    tester created earlier in the run it is the content the tester left. The
+    fix is not to skip paths with no HEAD version - skipping decides nothing
+    and would report a permission the check never established, which is the
+    assertion-that-cannot-fail failure mode tests/test_baseline_honesty.py
+    exists to prevent.
+
+    The pre-stage state is captured as a run-directory artifact rather than as
+    a private detail of the check, because .harness/requests/06-resume-continuity.md
+    is planned beside this story and needs the same fact. Answering "what did
+    the tree look like before this stage ran" twice is how this repository has
+    repeatedly ended up with one fact in two places - the era constant,
+    max_retries, the schema inventory - and widening a private mechanism
+    afterwards is the expensive direction.
+
+    The capture rule that serves both is one sentence: capture when no baseline
+    exists for this stage and attempt, reuse otherwise. That is what stops a
+    resumed stage from snapshotting its own completed edits, which would make
+    the revert a no-op, the suite pass, and the check report a permission it
+    never established. It is exercisable today, because run_story already
+    resumes a run whose status is running.
+
+tasks:
+  - Capture a stage baseline immediately before each stage agent is invoked - the content of every file under that stage's declared may_not_create prefixes, written to the run directory under the declared baseline name, keyed by stage and attempt.
+  - Take the captured file set from git ls-files --cached --others --exclude-standard under each prefix, the same tracked-plus-untracked set _build_clone uses, so a file an earlier stage of this run created is captured.
+  - Capture only when no baseline exists for this stage and attempt, and reuse the existing one otherwise, so a resumed stage is decided against the state it originally found rather than against its own completed edits.
+  - Turn the workflow's revert_check declaration into an object naming both the result artifact and the baseline directory, so one key still switches the whole check on and neither name appears in orchestration code.
+  - Replace the clone's git checkout HEAD -- <paths> with a restore from the captured baseline - baseline content for a path the baseline holds, deletion for a governed path the baseline does not hold, because a path absent from the baseline did not exist when the stage started.
+  - Remove HEAD as a baseline from the revert check entirely, so no code path reverts to HEAD and no path is skipped for lacking a HEAD version.
+  - Keep _build_clone's default of reverting nothing, so the clean-clone check's clone, artifact, events and routing are unchanged.
+  - Escalate naming the reason when the check still cannot run - a clone that cannot be built, or a stage that declares the check with no baseline captured - rather than permitting by default.
+  - Update schemas/revert-check-result.schema.json so the paths field describes what is now reverted, and add an optional baseline field naming the directory the content was restored from.
+  - Record the baseline in .harness/docs/ARCHITECTURE.md's run-directory anatomy, including that nothing routes on it, that it is not in state.json, that it carries no schema because it is a directory of file copies rather than a JSON artifact, and how it relates to Chapter 18's checkpoints.
+
+acceptance_criteria:
+  - story-018's escalation is reproduced and then decided - a run whose tester creates a file, whose clean-clone check or verifier fails, and whose retried implementer edits that file escalates before the change and reaches a decision after it.
+  - A forced edit to a file created earlier in the same run is permitted, demonstrated by a modification without which the suite fails, and the record names what was reverted.
+  - An additive edit to a file created earlier in the same run is escalated, demonstrated by a test function that passes both before and after the implementer's change.
+  - A governed path that predates the story is still reverted to its HEAD content, and its permitted and escalated outcomes are both unchanged by this story.
+  - A governed path the baseline does not hold is deleted in the clone rather than skipped, so an edit to a file the stage itself brought into existence is decided rather than passed over.
+  - No code path in the revert check reverts to HEAD, and no governed path is skipped for lacking a HEAD version.
+  - A clone that genuinely cannot be built still reports that the check did not run, with the reason, and escalates rather than permitting.
+  - A stage that declares the revert check with no baseline captured escalates naming that, rather than falling back to any other baseline.
+  - The baseline holds a file an earlier stage of the same run created but never committed, which is the case git ls-files --cached alone would miss.
+  - A stage re-entered with a baseline already recorded for that stage and attempt reuses it and does not overwrite it, so the check decides against the state the stage originally found.
+  - The baseline directory and the result artifact are both named by the workflow declaration, and removing that declaration disables the capture and the check with no change to orchestration code.
+  - No stage name, no prefix, no artifact name and no baseline name introduced by this story appears in orchestration/story_coordinator.py.
+  - Nothing in orchestration routes on the baseline. The revert check consumes it to build a clone; no branch in run_story reads it to decide where execution goes.
+  - The baseline is absent from state.json, and state.json's field set is unchanged by this story.
+  - The check still reverts every governed path at once and decides on one run of the suite, and the granularity limit stated in the module docstring and in the schema description is unchanged.
+  - schemas/revert-check-result.schema.json's paths field describes the baseline the check now uses rather than HEAD, and any assertion about that description moves with it.
+  - The clean-clone check is unaffected - same clone, same artifact, same events, same routing - with the revert parameter still defaulting to reverting nothing.
+  - The full test suite passes, in the working tree and in a clean clone.
+
+technical_plan:
+  implementation_steps:
+    - Add a capture function taking the run directory, the target root, a stage and an attempt number, and writing the content of every file under that stage's declared may_not_create prefixes into <baseline>/<stage>-attempt-N/ mirroring repository-relative paths. It names no stage and no prefix; both come from the loaded workflow.
+    - Enumerate the files with git ls-files --cached --others --exclude-standard -- <prefix> against the target root. Tracked files alone would miss the untracked file the tester created this run, which is the whole defect being fixed.
+    - Create the attempt directory even when it captures nothing, so its existence answers "was a baseline taken" and its absence is a distinct, reportable condition.
+    - Return early when the attempt directory already exists, so a stage re-entered against a recorded baseline reuses it. This is the rule that keeps the check honest on a resumed run.
+    - Call the capture in run_story immediately before the stage agent is invoked, beside the existing conditional_before = artifact_signatures(...) snapshot, which is already the place the coordinator asks what something looked like before a stage ran. Use state.retry_count + 1 as the attempt number, the same expression the rendered prompt filename uses.
+    - Capture over the stage's declared may_not_create prefixes rather than the grant-subtracted list, so the enforced-prefix computation stays where it is, after the stage. Capturing a superset costs a few file copies; the restore set stays grant-subtracted and unchanged.
+    - Change the implementer stage's revert_check in workflows/story-workflow.json from a string to an object with a result key naming revert-check-result.json and a baseline key naming the baseline directory. One key still turns the check on, and both names stay off Python.
+    - Read both names off that object in run_story and pass the resolved baseline directory to the check, exactly as the artifact name is read today.
+    - Replace _build_clone's git checkout HEAD -- <paths> with a restore from a baseline directory - copy the baseline's file over the clone's for each governed path it holds, and remove the clone's file for each governed path it does not. Keep the parameter defaulting to reverting nothing so the clean-clone path is untouched, and raise loudly when paths are named with no baseline given.
+    - Thread the baseline through run_clean_clone, which stays the single build-a-clone-and-run-the-suite path. Do not add a second clone builder.
+    - Report a missing baseline directory as a check that did not run, with the reason, alongside the existing unbuildable-clone case.
+    - Update schemas/revert-check-result.schema.json - the paths description stops saying "reverted from HEAD" and says what the baseline now is, and an optional baseline field names the directory restored from, absent when none was resolved.
+    - Repoint the tests that construct a workflow with revert_check as a string to the object form. Repointing, not weakening - every assertion and every record stays as it is.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The baseline capture and its reuse rule, the call site before the stage agent, reading both names off the declaration, the restore in _build_clone, and the missing-baseline cannot-run case.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The implementer stage's revert_check declaration becomes an object naming the result artifact and the baseline directory.
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: The paths field no longer describes reverting from HEAD, and an optional baseline field names what was restored from.
+    - file: tests/test_story_017_validation.py
+      stage: implementer
+      reason: Its constructed workflows declare revert_check as a string and stop matching the shipped declaration; repointed to the object form with every assertion unchanged.
+    - file: tests/test_story_019_validation.py
+      stage: tester
+      reason: Independent validation of the reproduced escalation, the permitted and escalated cases for a run-created file, the unchanged pre-existing-file behavior, the absent-from-baseline deletion, the reuse rule, the cannot-run cases, and the declaration-driven wiring.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the stage baseline in the run-directory anatomy, why the baseline is the stage rather than HEAD, the capture-once-reuse rule, and how the baseline relates to Chapter 18's checkpoints.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - schemas/revert-check-result.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/
+    - scripts/
+    - prompts/
+    - orchestration/context_assembler.py
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - schemas/clean-clone-result.schema.json
+    - schemas/changed-files.schema.json
+    - schemas/story.schema.json
+    - schemas/manifest.json
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .harness/config.yaml
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm story-018's escalation is reproduced before the change and decided after it, by constructing the run shape that caused it - a tester-created file, a failing check, a retried implementer editing that file - rather than by asserting on story-018's archived run.
+  - Confirm a forced edit to a run-created file is permitted and an additive one is escalated, the same two outcomes the check already distinguishes for pre-existing files, now reachable on a retry.
+  - Confirm a governed path that predates the story is still decided against its HEAD content, in both directions, so this story changed the baseline for run-created files without changing it for anything else.
+  - Confirm a governed path absent from the baseline is deleted in the clone rather than skipped, and that the resulting decision is a real one.
+  - Confirm no code path reverts to HEAD, by search over orchestration and by the absence of any skip for a path lacking a HEAD version.
+  - Confirm a genuinely unbuildable clone and a missing baseline both report a check that did not run, with the reason, and escalate rather than permitting.
+  - Confirm the baseline captures a file an earlier stage created and never committed, and that a tracked-files-only enumeration would have missed it.
+  - Confirm a stage re-entered with a baseline already recorded reuses it unmodified, and that this is what keeps the check from deciding against a stage's own edits.
+  - Confirm both names are read off the workflow declaration, by removing that declaration and observing the capture and the check disappear with no code change, and by grepping orchestration/story_coordinator.py for the stage name, the prefix, the artifact name and the baseline name.
+  - Confirm nothing routes on the baseline and that it is absent from state.json, whose field set this story leaves unchanged.
+  - Confirm the granularity limit and its statements in the module docstring and the schema description are unchanged, and that the schema's paths description matches what the check now reverts.
+  - Confirm the clean-clone check is unaffected, with the same clone, artifact, events and routing, and that no second clone builder was added.
+  - Confirm the full suite passes, in the working tree and in the clean clone.
+  - Any assertion this story adds about an absence must carry a negative control demonstrating it can fail.
+
+constraints:
+  - This story is not governed by the change it makes. The coordinator loads the workflow definition at run start, so the object-form revert_check declaration written by this story's implementer will not be in the definition its own run already holds - the same gap story-007 hit with may_not_create, story-014 with clean_clone and story-017 with revert_check. Its own run still reverts from HEAD, so a retry whose implementer edits a file the tester created this run will escalate on exactly the defect being fixed. That is expected, not a defect, and recovery is by hand because resume does not exist yet.
+  - Do not fix this by skipping governed paths that have no HEAD version. Skipping decides nothing and reports a permission the check did not establish.
+  - Do not change the granularity. The check reverts every governed path at once and decides on one run of the suite, and the limit stated in the module docstring and in the schema description stays exactly as story-017 wrote it.
+  - Do not change the clean-clone check's behavior. The revert parameter still defaults to reverting nothing, and every artifact, event and routing decision that check drives stays as it is.
+  - Do not write a second clone builder. run_clean_clone stays the single build-a-clone-and-run-the-suite path.
+  - Do not commit during a run so that files gain a HEAD version. The coordinator commits once, at _complete, and Appendix A's design depends on that.
+  - The baseline is evidence, never state. It does not go in state.json, nothing in orchestration routes on it, and the check consumes it only to build a clone.
+  - The baseline carries no schema and no schemas/manifest.json entry, because it is a directory of file copies rather than a JSON artifact. The inventory asserts exact set equality in both directions and must not gain an entry with no schema file behind it.
+  - The baseline is narrower than Chapter 18's checkpoints and the documentation must say so rather than leaving a reader to wonder. It records content for a bounded set of paths so one check can ask one question; it is not a known-good execution boundary and records no resumable point. The requests README's decision not to write checkpoints stands.
+  - Do not reuse or vary a canonical artifact name, and do not resurrect a retired one. The retired list is absent from this repository today and must stay absent.
+  - The capture-once-reuse rule is this story's to define, because .harness/requests/06-resume-continuity.md is planned beside it and inherits the rule rather than adding a second mechanism.
+  - Adding a declaration to the shipped workflow retargets the end-to-end tests of checks already declared on that stage. Repair by mirroring the workflow, never by weakening a test - the pattern tests/test_story_007_validation.py's ownership_only helper already establishes.
+  - No test may be weakened or skipped to make the check pass.
+  - This story does not change stage output ownership, blocked paths, or any other declaration in the workflow definition.

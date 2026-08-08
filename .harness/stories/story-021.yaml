@@ -1,0 +1,148 @@
+story:
+  id: story-021
+  title: A run does not commit what it did not produce
+  description: |
+    _complete finishes a run with git add -A, which stages the entire working
+    tree - including anything already sitting there uncommitted when the run
+    started. The story's commit therefore contains whatever the developer
+    happened to have in progress, silently, attributed to the story. Since
+    story-020, _escalate commits the same way, on a tree that is by definition
+    unfinished, so the coordinator now commits on both terminal paths and
+    neither establishes what it is committing.
+
+    Observed, not hypothetical. story-013's commit contains
+    .harness/stories/story-013.yaml, 237 lines, visible in
+    .harness/runs-archive/story-013-vacuous-tests/pre-reset-branch.patch. No
+    stage produced that file - l5-plan wrote it before the run began and left
+    it uncommitted, and git add -A absorbed it. The run's own record of what
+    changed names four files and does not include it. The consequence was not
+    theoretical either: because the artifact went into the story commit rather
+    than onto the base branch, discarding the branch for the re-run would have
+    destroyed the only copy of the story's definition, and it had to be
+    recovered from the archive.
+
+    git add -A is not the defect and replacing it with "stage only the paths
+    the stage records name" would be a regression. The tree the verifier
+    verified is the tree that should be committed; staging less produces a
+    commit no stage ever validated and silently drops a real change no record
+    happened to name. The defect is upstream: the verifier verified a tree that
+    already contained the developer's unrelated work, so that work was never
+    checked either - it was carried through the whole run. The fix belongs at
+    the start, not the end. Establish that the tree is clean before any stage
+    runs, and git add -A becomes an accurate statement about what the run
+    produced.
+
+    Which runs the check applies to is the question .harness/requests/06-resume-continuity.md
+    and this request were planned together to settle, and story-020's
+    escalation commit settles it. A fresh run must start from a known tree. A
+    resume of an escalated run must too, because story-020 leaves the tree
+    clean when a run escalates - so anything uncommitted when the developer
+    resumes is the developer's own fix, and committing it deliberately is
+    exactly what this check is for. A resume of a crashed run is the one
+    exception, and it is not an exception to the rule so much as a different
+    tree: nothing commits when a process dies, so that working tree holds the
+    run's own unfinished work and refusing it would refuse the run its own
+    state.
+
+    That leaves the three pre-flight guards on an escalated resume saying three
+    different things and overlapping nowhere. A clean tree with the story and
+    harness unchanged refuses because the resume would repeat itself. A dirty
+    tree refuses naming the paths. A clean tree with a new commit on the branch
+    resumes. And a resumed run's completion commit contains only what the
+    resumed run produced, exactly as a fresh one does.
+
+tasks:
+  - Establish that the target repository's working tree is clean before any stage runs, refusing the run when it is not.
+  - Apply the check to a fresh run and to a resume of a run that escalated, and skip it for a resume of a run that was still running, whose working tree holds that run's own unfinished work.
+  - Refuse above the run-directory creation and the branch checkout, so a refusal leaves no run directory, no state.json, no log, no new branch and invokes no agent.
+  - Name the dirty paths in the refusal message and say that committing or stashing them clears it.
+  - Repoint the assertion story-020 left stating that neither terminal commit establishes anything about the tree, to the guarantee this story establishes and the one case it does not.
+  - Record in the architecture document which runs the check applies to, why a crashed run's resume is excluded, and how the pre-flight guards on an escalated resume divide between them.
+
+acceptance_criteria:
+  - A fresh run whose target tree has unrelated uncommitted changes refuses, exits 1, creates no run directory, checks out no branch and invokes no agent.
+  - A fresh run whose target tree is clean is unaffected in every observable way - same artifacts, same events, same routing, same commit.
+  - The refusal message names the dirty paths and says that committing or stashing them clears it.
+  - A resume of an escalated run whose tree is dirty refuses the same way, because story-020 left that tree clean when the run escalated.
+  - A resume of a run whose status is running is not refused for a dirty tree, because that tree holds the run's own unfinished work.
+  - A first run of a newly planned story works end to end, which is the case a strict rule breaks and the case the planner committing its own artifact is what keeps working.
+  - A story artifact left uncommitted refuses the run and names that path, rather than being exempted from the check.
+  - story-013's regression case holds: a story artifact does not appear in a story commit.
+  - A completed run's commit contains the files the stage records name plus the documenter's outputs, and nothing that was in the tree before the run started.
+  - An escalated run's commit contains what the run produced and nothing that was already dirty when it started, on a fresh run and on a resumed escalated run alike.
+  - The one remaining case where a terminal commit stages more than the run produced is a resumed crashed run, and a test states that limit rather than leaving a reader to discover it.
+  - There is no flag, environment variable or configuration key that skips the check.
+  - The check reads the target repository only. It creates no commit, no branch, no stash and no index change of its own.
+  - The full test suite passes, in the working tree and in a clean clone.
+
+technical_plan:
+  implementation_steps:
+    - Add a pre-flight check on the target root reading git status --porcelain, returning the dirty paths.
+    - Call it in run_story beside the existing story reading and stage-exception refusals, above the run-directory creation and the branch checkout, so a refusal leaves nothing behind.
+    - Decide whether the check applies from the state the run is starting from - no state, or a state whose status is escalated, means it applies; a state whose status is running means it does not. That state is already loaded for the resume decision story-020 added.
+    - Refuse through the same shape the existing pre-flight refusals use - exit 1, one message per problem, nothing created - so the refusal shape stays a single code path rather than a third copy of one.
+    - Word the message so it names each dirty path and says committing or stashing them clears it, since the friction is the point of contact a developer will meet most often.
+    - Leave _complete and _escalate alone. git add -A is correct once the tree is known, and this story does not change what either stages.
+    - Repoint story-020's assertion about what the terminal commits establish, keeping its subject and its strictness, to the guarantee that now holds and the crashed-resume case that does not.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The clean-tree pre-flight, its placement above the run-directory creation and branch checkout, and the decision about which runs it applies to.
+    - file: tests/test_story_020_validation.py
+      stage: implementer
+      reason: Its assertion that neither terminal commit establishes anything about the tree stops being true for fresh runs and escalated resumes; repointed to the guarantee that now holds, with its subject and strictness kept.
+    - file: tests/test_story_021_validation.py
+      stage: tester
+      reason: Independent validation of the refusal and what it leaves behind, the clean-run case, the message content, the three resume cases, the newly planned story's first run, story-013's regression case, and the absence of any bypass.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the pre-flight, which runs it applies to and why a crashed run's resume is excluded, how the guards on an escalated resume divide, and that git add -A is now an accurate statement about what a run produced.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/
+    - workflows/
+    - schemas/
+    - prompts/
+    - scripts/
+    - orchestration/context_assembler.py
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .harness/config.yaml
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm a fresh run with a dirty target tree refuses, exits 1, and leaves no run directory, no state.json, no log, no new branch, and started no agent - by the absence of each, not by the exit code alone.
+  - Confirm a clean fresh run is unaffected, comparing what it produces against a run of the same story before the check existed.
+  - Confirm the refusal names the dirty paths and says how to clear it.
+  - Confirm each of the three resume cases separately - an escalated resume with a dirty tree refuses, an escalated resume with a clean tree and a new commit proceeds, and a crashed resume with a dirty tree proceeds.
+  - Confirm a first run of a newly planned story works end to end, since that is the case a strict rule breaks.
+  - Confirm an uncommitted story artifact refuses and is named, and that story-013's archived patch is used as the regression case for a story artifact never appearing in a story commit again.
+  - Confirm a completed run's commit and an escalated run's commit each contain what the run produced and nothing that predated it, on a fresh run and on a resumed escalated run.
+  - Confirm the remaining limit - a resumed crashed run - is stated by a test rather than left to be discovered, and that the test fails when the statement stops being true.
+  - Confirm no flag, environment variable or configuration key skips the check, by search and by attempting it.
+  - Confirm the check only reads the target repository, creating no commit, branch, stash or index change.
+  - Confirm the full suite passes, in the working tree and in the clean clone.
+  - Any assertion this story adds about an absence must carry a negative control demonstrating it can fail.
+
+constraints:
+  - Do not change what _complete stages. git add -A is correct once the tree is known clean, and staging only the paths the stage records name would commit a tree no stage validated and silently drop a real change no record happened to name.
+  - Do not change what _escalate stages either, for the same reason. This story establishes the tree both commit on; it does not change either commit.
+  - Do not make the check advisory. A warning a run prints and proceeds past is what the harness effectively has today, and it is how story-013's artifact ended up in a story commit unnoticed.
+  - Do not add a flag, environment variable or configuration key to skip the check. A bypass on a correctness guard becomes the default invocation.
+  - Do not exempt the story artifact's path. l5-plan's planner already commits the artifact it wrote, so the exemption would buy nothing and would leave the artifact where story-013 showed it to be fragile - single-copy on a branch that may be discarded.
+  - Do not refuse a resume of a crashed run for a dirty tree. That tree holds the run's own unfinished work, because nothing commits when a process dies.
+  - Do not cross-check changed-files.json against the commit's contents. That is a different guarantee and a separate story.
+  - Do not change branch naming, the branch checkout, the already-ended refusal for a completed run, or any part of the resume decision story-020 added. This story reads the state that decision already loads; it does not make it.
+  - .harness/runs/ is gitignored and never enters a commit, so it is not what this check is about.
+  - Repointing story-020's assertion keeps its subject, its strictness and its options. Repair is not deletion, and an assertion that is empty for a new reason is no improvement.
+  - No test may be weakened or skipped, and an existing test that goes red on landing is repointed rather than relaxed.
