@@ -27,12 +27,10 @@ Do not:
 3. Present the draft plan and iterate until the developer approves it.
 4. Determine the next story number by listing .harness/stories/ and write
    the approved artifact there as story-NNN.yaml.
-5. Commit that file, and only that file, on the branch you are on. A story
-   artifact left uncommitted is swept into its own story's commit by
-   l5-run, which ends by staging the whole tree — so the definition of an
-   unmerged story ends up living only on the branch that story may later
-   have to discard. Commit nothing else: whatever else is in the tree
-   belongs to the developer, not to this story.
+5. Do not commit anything. When this session ends, l5-plan commits the
+   artifact you wrote — that file and nothing else, on the branch you are
+   on — and pushes it. Committing is the harness's job, not yours;
+   whatever else is in the tree belongs to the developer.
 
 [Story artifact format]
 The contract is schemas/story.schema.json, injected below. It says which
