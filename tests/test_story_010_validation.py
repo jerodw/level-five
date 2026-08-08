@@ -17,6 +17,7 @@ import pytest
 from conftest import story_diff
 
 import context_assembler
+import harness_config
 import story_coordinator
 from agent_runner import AgentResult
 
@@ -222,12 +223,28 @@ def test_the_attempt_number_matches_the_rendered_prompt_of_the_same_attempt(
     assert not (run_dir / "attempts" / "attempt-2").exists()
 
 
+def stage_attempt_directory(name: str) -> bool:
+    """A per-stage, per-attempt directory keyed by a stage the workflow defines.
+
+    story-019's stage baseline is kept at <baseline>/<stage>-attempt-N/, which
+    is the attempt-keyed *directory* family below rather than a suffixed
+    variant of a canonical artifact name - the thing this test exists to
+    forbid. The stage names come off the loaded workflow, so this admits an
+    attempt-keyed directory of a stage that exists and nothing else.
+    """
+    stem, sep, number = name.rpartition("-attempt-")
+    stages = {stage["name"] for stage
+              in harness_config.load_workflow(REPO_ROOT, "story-workflow")["stages"]}
+    return bool(sep) and stem in stages and number.isdigit()
+
+
 def test_no_suffixed_filename_variant_appears_anywhere_in_the_run(retry_then_pass):
     _, run_dir = retry_then_pass
     names = [p.name for p in run_dir.rglob("*")]
     for name in names:
         assert "attempt" not in name or name.startswith("prompt-") \
-            or name.startswith("attempt-") or name == "attempts", name
+            or name.startswith("attempt-") or name == "attempts" \
+            or stage_attempt_directory(name), name
 
 
 def test_the_verifiers_own_archive_and_the_root_verdict_are_unchanged(

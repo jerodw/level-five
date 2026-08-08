@@ -11,7 +11,7 @@
     },
     "paths": {
       "type": "array",
-      "description": "The repository-relative paths that were reverted from HEAD inside the clone, sorted: the stage's own modified and deleted entries falling under a prefix it declared it may not create, with the story's granted prefixes already subtracted. created entries are not collected, because the stage output ownership check has already escalated on them. This is the whole of what the decision below covers.",
+      "description": "The repository-relative paths that were reverted inside the clone, sorted: the stage's own modified and deleted entries falling under a prefix it declared it may not create, with the story's granted prefixes already subtracted. created entries are not collected, because the stage output ownership check has already escalated on them. Each is restored to the content the stage baseline named below holds for it — what the tree held when the stage started, which for a file that predates the story is its HEAD content and for a file an earlier stage of this run created is the content that stage left. A governed path the baseline does not hold is deleted in the clone rather than skipped, because it did not exist when the stage started. Nothing here is reverted to HEAD. This is the whole of what the decision below covers.",
       "items": { "type": "string" }
     },
     "command": {
@@ -41,6 +41,10 @@
     "output_tail": {
       "type": "string",
       "description": "The tail of the reverted run's combined stdout and stderr — for a permitted set, the failures the reverted edits were repairing. Absent when ran is false."
+    },
+    "baseline": {
+      "type": "string",
+      "description": "The directory the reverted content was restored from: the stage baseline captured immediately before the stage agent was invoked, keyed by stage and attempt under the run directory. It is a directory of file copies rather than a JSON artifact, so it carries no schema of its own, and it is evidence — nothing in orchestration routes on it. Absent when no baseline was resolved, which is one of the two ways the check can report that it did not run."
     },
     "reason": {
       "type": "string",
