@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "revert-check-result",
+  "description": "The coordinator's record of the revert check: after a stage that declares both a changed-files record and a may_not_create list, its own modifications and deletions under those prefixes are permitted iff reverting them makes the suite fail. A forced repair breaks the suite when reverted; new coverage does not. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it, and nothing in orchestration routes on it — it is evidence, like clean-clone-result. GRANULARITY: the check reverts every governed path at once and decides on that single run of the suite. A set containing one forced repair is therefore permitted in full, including any added coverage sitting in the other files of that set, and a single file mixing a forced repair with added coverage is not caught at all. The paths field states exactly what was reverted, so a reader can tell what the decision covered rather than assuming it discriminated per file. Optional fields are expressed by absence rather than by null, as clean-clone-result does: a check that could not run decided nothing.",
+  "type": "object",
+  "required": ["ran", "paths", "command", "python"],
+  "properties": {
+    "ran": {
+      "type": "boolean",
+      "description": "Whether the suite actually ran in the clone with the edits reverted. False when the check could not run, in which case reason says why and permitted, exit_code, output_tail and python_version are absent."
+    },
+    "paths": {
+      "type": "array",
+      "description": "The repository-relative paths that were reverted from HEAD inside the clone, sorted: the stage's own modified and deleted entries falling under a prefix it declared it may not create, with the story's granted prefixes already subtracted. created entries are not collected, because the stage output ownership check has already escalated on them. This is the whole of what the decision below covers.",
+      "items": { "type": "string" }
+    },
+    "command": {
+      "type": "string",
+      "description": "The command executed with the clone as its working directory, taken from the target repository's configured test_command with its interpreter replaced by the one named below."
+    },
+    "python": {
+      "type": "string",
+      "description": "The interpreter the run used: .harness/config.yaml's clean_clone_python when that key is set, and test_command's own interpreter otherwise."
+    },
+    "permitted": {
+      "type": "boolean",
+      "description": "Whether the edits are permitted. True when the suite failed with every path above reverted, which is what makes the set maintenance the change forced rather than validation the stage authored. False escalates the run immediately, without incrementing retry_count. Absent when ran is false, because a check that could not run permitted nothing and refused nothing."
+    },
+    "python_version": {
+      "type": "string",
+      "description": "The version that interpreter reported, so a reader can tell which Python the check exercised. Absent when the interpreter reported no recognizable version, which is what a test command that is not a Python interpreter does."
+    },
+    "clone_path": {
+      "type": "string",
+      "description": "Where the clone was built, under a temporary directory outside the target repository. The directory is removed once the run completes, so this identifies the run rather than naming a path to visit. Absent when no clone was built."
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "The suite's exit status in the clone with the paths reverted. Non-zero is the evidence behind permitted being true; zero is the evidence behind it being false. Absent when ran is false."
+    },
+    "output_tail": {
+      "type": "string",
+      "description": "The tail of the reverted run's combined stdout and stderr — for a permitted set, the failures the reverted edits were repairing. Absent when ran is false."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why the check did not run, naming what stopped it. Absent when ran is true."
+    }
+  }
+}

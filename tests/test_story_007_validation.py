@@ -204,25 +204,47 @@ def test_an_ownership_escalation_does_not_increment_retry_count(target_root,
     assert state_of(target_root)["retry_count"] == 0
 
 
+def ownership_only(tmp_path: Path, harness_root: Path) -> Path:
+    """The shipped workflow with the implementer's revert_check declaration off.
+
+    story-017 added a second check reading this same record: an edit under a
+    governed prefix is permitted only if reverting it makes the suite fail.
+    That is a decision about *modifications*, and these two tests are about the
+    ownership rule, which reads `created` alone. Removing the declaration takes
+    the newer check out of the picture — the subject, the record and the
+    assertions below are exactly what they were — so what they show is that
+    ownership does not escalate on a modification or a deletion. The revert
+    check's own behavior on those records is story-017's to demonstrate.
+    """
+    workflow = harness_config.load_workflow(harness_root, "story-workflow")
+    for stage in workflow["stages"]:
+        stage.pop("revert_check", None)
+    return mirror_harness(tmp_path, harness_root, workflow)
+
+
 def test_an_implementer_modifying_an_existing_test_does_not_escalate(target_root,
-                                                                     harness_root):
+                                                                     harness_root,
+                                                                     tmp_path):
     """A changed signature must be allowed to leave the suite compiling."""
     runner = Runner(target_root, records={
         "implementer": {"modified": ["src/app.py", "tests/test_app.py"],
                         "created": [], "deleted": []},
     })
-    code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
+    fake_root = ownership_only(tmp_path, harness_root)
+    code = story_coordinator.run_story("story-001", fake_root, target_root, runner)
     assert code == 0
     assert state_of(target_root)["status"] == "completed"
 
 
 def test_an_implementer_deleting_under_the_prefix_does_not_escalate(target_root,
-                                                                    harness_root):
+                                                                    harness_root,
+                                                                    tmp_path):
     runner = Runner(target_root, records={
         "implementer": {"modified": [], "created": [],
                         "deleted": ["tests/test_obsolete.py"]},
     })
-    assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 0
+    fake_root = ownership_only(tmp_path, harness_root)
+    assert story_coordinator.run_story("story-001", fake_root, target_root, runner) == 0
 
 
 def test_a_path_merely_containing_the_prefix_is_not_a_violation(target_root,

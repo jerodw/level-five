@@ -5,6 +5,7 @@
     "execution-history",
     "retry-guidance",
     "retry-history",
+    "revert-check-result",
     "story",
     "test-results",
     "verification-result"

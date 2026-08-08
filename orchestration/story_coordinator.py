@@ -4,6 +4,16 @@ The workflow definition says what should happen. The coordinator makes it
 happen: it assembles context, invokes stage agents, saves state, and
 routes execution from structured artifacts. It never reasons; every
 decision here is a rule applied to a recorded fact.
+
+The revert check defined below decides at one granularity, and it is worth
+knowing before reading its verdict as more than it is: it reverts the whole
+set of governed paths in a single run of the suite and decides on that one
+result. So a set containing one forced repair is permitted *in full*, added
+coverage in the other files of that set included, and a single file mixing a
+forced repair with added coverage is not caught at all. The record names the
+paths that were reverted, so a reader can see exactly what the decision
+covered. Reading the diff remains the verifier's job; this check bounds a
+class of edit, it does not audit one.
 """
 from __future__ import annotations
 
@@ -500,7 +510,9 @@ def _interpreter_version(interpreter: Path) -> str | None:
     return version if result.returncode == 0 and _VERSION.fullmatch(version) else None
 
 
-def _build_clone(target_root: Path, clone: Path) -> None:
+def _build_clone(
+    target_root: Path, clone: Path, *, revert: list[str] | tuple[str, ...] = ()
+) -> None:
     """Clone the target locally and commit its working tree into the clone.
 
     A clone, not a tree copy: the point of the check is that the story is
@@ -513,6 +525,12 @@ def _build_clone(target_root: Path, clone: Path) -> None:
     and untracked-but-not-ignored files — so the clone holds the same set of
     files _complete's `git add -A` would commit. The target repository is only
     read: every write happens inside the clone.
+
+    `revert` names repository-relative paths to restore from HEAD *inside the
+    clone*, after the working tree has been applied and before the commit, so
+    the clone holds every change the working tree carries except those. It
+    defaults to reverting nothing, which is the clean-clone check's behavior
+    and is unchanged by its existence.
     """
     result = subprocess.run(
         ["git", "clone", "--quiet", "--no-hardlinks", str(target_root), str(clone)],
@@ -545,6 +563,14 @@ def _build_clone(target_root: Path, clone: Path) -> None:
         destination = clone / rel
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+    if revert:
+        reverted = _git(clone, "checkout", "HEAD", "--", *revert)
+        if reverted.returncode != 0:
+            raise RuntimeError(
+                f"Could not revert {', '.join(revert)} from HEAD in {clone}: "
+                f"{reverted.stderr.strip()}"
+            )
 
     _git(clone, "add", "-A")
     commit = _git(
@@ -599,6 +625,7 @@ def run_clean_clone(
     test_command: str,
     clean_clone_python: str | None,
     destination: Path,
+    revert: list[str] | tuple[str, ...] = (),
 ) -> CleanCloneResult:
     """Run the configured test command in a fresh clone with the story committed.
 
@@ -607,6 +634,11 @@ def run_clean_clone(
     configuration names a `clean_clone_python`, so the check can exercise the
     oldest supported Python rather than whichever one the developer works in.
     The caller owns `destination` and removes it whatever the result.
+
+    This is the single build-a-clone-and-run-the-suite path. `revert` is passed
+    through to the clone builder and defaults to reverting nothing, so the
+    clean-clone check runs exactly as it did; the revert check is this same
+    operation with the governed paths restored from HEAD rather than applied.
     """
     argv = shlex.split(test_command)
     interpreter = clean_clone_python or argv[0]
@@ -625,7 +657,7 @@ def run_clean_clone(
         )
 
     clone = destination / "clone"
-    _build_clone(target_root, clone)
+    _build_clone(target_root, clone, revert=revert)
     _link_interpreter_roots(target_root, clone, [argv[0], interpreter])
 
     result = subprocess.run(
@@ -731,6 +763,145 @@ def _clean_clone_failures(output: str) -> str:
     if len(failures) > 5:
         return "; ".join(failures[:5]) + f"; and {len(failures) - 5} more"
     return "; ".join(failures)
+
+
+# --------------------------------------------------------------------------
+# The revert check
+#
+# A stage's may_not_create declaration says what it must not *add*. It says
+# nothing about modifying or deleting, deliberately: a legitimate change can
+# break an existing test, and the suite has to stay green. What must not
+# happen is the stage authoring its own validation. The two acts are separated
+# exactly, with no judgement, by reverting: maintenance is by definition the
+# edit without which the suite fails.
+#
+# So an edit under a prefix the stage declared it may not create is permitted
+# iff reverting it makes the suite fail. This is the clean-clone operation with
+# the governed paths restored from HEAD rather than applied.
+#
+# Granularity. The check reverts every governed path in one run and decides on
+# that one result — see the module docstring, which states plainly what that
+# does not catch.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GovernedEdits:
+    """The stage's own modifications and deletions under its governed prefixes.
+
+    `created` is not collected: the ownership check has already escalated on
+    it, so anything reaching here is an edit to something that already existed.
+    """
+
+    paths: tuple[str, ...]
+    prefixes: tuple[str, ...]
+
+
+def governed_edits(
+    run_dir: Path, record_name: str, prefixes: list[str]
+) -> GovernedEdits:
+    """Read a stage's record for the edits the revert check decides on.
+
+    Names no stage and no prefix; the caller passes the enforced list it has
+    already narrowed by the story's grants. Sorted, so the record and the
+    escalation reason are deterministic.
+    """
+    changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
+    paths, matched = set(), set()
+    for group in ("modified", "deleted"):
+        for path in changed.get(group, []):
+            for prefix in prefixes:
+                if path.startswith(prefix):
+                    paths.add(path)
+                    matched.add(prefix)
+    return GovernedEdits(tuple(sorted(paths)), tuple(sorted(matched)))
+
+
+@dataclass(frozen=True)
+class RevertCheckResult:
+    """What the revert check did, as it is recorded in the run directory.
+
+    `permitted` is absent from the record when the check did not run, following
+    the optional-by-absence convention the other coordinator-written records
+    use: a check that could not run decided nothing, and null would claim it
+    decided something.
+    """
+
+    result: CleanCloneResult
+    paths: tuple[str, ...]
+    permitted: bool | None
+
+    def as_record(self) -> dict:
+        record = {"ran": self.result.ran, "paths": list(self.paths)}
+        record.update(
+            {key: value for key, value in self.result.as_record().items() if key != "ran"}
+        )
+        if self.permitted is not None:
+            record["permitted"] = self.permitted
+        return record
+
+
+def revert_check(
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    artifact: str,
+    paths: tuple[str, ...],
+) -> RevertCheckResult:
+    """Run the suite once with every governed path reverted, and record it.
+
+    Shaped like clean_clone_check: a scratch directory outside the target
+    repository, the shared runner, and removal in a finally whatever the
+    result. The decision is the suite's exit status — a non-zero exit means
+    the edits were needed, which is what makes them maintenance rather than
+    authorship.
+
+    A clone that cannot be built at all (a governed path with no HEAD version,
+    say) is reported as a check that did not run, with the reason, rather than
+    as a permission.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
+    command = config["test_command"]
+    try:
+        result = run_clean_clone(
+            target_root,
+            command,
+            config.get("clean_clone_python"),
+            scratch,
+            revert=list(paths),
+        )
+    except (RuntimeError, OSError) as error:
+        result = CleanCloneResult(
+            ran=False,
+            command=command,
+            python=config.get("clean_clone_python") or shlex.split(command)[0],
+            reason=f"the clone with the edits reverted could not be built: {error}",
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    decided = RevertCheckResult(
+        result=result,
+        paths=paths,
+        permitted=(result.exit_code != 0) if result.ran else None,
+    )
+    (run_dir / artifact).write_text(
+        json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
+    )
+    return decided
+
+
+def _revert_check_permitted(
+    run_dir: Path, stage_name: str, artifact: str, edits: GovernedEdits
+) -> None:
+    append_event(
+        run_dir,
+        f"{stage_name} edits under {', '.join(edits.prefixes)} permitted: the "
+        f"suite fails with {', '.join(edits.paths)} reverted",
+        kind="revert-check-permitted",
+        stage=stage_name,
+        artifacts=[artifact],
+    )
 
 
 def _refuse(story_path: Path, problems: list[str]) -> int:
@@ -983,6 +1154,42 @@ def run_story(
                     f"must not create under {ownership.prefix}",
                     duration_seconds=elapsed(),
                 )
+
+            # The revert check, on the same record and the same enforced
+            # prefixes the ownership check just used — the one record whose
+            # edits under those prefixes are known to be this stage's alone.
+            # The artifact name comes off the loaded workflow definition, so
+            # removing that declaration disables the check with no change here.
+            revert_artifact = stage.get("revert_check")
+            edits = (
+                governed_edits(run_dir, record_name, enforced)
+                if revert_artifact
+                else GovernedEdits((), ())
+            )
+            if edits.paths:
+                prefixes = ", ".join(edits.prefixes)
+                listed = ", ".join(edits.paths)
+                decided = revert_check(
+                    run_dir, target_root, config, revert_artifact, edits.paths
+                )
+                if not decided.result.ran:
+                    return _escalate(
+                        run_dir,
+                        state,
+                        f"the revert check on {name}'s edits under {prefixes} "
+                        f"could not run: {decided.result.reason}",
+                        duration_seconds=elapsed(),
+                    )
+                if not decided.permitted:
+                    return _escalate(
+                        run_dir,
+                        state,
+                        f"{name} edited {listed} under {prefixes}, which it "
+                        f"declared it must not create under, and the suite "
+                        f"still passes with those edits reverted",
+                        duration_seconds=elapsed(),
+                    )
+                _revert_check_permitted(run_dir, name, revert_artifact, edits)
 
         if name == "verifier":
             verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))
