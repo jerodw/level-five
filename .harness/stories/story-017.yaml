@@ -1,0 +1,179 @@
+story:
+  id: story-017
+  title: Decide an implementer's test edits by reverting them
+  description: |
+    Four story artifacts assert that the implementer's changed-files record
+    lists nothing under tests/. The harness enforces something narrower -
+    may_not_create, creation only - and has never escalated on the
+    difference. The prose rule adds no enforcement and is sometimes
+    impossible to satisfy, because a legitimate implementer change can break
+    an existing test and the suite has to stay green. Every finding it has
+    produced was a deviation from prose: story-011 had to add a schema to two
+    inventories asserting exact set equality, story-013 could not carry the
+    rule at all because deleting those inventories was its deliverable, and
+    story-012 shipped a schema that turned five story-013 assertions red and
+    recorded the deviation as not clearable by a retry.
+
+    Three separate causes - a schema inventory, a git baseline, a
+    working-tree endpoint - each removed by its own story, each followed by
+    another. Nobody can enumerate the next one.
+
+    The distinction the rule was reaching for is not "the implementer must
+    not touch tests/" but "the implementer must not author its own
+    validation". Two acts get conflated by a path prefix: authoring coverage,
+    which must not happen in the implementer, and keeping existing validation
+    runnable, which is maintenance. Reverting separates them exactly, with no
+    judgement: maintenance is by definition the edit without which the suite
+    fails.
+
+    So this story enforces that. After the implementer stage, an edit under a
+    prefix that stage declared it may not create is permitted iff reverting
+    it makes the suite fail. A forced repair breaks the suite when reverted;
+    new coverage does not. The machinery already exists - story-014's
+    clean-clone check clones the repository, applies the working tree,
+    commits, and runs the configured test command - so this is that same
+    operation with the governed paths restored from HEAD rather than applied.
+
+    The prose rule is not stored anywhere and there is nothing to delete.
+    prompts/implementer.md already states the create/modify distinction
+    correctly and prompts/planner.md injects the enforced rule verbatim; the
+    offending sentence is composed fresh by the planner into each story. This
+    story does not try to stop it being written - that is plan-time
+    validation's job. It makes it inert: once reverting decides permission, a
+    verification requirement restating the stricter rule has nothing to
+    adjudicate, because the coordinator has already permitted or refused the
+    edit before the verifier is asked.
+
+tasks:
+  - Add a revert parameter to _build_clone that restores the named repository-relative paths from HEAD inside the clone, after the working tree diff is applied and before the commit, and pass it through run_clean_clone. It defaults to reverting nothing, so the clean-clone check's behavior is unchanged.
+  - Add a revert_check declaration to the implementer stage of workflows/story-workflow.json naming the artifact the check writes, following the verifier's clean_clone declaration - the key is what turns the check on, and no artifact name appears in orchestration code.
+  - Add the check to the coordinator, immediately after the existing stage output ownership check and inside the same changed_files block, so it runs on the one record whose tests/ edits are known to be the implementer's alone.
+  - Collect the governed paths from the stage's own record - the modified and deleted entries falling under the stage's may_not_create prefixes after the story's granted prefixes have been subtracted. created is not collected, because the ownership check has already escalated on it.
+  - Run nothing when no governed path is named. No clone is built, no suite is run, and no artifact is written.
+  - Run the configured test command once in a clone with every governed path reverted at once, and escalate when it passes - a set of edits none of which the suite needs is authorship, not maintenance.
+  - Escalate immediately without incrementing retry_count, matching the ownership violation it sits beside, with a reason naming the stage, the prefix and the governed paths.
+  - Escalate naming the reason when the check cannot run at all, matching how the clean-clone check treats an unresolvable configured interpreter.
+  - Add schemas/revert-check-result.schema.json and its schemas/manifest.json entry, following clean-clone-result - coordinator-written, in no stage's schemas map, optional fields expressed by absence rather than by null.
+  - Write the check's record to the run directory under the declared artifact name, carrying the governed paths, whether the edits were permitted, and the evidence behind that decision.
+  - Append one event when the check permits the edits, so the run can show why an implementer was allowed into a governed prefix rather than only that it was.
+  - State the granularity limit where the check is defined - in the module docstring and in the schema's own description - saying plainly that the decision is on the whole set and what that does not catch.
+  - Add one line to the [Workflow facts] section of prompts/planner.md telling a plan not to restate an injected restriction more strictly than the workflow declares it.
+
+acceptance_criteria:
+  - An implementer edit under a governed prefix that a legitimate change forces is permitted, and the run records why - demonstrated by a modification without which the suite fails.
+  - An implementer edit under a governed prefix that adds coverage is escalated, demonstrated by a test function that passes both before and after the implementer's change.
+  - The check treats a deleted governed path the same way as a modified one - deleting a test the implementer's change broke is permitted, and deleting a test that still passes is escalated.
+  - A run whose implementer record names no path under a governed prefix performs no extra work: no clone is built, no suite is run, and no revert-check artifact appears in the run directory.
+  - The governed prefixes come from the implementer stage's may_not_create declaration in the loaded workflow, with the story's granted prefixes subtracted, so a story granting an exception for a prefix is not subject to the revert check on that prefix either.
+  - No stage name, no prefix and no artifact name introduced by this check appears in orchestration/story_coordinator.py - all three are read off the loaded workflow definition and the story.
+  - Removing the revert_check declaration from the workflow definition disables the check with no change to orchestration code.
+  - A clean revert escalates immediately without incrementing retry_count, and the escalation reason names the stage, the prefix and the governed paths in both events.log and escalation-summary.md.
+  - A check that cannot run escalates naming why, rather than permitting the edits by default.
+  - The check reverts every governed path in one run and decides on that one result. The record states which paths were reverted, so a reader can tell what the decision covered.
+  - The granularity limit is stated in the check's own module docstring and in schemas/revert-check-result.schema.json's description - a set containing one forced repair is permitted in full, and a single file mixing a forced repair with added coverage is not caught.
+  - Constructing the case the granularity misses shows the check reporting what it checked rather than claiming more.
+  - schemas/revert-check-result.schema.json exists, is listed in schemas/manifest.json, appears in no stage's schemas map, and passes the existing parametrized draft-2020-12, unsupported-keyword and no-additionalProperties checks.
+  - Nothing in orchestration routes on the revert-check record. It is evidence, like clean-clone-result.json and retry-history.json.
+  - _build_clone's revert parameter defaults to reverting nothing, and the clean-clone check's observable behavior - the artifact it writes, the events it appends, and the routing it drives - is unchanged.
+  - The rendered planner prompt tells a plan not to restate an injected restriction more strictly than the workflow declares it, confirmed by rendering prompts/planner.md through orchestration/context_assembler.py rather than by reading the template.
+  - No story artifact under .harness/stories/ needs the prose rule this story supersedes in order for the suite to hold.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Give _build_clone a keyword-only revert parameter defaulting to an empty sequence. After the git apply of the working tree diff and before git add -A, run git checkout HEAD -- <paths> inside the clone for the named paths, so the clone commits those files as HEAD has them while every other change is present. Reverting exactly the paths named is what keeps the record's claim and the clone's contents the same statement.
+    - Pass the same parameter through run_clean_clone, which stays the single build-a-clone-and-run-the-suite path. Both the clean-clone check and this one go through it.
+    - Add "revert_check" to the implementer stage in workflows/story-workflow.json naming revert-check-result.json, exactly as the verifier's clean_clone key names clean-clone-result.json.
+    - In run_story, inside the existing if record_name block and immediately after the ownership escalation, read stage.get("revert_check"). Do nothing when it is absent. The enforced prefix list is already computed there for the ownership check, with the story's granted prefixes subtracted and each grant logged - reuse that same list rather than recomputing it.
+    - Collect the governed paths with a small helper taking the record and the prefixes and returning the sorted modified and deleted entries falling under any of them. It names no prefix and no stage.
+    - When the list is empty, skip the check entirely - no clone, no suite, no artifact. The request is explicit that a check which can say nothing should not run.
+    - Otherwise call a revert_check function shaped like clean_clone_check - scratch directory from tempfile.mkdtemp, run_clean_clone with revert set to the governed paths, shutil.rmtree in a finally whatever the result - and write the record under the declared artifact name.
+    - Build the record from the CleanCloneResult the shared runner returns plus the governed paths and the permission decision. permitted is true when the suite failed with the edits reverted, which is what makes the edits maintenance.
+    - When the result did not run, escalate naming its reason. When it ran and the suite passed, escalate: the reason names the stage, the prefix, and the governed paths, and says the edits reverted clean. When it ran and the suite failed, append one event recording that the edits were permitted and fall through to the existing advance.
+    - Add schemas/revert-check-result.schema.json with ran, command, python and paths required, and python_version, clone_path, exit_code, output_tail, permitted and reason optional - absent rather than null, since the validator subset has no union keyword. The description carries the granularity limit.
+    - Add the schema's stem to schemas/manifest.json, which is a two-line edit under schemas/ and nothing else since story-013 moved the inventory out of tests/.
+    - Add the planner line to the [Workflow facts] section of prompts/planner.md beside the injected stage restrictions. It names no stage and no prefix, so the existing assertion that planner.md contains neither continues to hold.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The revert parameter on _build_clone and run_clean_clone, the check itself, the governed-path helper, the record, the event, and the escalations.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The implementer stage's revert_check declaration, which is what turns the check on.
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: The shape of the check's record, and where the granularity limit is stated for a reader of the artifact.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: The schemas inventory asserts exact set equality in both directions, so a new schema needs its entry.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: One line telling a plan not to restate an injected restriction more strictly than the workflow declares it.
+    - file: tests/test_story_017_validation.py
+      stage: tester
+      reason: Independent validation of the permitted case, the escalated case, the deleted-path case, the no-governed-path case, the grant interaction, the declaration-driven wiring, and the stated granularity limit.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the revert check, why the decision rests on reverting rather than on a path prefix, the granularity it decides at, and what it does not catch.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - schemas/revert-check-result.schema.json
+    - schemas/manifest.json
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - orchestration/context_assembler.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - scripts/
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - prompts/assist.md
+    - schemas/clean-clone-result.schema.json
+    - schemas/changed-files.schema.json
+    - schemas/story.schema.json
+    - .harness/stories/
+    - .harness/runs-archive/
+    - .harness/config.yaml
+    - .github/workflows/tests.yml
+
+verification_requirements:
+  - Confirm an implementer edit that a legitimate change forces is permitted, by constructing one - a modification without which the suite fails - and showing the check permits it and records why.
+  - Confirm an implementer edit that adds coverage is escalated, demonstrated by a test function that passes both before and after the implementer's change, so the only thing distinguishing it from a repair is that reverting it costs nothing.
+  - Confirm a deleted governed path is decided the same way, in both directions - a deleted test the change broke is permitted, a deleted test that still passes is escalated.
+  - Confirm a run whose implementer record names no governed path performs no extra work, by the absence of the artifact and by the check building no clone.
+  - Confirm the granularity limit by constructing the case it misses - a set mixing a forced repair with added coverage - and showing the check reports what it checked rather than claiming more.
+  - Confirm the escalation reason names the stage, the prefix and the governed paths in both events.log and escalation-summary.md, and that retry_count is unchanged by it.
+  - Confirm the check is driven entirely by the loaded workflow definition and the story, by removing the revert_check declaration and observing the check disappear with no code change, and by grepping orchestration/story_coordinator.py for the stage name, the prefix and the artifact name.
+  - Confirm the story's granted prefixes are subtracted before the check runs, so a story holding a stage exception for a prefix is not subject to the revert check on it.
+  - Confirm the clean-clone check is unaffected - same artifact, same events, same routing - with the revert parameter defaulting to reverting nothing.
+  - Confirm the new schema is listed in schemas/manifest.json, appears in no stage's schemas map, and that no orchestration code routes on the record.
+  - Confirm the planner guidance reaches a rendered prompt by rendering prompts/planner.md through orchestration/context_assembler.py, not by reading the template, and that planner.md still names no stage and no restricted prefix.
+  - Confirm no story artifact under .harness/stories/ was edited, and that no test in the suite depends on the prose rule this story supersedes.
+  - Confirm the full suite passes, in the working tree and in the clean clone.
+
+constraints:
+  - This story is not governed by the check it adds. The coordinator loads the workflow definition at run start, so the revert_check declaration written by this story's implementer will not be in the definition its own run already holds - the same gap story-007 hit with may_not_create and story-014 hit with clean_clone. Enforcement begins with the next story. This is expected, not a defect.
+  - Do not change may_not_create enforcement or any other declaration in the workflow definition. The creation rule is correct and has held throughout; this story adds a decision about modifications beside it, it does not replace it.
+  - Do not change the clean-clone check's behavior. The added parameter defaults to reverting nothing, and every artifact, event and routing decision that check drives stays exactly as it is.
+  - Do not write a second clone builder. The check is story-014's existing clone operation with the governed paths restored from HEAD instead of applied.
+  - Do not edit story-008, story-009, story-011, story-012 or story-013. They are execution records of what was written, not the source of it, and this story does not retroactively correct them.
+  - Do not add planner prompt guidance as the enforcement. The one line this story adds is a courtesy; the enforcement is the revert check. A written rule in an injected document has already been tried in this repository and failed, which is what tests/test_baseline_honesty.py exists because of.
+  - Do not close the mechanical hole at plan time. A story whose verification requirements restate a stage's may_not_create prefix more strictly than the workflow declares it is a planning error that .harness/requests/11-plan-time-validation.md proposes catching when the artifact is written. This story makes the requirement harmless; that one stops it being written.
+  - This story's own verification requirements must not restate the tests/ restriction more strictly than the workflow declares it. That would be the exact error the story exists to defuse.
+  - The check decides on the whole set of governed paths in one run. Do not add per-file or per-hunk reversion, and do not imply the check discriminates at a granularity it does not - state the limit where the check is defined, the way tests/test_baseline_honesty.py states its own narrowness.
+  - This does not replace the negative-control guidance. An implementer could weaken an assertion as part of an otherwise-forced repair, and reverting still fails; that is covered by prompts/verifier.md and by the verifier reading the diff, which it has done correctly in every recorded instance.
+  - The record is evidence, never state. Nothing routes on it, exactly as nothing routes on clean-clone-result.json or retry-history.json.
+  - Like clean-clone-result.json, the record is not archived on a retry, because it is named in no stage's outputs, changed_files or schemas map. That is a known cost carried deliberately, not an oversight to fix here.
+  - No test may be weakened or skipped to make the check pass, and any assertion this story adds about an absence needs a negative control demonstrating it can fail.
