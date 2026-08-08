@@ -1149,8 +1149,13 @@ def test_the_new_schema_ships_and_both_inventories_still_assert_equality():
     """Adding a schema file necessarily fails both set-equality assertions.
     They were updated rather than relaxed to a subset."""
     assert (REPO_ROOT / "schemas" / "clean-clone-result.schema.json").is_file()
+    # story-013 moved the declaration out of the two test files and into
+    # schemas/manifest.json. The forcing property is unchanged — the new
+    # schema still had to be declared — only the one place it is declared
+    # moved. The two files remain where the equality is asserted.
+    assert "clean-clone-result" in schema_validator.shipped_schemas(REPO_ROOT)
     for rel in ("tests/test_schema_validator.py", "tests/test_story_004_validation.py"):
         source = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert "clean-clone-result" in source, rel
+        assert "shipped_schemas()" in source, rel
         assert "issubset" not in source, rel
         assert ">=" not in source.split("SHIPPED")[1][:400], rel

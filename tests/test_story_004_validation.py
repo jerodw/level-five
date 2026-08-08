@@ -19,18 +19,10 @@ import story_coordinator
 import story_parser
 from agent_runner import AgentResult
 
-SHIPPED_SCHEMAS = {
-    "changed-files",
-    "test-results",
-    "verification-result",
-    "retry-guidance",
-    "story",
-    # story-011: the coordinator's own execution-history.json. No stage maps
-    # to it, and the inventory below stays exact.
-    "execution-history",
-    # story-014: the coordinator's own clean-clone-result.json, same reason.
-    "clean-clone-result",
-}
+# story-013: the inventory is declared once, in schemas/manifest.json. The
+# assertions below check the declaration against the directory; they no
+# longer hold a second copy of it.
+SHIPPED_SCHEMAS = set(schema_validator.shipped_schemas())
 
 ORIGINAL_STORY_SECTIONS = (
     "story",
@@ -120,8 +112,13 @@ def test_the_validation_step_hard_codes_no_artifact_or_schema_name():
 
 
 def test_schemas_directory_holds_exactly_the_named_schemas(harness_root):
-    present = {p.name for p in (harness_root / "schemas").iterdir()}
-    assert present == {f"{name}.schema.json" for name in SHIPPED_SCHEMAS}
+    directory = harness_root / "schemas"
+    schemas = {p.name for p in directory.glob("*.schema.json")}
+    assert schemas == {f"{name}.schema.json" for name in SHIPPED_SCHEMAS}
+    # And nothing else is in there: the narrowed glob must not let a stray
+    # file past that the previous iterdir() comparison would have caught.
+    present = {p.name for p in directory.iterdir()}
+    assert present == schemas | {schema_validator.MANIFEST_NAME}
 
 
 def test_every_required_field_is_also_a_declared_property(harness_root):
