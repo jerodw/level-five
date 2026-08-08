@@ -1,0 +1,131 @@
+story:
+  id: story-018
+  title: Validate the story artifact at plan time, where it was written
+  description: |
+    The planner writes a story artifact and hands it to the developer.
+    Nothing reads that artifact back until l5-run refuses it at pre-flight,
+    by which time the planning session has closed and the interactive
+    context that could have fixed it in one exchange is gone. Every
+    workflow stage's output is validated against a schema before the run
+    advances (story-004) and the story artifact is validated before a run
+    starts (story-005); the one artifact produced outside the coordinator
+    is the one nothing checks at the moment it is produced.
+
+    scripts/l5-plan cannot do the checking itself: it ends in os.execvp,
+    which replaces the script's process with the interactive session, so
+    the script never regains control. This story adds a separate entry
+    point instead - scripts/l5-validate - and teaches the planner to run
+    it between writing the artifact and committing it.
+
+    Two of the three classes it reports are the two l5-run already refuses,
+    reached through the same functions rather than through a second reader:
+    schema conformance via read_story, and stage_exceptions agreement with
+    the loaded workflow via stage_exception_problems. story-005 existed to
+    collapse two readers of a story artifact into one and this story must
+    not reintroduce that divergence.
+
+    The third class is one l5-run will never refuse, which is why plan time
+    is the only place it can be caught. Five committed artifacts state, in
+    verification_requirements or in constraints, that the implementer's
+    changed-files record lists no file under a path the workflow restricts
+    it only from creating under. story-017 made such a sentence harmless -
+    the coordinator decides the edit before the verifier is asked - but
+    nothing stops it being written, and until story-017 landed it cost a
+    verifier finding and a human adjudication on every story that carried
+    one. Prompt guidance against paraphrasing is the mechanism that failed
+    five times over the HEAD-baseline rule, so the check goes where the
+    artifact is written.
+
+tasks:
+  - Add preflight_problems(story_text, stages, harness_root=None) to orchestration/story_coordinator.py, composing the existing read_story and stage_exception_problems in the order run_story already applies them - schema conformance first, short-circuiting before the exception cross-check, which cannot run on an unparsed story.
+  - Make the refusal shape public as refuse(story_path, problems), replacing the private _refuse, so plan time and run time print one message per problem through one code path.
+  - Collapse run_story's two sequential pre-flight blocks into a single preflight_problems call, preserving exactly what pre-flight accepts, what it refuses, what it prints, and the fact that a refusal happens above run-directory creation and above the branch checkout.
+  - Add orchestration/plan_validation.py owning the plan-time-only third check and the entry point behind scripts/l5-validate. It resolves the target's config, workflow and rules the way run_story does, reads the story artifact from the configured stories directory, and reports through the shared refuse.
+  - Implement the strictness check as a clause-level scan. An entry is split into clauses on commas, semicolons and the word "and"; a clause is reported when it names a stage the loaded workflow defines, names one of that stage's declared may_not_create prefixes, and carries no creation word. Both the stage names and the prefixes come off the loaded workflow definition, never from a list in code.
+  - Scan acceptance_criteria, verification_requirements and constraints. All three are free-text arrays the verifier is asked to evaluate against, and the historical instances sit in two of them.
+  - State the check's limit where the check is defined, in plan_validation.py's module docstring, following the narrowness tests/test_baseline_honesty.py and the revert check each state about themselves.
+  - Add scripts/l5-validate as a thin entry point mirroring scripts/l5-run - resolve HARNESS_ROOT from its own location, add orchestration/ to sys.path, find the target repository through harness_config.find_target_root, and delegate. No logic of its own.
+  - Add a step to prompts/planner.md between writing the artifact and committing it - validate with scripts/l5-validate, fix what it reports, re-validate until it is clean, and only then commit and tell the developer the story is ready. Update the closing hand-off so the developer is not sent to execution by an unvalidated artifact.
+
+acceptance_criteria:
+  - scripts/l5-validate <story-id> exits 0 and prints a single success line naming the story id when the artifact is clean, and exits 1 when it is not.
+  - A story artifact that fails schemas/story.schema.json is reported at plan time with the same message text l5-run prints for the same artifact.
+  - A story artifact whose stage_exceptions entry names a stage the loaded workflow does not define is reported at plan time with the same message text l5-run prints for it, as is one granting a prefix that stage was never restricted on.
+  - Both of those messages are produced by the same functions the coordinator uses. No second parse, no second schema walk, and no second copy of the refusal formatting is introduced anywhere.
+  - A verification_requirements, acceptance_criteria or constraints entry containing a clause that names a workflow stage together with one of that stage's declared may_not_create prefixes, and no creation word, is refused. The message quotes the offending entry, names the stage and the prefix, and states the restriction as the workflow declares it.
+  - An entry whose clause names the same stage and prefix but is scoped to creation is not refused.
+  - The stage names and the restricted prefixes the third check matches on are read from the loaded workflow definition. Neither appears as a literal in orchestration/plan_validation.py.
+  - plan_validation.py's module docstring states what the check does not catch - a phrasing that names neither the stage nor the prefix, and a strictness the clause split does not isolate - rather than implying broader coverage.
+  - What l5-run's pre-flight accepts and refuses is unchanged. The third check runs at plan time only, and the five committed artifacts that carry the over-strict sentence still pass pre-flight and still run.
+  - prompts/planner.md instructs the planner to validate the artifact, repair what is reported, and re-validate before committing it or reporting the story ready. Validation is a refusal the planner acts on, not a warning it passes along.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_coordinator.py, add preflight_problems returning the same StoryReading shape read_story returns - the parse and the accumulated problems - so a caller that needs the parsed story after a clean result still has it. Schema problems short-circuit; stage exception problems are appended only when the parse succeeded.
+    - Rename _refuse to refuse in the same module and update its call sites. Its output shape - the header naming the artifact, one indented line per problem, the closing instruction, exit 1 - is unchanged, because it is now what plan time prints too.
+    - Rewrite run_story's pre-flight as one preflight_problems call followed by one refuse, keeping it above the run-directory creation, above the branch checkout, and above any agent invocation. reading.parsed continues to be threaded into every build_context call and into _complete.
+    - Write orchestration/plan_validation.py with a module docstring that states the third check's limit in full, a function returning the strictness problems for a parsed story against a stage list, and a validate_story(story_id, harness_root, target_root) -> int entry point that loads config, workflow and rules, reads the artifact, calls preflight_problems, appends the strictness problems when the story parsed, and returns refuse(...) or prints the success line and returns 0.
+    - Build the stage/prefix pairs from the loaded workflow the same way context_assembler.workflow_context does - each stage's name against its may_not_create declarations - so a workflow that restricts a different stage on a different prefix is covered with no code change.
+    - Match a stage name on a word boundary so a possessive form is still a mention, and match a prefix as a literal substring so a path that merely begins with the prefix still counts as naming it.
+    - Split an entry on commas, semicolons and the standalone word "and" before matching. Clause-level is load-bearing rather than cosmetic - story-010's offending entry confirms a file was created by the tester in its first clause, so an entry-level creation-word test would let it through.
+    - Add scripts/l5-validate, executable, documented in its docstring the way l5-run and l5-status are, delegating to plan_validation.validate_story.
+    - Add the validation step to prompts/planner.md's [Process] section between writing the artifact and committing it, and amend the closing hand-off. This is role guidance about a step the planner performs, not a restatement of a contract that is injected elsewhere.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: preflight_problems added, _refuse made public as refuse, run_story's two pre-flight blocks collapsed onto the shared composition without changing what pre-flight accepts.
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: New module owning the plan-time-only strictness check and the l5-validate entry point.
+    - file: scripts/l5-validate
+      stage: implementer
+      reason: New thin entry point, mirroring l5-run's shape.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: A validation step between writing the artifact and committing it, and an amended hand-off.
+    - file: tests/test_story_018_validation.py
+      stage: tester
+      reason: This story's validation, including the regression set of committed offending entries and the negative controls.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the plan-time entry point, the shared pre-flight composition, and why the third check is plan-time only.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/plan_validation.py
+    - scripts/l5-validate
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/context_assembler.py
+    - workflows/
+    - scripts/l5-run
+    - scripts/l5-plan
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm a malformed story artifact and a story artifact with a stage_exceptions entry naming an undefined stage are both reported by scripts/l5-validate, and that the message text matches character for character what l5-run prints for the same artifact.
+  - Confirm by search rather than by inspection that no second parsing implementation, no second schema walk and no second copy of the refusal formatting was introduced. story-005 collapsed two readers of a story artifact into one and this story must not undo it.
+  - Confirm l5-run's pre-flight still refuses exactly the artifacts it refused before and still accepts exactly the artifacts it accepted before, including the five committed artifacts carrying the over-strict sentence, so the earlier check is an addition and never a move.
+  - Confirm a refusal still leaves no run directory, no state.json, no log and no new branch, and invokes no agent.
+  - Confirm the strictness check is demonstrated against the committed regression set - the known offending entries in story-008, story-009, story-010, story-011 and story-012 - read as evidence and left unedited, and that the entries in later artifacts that legitimately mention a restricted path are not among them.
+  - Confirm the strictness check carries a negative control - an entry naming the same stage and prefix but scoped to creation, shown not to be reported - so a zero-problem result means the check is discriminating rather than blind.
+  - Confirm plan_validation.py states what the check does not catch, and that the statement is where the check is defined rather than only in this artifact.
+  - Confirm the stage names and restricted prefixes the check matches on come off the loaded workflow, by driving it against a workflow definition the repository does not ship.
+  - Confirm tests/test_story_018_validation.py was created by the tester stage.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - The general problem - is this English sentence stronger than that declared rule - is not decidable and must not be attempted. The check is the narrow, stated version of it, and it refuses rather than warns, because a warning at plan time is a warning nobody sees.
+  - Plan-time validation is an addition, never a replacement. The l5-run pre-flight path keeps its behavior exactly, and the collapse onto the shared composition is authorized only because it preserves that behavior.
+  - The third class is checked at plan time only. Adding it to pre-flight would refuse committed artifacts that already ran, and this story does not change what pre-flight accepts.
+  - Scripts stay thin. The loading, the reading and the reporting belong in orchestration; l5-validate wires them together and nothing more.
+  - Standard library only, and no model call anywhere in the new path. Plan-time validation is deterministic checking, not judgement.
+  - This story's own artifact was written by the planner as it exists today, so it is the last story the new check does not govern - the same shape story-007, story-014 and story-017 each recorded. That is a property of when the prompt changes, not a defect of the story.
+  - This story's own requirements must state a workflow restriction exactly as the workflow declares it, or not at all. Writing the very sentence the check exists to refuse would be the error the story is about.
