@@ -103,6 +103,13 @@ than the stage being validated:
 
 {{stage_create_restrictions}}
 
+Restate an injected restriction exactly as the workflow declares it, or not
+at all. A task, acceptance criterion or verification requirement that
+tightens one — asking a stage to leave a path alone entirely when the
+workflow only stops it adding files there — is not a stricter version of an
+enforced rule; it is an unenforced rule the harness cannot see broken, and
+one a legitimate change can make impossible to satisfy.
+
 A stage_exceptions entry lifts one of those restrictions for one story,
 which is what a story whose own deliverable is a test suite needs.
 
