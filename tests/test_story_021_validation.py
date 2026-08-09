@@ -366,12 +366,43 @@ def pre_story(path: str) -> str:
     return git(REPO_ROOT, "show", f"{revision}:{path}").stdout
 
 
+def at_story_endpoint(path: str) -> str:
+    """A repository file as *this* story's own run left it.
+
+    The counterpart of `pre_story`, and the upper bound a "this story did not
+    change X" comparison needs. Against today's working tree it asks what the
+    file looks like *now*, which a later story changes without this story
+    having done anything — the HEAD-baseline trap the architecture document
+    records. story-024 is where it bit: it moved the escalation summary's
+    construction out of `_escalate`, which story-021 left exactly as it found
+    it. While this story is still in flight there is no endpoint and the
+    working tree is the right answer.
+    """
+    endpoint = story_commit_range(Path(__file__)).endpoint
+    if endpoint is None:
+        return (REPO_ROOT / path).read_text(encoding="utf-8")
+    return git(REPO_ROOT, "show", f"{endpoint}:{path}").stdout
+
+
 @pytest.fixture
 def pre_story_coordinator(tmp_path: Path):
-    module_path = tmp_path / "pre_story_coordinator.py"
-    write(module_path, pre_story("orchestration/story_coordinator.py"))
-    loader = importlib.machinery.SourceFileLoader(
-        "pre_story_coordinator", str(module_path))
+    return _loaded_coordinator(
+        tmp_path, "pre_story_coordinator",
+        pre_story("orchestration/story_coordinator.py"))
+
+
+@pytest.fixture
+def endpoint_coordinator(tmp_path: Path):
+    """The coordinator as this story's own run left it, loaded the same way."""
+    return _loaded_coordinator(
+        tmp_path, "endpoint_coordinator",
+        at_story_endpoint("orchestration/story_coordinator.py"))
+
+
+def _loaded_coordinator(tmp_path: Path, name: str, source: str):
+    module_path = tmp_path / f"{name}.py"
+    write(module_path, source)
+    loader = importlib.machinery.SourceFileLoader(name, str(module_path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     # Registered before execution because `@dataclass` resolves a field's
@@ -945,19 +976,23 @@ def executable_source(text: str) -> str:
 
 
 def test_neither_terminal_commit_was_changed_to_achieve_any_of_this(
-    pre_story_coordinator,
+    pre_story_coordinator, endpoint_coordinator,
 ):
     """What the story forbade, checked against the earlier module rather than
     against a phrase: `_complete` and `_escalate` still stage what they staged.
 
     The control is `run_story` itself, compared the same way, which did change
     — so this is a comparison that can report a difference.
+
+    Both sides are bounded at this story's own commit range, per
+    `at_story_endpoint` above: story-024 later moved the summary's
+    construction out of `_escalate`, and that is not story-021 changing it.
     """
     import inspect
     for name in ("_complete", "_escalate"):
-        assert inspect.getsource(getattr(story_coordinator, name)) \
+        assert inspect.getsource(getattr(endpoint_coordinator, name)) \
             == inspect.getsource(getattr(pre_story_coordinator, name)), name
-    assert inspect.getsource(story_coordinator.run_story) \
+    assert inspect.getsource(endpoint_coordinator.run_story) \
         != inspect.getsource(pre_story_coordinator.run_story)
 
 

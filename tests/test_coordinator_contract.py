@@ -152,14 +152,62 @@ def log_format_problems(lines: list[str]) -> list[str]:
     return problems
 
 
+def section_of(text: str, heading: str) -> str:
+    """One `## heading` section's body, or "" when the section is absent.
+
+    Split on `\\n## ` with its trailing space, so a `###` subheading inside a
+    section — which `## Retry History` writes, one per recorded retry — does
+    not end it.
+    """
+    marker = f"## {heading}"
+    if marker not in text:
+        return ""
+    return text.split(marker, 1)[1].split("\n## ", 1)[0]
+
+
+def issue_problems(where: str, section: str, issues: list[dict]) -> list[str]:
+    """Each blocking issue's four fields, as the verifier recorded them.
+
+    The four are checked individually rather than as one rendered line, so
+    the contract states the *fields* a reader must be handed and leaves the
+    layout free. A section carrying a count, a summary, or a pointer at the
+    artifact the issues came from fails every one of them.
+    """
+    problems = []
+    for issue in issues:
+        for field in ("severity", "issue", "location", "required_behavior"):
+            value = str(issue.get(field, ""))
+            if value and value not in section:
+                problems.append(f"{where}: {field} {value!r} is not rendered")
+    return problems
+
+
 def escalation_summary_problems(
     text: str, *, story_id: str, stage: str, retry_count: int,
+    blocking_issues: list[dict] | None = None,
+    retries: list[dict] | None = None,
 ) -> list[str]:
     """Violations of `escalation-summary.md`'s contract, one string each.
 
-    Its five parts: a heading naming the story, the escalated status, the
-    reason, the stage and retry count where execution stopped, and a pointer
-    at events.log and the verification directory.
+    Its five unconditional parts: a heading naming the story, the escalated
+    status, the reason, the stage and retry count where execution stopped,
+    and a pointer at events.log and the verification directory.
+
+    Since story-024 the summary carries the finding rather than a pointer to
+    it, and this states three further parts:
+
+      * `## Recommended Investigation`, on every escalation, naming how the
+        run is continued and when that is refused;
+      * `## Outstanding Issues`, iff a failing verdict stands behind the
+        escalation, carrying each blocking issue's four recorded fields;
+      * `## Retry History`, iff the run took a retry, carrying each recorded
+        entry's attempt, destination, archive and blocking issues.
+
+    The two conditional sections are stated in *both* directions, which is
+    what makes them assertable: `blocking_issues=[]` and `retries=[]` say the
+    run had none and require the heading to be absent — not present and
+    empty, which is the failure mode story-024 exists to remove. `None` is
+    the caller declining to say, and asserts nothing either way.
     """
     problems = []
     heading = text.splitlines()[0] if text.splitlines() else ""
@@ -177,10 +225,66 @@ def escalation_summary_problems(
         problems.append(f"the stage execution stopped at ({stage}) is missing")
     if f"retry count: {retry_count}" not in text:
         problems.append(f"the retry count ({retry_count}) is missing")
-    if "events.log" not in text:
+    # Read inside `## Where to Look` rather than anywhere in the summary.
+    # Since story-024 other sections name `verification/iteration-N.json` and
+    # list `events.log` among the run's artifacts, so a whole-text search
+    # would be satisfied by them and this part could be deleted unnoticed —
+    # which is what `tests/test_story_016_validation.py` mutates to check.
+    where_to_look = section_of(text, "Where to Look")
+    if "events.log" not in where_to_look:
         problems.append("the pointer to events.log is missing")
-    if "verification/" not in text:
+    if "verification/" not in where_to_look:
         problems.append("the pointer to the verification directory is missing")
+
+    investigation = section_of(text, "Recommended Investigation")
+    if not investigation.strip():
+        problems.append("the recommended investigation section is missing")
+    else:
+        if f"l5-run {story_id}" not in investigation:
+            problems.append(
+                f"the way to continue the run (l5-run {story_id}) is missing")
+        if "--stage" not in investigation:
+            problems.append("the --stage override is missing")
+        if not ("refused" in investigation and "unchanged" in investigation):
+            problems.append(
+                "the refusal of a resume while nothing has changed is missing")
+
+    if blocking_issues is not None:
+        outstanding = section_of(text, "Outstanding Issues")
+        if blocking_issues and "## Outstanding Issues" not in text:
+            problems.append(
+                f"a failing verdict stands behind this escalation and its "
+                f"{len(blocking_issues)} blocking issue(s) are not reported")
+        elif not blocking_issues and "## Outstanding Issues" in text:
+            problems.append(
+                "an outstanding issues section is emitted with no failing "
+                "verdict behind it")
+        else:
+            problems += issue_problems(
+                "outstanding issues", outstanding, blocking_issues)
+
+    if retries is not None:
+        history = section_of(text, "Retry History")
+        if retries and "## Retry History" not in text:
+            problems.append(
+                f"this run took {len(retries)} retr(ies) and none are reported")
+        elif not retries and "## Retry History" in text:
+            problems.append(
+                "a retry history section is emitted by a run that never retried")
+        elif text.count("## Retry History") > 1:
+            problems.append("the retry history is split across sections")
+        else:
+            for entry in retries:
+                attempt = entry.get("attempt")
+                if f"{attempt}" not in history:
+                    problems.append(f"retry {attempt} is not reported")
+                for field in ("retry_stage", "archive_directory"):
+                    value = str(entry.get(field, ""))
+                    if value and value not in history:
+                        problems.append(
+                            f"retry {attempt}: {field} {value!r} is not reported")
+                problems += issue_problems(
+                    f"retry {attempt}", history, entry.get("blocking_issues", []))
     return problems
 
 
@@ -388,8 +492,32 @@ def test_the_log_format_assertion_fails_on_a_changed_line(line):
 # --------------------------------------------------------------------------
 
 
+def summary_expectations(run_dir: Path) -> dict:
+    """What this run's own artifacts say its summary must carry.
+
+    Read off the run directory rather than written here, so the conditional
+    sections are asserted against the run that produced them: a failing
+    verdict's blocking issues, and whatever retries were recorded.
+    """
+    verdict_path = run_dir / "verification-result.json"
+    verdict = (json.loads(verdict_path.read_text(encoding="utf-8"))
+               if verdict_path.is_file() else {})
+    history = run_dir / "retry-history.json"
+    return {
+        "blocking_issues": (verdict.get("blocking_issues", [])
+                            if verdict.get("status") == "failed" else []),
+        "retries": (json.loads(history.read_text(encoding="utf-8"))
+                    if history.is_file() else []),
+    }
+
+
 def test_the_escalation_summary_holds_its_five_parts(escalated_run):
-    """Driven by a real escalated run, not by a string written here."""
+    """Driven by a real escalated run, not by a string written here.
+
+    The name is the one `tests/test_story_016_validation.py` names as the
+    assertion each escalation-summary mutation must turn red, and the five
+    parts it was written for are still five of the parts checked here.
+    """
     state = read_state(escalated_run)
     text = (escalated_run / "escalation-summary.md").read_text(encoding="utf-8")
     assert escalation_summary_problems(
@@ -397,14 +525,16 @@ def test_the_escalation_summary_holds_its_five_parts(escalated_run):
         story_id=state["story_id"],
         stage=state["current_stage"],
         retry_count=state["retry_count"],
+        **summary_expectations(escalated_run),
     ) == []
     assert state["current_stage"] in STAGE_NAMES
 
 
 @pytest.fixture
-def escalated_summary(escalated_run) -> tuple[str, dict]:
+def escalated_summary(escalated_run) -> tuple[str, dict, dict]:
     state = read_state(escalated_run)
-    return (escalated_run / "escalation-summary.md").read_text(encoding="utf-8"), state
+    text = (escalated_run / "escalation-summary.md").read_text(encoding="utf-8")
+    return text, state, summary_expectations(escalated_run)
 
 
 @pytest.mark.parametrize("part", [
@@ -416,31 +546,90 @@ def escalated_summary(escalated_run) -> tuple[str, dict]:
     "retry count: 2",
     "events.log",
     "verification/",
+    # story-024's parts. Each is an absence assertion about a summary that
+    # dropped it, so each is struck out of a real summary here and the
+    # contract must report it.
+    "## Outstanding Issues",
+    "sample behavior missing",   # a blocking issue's `issue`
+    "src/app.py",                # its `location`
+    "sample behavior exists",    # its `required_behavior`
+    "## Retry History",
+    "attempts/attempt-1",        # a recorded retry's `archive_directory`
+    "## Recommended Investigation",
+    "l5-run story-001",
+    "--stage",
+    "refused",
 ])
 def test_the_summary_assertion_fails_when_a_part_is_removed(escalated_summary, part):
-    """Non-vacuity, part by part: strike any one of the five out of a real
+    """Non-vacuity, part by part: strike any one of the parts out of a real
     summary and the contract reports it."""
-    text, state = escalated_summary
+    text, state, expected = escalated_summary
     assert part in text, part
     problems = escalation_summary_problems(
         text.replace(part, ""),
         story_id=state["story_id"],
         stage=state["current_stage"],
         retry_count=state["retry_count"],
+        **expected,
     )
     assert problems, part
 
 
 def test_the_summary_assertion_fails_on_an_empty_reason(escalated_summary):
-    text, state = escalated_summary
+    text, state, expected = escalated_summary
     reason = text.split("## Reason", 1)[1].split("##", 1)[0]
     problems = escalation_summary_problems(
         text.replace(reason, "\n\n"),
         story_id=state["story_id"],
         stage=state["current_stage"],
         retry_count=state["retry_count"],
+        **expected,
     )
     assert problems == ["the reason section is empty"]
+
+
+def test_the_summary_assertion_fails_on_a_section_with_no_source_behind_it(
+    escalated_summary,
+):
+    """The other direction, which is the one story-024 exists for: a heading
+    over nothing. This run has a failing verdict and two retries; told it had
+    neither, the contract reports both sections as emitted without a source
+    rather than accepting them."""
+    text, state, _ = escalated_summary
+    problems = escalation_summary_problems(
+        text,
+        story_id=state["story_id"],
+        stage=state["current_stage"],
+        retry_count=state["retry_count"],
+        blocking_issues=[],
+        retries=[],
+    )
+    assert problems == [
+        "an outstanding issues section is emitted with no failing verdict behind it",
+        "a retry history section is emitted by a run that never retried",
+    ]
+
+
+def test_the_summary_assertion_fails_when_a_section_reports_a_count_not_the_finding(
+    escalated_summary,
+):
+    """A section that says how many issues there are, or points at the file
+    they are in, satisfies nothing: the four recorded fields are what the
+    contract asks for."""
+    text, state, expected = escalated_summary
+    gutted = (
+        text.split("## Outstanding Issues", 1)[0]
+        + "## Outstanding Issues\n2 blocking issues; see verification-result.json.\n\n"
+        + "## " + text.split("## Outstanding Issues", 1)[1].split("\n## ", 1)[1]
+    )
+    problems = escalation_summary_problems(
+        gutted,
+        story_id=state["story_id"],
+        stage=state["current_stage"],
+        retry_count=state["retry_count"],
+        **expected,
+    )
+    assert any("is not rendered" in problem for problem in problems), problems
 
 
 # --------------------------------------------------------------------------

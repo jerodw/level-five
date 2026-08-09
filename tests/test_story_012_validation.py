@@ -571,8 +571,13 @@ def test_the_new_artifact_did_not_displace_the_guidance_in_the_prompt_context(
 # --------------------------------------------------------------------------
 
 #: The only functions permitted to know the artifact exists: the path helper,
-#: the reader the writer uses, and the writer.
-RECORD_AWARE = ("_retry_record_file", "load_retry_records", "append_retry_record")
+#: the reader the writer uses, and the writer — plus, since story-024, the one
+#: function that renders the record into `escalation-summary.md`. Rendering a
+#: recorded fact into a human report is not a routing decision: nothing
+#: branches on what it reads and the summary routes nothing, which is exactly
+#: what the scan below and its planted control still hold everywhere else.
+RECORD_AWARE = ("_retry_record_file", "load_retry_records", "append_retry_record",
+                "_retry_history_section")
 
 #: The three ways a function could reach the artifact.
 RECORD_REFERENCES = ("load_retry_records", "_retry_record_file", "retry-history")
@@ -600,8 +605,9 @@ COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8"
 
 def test_no_routing_decision_reads_the_retry_history():
     assert record_readers(COORDINATOR_SOURCE) == []
-    # The one read in the module is the writer appending to what is there.
-    assert COORDINATOR_SOURCE.count("load_retry_records(") == 2
+    # The reads in the module are the writer appending to what is there, and
+    # the escalation summary rendering it.
+    assert COORDINATOR_SOURCE.count("load_retry_records(") == 3
     body = ast.unparse(next(
         node for node in ast.parse(COORDINATOR_SOURCE).body
         if isinstance(node, ast.FunctionDef) and node.name == "append_retry_record"

@@ -149,26 +149,30 @@ VIOLATIONS = {
           'stamp = time.strftime("%Y-%m-%dT%H:%M:%S")')],
         ("test_every_events_log_line_matches_the_frozen_format",),
     ),
+    # story-024 moved the summary's composition out of `_escalate` into the
+    # module-level `escalation_summary`, so these five mutations are repointed
+    # at the text where each part is now written. Every subject, replacement
+    # and expected failure is the one it was.
     "an escalation summary whose heading stops naming the story": (
-        [('f"# {state.story_id} Escalation Summary\\n\\n"',
-          'f"# Escalation Summary\\n\\n"')],
+        [('f"# {state.story_id} Escalation Summary"',
+          'f"# Escalation Summary"')],
         ("test_the_escalation_summary_holds_its_five_parts",),
     ),
     "an escalation summary that stops reporting the escalated status": (
-        [('f"## Status\\nEscalated\\n\\n"', 'f"## Status\\n\\n"')],
+        [('f"## Status\\nEscalated"', 'f"## Status"')],
         ("test_the_escalation_summary_holds_its_five_parts",),
     ),
     "an escalation summary that stops pointing at the verification directory": (
-        [('f"verification/ directory for verifier findings.\\n"',
-          'f"the verifier findings.\\n"')],
+        [('f"verification/ directory for verifier findings.",',
+          'f"the verifier findings.",')],
         ("test_the_escalation_summary_holds_its_five_parts",),
     ),
     "an escalation summary with no reason": (
-        [('f"## Reason\\n{reason}\\n\\n"', '""')],
+        [('f"## Reason\\n{reason}"', '""')],
         ("test_the_escalation_summary_holds_its_five_parts",),
     ),
     "an escalation summary that drops the retry count": (
-        [('f"retry count: {state.retry_count}\\n\\n"', 'f"\\n\\n"')],
+        [('f"retry count: {state.retry_count}"', '""')],
         ("test_the_escalation_summary_holds_its_five_parts",),
     ),
     "a required artifact a completed run stops writing": (
