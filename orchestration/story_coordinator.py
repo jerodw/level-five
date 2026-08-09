@@ -102,6 +102,22 @@ def story_digest(story_text: str) -> str:
     return hashlib.sha256(story_text.encode("utf-8")).hexdigest()
 
 
+def stage_restrictions(stages: list[dict]) -> list[tuple[str, str]]:
+    """The workflow's (stage, prefix) create-restriction pairs, in declared order.
+
+    The mapping from a stage to the prefixes it may not create under is
+    derived here and nowhere else, so the exception cross-check below and the
+    plan-time strictness check in plan_validation read one derivation rather
+    than two copies of it. No stage name and no prefix is written here; both
+    come off the loaded workflow definition.
+    """
+    return [
+        (stage["name"], prefix)
+        for stage in stages
+        for prefix in stage.get("may_not_create", [])
+    ]
+
+
 def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
     """Cross-check a story's stage exceptions against the loaded workflow.
 
@@ -113,7 +129,9 @@ def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
     harmless one, so both refuse the run. Stage names and prefixes come from
     the workflow definition; none is named here.
     """
-    restricted = {stage["name"]: stage.get("may_not_create", []) for stage in stages}
+    restricted: dict[str, list[str]] = {stage["name"]: [] for stage in stages}
+    for name, prefix in stage_restrictions(stages):
+        restricted[name].append(prefix)
     problems = []
     for index, exception in enumerate(story.get("stage_exceptions", [])):
         name, granted = exception["stage"], exception["create"]
@@ -1513,14 +1531,18 @@ def _resume_refusal(
     return "\n".join(lines)
 
 
-def _refuse(header: str, problems: list[str], guidance: str) -> int:
-    """The one pre-flight refusal path: exit 1, one message per problem.
+def refuse(header: str, problems: list[str], guidance: str) -> int:
+    """The one refusal path: exit 1, one message per problem.
 
-    Every pre-flight refusal that has problems to enumerate goes through here
-    — the two story-artifact refusals and the clean-tree one — so the shape
-    stays a single code path rather than a copy per reason. What differs
-    between them is the sentence above the list and the sentence below it,
-    which is what a caller supplies.
+    Every refusal that has problems to enumerate goes through here — the two
+    story-artifact refusals, the clean-tree one, and l5-plan's plan-time
+    validation — so the shape stays a single code path rather than a copy per
+    reason. What differs between them is the sentence above the list and the
+    sentence below it, which is what a caller supplies.
+
+    It is public because plan time and pre-flight must print a given problem
+    identically: the same defect in the same artifact produces the same text
+    whether it is caught when the artifact is written or when it is run.
     """
     print(header, file=sys.stderr)
     for problem in problems:
@@ -1529,8 +1551,8 @@ def _refuse(header: str, problems: list[str], guidance: str) -> int:
     return 1
 
 
-def _refuse_bad_story(story_path: Path, problems: list[str]) -> int:
-    return _refuse(
+def refuse_bad_story(story_path: Path, problems: list[str]) -> int:
+    return refuse(
         f"{story_path} is not a valid story artifact:",
         problems,
         "Fix the artifact or re-run planning before executing the story.",
@@ -1543,7 +1565,7 @@ def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     The friction here is the point of contact a developer meets most often, so
     the message names every dirty path and says what clears it.
     """
-    return _refuse(
+    return refuse(
         f"{target_root} has uncommitted changes, so a run starting here could "
         f"not establish that what it commits is what it produced:",
         paths,
@@ -1709,7 +1731,7 @@ def run_story(
     # schema_validator relative to its own module, not from harness_root.
     reading = read_story(story_text)
     if reading.problems:
-        return _refuse_bad_story(story_path, reading.problems)
+        return refuse_bad_story(story_path, reading.problems)
 
     # Conformance is one question, agreement with this workflow another. A
     # stage exception is checked here rather than inside read_story so schema
@@ -1717,7 +1739,7 @@ def run_story(
     # creation.
     exception_problems = stage_exception_problems(reading.parsed, stages)
     if exception_problems:
-        return _refuse_bad_story(story_path, exception_problems)
+        return refuse_bad_story(story_path, exception_problems)
 
     run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
     state = load_state(run_dir)

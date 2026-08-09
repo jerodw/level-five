@@ -18,6 +18,8 @@ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 import context_assembler  # noqa: E402
 import harness_config  # noqa: E402
 import plan_commit  # noqa: E402
+import plan_validation  # noqa: E402
+import story_coordinator  # noqa: E402
 
 
 def main() -> None:
@@ -69,14 +71,14 @@ def main() -> None:
     # before the status is consulted at all. The session's own status then
     # wins; the commit's is what is left to say when the session ended
     # cleanly and the push did not.
-    committing = report(target_root, stories_dir, before)
+    committing = report(target_root, stories_dir, before, workflow["stages"])
     sys.exit(status or committing)
 
 
-def report(target_root: Path, stories_dir: Path, before) -> int:
-    """Say what plan_commit did with the artifacts the session added.
+def report(target_root: Path, stories_dir: Path, before, stages) -> int:
+    """Say what plan_validation and plan_commit did with the session's artifacts.
 
-    plan_commit returns what happened rather than printing it, so this is
+    Both modules return what happened rather than printing it, so this is
     where the wording lives. The status it returns is only ever this script's
     own, and it is never allowed to unwind anything plan_commit did.
     """
@@ -84,6 +86,27 @@ def report(target_root: Path, stories_dir: Path, before) -> int:
     if not artifacts:
         print("l5-plan: the session added no story artifact; committed nothing.")
         return 0
+    # Validation sits between the snapshot and the commit, so an artifact that
+    # would be refused at pre-flight is never committed. It refuses rather
+    # than warning — a warning here is a warning nobody sees, because the
+    # session that could have repaired it has already ended. Nothing is
+    # deleted and nothing is repaired: every artifact stays in the working
+    # tree exactly as the session wrote it, which is what the developer fixes
+    # and re-runs from. When one of several artifacts fails, none is
+    # committed; the commit is one commit for the session's artifacts, and a
+    # partial one would invent a split the session did not have.
+    problems = plan_validation.artifact_problems(artifacts, stages)
+    if problems:
+        for path, found in problems.items():
+            # The coordinator's own refusal helper, so the text a developer
+            # reads here is the text l5-run's pre-flight would print.
+            story_coordinator.refuse_bad_story(path, found)
+        print(
+            "l5-plan: committed nothing; "
+            f"{', '.join(str(path) for path in artifacts)} "
+            "remain in the working tree."
+        )
+        return 1
     commit = plan_commit.commit_artifacts(target_root, artifacts, HARNESS_ROOT)
     if not commit.committed:
         print(f"l5-plan: could not commit {', '.join(commit.paths)}: {commit.detail}")
