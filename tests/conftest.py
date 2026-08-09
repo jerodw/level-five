@@ -194,6 +194,25 @@ def target_root(tmp_path: Path) -> Path:
     return root
 
 
+def commit_setup(root: Path, message: str = "setup for this test") -> None:
+    """Commit what a test set up in a target repository after building it.
+
+    story-021 added a clean-tree pre-flight: `run_story` refuses a fresh run
+    whose target tree already holds work no stage produced, naming the paths,
+    because a run commits the tree it ends on and so has to start from one it
+    can account for. A test's own setup — the story artifact it installs, the
+    config key it overrides — is part of the repository the run starts *from*,
+    not something the run produced, so committing it is exactly what the
+    refusal asks for and leaves every assertion pointed where it was.
+
+    It lives here rather than being copied per module for the same reason the
+    baseline resolution above does: one home for one fact.
+    """
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message],
+                   cwd=root, check=True)
+
+
 @pytest.fixture
 def harness_root() -> Path:
     return HARNESS_ROOT

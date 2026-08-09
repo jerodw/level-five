@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_diff
+from conftest import commit_setup, story_diff
 
 import context_assembler
 import harness_config
@@ -108,6 +108,12 @@ def branches(target_root: Path) -> list[str]:
 def append_to_story(target_root: Path, text: str, story_id: str = "story-001") -> Path:
     path = target_root / ".harness" / "stories" / f"{story_id}.yaml"
     path.write_text(path.read_text() + text, encoding="utf-8")
+    # The artifact is what a run reads, not what it produces. story-021's
+    # clean-tree pre-flight refuses a run whose target tree holds anything
+    # uncommitted, so committing it here keeps the refusals below refusing for
+    # the reason each one names — the stage-exception check runs above the
+    # clean-tree one and still fires first.
+    commit_setup(target_root, "the story artifact this test runs")
     return path
 
 
@@ -675,6 +681,7 @@ def test_a_stage_touching_a_file_the_plan_did_not_predict_does_not_escalate(
     (target_root / ".harness" / "stories" / "story-001.yaml").write_text(
         PLANNED_STORY, encoding="utf-8"
     )
+    commit_setup(target_root, "the story artifact this test runs")
     runner = Runner(target_root, records={
         "implementer": {"modified": ["src/unpredicted.py"], "created": [],
                         "deleted": []},
