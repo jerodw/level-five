@@ -1,0 +1,127 @@
+story:
+  id: story-024
+  title: escalation-summary.md carries the finding, not a pointer to it
+  description: |
+    `escalation-summary.md` tells a developer that a run escalated, at which
+    stage, and where to look. It does not tell them what went wrong. Chapter 17
+    (`3_17_0-chapter-17.md:565-584`) specifies three sections the harness does
+    not write — Outstanding Issues, Retry History, and Recommended Investigation
+    — against the standard that "the developer needs enough information to
+    understand what happened without reconstructing the entire execution history
+    manually" (`3_17_0-chapter-17.md:550`).
+
+    The gap is not cosmetic. story-009's summary said "verification failed and
+    the verifier did not recommend a retry" and pointed at a directory. The
+    actual finding — which acceptance criterion was unsatisfiable, which two
+    files carried the duplicated code, and why no retry inside the authorized
+    scope could fix it — existed only inside `verification-result.json`, and
+    reaching it required knowing that file exists and how to read it. Every
+    field the template asks for was already on disk when the summary was
+    written.
+
+    Both artifacts this needs now exist: `verification-result.json` always did,
+    and `retry-history.json` landed with story-012, so no section has to ship
+    partial. Resume landed with story-020 and the escalation commit with it,
+    which is why this story is sequenced after them rather than before:
+    Recommended Investigation written earlier could only tell a developer to
+    inspect and re-run from the start, which is advice with a known expiry. It
+    can now say what to fix, that the work is committed on the story branch, and
+    that the run can be continued from where it stopped.
+
+    This enriches a canonical artifact rather than adding one. The filename is
+    the contract's Baseline-tier "terminal escalation report" and stays exactly
+    `escalation-summary.md` — no variant, no companion file carrying the new
+    sections separately, and none of the retired names. Nothing new is written
+    to disk: the sections render artifacts that already exist. The coordinator
+    composes a report from recorded facts and never reasons about them.
+
+tasks:
+  - Extract the escalation summary's construction out of `_escalate` into a module-level function of `orchestration/story_coordinator.py` taking the run directory, the run state and the escalation reason and returning the summary text, so the composition is testable without driving a run. `_escalate` calls it at the point that currently builds the f-string and writes the result to the same path; the escalation's own ordering (state saved, event appended, record commit made, summary written, tree commit made by the decorator) is unchanged.
+  - Keep the four existing sections — the heading, Status, Reason, Where Execution Stopped, Where to Look — byte for byte what they are today, and keep Reason as the section immediately following Status, so `escalation_reason`'s split on the next `##` reads the same text it reads now.
+  - Render an Outstanding Issues section from `verification-result.json` when that artifact is present and its `status` is `failed`. Open the section with a line naming the artifact it was read from and the `verification/iteration-N.json` corresponding to `state.verification_iterations`, then render one line per entry of `blocking_issues` carrying that entry's `severity`, `issue`, `location` and `required_behavior` as the verifier recorded them. Emit no section at all when the artifact is absent, unparseable, or records a passing verdict.
+  - Render a Retry History section from `retry-history.json` when that artifact is present. Render one block per entry: a heading naming the entry's `attempt` and the `retry_stage` execution was rerouted to, one line per entry of that record's `blocking_issues`, and the entry's `archive_directory`. Emit no section at all when the artifact is absent, which is a run that never retried.
+  - Render a Recommended Investigation section on every escalation, composed by conditionals over facts already in hand rather than by classifying the escalation reason text. It names the run-directory artifacts that exist for the reader to open, states that the escalated work is committed on the story branch and names `ESCALATION_UNDO_COMMAND` only when `state.escalation_commit` is non-empty, and states that `l5-run <story-id>` resumes the run at the recorded stage, that `--stage` overrides that, and that the resume is refused while the story artifact, the branch and the harness are all unchanged.
+  - Extend `tests/test_coordinator_contract.py`'s `escalation_summary_problems` to state the summary's new parts alongside its existing five, as a deliberate change to the standing contract rather than a per-story assertion.
+  - Add validation covering an escalation with a failed verdict, an escalation with no verdict, a run escalating at the retry ceiling with retries recorded, and an escalation whose record commit was empty.
+  - Update `.harness/docs/ARCHITECTURE.md` to describe what the escalation summary now renders, which artifacts each section reads, and the omit-rather-than-emit-empty rule.
+
+acceptance_criteria:
+  - The summary produced by an escalation following a `verification-result.json` whose `status` is `failed` contains an `## Outstanding Issues` section, and that section contains the `severity`, `issue`, `location` and `required_behavior` of every entry in that artifact's `blocking_issues`, verbatim as the verifier recorded them.
+  - The Outstanding Issues section names `verification-result.json` and the `verification/iteration-N.json` matching `state.verification_iterations`, so a reader can tell which verdict the issues came from and that it may predate the stage the run escalated at.
+  - An escalation with no `verification-result.json` in the run directory — a missing-artifact or blocked-path escalation — produces a summary containing no `## Outstanding Issues` heading at all, rather than the heading with nothing under it.
+  - An escalation whose `verification-result.json` records `status: passed` — the clean-clone and revert-check paths — likewise produces a summary containing no `## Outstanding Issues` heading.
+  - A run that escalates with entries in `retry-history.json` produces a summary containing one `## Retry History` section holding one block per recorded entry, each naming that entry's `attempt`, its `retry_stage`, its `archive_directory`, and each of its `blocking_issues`.
+  - A run that escalates having taken no retry produces a summary containing no `## Retry History` heading, matching the artifact's own absence.
+  - Every escalation produces a summary containing a `## Recommended Investigation` section, and that section names `l5-run` with the story id as the way to continue the run, names the `--stage` option, and says the resume is refused while the story, branch and harness are unchanged.
+  - The Recommended Investigation section states that the work is committed on the story branch and names the undo command only when `state.escalation_commit` is non-empty; an escalation that recorded no commit produces a section making no claim that anything was committed.
+  - The heading, `## Status`, `## Reason`, `## Where Execution Stopped` and `## Where to Look` sections carry the same text they carry today, and `## Reason` is still the section immediately after `## Status`, so `escalation_reason` returns the same string for the same escalation as it does before this story.
+  - The summary's composition is reachable as a module-level function of `orchestration/story_coordinator.py` that takes a run directory, a `RunState` and a reason and returns the text, and a test can call it against a hand-built run directory without invoking `run_story`.
+  - `tests/test_coordinator_contract.py` states the new sections as part of `escalation-summary.md`'s contract, and each new assertion is demonstrated failing against a summary that omits the part it requires.
+  - The run directory gains no new file and `schemas/` gains no new schema: every section renders an artifact that already exists.
+  - The full suite passes, including every existing assertion about `escalation-summary.md`, unchanged.
+
+technical_plan:
+  implementation_steps:
+    - Read `_escalate` and the decorator above it in `orchestration/story_coordinator.py`, and note the ordering it already has — `state.escalation_commit` is assigned before the summary is written, so the summary can name that the record commit happened, while the tree commit that follows cannot be named by sha because the summary is inside it.
+    - Add a module-level `escalation_summary(run_dir, state, reason) -> str` composing the whole report, and replace `_escalate`'s inline f-string with a call to it followed by the same `write_text` to the same path.
+    - Compose the four existing sections first and unchanged, then the new ones, in the order heading, Status, Reason, Where Execution Stopped, Outstanding Issues, Retry History, Where to Look, Recommended Investigation.
+    - Read `verification-result.json` through a small helper that returns nothing on an absent or unparseable file, matching how the coordinator already skips an artifact it cannot read rather than raising out of a report.
+    - Read the retry entries through the existing `load_retry_records(run_dir)` rather than reading the file again, so the artifact has one reader.
+    - Build Recommended Investigation from what is in hand: the artifacts present in the run directory, `state.branch` and `state.escalation_commit`, `state.story_id`, and the module's existing `ESCALATION_UNDO_COMMAND`. Do not match on the reason string.
+    - Extend `escalation_summary_problems` in `tests/test_coordinator_contract.py` with the new parts and update its docstring, which currently says "five parts".
+    - Add the story's validation covering the four escalation shapes named in the acceptance criteria, driving real runs through the fake runner where the shape needs a run and calling `escalation_summary` directly where it does not.
+    - Update `.harness/docs/ARCHITECTURE.md`.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The summary's composition is extracted into a module-level function and gains the three new sections.
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: The standing contract for `escalation-summary.md` gains the new parts, deliberately rather than as a ripple.
+    - file: tests/test_story_024_validation.py
+      stage: tester
+      reason: This story's validation of the four escalation shapes and the omit-rather-than-empty rule.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records what each section renders, which artifact it reads, and why an absent source omits the section entirely.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/
+    - schemas/
+    - workflows/
+    - orchestration/context_assembler.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/plan_commit.py
+    - orchestration/run_status.py
+    - orchestration/harness_config.py
+    - orchestration/agent_runner.py
+    - scripts/
+    - .harness/stories/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm the Outstanding Issues section reproduces each blocking issue's four fields as the verifier recorded them, rather than a summary, a count, or a pointer to the artifact.
+  - Confirm the absent-source cases produce no heading at all, by reading the produced summary text and asserting the heading string does not appear — not by asserting a section is empty.
+  - Confirm the negative cases are real negative controls: the test that asserts a section is omitted must be shown to fail when the section is emitted, so it cannot pass vacuously.
+  - Confirm each new assertion added to `tests/test_coordinator_contract.py` is demonstrated failing against a summary lacking the part it requires, per the repository's rule that an absence assertion carries a negative control.
+  - Confirm `escalation_reason(run_dir)` returns, for a given escalation, exactly the string it returned before this story, and that the four pre-existing sections are unchanged.
+  - Confirm the Recommended Investigation section makes no claim about a commit when `state.escalation_commit` is empty, and that this is exercised by a case that reaches that state rather than asserted only in prose.
+  - Confirm no new file is written to the run directory by an escalation and no schema is added under `schemas/`.
+  - Confirm the summary is composed from the named artifacts and `RunState` alone, with no branch keyed off the escalation reason's text.
+  - Confirm the full suite passes, including the clean-clone check the coordinator runs at the end of a passing verification.
+
+constraints:
+  - The artifact keeps the filename `escalation-summary.md` exactly. No variant, no companion file carrying the new sections, and none of the retired names.
+  - The artifact stays Markdown. It is a human artifact, and machine artifacts are JSON because later stages consume them.
+  - The coordinator renders what the artifacts say and never summarizes, interprets, or infers. A section reports recorded fields; it does not draw a conclusion from them.
+  - A section whose source artifact is absent is omitted entirely. An empty or placeholder section is the failure mode this story exists to remove, not an acceptable degradation.
+  - `_escalate`'s ordering and its two commits are unchanged, as is the decorator above it. Only the construction of the summary text moves.
+  - `_complete` and `completion-report.md` are untouched. The success-path counterpart is a separate concern.
+  - Nothing routes on the summary. `escalation_reason` reads it for a refusal message only, and no new reader of it is added.
+  - The existing `retry-history.json` reader is reused rather than duplicated; the artifact keeps one reader in orchestration.
