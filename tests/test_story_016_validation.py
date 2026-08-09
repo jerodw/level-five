@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import story_commit_range
+
 import story_coordinator
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -526,12 +528,31 @@ def test_the_baseline_is_not_this_storys_own_file():
         assert f"def {name}" in before, name
 
 
+def story_011_at_this_storys_endpoint() -> str:
+    """The story-011 validation file as *this* story left it.
+
+    The counterpart of `story_011_before_this_story`, and the upper bound the
+    comparison below needs. Read against today's working tree it asks what the
+    file looks like *now*, which a later story changes without this story
+    having done anything — the trap the architecture document records under
+    the `HEAD`-baseline bullets. story-021 is where it bit: it edited one
+    function in that file so a probe workflow's config change is committed
+    before the run, and this comparison went red for a change story-016 has
+    nothing to say about. While this story is still in flight there is no
+    endpoint and the working tree is the right answer.
+    """
+    endpoint = story_commit_range(Path(__file__)).endpoint
+    if endpoint is None:
+        return STORY_011_FILE.read_text(encoding="utf-8")
+    return story_011_file_at(endpoint)
+
+
 def test_every_surviving_assertion_in_story_011_is_unchanged():
     """Read the diff, not the summary: every function that did not take the
     historical coordinator is byte-identical in its code, so no remaining
     assertion's subject or strictness moved."""
     before = functions_of(story_011_before_this_story())
-    after = functions_of(STORY_011_FILE.read_text(encoding="utf-8"))
+    after = functions_of(story_011_at_this_storys_endpoint())
     depended_on_history = {
         name: dump for name, dump in before.items()
         if "legacy_coordinator" in dump or "both_implementations" in dump

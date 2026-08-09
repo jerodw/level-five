@@ -334,6 +334,20 @@ def run(target_root: Path, harness: Path, edits: dict) -> tuple[int, Runner]:
     return code, runner
 
 
+def commit_setup(target_root: Path, message: str) -> None:
+    """Commit setup a test made after the fixture built the repository.
+
+    story-021's clean-tree pre-flight refuses a run whose target tree already
+    holds work no stage produced, and a test's configuration or story artifact
+    is exactly that: part of the repository the run starts *from*, not
+    something the run is meant to commit. Committing it keeps every assertion
+    below pointed at what it was pointed at.
+    """
+    subprocess.run(["git", "add", "-A"], cwd=target_root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=target_root,
+                   check=True)
+
+
 def configure(target_root: Path, **overrides) -> None:
     path = target_root / ".harness" / "config.yaml"
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -345,6 +359,7 @@ def configure(target_root: Path, **overrides) -> None:
         else:
             lines.append(f"{key}: {value}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    commit_setup(target_root, "configure the target for this test")
 
 
 def mirror_harness(tmp_path: Path, workflow: dict) -> Path:
@@ -364,6 +379,7 @@ def loaded_workflow() -> dict:
 def append_to_story(target_root: Path, text: str) -> None:
     path = target_root / ".harness" / "stories" / "story-001.yaml"
     path.write_text(path.read_text() + text, encoding="utf-8")
+    commit_setup(target_root, "the story artifact this test runs")
 
 
 def executable_source(text: str) -> str:

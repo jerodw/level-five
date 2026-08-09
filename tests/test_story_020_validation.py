@@ -33,10 +33,15 @@ report the violation it exists to catch:
     itself, read out of git, and paired with a field neither module declares,
     which still fails to load.
 
-The one place this file asserts a *positive* fact about a limit rather than a
-guarantee is `test_neither_terminal_commit_establishes_what_it_commits`. That
-limit is stated rather than closed by this story, and the test is written so
-that closing it turns the test red rather than leaving it quietly true.
+The place this file used to assert a *positive* fact about a limit rather than
+a guarantee was `test_neither_terminal_commit_establishes_what_it_commits`.
+story-021 closed that limit, from the start of the run rather than the end,
+and the test went red exactly as it was written to. It is repointed rather
+than deleted, keeping its subject and its strictness:
+`test_the_escalation_commit_carries_only_what_the_run_produced` and
+`test_the_completion_commit_stages_the_same_way` now assert the guarantee, and
+the second also states the one case it does not cover — a resumed crashed run,
+whose dirty tree is that run's own unfinished work.
 
 Nothing here invokes a model: every run goes through a fake agent runner and
 every clone source is a local filesystem path.
@@ -363,6 +368,29 @@ def change_the_code(target_root: Path) -> None:
 def amend_the_story(target_root: Path) -> None:
     write(target_root / ".harness" / "stories" / f"{STORY_ID}.yaml",
           STORY + "  - and keep the sample behavior working\n")
+
+
+def ready_to_resume(target_root: Path,
+                    message: str = "what the developer decided to do") -> None:
+    """Commit whatever the test set up, so the resume starts from a clean tree.
+
+    story-021 refuses a resume of an *escalated* run whose target tree is
+    dirty, and it is right to: this story leaves the tree clean when a run
+    escalates, so anything uncommitted afterwards is the developer's own work
+    and committing it deliberately is exactly what that check is for. Every
+    test below whose subject is what the resume *does* therefore does the
+    thing the refusal asks for before running.
+
+    The guard-level tests are deliberately not routed through here. Their
+    subject is `unchanged_since_escalation`, which is called directly and
+    never meets the pre-flight, so `change_the_code` on its own still means
+    there what it always meant: a dirty tree the guard reads as changed.
+
+    `--allow-empty`, so a repository that ignores its run directory and has
+    nothing uncommitted is not a special case for the caller.
+    """
+    git(target_root, "add", "-A")
+    git(target_root, "commit", "-q", "--allow-empty", "-m", message)
 
 
 def subject_of(root: Path, revision: str = "HEAD") -> str:
@@ -774,6 +802,7 @@ def test_an_escalated_run_resumes_at_the_recorded_stage(target, harness_root):
     escalate(target, harness_root)
     assert state_of(target)["current_stage"] == VERIFIER_STAGE["name"]
     change_the_code(target)
+    ready_to_resume(target)
 
     code, resumed = run(target, harness_root, verdicts=[PASS])
 
@@ -822,6 +851,7 @@ def test_the_completed_refusal_starts_no_agent_and_the_escalated_one_does(
     assert refused.calls == []
 
     write_state(target, status="escalated")
+    ready_to_resume(target)
     code, resumed = run(target, harness_root, verdicts=[PASS])
     assert code == 0
     assert resumed.calls != []
@@ -843,6 +873,7 @@ def test_the_pre_story_coordinator_refused_the_run_this_one_resumes(
         STORY_ID, harness_root, target, refused) == 1
     assert refused.calls == []
     restore_state(target, original)
+    ready_to_resume(target)
 
     code, resumed = run(target, harness_root, verdicts=[PASS])
     assert code == 0
@@ -890,6 +921,7 @@ def test_a_resumed_run_carries_the_counters_and_preserves_the_attempt(
     iteration_2 = (run_dir / "verification" / "iteration-2.json").read_text()
 
     change_the_code(target)
+    ready_to_resume(target)
     code, resumed = run(target, harness_root, verdicts=[PASS])
     assert code == 0
 
@@ -925,6 +957,7 @@ def test_resetting_the_counters_would_have_overwritten_that_evidence(
 
     change_the_code(target)
     write_state(target, verification_iterations=0)
+    ready_to_resume(target)
     code, _ = run(target, harness_root, verdicts=[PASS])
 
     assert code == 0
@@ -950,6 +983,7 @@ def test_the_interrupted_attempt_is_archived_before_the_resumed_stage_runs(
     escalated_prompt = (run_dir / "prompt-verifier-attempt-1.md").read_text()
 
     change_the_code(target)
+    ready_to_resume(target)
     code, resumed = run(target, harness_root, verdicts=[PASS])
     assert code == 0
 
@@ -990,6 +1024,10 @@ def test_a_resume_whose_archive_directory_exists_refuses_naming_it(
     occupied = story_coordinator.attempt_dir(run_dir_of(target), 1)
     occupied.mkdir(parents=True)
     write(occupied / "verification-result.json", "hand-written evidence\n")
+    # Committed, so the refusal below can only be the archive directory's:
+    # a dirty tree would refuse first, for story-021's reason instead of this
+    # one, and the message assertion would be checking the wrong refusal.
+    ready_to_resume(target)
     capsys.readouterr()
 
     blocked = Runner(target)
@@ -1006,6 +1044,7 @@ def test_a_resume_whose_archive_directory_exists_refuses_naming_it(
     elsewhere = build_target(target.parent / "unoccupied")
     escalate(elsewhere, harness_root)
     change_the_code(elsewhere)
+    ready_to_resume(elsewhere)
     proceeded, runner = run(elsewhere, harness_root, verdicts=[PASS])
     assert proceeded == 0
     assert runner.calls != []
@@ -1022,6 +1061,7 @@ def test_a_stage_argument_overrides_the_recorded_stage(target, harness_root):
     escalate(target, harness_root)
     assert state_of(target)["current_stage"] == VERIFIER_STAGE["name"]
     change_the_code(target)
+    ready_to_resume(target)
 
     code, overridden = run(target, harness_root, verdicts=[PASS],
                            edits={"implementer": [edits_the_module]},
@@ -1035,6 +1075,7 @@ def test_a_stage_argument_overrides_the_recorded_stage(target, harness_root):
     elsewhere = build_target(target.parent / "no-override")
     escalate(elsewhere, harness_root)
     change_the_code(elsewhere)
+    ready_to_resume(elsewhere)
     assert run(elsewhere, harness_root, verdicts=[PASS])[1].calls[0] \
         == VERIFIER_STAGE["name"]
 
@@ -1206,6 +1247,10 @@ def test_amending_the_story_clears_the_refusal(quiet_target, harness_root):
     amend_the_story(quiet_target)
     assert guard(quiet_target, harness_root) == []
 
+    # The guard assertion above is what carries the claim; committing after it
+    # is story-021's clean-tree pre-flight being satisfied, not a second way of
+    # clearing the guard sneaking into the subject.
+    ready_to_resume(quiet_target, "the amended story")
     code, resumed = run(quiet_target, harness_root, verdicts=[PASS])
     assert code == 0
     assert resumed.calls[0] == VERIFIER_STAGE["name"]
@@ -1335,6 +1380,7 @@ def test_the_digest_neither_authorizes_nor_triggers_a_resume(
     assert "completed" in capsys.readouterr().err
 
     write_state(target, status="escalated")
+    ready_to_resume(target)
     assert run(target, harness_root, verdicts=[PASS])[1].calls != []
 
 
@@ -1365,6 +1411,7 @@ def test_the_resumed_stage_comes_from_state_json(target, harness_root):
     assert state_of(target)["current_stage"] == VERIFIER_STAGE["name"]
     change_the_code(target)
     write_state(target, current_stage="documenter")
+    ready_to_resume(target)
 
     code, resumed = run(target, harness_root)
 
@@ -1387,6 +1434,7 @@ def test_nothing_routes_on_the_summary_the_archive_or_the_baseline(
     change_the_code(target)
     (run_dir / "escalation-summary.md").unlink()
     subprocess.run(["rm", "-rf", str(run_dir / BASELINE)], check=True)
+    ready_to_resume(target, "the run directory with all three removed")
 
     code, stripped = run(target, harness_root, verdicts=[PASS])
 
@@ -1396,6 +1444,7 @@ def test_nothing_routes_on_the_summary_the_archive_or_the_baseline(
     intact = build_target(target.parent / "intact")
     escalate(intact, harness_root)
     change_the_code(intact)
+    ready_to_resume(intact)
     code, kept = run(intact, harness_root, verdicts=[PASS])
     assert code == 0
     assert kept.calls == stripped.calls
@@ -1457,6 +1506,7 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
     assert (captured / "tests" / "test_existing.py").read_text() == TEST_AT_HEAD
 
     change_the_code(target)
+    ready_to_resume(target)
     code, _ = run(target, harness_root, verdicts=[PASS],
                   edits={"implementer": [edits_the_module]})
     assert code == 0
@@ -1478,6 +1528,7 @@ def test_one_resumed_event_names_the_stage_in_both_renderings(
 ):
     escalate(target, harness_root)
     change_the_code(target)
+    ready_to_resume(target)
     run(target, harness_root, verdicts=[PASS])
 
     resumed = [line for line in messages(target) if line.startswith("resumed")]
@@ -1501,6 +1552,7 @@ def test_the_whole_run_including_the_escalation_and_the_resume_reconstructs(
     """
     escalate(target, harness_root, AFTER_A_RETRY)
     change_the_code(target)
+    ready_to_resume(target)
     assert run(target, harness_root, verdicts=[PASS])[0] == 0
 
     entries = history(target)
@@ -1575,6 +1627,7 @@ def test_a_run_escalated_before_this_story_resumes_without_a_false_refusal(
            if key not in NEW_FIELDS}
     (run_dir / "state.json").write_text(json.dumps(old, indent=2) + "\n",
                                         encoding="utf-8")
+    ready_to_resume(target, "the pre-story state file")
 
     code, resumed = run(target, harness_root, verdicts=[PASS])
 
@@ -1603,65 +1656,115 @@ def test_the_new_fields_are_written_by_every_run_and_default_to_empty(
 
 
 # --------------------------------------------------------------------------
-# The limit this story states rather than closes
+# What the terminal commits establish
+#
+# story-020 stated a limit here: neither terminal commit established that the
+# tree it staged was the tree the run produced. story-021 closed it, from the
+# start of the run rather than the end — neither commit changed — so the two
+# assertions below are repointed to the guarantee that now holds and to the
+# one case it does not, keeping their subject, their strictness and their
+# stray file. Repointing is what story-020 said should happen when it landed.
 # --------------------------------------------------------------------------
 
+STRAY = "stray-nothing-produced-this.txt"
 
-def test_neither_terminal_commit_establishes_what_it_commits(
+
+def test_the_escalation_commit_carries_only_what_the_run_produced(
     target, harness_root,
 ):
-    """A property of the coordinator, not of one commit: both terminal commits
-    stage the working tree rather than the run's own work.
+    """Still a property of the coordinator rather than of one commit, and
+    still asserted on the same stray file the working tree held before the run.
 
-    This is the one test here that asserts a limit rather than a guarantee, so
-    it is written to go *red* when the limit closes:
-    `.harness/requests/commit-only-what-the-run-produced.md` is the story that
-    closes it, and when it lands the stray file below stops being committed
-    and both halves fail. Repoint them there rather than deleting them.
+    What changed is the answer. The stray file is no longer absorbed, because
+    the run never starts: the clean-tree pre-flight refuses it, having created
+    nothing and moved nothing. Once the developer does what the refusal asks,
+    the escalation's commits carry the run's own work and not a second copy of
+    what predated it.
 
-    The control is the same tree committed the narrow way — only the paths the
-    stage recorded — which does not carry the stray file. That is what makes
-    the assertion a statement about what the coordinator stages rather than a
-    statement about the file existing at all.
+    The control is the developer's own commit, which does carry the stray file
+    — so the two absences below are statements about what the coordinator
+    stages rather than about the file being absent from the repository.
     """
-    stray = "stray-nothing-produced-this.txt"
-    write(target / stray, "no stage wrote this\n")
+    tip_before = git(target, "rev-parse", "HEAD").stdout.strip()
+    write(target / STRAY, "no stage wrote this\n")
+
+    refused = Runner(target)
+    assert story_coordinator.run_story(
+        STORY_ID, harness_root, target, refused) == 1
+    assert refused.calls == []
+    assert git(target, "rev-parse", "HEAD").stdout.strip() == tip_before
+
+    git(target, "add", "--", STRAY)
+    git(target, "commit", "-q", "-m", "the developer's own file")
+    developers = git(target, "rev-parse", "HEAD").stdout.strip()
+
     escalate(target, harness_root)
 
-    assert stray in files_in(target)
-
-    # The control: staged the narrow way, the same tree yields no stray file.
-    narrow = build_target(target.parent / "narrow")
-    write(narrow / stray, "no stage wrote this\n")
-    edits_the_module(narrow, 1)
-    git(narrow, "add", "--", "src/app.py")
-    git(narrow, "commit", "-q", "-m", "only what was recorded")
-    assert "src/app.py" in files_in(narrow)
-    assert stray not in files_in(narrow)
+    # An escalation leaves two commits and neither of them carries it.
+    assert STRAY not in files_in(target)
+    assert STRAY not in files_in(target, "HEAD~1")
+    assert "src/app.py" in files_in(target)
+    assert STRAY in files_in(target, developers)          # the control
 
 
 def test_the_completion_commit_stages_the_same_way(target, harness_root):
-    """The other half of the same limit, so the statement is about both
-    terminal commits and neither can close alone without this going red."""
-    stray = "stray-nothing-produced-this.txt"
-    write(target / stray, "no stage wrote this\n")
+    """The other half of the same statement, so it is about both terminal
+    commits and neither can regress alone without this going red — and the one
+    case the guarantee does not cover, stated here rather than left to be
+    discovered.
+
+    A resumed *crashed* run is that case: nothing commits when a process dies,
+    so its working tree holds the run's own unfinished work and the pre-flight
+    does not apply. Its completion commit therefore stages whatever the tree
+    held, the stray file included. When that stops being true this fails, and
+    the exclusion is what should be re-read rather than the assertion relaxed.
+    """
+    write(target / STRAY, "no stage wrote this\n")
+
+    refused = Runner(target)
+    assert story_coordinator.run_story(
+        STORY_ID, harness_root, target, refused) == 1
+    assert refused.calls == []
+
+    git(target, "add", "--", STRAY)
+    git(target, "commit", "-q", "-m", "the developer's own file")
 
     code, _ = run(target, harness_root, {"implementer": [edits_the_module]})
 
     assert code == 0
-    assert stray in files_in(target)
+    assert "src/app.py" in files_in(target)
+    assert STRAY not in files_in(target)
+
+    # The exclusion: a run left `running` is resumed on its own dirty tree, so
+    # its completion commit does carry a file no stage recorded.
+    crashed = build_target(target.parent / "crashed")
+    run_dir_of(crashed).mkdir(parents=True, exist_ok=True)
+    story_coordinator.save_state(
+        run_dir_of(crashed),
+        story_coordinator.RunState(story_id=STORY_ID,
+                                   branch=f"story/{STORY_ID}",
+                                   status="running", current_stage="tester"),
+    )
+    write(crashed / STRAY, "the crashed run's own unfinished work\n")
+
+    resumed = Runner(crashed, {"implementer": [edits_the_module]})
+    assert run(crashed, harness_root, runner=resumed, verdicts=[PASS])[0] == 0
+    assert resumed.calls[0] == "tester"
+    assert STRAY in files_in(crashed)
 
 
-def test_the_coordinator_states_that_limit_where_the_commits_are_made():
-    """Stated in the coordinator as a property of the coordinator, so the
-    story that closes it repoints one statement rather than hunting for
-    prose. The control is that the same search finds nothing in a rendering
-    with the prose stripped out."""
+def test_the_coordinator_states_that_where_the_commits_are_made():
+    """Stated in the coordinator as a property of the coordinator. story-020
+    put a limit here and story-021 repointed it to the guarantee and its one
+    exclusion, which is why one statement moved rather than prose being hunted
+    for. The control is that the same search finds nothing in a rendering with
+    the prose stripped out."""
     source = (REPO_ROOT / "orchestration" / "story_coordinator.py").read_text(
         encoding="utf-8")
     stated = [line for line in source.splitlines()
               if "working tree" in line and ("add -A" in line or "stage" in line)]
     assert stated
+    assert any("crashed" in line for line in source.splitlines())
     assert [line for line in executable_source(source).splitlines()
             if "working tree" in line and "add -A" in line] == []
 

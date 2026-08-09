@@ -36,6 +36,7 @@ import run_status
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
+from conftest import commit_setup
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 WORKFLOW = json.loads(
@@ -613,6 +614,7 @@ def test_an_artifact_list_no_orchestration_code_knows_about_reaches_the_entry(
             "workflow: story-workflow", "workflow: history-probe-workflow"),
         encoding="utf-8",
     )
+    commit_setup(target_root, "run the history probe workflow")
     assert "design-notes.md" not in Path(
         story_coordinator.__file__).read_text(encoding="utf-8")
 

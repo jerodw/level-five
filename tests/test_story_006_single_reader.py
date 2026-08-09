@@ -21,6 +21,7 @@ import schema_validator
 import story_coordinator
 import story_parser
 from agent_runner import AgentResult
+from conftest import commit_setup
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS = REPO_ROOT.joinpath(".harness", "stories")
@@ -91,6 +92,10 @@ def context_for(target_root: Path, harness_root: Path, story_text: str) -> dict:
 def install(target_root: Path, story_text: str) -> Path:
     path = target_root / ".harness" / "stories" / "story-001.yaml"
     path.write_text(story_text, encoding="utf-8")
+    # The artifact is what the run reads, not what it produces, so it is
+    # committed: story-021's clean-tree pre-flight refuses a run whose target
+    # tree holds anything uncommitted, the story artifact included.
+    commit_setup(target_root, "the story artifact this test runs")
     return path
 
 

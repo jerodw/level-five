@@ -91,6 +91,21 @@ def write_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def commit_setup(target_root: Path, message: str) -> None:
+    """Commit setup a test made after the fixture built the repository.
+
+    story-021's clean-tree pre-flight refuses a run whose target tree already
+    holds work no stage produced, and a test's configuration is exactly that:
+    part of the repository the run starts *from*, not something the run is
+    meant to commit. Committing it is what makes the setup a fact about the
+    target rather than uncommitted work sitting in it, so every assertion
+    below keeps its subject and its strictness.
+    """
+    subprocess.run(["git", "add", "-A"], cwd=target_root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=target_root,
+                   check=True)
+
+
 def configure(target_root: Path, **overrides) -> None:
     """Rewrite the target's config keys, adding those it does not carry."""
     lines = (target_root / ".harness" / "config.yaml").read_text(
@@ -105,6 +120,7 @@ def configure(target_root: Path, **overrides) -> None:
             lines.append(rendered)
     (target_root / ".harness" / "config.yaml").write_text(
         "\n".join(lines) + "\n", encoding="utf-8")
+    commit_setup(target_root, "configure the target for this test")
 
 
 def install_interpreter(target_root: Path, rel: str) -> str:

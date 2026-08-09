@@ -240,6 +240,36 @@ def _revision(root: Path, revision: str = "HEAD") -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def dirty_paths(target_root: Path) -> list[str]:
+    """The paths `git status --porcelain` reports as uncommitted, sorted.
+
+    This is the whole of the clean-tree pre-flight's evidence, and it only
+    *reads* the target repository: no commit, no branch, no stash, no index
+    change. A root that is not a git repository, or a git that fails for any
+    other reason, reports nothing dirty — the run is refused for what can be
+    established, never for what cannot, which is the same bias the resume
+    guard takes.
+
+    Untracked files count, because a file no stage produced is exactly what
+    `git add -A` would absorb into the run's commit. Ignored files do not,
+    which is why a gitignored run directory is not what this is about.
+    """
+    result = _git(target_root, "status", "--porcelain")
+    if result.returncode != 0:
+        return []
+    paths = []
+    for line in result.stdout.splitlines():
+        entry = line[3:]
+        # A rename is reported as "old -> new"; the new path is the one a
+        # developer would look for, and the old one no longer exists.
+        if " -> " in entry:
+            entry = entry.split(" -> ", 1)[1]
+        entry = entry.strip().strip('"')
+        if entry:
+            paths.append(entry)
+    return sorted(set(paths))
+
+
 def _checkout_story_branch(target_root: Path, branch: str) -> None:
     exists = _git(target_root, "rev-parse", "--verify", branch).returncode == 0
     args = ["checkout", branch] if exists else ["checkout", "-b", branch]
@@ -1132,11 +1162,20 @@ def _revert_check_permitted(
 # about an escalation. Resume cannot recover what the harness did not preserve,
 # so the escalation commits too.
 #
-# It commits with the same looseness _complete has, and the limit is stated
-# rather than closed here: `git add -A` stages whatever is in the working tree,
-# not what the run produced, and an escalation does that on a tree that is by
-# definition unfinished. Closing it is a separate story, deliberately after
-# this one.
+# It commits the same way _complete does — `git add -A` on the working tree —
+# and since story-021 that is an accurate statement about what the run
+# produced rather than a loose one. Neither commit was changed to make it so:
+# the clean-tree pre-flight above establishes that the tree held nothing the
+# run did not produce *before* any stage ran, so staging everything and
+# staging what the run produced are the same set. Staging less would be the
+# regression — it would commit a tree no stage validated and silently drop a
+# real change no record happened to name.
+#
+# The guarantee has exactly one gap, and it is the pre-flight's one exclusion
+# rather than a looseness here: a resume of a *crashed* run is not held to a
+# clean tree, because nothing commits when a process dies and that working
+# tree holds the run's own unfinished work. So a resumed crashed run is the
+# one case where a terminal commit can stage more than the run produced.
 #
 # The escalation ends in *two* commits, and the second one is not bookkeeping
 # for its own sake. Everything the escalation writes — state.json, both
@@ -1333,16 +1372,42 @@ def _resume_refusal(
     return "\n".join(lines)
 
 
-def _refuse(story_path: Path, problems: list[str]) -> int:
-    """The one pre-flight refusal path: exit 1, one message per problem."""
-    print(f"{story_path} is not a valid story artifact:", file=sys.stderr)
+def _refuse(header: str, problems: list[str], guidance: str) -> int:
+    """The one pre-flight refusal path: exit 1, one message per problem.
+
+    Every pre-flight refusal that has problems to enumerate goes through here
+    — the two story-artifact refusals and the clean-tree one — so the shape
+    stays a single code path rather than a copy per reason. What differs
+    between them is the sentence above the list and the sentence below it,
+    which is what a caller supplies.
+    """
+    print(header, file=sys.stderr)
     for problem in problems:
         print(f"  - {problem}", file=sys.stderr)
-    print(
-        "Fix the artifact or re-run planning before executing the story.",
-        file=sys.stderr,
-    )
+    print(guidance, file=sys.stderr)
     return 1
+
+
+def _refuse_bad_story(story_path: Path, problems: list[str]) -> int:
+    return _refuse(
+        f"{story_path} is not a valid story artifact:",
+        problems,
+        "Fix the artifact or re-run planning before executing the story.",
+    )
+
+
+def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
+    """Refuse a run whose target tree already holds work no stage produced.
+
+    The friction here is the point of contact a developer meets most often, so
+    the message names every dirty path and says what clears it.
+    """
+    return _refuse(
+        f"{target_root} has uncommitted changes, so a run starting here could "
+        f"not establish that what it commits is what it produced:",
+        paths,
+        "Commit or stash them, then run the story again.",
+    )
 
 
 def _commits_the_tree_it_ends_on(escalate):
@@ -1511,7 +1576,7 @@ def run_story(
     # schema_validator relative to its own module, not from harness_root.
     reading = read_story(story_text)
     if reading.problems:
-        return _refuse(story_path, reading.problems)
+        return _refuse_bad_story(story_path, reading.problems)
 
     # Conformance is one question, agreement with this workflow another. A
     # stage exception is checked here rather than inside read_story so schema
@@ -1519,14 +1584,36 @@ def run_story(
     # creation.
     exception_problems = stage_exception_problems(reading.parsed, stages)
     if exception_problems:
-        return _refuse(story_path, exception_problems)
+        return _refuse_bad_story(story_path, exception_problems)
 
     run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
+    state = load_state(run_dir)
+
+    # Pre-flight: a run commits the tree it ends on, so it has to start from a
+    # tree it can account for. Which runs this applies to is decided by the
+    # state the run is *starting from*, which is already loaded above for the
+    # resume decision. No state is a fresh run; an escalated state is a resume
+    # of a run that left the tree clean when it escalated, so anything
+    # uncommitted now is the developer's own fix and committing it deliberately
+    # is what this check is for. A `running` state is the one exclusion, and it
+    # is not an exception to the rule so much as a different tree: nothing
+    # commits when a process dies, so that working tree holds the run's own
+    # unfinished work and refusing it would refuse the run its own state.
+    #
+    # It sits above the run-directory creation and the branch checkout, so a
+    # refusal leaves no run directory, no state.json, no log, no new branch,
+    # and invokes no agent. There is deliberately no flag, environment variable
+    # or configuration key that skips it: a bypass on a correctness guard
+    # becomes the default invocation.
+    if state is None or state.status == "escalated":
+        dirty = dirty_paths(target_root)
+        if dirty:
+            return _refuse_dirty_tree(target_root, dirty)
+
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "verification").mkdir(exist_ok=True)
     log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
 
-    state = load_state(run_dir)
     if state and state.status == "completed":
         # Name the branch as well as the run directory. _checkout_story_branch
         # reuses an existing branch rather than resetting it, so deleting only

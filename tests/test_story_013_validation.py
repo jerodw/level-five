@@ -740,8 +740,16 @@ def test_the_added_no_test_function_check_can_fail():
 
 @pytest.mark.parametrize("rel", sorted(IMPLEMENTER_TEST_EDITS))
 def test_the_implementer_changed_only_the_inventory_bound_assertions(rel):
+    """The "after" side is this story's own endpoint, for the same reason
+    `_endpoint_listing` and `_endpoint_text` exist beside it: read against
+    today's working tree it reports every function any later story touches in
+    these files, which is not what its name asks. story-021 is the story that
+    made that concrete — it edited `configure` in
+    `tests/test_story_014_validation.py` because its clean-tree pre-flight
+    refuses a run whose target tree the test left dirty. The subject and the
+    expected set are unchanged."""
     before = _blob(_baseline(), rel)
-    after = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    after = _endpoint_text(rel)
     before_functions, after_functions = _functions(before), _functions(after)
     changed = {name for name in after_functions
                if after_functions[name] != before_functions.get(name)}

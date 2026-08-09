@@ -650,6 +650,13 @@ def use_probe_workflow(target_root: Path, workflow: dict) -> None:
     config = target_root / ".harness" / "config.yaml"
     write(config, config.read_text(encoding="utf-8").replace(
         "workflow: story-workflow", f"workflow: {workflow['name']}"))
+    # story-021's clean-tree pre-flight refuses a run whose target tree holds
+    # work no stage produced. Which workflow the target runs is part of the
+    # repository the run starts from, so it is committed rather than left
+    # uncommitted; the probe below is unchanged in every other respect.
+    subprocess.run(["git", "add", "-A"], cwd=target_root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "run the probe workflow"],
+                   cwd=target_root, check=True)
 
 
 def test_an_output_no_orchestration_code_knows_about_is_covered(

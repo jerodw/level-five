@@ -21,6 +21,7 @@ import schema_validator
 import story_coordinator
 import story_parser
 from agent_runner import AgentResult
+from conftest import commit_setup
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 STORIES_DIR = HARNESS_ROOT.joinpath(".harness", "stories")
@@ -362,6 +363,11 @@ def reject(target_root: Path, harness_root: Path, story_text: str) -> int:
 def test_a_valid_story_reports_no_problems_and_still_runs(target_root, harness_root):
     assert story_coordinator.read_story(VALID_STORY).problems == []
     story_file(target_root).write_text(VALID_STORY, encoding="utf-8")
+    # story-021's clean-tree pre-flight refuses a run whose target tree holds
+    # anything uncommitted, and the story artifact is no exception. The
+    # refusals `reject` above drives are unaffected: the story-artifact
+    # refusal is above this one and still fires first.
+    commit_setup(target_root, "the story artifact this test runs")
     calls: list[str] = []
 
     def runner(prompt, *, stage, **kwargs):

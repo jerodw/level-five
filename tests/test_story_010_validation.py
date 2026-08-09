@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_diff
+from conftest import commit_setup, story_diff
 
 import context_assembler
 import harness_config
@@ -395,6 +395,7 @@ def test_a_workflow_the_repository_does_not_ship_gets_its_artifact_archived(
             "workflow: story-workflow", "workflow: archive-probe-workflow"),
         encoding="utf-8",
     )
+    commit_setup(target_root, "run the archive probe workflow")
     assert "design-notes.md" in story_coordinator.archivable_artifacts(
         json.loads((probe_harness_root / "workflows" /
                     "archive-probe-workflow.json").read_text())["stages"])
