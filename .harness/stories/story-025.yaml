@@ -1,0 +1,134 @@
+story:
+  id: story-025
+  title: Plan time validates the artifact it just wrote
+  description: |
+    The planner writes a story artifact and hands it to the developer. Nothing
+    reads that artifact back until l5-run refuses it at pre-flight, by which
+    time the interactive session that could have repaired it in one exchange
+    has closed. Recovering means re-reading the schema, hand-editing the
+    artifact, and re-running, or opening another planning session to repair
+    the output of the last one.
+
+    Since story-023 scripts/l5-plan no longer ends in os.execvp: it runs the
+    session as a child process, outlives it, snapshots the stories directory
+    before the session and commits what appeared after it. Validation belongs
+    between those two acts. A failing artifact is left in the working tree,
+    uncommitted, with its problems reported, which is exactly the state a
+    developer can fix and re-run from.
+
+    Three classes of problem are reported. Two are the ones l5-run already
+    refuses and are reached through the coordinator's own functions rather
+    than through a second reader: schema conformance via read_story, and
+    agreement of a story's stage_exceptions with the loaded workflow via
+    stage_exception_problems. The third is new and runs at plan time only: a
+    story entry that states a workflow restriction more strictly than the
+    workflow declares it. That class is never refused by l5-run, which is why
+    plan time is the only place it can be caught; it costs a verifier finding
+    and a human adjudication on every story that carries it, and four
+    committed artifacts carry one.
+
+    This story moves an existing check earlier and adds one new one at plan
+    time. It changes nothing about what l5-run's pre-flight checks or accepts.
+
+tasks:
+  - Add orchestration/plan_validation.py, a module that validates story artifacts at plan time and returns the problems it found rather than printing them.
+  - Compose the two run-time checks in that module by calling story_coordinator.read_story and story_coordinator.stage_exception_problems. Do not reimplement parsing, schema validation, or the stage-exception cross-check.
+  - Recover strictness_problems from story-018 with git show e2f401d:orchestration/plan_validation.py and adapt it as a starting point rather than a specification. It reports an entry of acceptance_criteria, verification_requirements or constraints that names a stage the loaded workflow defines together with one of that stage's declared may_not_create prefixes, in a clause carrying no word scoping it to creation.
+  - Read both halves of that match off the loaded workflow definition. No stage name and no restricted prefix may appear as a literal in orchestration code. Add whatever derivation helper this needs beside stage_exception_problems, which already derives the same mapping.
+  - Promote the coordinator's refusal helpers from _refuse and _refuse_bad_story to public names, and update every existing caller in story_coordinator.py, so plan time and pre-flight print a given problem identically from one code path.
+  - Wire validation into scripts/l5-plan between plan_commit.snapshot and plan_commit.commit_artifacts, so a failing artifact is never committed. The script stays a thin entry point: the decision and the composition live in orchestration, and the script wires them and reports.
+  - When one of several new artifacts fails, commit none of them. The commit is one commit for the session's artifacts, and a partial commit would invent a split the session did not have.
+  - Leave the no-new-artifact case exactly as it is. A session that wrote nothing already commits nothing and says so, and validation must not turn that into a failure.
+  - Amend prompts/planner.md so the paragraph stating that l5-plan commits the artifact also states that it validates it first and does not commit one that fails, and names the strictness rule as something plan time now checks.
+  - State plainly in the module docstring what the strictness check does not catch, including a phrasing that names neither the stage nor the prefix, and a single clause that both restricts creation and restricts more than creation.
+
+acceptance_criteria:
+  - orchestration/plan_validation.py exists and reports schema-conformance problems by calling story_coordinator.read_story, not by parsing or validating a story itself.
+  - A story artifact that fails the story schema is reported by l5-plan after the session ends, and is not committed.
+  - A story artifact whose stage_exceptions name a stage the loaded workflow does not define is reported by l5-plan after the session ends, and is not committed.
+  - A story artifact whose stage_exceptions grant a prefix the named stage was never restricted on is reported by l5-plan after the session ends, and is not committed.
+  - For a given defect in a given artifact, the message plan time prints and the message l5-run prints at pre-flight are the same text, produced by the same function.
+  - strictness_problems reports an entry naming a workflow-defined stage together with one of that stage's declared may_not_create prefixes in a clause with no creation word, and does not report the same entry when the clause is scoped to creation.
+  - strictness_problems derives both the stage names and the restricted prefixes from the loaded workflow definition; grep over orchestration/plan_validation.py finds no literal stage name and no literal restricted prefix.
+  - A validation failure refuses rather than warns: l5-plan exits non-zero, commits nothing, and leaves every new artifact in the working tree.
+  - A validation failure deletes no artifact and rewrites no artifact. Automatic repair is not attempted.
+  - A session that added no story artifact still prints that it committed nothing and exits on the session's own status, unchanged by this story.
+  - A session whose artifacts all validate commits and pushes exactly as it did before this story.
+  - l5-run's pre-flight still refuses the same artifacts it refused before, with the same exit status and no run directory, state.json, log or branch created.
+  - prompts/planner.md states that l5-plan validates before committing and does not commit a failing artifact, and names the strictness rule.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Promote _refuse and _refuse_bad_story in orchestration/story_coordinator.py to public refuse and refuse_bad_story, updating their existing call sites. _refuse_dirty_tree is a run-time refusal with no plan-time counterpart and may stay private; leave its behaviour unchanged either way.
+    - Add a helper beside stage_exception_problems that returns the workflow's (stage, prefix) restriction pairs, so the derivation exists once and both the exception cross-check and the strictness check read it.
+    - Write orchestration/plan_validation.py. Recover story-018's version for its structure, its clause split, its creation-word test and its stated limits, and adapt it to the functions the coordinator exposes today. Discard everything in that file belonging to the separate-script approach, including validate_story's entry-point shape and any reference to l5-validate.
+    - Give the module one composition function that takes the artifacts a session added plus the loaded workflow's stages and returns the problems per artifact, calling read_story once per artifact and passing its parse to stage_exception_problems and strictness_problems. An artifact that fails to parse yields its parse problem and nothing further.
+    - In scripts/l5-plan, call that function after plan_commit.new_artifacts and before plan_commit.commit_artifacts. On problems, print through the coordinator's public refusal helper, commit nothing, and return a non-zero status. On no problems, fall through to the existing commit and push unchanged.
+    - Amend prompts/planner.md's post-session paragraph. Do not add a step telling the planner to run a validation script; story-023 made that paragraph say "Do not commit anything", and a script the developer or the agent must remember is the approach this story rejects.
+    - Update .harness/docs/ARCHITECTURE.md: the scripts/ section on l5-plan, and a plan_validation.py bullet under orchestration, saying what the three classes are and what the third one does not catch.
+  likely_file_changes:
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: The new module composing the two coordinator checks and adding the strictness check.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Promote the refusal helpers to public names and add the workflow restriction-pairs helper.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Validate between the snapshot and the commit, and report a refusal.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: State that plan time validates before committing, and name the strictness rule.
+    - file: tests/test_story_025_validation.py
+      stage: tester
+      reason: The story's regression suite, covering all three classes, the parity of messages, the refuse-and-commit-nothing behaviour, and the unchanged no-artifact and all-valid paths.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record plan-time validation under scripts/ and orchestration/, including the third check's stated limits.
+
+scope:
+  modify:
+    - orchestration/plan_validation.py
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/story.schema.json
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/plan_commit.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - .harness/stories/
+    - scripts/l5-run
+    - scripts/l5-status
+    - scripts/l5-assist
+    - scripts/l5-init
+
+verification_requirements:
+  - Confirm that a story artifact failing the schema and a story artifact whose stage_exceptions name a stage the workflow does not define are both reported at plan time, from the evidence artifacts rather than by re-running the suite.
+  - Confirm that for the same artifact and the same defect, the text plan time prints and the text l5-run's pre-flight prints are identical, and that both come from one function.
+  - Confirm by search rather than by inspection that no second parsing implementation and no second schema-validation implementation was introduced. story_parser.parse and schema_validator.validate must each still have their existing callers and no new one outside story_coordinator.read_story.
+  - Confirm that l5-run's pre-flight behaviour is unchanged: it refuses the same artifacts, with the same exit status, creating no run directory, no state.json, no log and no branch.
+  - Confirm that orchestration/plan_validation.py contains no literal workflow stage name and no literal restricted path prefix, and that both come from the loaded workflow definition.
+  - Confirm that a failing validation leaves every new artifact on disk, unmodified and uncommitted, and that git log shows no commit from that session.
+  - Confirm that a session adding no artifact behaves exactly as before this story.
+  - Confirm the new tests fail against the pre-story code for the reason they were written, and are not vacuous.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - Reuse story_coordinator.read_story. A plan-time check that re-implements any part of parsing or validation reintroduces the divergence story-005 existed to remove. If a function is awkward to call from the new entry point, move or wrap it rather than copying it.
+  - The l5-run pre-flight path stays exactly as it is. Plan-time validation is an addition, never a replacement, and no story that pre-flight accepts today may start being refused by it.
+  - Do not add scripts/l5-validate or any separate command a developer or the planner agent must remember to run. Forgetting it returns the harness to today's behaviour.
+  - Do not tell the planner agent to validate its own output as the mechanism. Prompt guidance is a courtesy here; the deterministic check in the script is the enforcement.
+  - Do not repair a malformed story automatically. The developer must see the problems and decide.
+  - Do not delete an artifact that fails validation. It stays in the working tree where it was written.
+  - Do not attempt the general problem of deciding whether an English sentence is stronger than a declared rule. The strictness check is the narrow, stated version, and what it does not catch must be written down where a reader of the module meets it.
+  - Warning is not enough for any of the three classes. A warning at plan time is a warning nobody sees, because the session has moved on by then.
+  - Validate only the story artifact. Nothing else the session touched is this check's concern.
+  - scripts/l5-plan stays a thin entry point. The composition and the decision live in orchestration; the script wires them together and reports.
+  - Preserve the process model story-023 established: the session runs as a child with stdin, stdout and stderr inherited, the session's own exit status wins over the script's, and an interrupt still exits 130.
+  - The harness is standard library only. Add no third-party dependency.
