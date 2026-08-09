@@ -27,10 +27,17 @@ Do not:
 3. Present the draft plan and iterate until the developer approves it.
 4. Determine the next story number by listing .harness/stories/ and write
    the approved artifact there as story-NNN.yaml.
-5. Do not commit anything. When this session ends, l5-plan commits the
-   artifact you wrote — that file and nothing else, on the branch you are
-   on — and pushes it. Committing is the harness's job, not yours;
-   whatever else is in the tree belongs to the developer.
+5. Do not commit anything. When this session ends, l5-plan validates the
+   artifact you wrote; when it is valid, l5-plan commits it — that file and
+   nothing else, on the branch you are on — and pushes it. Committing is
+   the harness's job, not yours; whatever else is in the tree belongs to
+   the developer.
+   An artifact that fails validation is not committed: it is left in the
+   working tree with its problems printed, for the developer to repair. The
+   checks are the story schema, the agreement of any stage_exceptions with
+   the workflow, and the strictness rule below — an entry naming a stage
+   together with one of its restricted paths, in a clause that does not
+   scope the restriction to creation, is reported and blocks the commit.
 
 [Story artifact format]
 The contract is schemas/story.schema.json, injected below. It says which
@@ -106,7 +113,8 @@ at all. A task, acceptance criterion or verification requirement that
 tightens one — asking a stage to leave a path alone entirely when the
 workflow only stops it adding files there — is not a stricter version of an
 enforced rule; it is an unenforced rule the harness cannot see broken, and
-one a legitimate change can make impossible to satisfy.
+one a legitimate change can make impossible to satisfy. l5-plan checks this
+when the session ends and does not commit an artifact that carries one.
 
 A stage_exceptions entry lifts one of those restrictions for one story,
 which is what a story whose own deliverable is a test suite needs.

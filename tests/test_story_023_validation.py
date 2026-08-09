@@ -530,16 +530,35 @@ def test_the_subject_names_the_story_and_carries_its_title(planning: Planning):
     assert planning.subject() == "Plan story-900: Stub planned story"
 
 
-def test_an_unparseable_artifact_is_still_committed_with_the_fallback_subject(
+def test_the_fallback_subject_is_used_when_an_artifact_does_not_parse(tmp_path: Path):
+    """The subject falls back when the parse fails; the commit is elsewhere.
+
+    Repointed by story-025, which validates before committing, so an
+    unparseable artifact no longer reaches a commit at all (that end of it is
+    asserted in this file by
+    test_an_unparseable_artifact_is_not_committed_and_stays_in_the_tree).
+    What this test always established about plan_commit — that a failed parse
+    costs the title and nothing more — is unchanged and is asserted on
+    commit_subject directly, where it lives.
+    """
+    sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+    import plan_commit
+
+    unparseable = tmp_path / "story-902.yaml"
+    unparseable.write_text("this: is: not: a story\n\t- ?\n", encoding="utf-8")
+    assert plan_commit.commit_subject([unparseable]) == "Plan story-902"
+
+
+def test_an_unparseable_artifact_is_not_committed_and_stays_in_the_tree(
         planning: Planning):
+    """Since story-025 l5-plan validates between the snapshot and the commit."""
     before = planning.head()
     result = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-902.yaml", "this: is: not: a story\n\t- ?\n")))
 
-    assert result.returncode == 0, result.stderr
-    assert planning.head() != before
-    assert committed_paths(planning.root) == [".harness/stories/story-902.yaml"]
-    assert planning.subject() == "Plan story-902"
+    assert result.returncode != 0
+    assert planning.head() == before
+    assert (planning.stories_dir / "story-902.yaml").is_file()
 
 
 def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning):
