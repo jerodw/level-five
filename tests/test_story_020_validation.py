@@ -441,6 +441,25 @@ def pre_story(path: str) -> str:
     return git(REPO_ROOT, "show", f"{revision}:{path}").stdout
 
 
+def at_story_endpoint(path: str) -> str:
+    """A repository file as *this* story's own run left it.
+
+    The counterpart of `pre_story` and the upper bound every "this story did
+    not change X" comparison needs. Read against today's working tree such a
+    comparison asks what the file looks like *now*, which a later story
+    changes without this story having done anything — the HEAD-baseline trap
+    the architecture document records. story-024 is where it bit: it rewrote
+    the escalation summary, whose content story-020 deliberately left to a
+    later request, and the comparison below went red for a change story-020
+    has nothing to say about. While this story is still in flight there is no
+    endpoint and the working tree is the right answer.
+    """
+    endpoint = story_commit_range(Path(__file__)).endpoint
+    if endpoint is None:
+        return (REPO_ROOT / path).read_text(encoding="utf-8")
+    return git(REPO_ROOT, "show", f"{endpoint}:{path}").stdout
+
+
 def pre_story_coordinator(tmp_path: Path):
     """The coordinator as it stood before this story, loaded as its own module.
 
@@ -448,10 +467,22 @@ def pre_story_coordinator(tmp_path: Path):
     rather than against a phrase written here, so the control for each is the
     thing the story *did* change, compared the same way.
     """
-    module_path = tmp_path / "pre_story_coordinator.py"
-    write(module_path, pre_story("orchestration/story_coordinator.py"))
-    loader = importlib.machinery.SourceFileLoader(
-        "pre_story_coordinator", str(module_path))
+    return _loaded_coordinator(
+        tmp_path, "pre_story_coordinator",
+        pre_story("orchestration/story_coordinator.py"))
+
+
+def endpoint_coordinator(tmp_path: Path):
+    """The coordinator as this story's own run left it, loaded the same way."""
+    return _loaded_coordinator(
+        tmp_path, "endpoint_coordinator",
+        at_story_endpoint("orchestration/story_coordinator.py"))
+
+
+def _loaded_coordinator(tmp_path: Path, name: str, source: str):
+    module_path = tmp_path / f"{name}.py"
+    write(module_path, source)
+    loader = importlib.machinery.SourceFileLoader(name, str(module_path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     # Registered before execution because `@dataclass` resolves a field's
@@ -1787,12 +1818,18 @@ def test_this_story_edited_no_blocked_path_and_added_no_artifact(harness_root):
 
 def test_the_escalation_summary_is_the_text_it_was(tmp_path):
     """A separate request owns its content, sequenced after this story. The
-    control is `_escalate`'s own source, which did change in the same file."""
+    control is `_escalate`'s own source, which did change in the same file.
+
+    Bounded at *this* story's endpoint rather than at the working tree, per
+    `at_story_endpoint` above: story-024 is the separate request, and its
+    rewrite of the summary is not this story changing it.
+    """
     before_module = pre_story_coordinator(tmp_path)
-    summary_body = inspect.getsource(story_coordinator._escalate).split(
+    after_module = endpoint_coordinator(tmp_path)
+    summary_body = inspect.getsource(after_module._escalate).split(
         "summary = (", 1)[1]
     before_body = inspect.getsource(before_module._escalate).split(
         "summary = (", 1)[1]
     assert summary_body == before_body
-    assert inspect.getsource(story_coordinator._escalate) \
+    assert inspect.getsource(after_module._escalate) \
         != inspect.getsource(before_module._escalate)

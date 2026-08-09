@@ -1289,6 +1289,147 @@ def commit_escalated_tree(target_root: Path, state: RunState, reason: str) -> No
     )
 
 
+def _readable_json(path: Path):
+    """An artifact's contents, or None when it is absent or unparseable.
+
+    A report is not the place an unreadable artifact raises: the coordinator
+    already skips an artifact it cannot read rather than failing out of one,
+    and a summary that cannot be written is worse than a summary missing a
+    section whose source is unreadable.
+    """
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _issue_line(issue: dict) -> str:
+    """One blocking issue, carrying the four fields the verifier recorded.
+
+    Rendered, never summarized: a reader must be able to act on the finding
+    without opening the artifact it came from.
+    """
+    return (
+        f"- [{issue.get('severity')}] {issue.get('issue')}\n"
+        f"  Location: {issue.get('location')}\n"
+        f"  Required behavior: {issue.get('required_behavior')}"
+    )
+
+
+def _outstanding_issues_section(run_dir: Path, state: RunState) -> str | None:
+    """What the last verdict said still blocks acceptance.
+
+    Rendered from `verification-result.json` and only when that artifact
+    records a failure. A missing-artifact, blocked-path or clean-clone
+    escalation has no failing verdict behind it, and an empty section under a
+    heading is the failure mode this exists to remove — so nothing is emitted
+    at all.
+
+    The opening line names both the artifact read and the iteration file
+    holding the same verdict, because the verdict may predate the stage the
+    run escalated at and a reader has to be able to tell.
+    """
+    verdict = _readable_json(run_dir / "verification-result.json")
+    if not isinstance(verdict, dict) or verdict.get("status") != "failed":
+        return None
+    blocks = [
+        f"## Outstanding Issues\n"
+        f"From verification-result.json, the same verdict recorded as "
+        f"verification/iteration-{state.verification_iterations}.json. It may "
+        f"predate the stage this run escalated at.",
+        *(_issue_line(issue) for issue in verdict.get("blocking_issues", [])),
+    ]
+    return "\n\n".join(blocks)
+
+
+def _retry_history_section(run_dir: Path) -> str | None:
+    """Each retry this run took, as `retry-history.json` recorded it.
+
+    The artifact is created at the first retry and never in advance, so its
+    absence is itself evidence: a run that never retried gets no section
+    rather than an empty one.
+    """
+    records = load_retry_records(run_dir)
+    if not records:
+        return None
+    blocks = ["## Retry History"]
+    for record in records:
+        blocks.append(
+            f"### Attempt {record.get('attempt')}, rerouted to "
+            f"{record.get('retry_stage')}"
+        )
+        blocks.extend(_issue_line(issue) for issue in record.get("blocking_issues", []))
+        blocks.append(f"Archived at {record.get('archive_directory')}")
+    return "\n\n".join(blocks)
+
+
+def _recommended_investigation_section(run_dir: Path, state: RunState) -> str:
+    """Where to start, composed from facts already in hand.
+
+    Every conditional here is over something recorded — which artifacts are on
+    disk, and whether the escalation made a commit — never over the escalation
+    reason's text. The coordinator renders what it knows; it does not classify
+    why the run stopped.
+    """
+    # The summary itself is left off the list it renders. It exists on a
+    # re-escalation and not on a first one, and a report naming itself as
+    # something to open would be the only part of this section that differed
+    # between the two for no reason a reader could use.
+    artifacts = sorted(
+        path.name
+        for path in run_dir.iterdir()
+        if path.is_file() and path.name != "escalation-summary.md"
+    )
+    blocks = ["## Recommended Investigation"]
+    if artifacts:
+        listing = "\n".join(f"- {name}" for name in artifacts)
+        blocks.append(f"Artifacts this run left in {run_dir}:\n\n{listing}")
+    if state.escalation_commit:
+        blocks.append(
+            f"The escalated work is committed on branch {state.branch} at "
+            f"{state.escalation_commit}, so it survives a checkout of another "
+            f"branch. To put those changes back in the working tree:\n\n"
+            f"    {ESCALATION_UNDO_COMMAND}"
+        )
+    blocks.append(
+        f"Once you have made a change, `l5-run {state.story_id}` resumes this "
+        f"run at the stage it stopped at ({state.current_stage}); `--stage "
+        f"<stage>` overrides that and enters somewhere else. The resume is "
+        f"refused while the story artifact, the branch and the harness are all "
+        f"unchanged, because it would reach the same point the same way."
+    )
+    return "\n\n".join(blocks)
+
+
+def escalation_summary(run_dir: Path, state: RunState, reason: str) -> str:
+    """The escalation report, composed from the run's recorded facts.
+
+    A developer meeting this file should not have to reconstruct the run to
+    learn what went wrong. Every section renders an artifact that already
+    exists — nothing new is written to disk — and a section whose source is
+    absent is omitted entirely rather than emitted empty.
+
+    The first four sections are what they have always been, and `## Reason`
+    stays immediately after `## Status` so `escalation_reason`'s split reads
+    the same text it has always read.
+    """
+    blocks = [
+        f"# {state.story_id} Escalation Summary",
+        f"## Status\nEscalated",
+        f"## Reason\n{reason}",
+        f"## Where Execution Stopped\nStage: {state.current_stage}, "
+        f"retry count: {state.retry_count}",
+        _outstanding_issues_section(run_dir, state),
+        _retry_history_section(run_dir),
+        f"## Where to Look\nSee events.log for the run history and the "
+        f"verification/ directory for verifier findings.",
+        _recommended_investigation_section(run_dir, state),
+    ]
+    return "\n\n".join(block for block in blocks if block) + "\n"
+
+
 def escalation_reason(run_dir: Path) -> str | None:
     """The reason the escalation summary recorded, for a message only.
 
@@ -1487,15 +1628,7 @@ def _escalate(
     )
     if state.escalation_commit:
         save_state(run_dir, state)
-    summary = (
-        f"# {state.story_id} Escalation Summary\n\n"
-        f"## Status\nEscalated\n\n"
-        f"## Reason\n{reason}\n\n"
-        f"## Where Execution Stopped\nStage: {state.current_stage}, "
-        f"retry count: {state.retry_count}\n\n"
-        f"## Where to Look\nSee events.log for the run history and the "
-        f"verification/ directory for verifier findings.\n"
-    )
+    summary = escalation_summary(run_dir, state, reason)
     (run_dir / "escalation-summary.md").write_text(summary, encoding="utf-8")
     return 2
 
