@@ -288,6 +288,18 @@ def dirty_paths(target_root: Path) -> list[str]:
     return sorted(set(paths))
 
 
+def story_branch(config: dict, story_id: str) -> str:
+    """The branch a story's run works on, derived in one place.
+
+    The prefix comes from the target repository's config; no branch name and
+    no default base branch is written into orchestration. It exists because two
+    callers now need the name — the fresh run's RunState, and the pre-flight
+    that asks whether that branch already holds the story's finished work —
+    and two derivations would be one fact in two places.
+    """
+    return config.get("branch_prefix", "story/") + story_id
+
+
 def _checkout_story_branch(target_root: Path, branch: str) -> None:
     exists = _git(target_root, "rev-parse", "--verify", branch).returncode == 0
     args = ["checkout", branch] if exists else ["checkout", "-b", branch]
@@ -1223,6 +1235,85 @@ ESCALATION_COMMIT_MARKER = "l5 escalated:"
 #: back in the tree.
 ESCALATION_UNDO_COMMAND = "git reset --mixed HEAD~2"
 
+#: Leads the completion commit's body, and is what identifies a completion
+#: commit on a branch. The subject alone cannot: "<story-id>: <title>" is a
+#: shape any hand-written commit about the story can wear, and a pre-flight
+#: that refused on it would refuse work the harness never did. The marker is
+#: written by _complete and by nothing else, so a commit carrying both the
+#: subject and this sentence is evidence that a run of this story finished.
+COMPLETION_COMMIT_MARKER = "Implemented by the l5 harness story workflow."
+
+
+def completion_commit_subject(story_id: str, title: str) -> str:
+    """The completion commit's subject line.
+
+    Extracted so the composition and the pre-flight that recognizes it are one
+    fact: `completion_commits` matches on the prefix this builds, rather than
+    on a second spelling of the same shape.
+    """
+    return f"{story_id}: {title}"
+
+
+def completion_commit_message(state: RunState, title: str) -> str:
+    """The completion commit's message: the story it finished, and by what.
+
+    Byte for byte what `_complete` composed inline before it was extracted.
+    The subject names the story as a reader scanning the branch would want it
+    named; the body is the single marker sentence, which is what makes the
+    commit recognizable as a finished run's rather than as anyone's commit
+    about the story.
+    """
+    return (
+        f"{completion_commit_subject(state.story_id, title)}\n"
+        f"\n"
+        f"{COMPLETION_COMMIT_MARKER}"
+    )
+
+
+def completion_commits(target_root: Path, branch: str, story_id: str) -> list[str]:
+    """Commits reachable from `branch` that a finished run of `story_id` made.
+
+    One "<abbrev sha> <subject>" line per match, newest first, and an empty
+    list when there is nothing to say. A commit qualifies on two pieces of
+    evidence together: a subject of the completion shape for *this* story, and
+    a body carrying `COMPLETION_COMMIT_MARKER`. Neither alone is enough — the
+    subject shape is one a hand-written commit can wear, and the marker without
+    the subject would report another story's run.
+
+    Reachability from the branch is the whole test, deliberately rather than
+    `<base>..<branch>`. Being ahead of a base is no longer the same thing as
+    having finished: since story-020 an escalation leaves two commits, so an
+    ahead-of-base test would refuse every escalated resume. It is also base-
+    free, which is what makes it still hold when the developer is standing on
+    the story branch a completed run left them on.
+
+    The target repository is only read: no commit, no branch, no checkout, no
+    index change, no stash. A branch that does not exist, a root that is not a
+    git repository, and a git invocation that fails all return an empty list —
+    the check refuses only on positive evidence of finished work, the same
+    one-directional bias `dirty_paths` and `unchanged_since_escalation` take.
+    """
+    if _git(target_root, "rev-parse", "--verify", branch).returncode != 0:
+        return []
+    result = _git(
+        target_root, "log", "--format=%h%x1f%s%x1f%b%x1e", branch
+    )
+    if result.returncode != 0:
+        return []
+    found = []
+    for record in result.stdout.split("\x1e"):
+        fields = record.strip("\n").split("\x1f")
+        if len(fields) != 3:
+            continue
+        sha, subject, body = fields
+        prefix = completion_commit_subject(story_id, "")
+        if not subject.startswith(prefix) or subject == prefix:
+            continue
+        if COMPLETION_COMMIT_MARKER not in body:
+            continue
+        found.append(f"{sha} {subject}")
+    return found
+
 
 def escalation_commit_message(state: RunState, reason: str) -> str:
     """The escalation commit's message: what it is, why, and how to undo it.
@@ -1573,6 +1664,29 @@ def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     )
 
 
+def _refuse_finished_branch(branch: str, run_dir: Path, commits: list[str]) -> int:
+    """Refuse a run whose branch already carries the story's finished work.
+
+    The refusal names what it found and what to do about each of the two things
+    a re-run would otherwise silently sit on top of: the branch, whose reset or
+    deletion discards work a run finished, and the run directory, which is
+    gitignored and therefore lost rather than merely uncommitted.
+    """
+    return refuse(
+        f"Branch {branch} already carries a completion commit for this story, "
+        f"so a run starting here would re-run a story that has already "
+        f"finished:",
+        commits,
+        f"A completion commit reachable from the branch you plan to run from "
+        f"means the story has already shipped; the right response is a new "
+        f"story describing what is still wanted, not a reset. To genuinely run "
+        f"this one again, reset or delete {branch} — which discards the "
+        f"finished work — and delete {run_dir}, which is gitignored and will "
+        f"not come back. Archive either to .harness/runs-archive/ first if it "
+        f"is worth keeping.",
+    )
+
+
 def _commits_the_tree_it_ends_on(escalate):
     """Commit the escalated work after the escalation has finished writing.
 
@@ -1676,7 +1790,7 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     )
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
     _git(target_root, "add", "-A")
-    _git(target_root, "commit", "-m", f"{state.story_id}: {title}\n\nImplemented by the l5 harness story workflow.")
+    _git(target_root, "commit", "-m", completion_commit_message(state, title))
     append_event(
         run_dir,
         f"story completed on branch {state.branch}",
@@ -1743,6 +1857,30 @@ def run_story(
 
     run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
     state = load_state(run_dir)
+
+    # Pre-flight: refuse a run onto a branch that already holds this story's
+    # finished work. `_checkout_story_branch` reuses an existing branch rather
+    # than resetting it, so deleting only the run directory puts the implementer
+    # in a repository where the story is already done, the tester finds the
+    # tests written and passing, the verifier verifies a tree that genuinely
+    # satisfies the story, and the run reports success having changed nothing.
+    #
+    # The evidence is deliberately a *finished run* — `_complete`'s own commit,
+    # recognized by its subject and marker — and not the existence of commits on
+    # the branch. Those are different statements, and only the first is what
+    # makes a re-run pointless: an escalation already leaves two commits, so an
+    # ahead-of-base test would refuse every escalated resume, and a later design
+    # that commits partial progress would have to unpick a check written that
+    # way. It is base-free for the same reason, so it still holds when the
+    # developer is standing on the branch a completed run left them on.
+    #
+    # A loaded state recording `completed` keeps its own refusal below: that one
+    # has the run directory to point at and says more.
+    if not (state and state.status == "completed"):
+        branch = state.branch if state else story_branch(config, story_id)
+        finished = completion_commits(target_root, branch, story_id)
+        if finished:
+            return _refuse_finished_branch(branch, run_dir, finished)
 
     # Pre-flight: a run commits the tree it ends on, so it has to start from a
     # tree it can account for. Which runs this applies to is decided by the
@@ -1838,10 +1976,9 @@ def run_story(
             stage=state.current_stage,
         )
     else:
-        branch = config.get("branch_prefix", "story/") + story_id
         state = RunState(
             story_id=story_id,
-            branch=branch,
+            branch=story_branch(config, story_id),
             current_stage=start_stage or stage_names[0],
             # Recorded from the same text read_story was given, so the digest
             # and the run's one reading describe one artifact.
