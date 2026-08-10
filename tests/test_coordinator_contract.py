@@ -23,6 +23,7 @@ import ast
 import dataclasses
 import json
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -149,6 +150,38 @@ def log_format_problems(lines: list[str]) -> list[str]:
             datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
         except ValueError:
             problems.append(f"timestamp is not %Y-%m-%d %H:%M:%S: {line!r}")
+    return problems
+
+
+def completion_commit_problems(message: str, *, story_id: str,
+                               title: str) -> list[str]:
+    """Violations of the completion commit's message contract, one string each.
+
+    What `_complete` commits is a standing guarantee and not one story's
+    evidence: the subject is `<story-id>: <title>`, a blank line follows it,
+    and the body carries the marker sentence. Since story-027 that shape is
+    also *read* — the pre-flight that refuses a re-run onto a branch already
+    holding the story's finished work recognizes a completion commit by it — so
+    a story that changes the message has to change this deliberately and knows
+    what else moves when it does.
+
+    The marker is read off `COMPLETION_COMMIT_MARKER` rather than typed out, so
+    this cannot silently disagree with the constant the coordinator writes and
+    the recognizer matches.
+    """
+    problems = []
+    lines = message.rstrip("\n").split("\n")
+    expected_subject = f"{story_id}: {title}"
+    if lines[0] != expected_subject:
+        problems.append(
+            f"subject: expected {expected_subject!r}, found {lines[0]!r}")
+    if len(lines) < 2 or lines[1] != "":
+        problems.append("no blank line separates the subject from the body")
+    body = "\n".join(lines[2:])
+    if story_coordinator.COMPLETION_COMMIT_MARKER not in body:
+        problems.append(
+            f"body does not carry "
+            f"{story_coordinator.COMPLETION_COMMIT_MARKER!r}: {body!r}")
     return problems
 
 
@@ -687,3 +720,73 @@ def test_the_run_directory_assertion_fails_when_a_required_artifact_is_missing(
     (completed_run / "completion-report.md").unlink()
     present = {path.name for path in completed_run.iterdir()}
     assert not required_artifacts() <= present
+
+
+# --------------------------------------------------------------------------
+# The completion commit
+# --------------------------------------------------------------------------
+
+
+#: The title of the story the shared fixture installs, so the subject asserted
+#: below is the one a real run of that story writes.
+STORY_TITLE = "Sample story for coordinator tests"
+
+
+def commit_message(target_root: Path, revision: str = "HEAD") -> str:
+    return subprocess.run(
+        ["git", "-C", str(target_root), "log", "-1", "--format=%B", revision],
+        capture_output=True, text=True, check=True).stdout
+
+
+def test_a_completed_runs_commit_holds_the_message_the_contract_names(
+    completed_run, target_root,
+):
+    """Read off the repository a real run committed into, not off the function
+    that composes it."""
+    assert completion_commit_problems(
+        commit_message(target_root), story_id="story-001",
+        title=STORY_TITLE) == []
+
+
+def test_the_composed_message_and_the_committed_one_are_the_same_message(
+    completed_run, target_root,
+):
+    """The composition the coordinator exposes is what reaches git, so the
+    pre-flight that recognizes a completion commit and the code that writes one
+    are held to one shape rather than to two that agree today."""
+    state = story_coordinator.RunState(story_id="story-001",
+                                       branch="story/story-001")
+    composed = story_coordinator.completion_commit_message(state, STORY_TITLE)
+    assert commit_message(target_root).rstrip("\n") == composed
+    assert completion_commit_problems(
+        composed, story_id="story-001", title=STORY_TITLE) == []
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("story-001: Sample story for coordinator tests\n\nWritten by hand.",
+     "does not carry"),
+    ("Sample story for coordinator tests\n\n"
+     "Implemented by the l5 harness story workflow.", "subject"),
+    ("story-001: Sample story for coordinator tests\n"
+     "Implemented by the l5 harness story workflow.", "blank line"),
+])
+def test_the_completion_commit_contract_fails_on_each_part_removed(
+    message, expected,
+):
+    """Non-vacuity, once per part: a message missing the marker, wearing
+    another subject, or running the body into the subject is a violation."""
+    problems = completion_commit_problems(
+        message, story_id="story-001", title=STORY_TITLE)
+    assert problems
+    assert any(expected in problem for problem in problems), problems
+
+
+def test_the_marker_the_contract_checks_is_the_constant_the_coordinator_writes():
+    """Read from the module rather than typed here, so the contract cannot
+    drift from what `_complete` commits and the pre-flight matches on."""
+    assert story_coordinator.COMPLETION_COMMIT_MARKER \
+        in story_coordinator.completion_commit_message(
+            story_coordinator.RunState(story_id="story-001", branch="b"), "T")
+    assert completion_commit_problems(
+        f"story-001: T\n\n{story_coordinator.COMPLETION_COMMIT_MARKER}",
+        story_id="story-001", title="T") == []

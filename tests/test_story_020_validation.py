@@ -798,11 +798,20 @@ def test_commit_escalated_work_returns_empty_on_a_clean_tree(target, tmp_path):
 def test_the_completion_commit_is_byte_for_byte_the_code_it_was(tmp_path):
     """Same message, same contents, same behavior, stated as sameness of the
     function that produces them. The control is `_escalate`, compared the same
-    way against the same pre-story module, which did change."""
+    way against the same pre-story module, which did change.
+
+    Bounded at *this* story's endpoint rather than at today's working tree, for
+    the reason `at_story_endpoint` records: read against the working tree the
+    comparison asks what `_complete` looks like now, which a later story
+    changes without story-020 having done anything. story-027 is where it bit —
+    it extracted `_complete`'s inline message into `completion_commit_message`,
+    which story-020 has nothing to say about — and the extraction is held to
+    producing identical bytes by its own story's coverage, not by this."""
     before = pre_story_coordinator(tmp_path)
-    assert inspect.getsource(story_coordinator._complete) \
+    after = endpoint_coordinator(tmp_path)
+    assert inspect.getsource(after._complete) \
         == inspect.getsource(before._complete)
-    assert inspect.getsource(story_coordinator._escalate) \
+    assert inspect.getsource(after._escalate) \
         != inspect.getsource(before._escalate)
 
 
