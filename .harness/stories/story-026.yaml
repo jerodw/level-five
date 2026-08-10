@@ -1,0 +1,228 @@
+story:
+  id: story-026
+  title: One resolution of a story's own commit range, not two
+  description: |
+    story-015 put the resolution of a story's own commit range in
+    tests/conftest.py: the oldest commit that added that story's validation
+    file, and that commit's parent as the baseline. tests/test_story_011_
+    validation.py still carries story_revision(), which resolves the same
+    commit by a different mechanism - walking the coordinator's own history
+    for the oldest revision whose source contains "execution-history".
+
+    Both resolve the same pair today (2239a23..973fdb5). The shared one is
+    the better mechanism: it works for every story without a per-story
+    marker string, and it is the one the rest of the suite already uses.
+    The duplication was created by story-015 landing, not by anything wrong
+    in it - story-015 pinned tests/test_story_011_validation.py in
+    do_not_modify correctly, because that file is not one of the four it
+    repairs.
+
+    This story deletes story_revision() and points its one caller at the
+    shared helper. It changes no behaviour and no production code; what it
+    removes is a second answer to a question that already has one.
+
+    pre_story_coordinator_source() is not duplication and stays. It resolves
+    the pre-story coordinator's source *text*, which the differential module
+    loading needs; the shared helper resolves commits. Only story_revision()
+    overlaps.
+
+tasks:
+  - Delete story_revision() from tests/test_story_011_validation.py.
+  - Rewrite test_no_prompt_template_was_changed_by_this_story to bound its
+    diff through conftest.story_diff, and rewrite its docstring so it
+    describes the shared bounding rather than the deleted helper.
+  - Remove the "def story_revision" entry from the intact-list in
+    tests/test_story_016_validation.py's
+    test_the_baseline_resolution_the_prompt_scope_assertion_needs_is_intact,
+    keeping its other seven entries, and record beside it why that one name
+    is no longer required there.
+  - Add tests/test_story_026_validation.py validating the fold, with a
+    control beside every absence.
+  - Record the fold in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - tests/test_story_011_validation.py no longer defines story_revision, and
+    no module under tests/ other than tests/conftest.py resolves a story's
+    own commit range.
+  - test_no_prompt_template_was_changed_by_this_story resolves its range
+    through conftest.story_diff and asserts the same subject it asserted
+    before - that prompts/, workflows/ and rules/ are unchanged between the
+    pre-story baseline and story-011's own run commit - and its docstring
+    names the shared helper rather than the deleted one.
+  - That assertion is shown to fail when its subject is violated, driven
+    against a synthetic history whose run commit touches one of the paths it
+    guards. An assertion that passes and cannot fail is what this suite
+    exists to refuse.
+  - coordinator_source_at, pre_story_revision and pre_story_coordinator_
+    source survive with their bodies unchanged, as do
+    test_the_comparison_baseline_is_not_this_implementation,
+    test_the_baseline_stays_pre_story_once_this_story_is_committed and
+    test_the_baseline_resolution_fails_loudly_when_there_is_nothing_older.
+  - The positive guard survives - the assertion in
+    test_the_baseline_stays_pre_story_once_this_story_is_committed that the
+    resolved baseline differs from coordinator_source_at("HEAD", repo) - and
+    tests/test_baseline_honesty.py still reports no flagged call in
+    tests/test_story_011_validation.py.
+  - tests/test_story_016_validation.py's intact-list loses "def story_revision"
+    and keeps its other seven entries, and its remaining assertions about
+    story-011 are shown to still fail when their subject is violated.
+  - tests/conftest.py is unchanged - the shared resolution itself is not
+    touched by this story.
+  - The four files story-015 repaired are unchanged, and
+    tests/test_story_015_validation.py is unchanged.
+  - No production code changes - orchestration/, prompts/, workflows/,
+    schemas/, scripts/ and rules/ are all unchanged by this story.
+  - The new assertions fail against the pre-story tree for the reason they
+    were written, and are not vacuous.
+  - The full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - In tests/test_story_011_validation.py, add story_diff to the existing
+      "from conftest import commit_setup" line and delete the story_revision
+      function and its docstring. Leave coordinator_source_at,
+      pre_story_revision and pre_story_coordinator_source exactly as they
+      are.
+    - Replace the body of test_no_prompt_template_was_changed_by_this_story
+      with a single story_diff call over prompts/, workflows/ and rules/,
+      passing validation_file=Path(__file__), and assert the result is
+      empty. Rewrite the docstring to state that the range is the story's own
+      commit range resolved in tests/conftest.py, and that while the story is
+      in flight the range degrades to HEAD against the working tree, which is
+      the correct pre-story baseline then. The subject and the strictness of
+      the assertion do not change; only where its two bounds come from.
+    - In tests/test_story_016_validation.py, remove the "def story_revision"
+      string from the tuple in
+      test_the_baseline_resolution_the_prompt_scope_assertion_needs_is_intact
+      and add one comment saying story-026 folded that helper into the shared
+      resolution in tests/conftest.py, so the surviving prompt-scope
+      assertion no longer depends on it. Nothing else in the file changes -
+      story_011_before_this_story, story_011_at_this_storys_endpoint,
+      REMOVED_TESTS and every other assertion are left alone.
+    - Write tests/test_story_026_validation.py. For the single-resolution
+      claim, scan every module under tests/ with ast for a resolution of a
+      story's own commit range and assert conftest.py is the only one, with a
+      control that the same scan reports a module carrying a reintroduced
+      copy. For the surviving assertion, follow story-015's committed_story
+      and redirect pattern - build a synthetic repository whose run commit
+      both adds the validation file and touches prompts/, redirect story_diff
+      at it, and assert story-011's test fails there. For story-016, do the
+      same against a synthetic history missing one of the names the intact-
+      list still carries.
+    - Confirm tests/test_baseline_honesty.py still reports no flagged call in
+      tests/test_story_011_validation.py after the rewrite, and that the
+      parametrized unflagged case naming that file still passes.
+  likely_file_changes:
+    - file: tests/test_story_011_validation.py
+      stage: implementer
+      reason: story_revision is deleted and its one caller is pointed at the
+        shared resolution in tests/conftest.py.
+    - file: tests/test_story_016_validation.py
+      stage: implementer
+      reason: Its intact-list asserts "def story_revision" is present, which
+        is exactly what this story removes. Only that entry comes out.
+    - file: tests/test_story_026_validation.py
+      stage: tester
+      reason: Independent validation of the fold - the single surviving
+        resolution, the rewritten assertion's ability to fail, and the
+        controls beside each absence. New validation is the tester's output.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that story-011's local resolution is folded into the
+        shared one, and why pre_story_coordinator_source is deliberately not.
+
+scope:
+  modify:
+    - tests/test_story_011_validation.py
+    - tests/test_story_016_validation.py
+    - tests/test_story_026_validation.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - tests/conftest.py
+    - tests/test_baseline_honesty.py
+    - tests/test_story_015_validation.py
+    - tests/test_story_007_validation.py
+    - tests/test_story_008_validation.py
+    - tests/test_story_009_validation.py
+    - tests/test_story_010_validation.py
+    - orchestration/
+    - prompts/
+    - workflows/
+    - schemas/
+    - scripts/
+    - rules/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm exactly one resolution of a story's own commit range survives
+    under tests/, and that the scan proving it reports a reintroduced copy
+    when one is placed in front of it.
+  - Confirm test_no_prompt_template_was_changed_by_this_story still asserts
+    the same three paths and still fails when its subject is violated. The
+    guarantee under test is not that it passes - it passed before - but that
+    it can still fail.
+  - Confirm the deleted helper and the surviving one resolved the same
+    commits before this story, so the fold is a change of mechanism and not
+    of subject.
+  - Confirm pre_story_coordinator_source, pre_story_revision,
+    coordinator_source_at and the differential module loading are untouched,
+    and that the three tests guarding that resolution still pass.
+  - Confirm the positive guard on coordinator_source_at("HEAD", repo)
+    survives, and that tests/test_baseline_honesty.py's scanner still reports
+    no flagged call in tests/test_story_011_validation.py.
+  - Confirm the edit to tests/test_story_016_validation.py removes only the
+    "def story_revision" entry, that the file's other assertions are intact,
+    and that they still fail when their subject is violated. This story
+    authorizes that edit: the assertion's claim is that the surviving
+    prompt-scope assertion still has a baseline resolution, and after this
+    story it has the shared one, so removing that one name is a faithful
+    update rather than a weakening.
+  - Confirm tests/conftest.py, tests/test_story_015_validation.py and the
+    four files story-015 repaired are unchanged by this story.
+  - Confirm no file outside tests/ and .harness/docs/ARCHITECTURE.md was
+    changed by this story.
+  - Confirm tests/test_story_026_validation.py was written by the tester
+    stage rather than by the stage that made the edits it validates.
+  - Confirm the new assertions fail against the pre-story tree for the reason
+    they were written.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - The shared resolution in tests/conftest.py is not changed by this story.
+    Neither story_commit_range, story_diff, StoryRange nor
+    NothingToCompareAgainst gains, loses or changes a parameter.
+  - pre_story_coordinator_source and the differential module loading it feeds
+    are preserved exactly. They resolve source text rather than commits and
+    are not duplication of the shared helper.
+  - The subject and the strictness of
+    test_no_prompt_template_was_changed_by_this_story do not change. It
+    guards the same three paths, bounded at both ends of story-011's own
+    commit range, before and after.
+  - No test is weakened, skipped, renamed or deleted to make this change
+    pass, in tests/test_story_011_validation.py or in
+    tests/test_story_016_validation.py.
+  - tests/test_story_011_validation.py is not added to
+    tests/test_story_015_validation.py's REPAIRED mapping. That scan asserts
+    a module makes no git log, show or diff call at all, and this file
+    legitimately keeps coordinator_source_at and pre_story_revision.
+  - No behaviour of the harness changes. This story touches no production
+    code and no harness artifact shape.
+  - The move of the both-ends resolution into tests/conftest.py that
+    ARCHITECTURE.md's story-024 bullet asks the next story to make is not
+    this story. It is a separate, larger change and is out of scope here.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/
+    reason: Everything this story changes lives under tests/, because the
+      duplication it removes lives there. The implementer only modifies
+      files - it adds none - but the revert check governs modifications
+      under a restricted prefix too, and it permits an edit only when
+      reverting it makes the suite fail. Reverting these two edits restores
+      the tree this story starts from, which is green, so the run would
+      escalate on a change that is correct. The grant subtracts tests/ from
+      the enforced list ahead of both checks, which is the mechanism story-015
+      and story-016 used for the same reason. Independence is preserved: the
+      tester still writes tests/test_story_026_validation.py and validates
+      the fold, and every assertion this story keeps must still be shown able
+      to fail.
