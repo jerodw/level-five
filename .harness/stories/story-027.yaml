@@ -1,0 +1,119 @@
+story:
+  id: story-027
+  title: Refuse a re-run onto a branch that already holds the story's finished work
+  description: |
+    `_checkout_story_branch` reuses an existing story branch rather than
+    resetting it, and the refusal that guards a re-run reads `state.json`
+    alone. Delete a finished run's directory and run the story again and the
+    coordinator checks out the branch that still carries the completed work.
+    The implementer opens a repository where the story is already done, the
+    tester finds the tests written and passing, the verifier verifies a tree
+    that genuinely satisfies the story, and the run completes. The output is a
+    green run that changed nothing, and nothing in the run directory
+    distinguishes it from a real one. `4d8cdf3` made the existing message name
+    the branch; this story makes the coordinator enforce what that message
+    describes.
+
+    The request proposed `git rev-list <base>..<branch> --count` as the whole
+    test, on the reasoning that the coordinator only ever commits in
+    `_complete`. That reasoning expired with story-020: an escalation now
+    leaves two commits, so a branch ahead of its base is no longer the same
+    thing as a branch whose run finished, and refusing on it would refuse
+    every escalated resume. The request also asked that whatever this story
+    writes be a statement about *finished* work rather than about commits
+    existing, so the resume story is not forced to unpick it. The evidence
+    used here is therefore `_complete`'s own commit, reachable from the story
+    branch: base-free, so it still holds when the developer is standing on the
+    story branch a completed run left them on, and blind to escalation
+    commits, which carry a different subject.
+
+tasks:
+  - Extract `_complete`'s commit message into a module-level `completion_commit_message(state, title)` and a `COMPLETION_COMMIT_MARKER` constant leading its body, mirroring `escalation_commit_message` and `ESCALATION_COMMIT_MARKER`, with `_complete` calling it and the committed bytes unchanged.
+  - Add `story_branch(config, story_id)` so the story branch name is derived in one place, and use it both for the new check and where the fresh run's `RunState` is built.
+  - Add `completion_commits(target_root, branch, story_id) -> list[str]`, which returns one line per commit reachable from the branch whose subject is this story's completion subject and whose body carries the marker, and returns nothing when the branch does not exist or git cannot answer.
+  - Add the refusal, through the shared `refuse`, naming the branch, the commits found, the run directory, and what to do about each.
+  - Wire the check into `run_story`'s pre-flight, above the run-directory creation, the clean-tree check and `_checkout_story_branch`, skipped when the loaded state already records `completed`.
+  - Cover the new behaviour with regression tests that drive the coordinator with the fake runner and invoke no model.
+  - Repoint any existing assertion the new pre-flight turns red, keeping its subject and strictness.
+  - Record the check, its evidence, and the reasoning that replaced the ahead-of-base test in `.harness/docs/ARCHITECTURE.md`.
+
+acceptance_criteria:
+  - A run whose story branch carries a commit written by `_complete` for this story exits 1, creates no run directory, writes no `state.json`, appends no log, creates and checks out no branch, and invokes no agent.
+  - The refusal names the branch, names each commit found (abbreviated sha and subject), names the run directory, says that resetting or deleting the branch discards the finished work, says that the run directory is gitignored and should be archived first if it is worth keeping, and names `.harness/runs-archive/` as where archives go.
+  - The refusal also says that a commit reachable from the branch the developer plans to run from means the story has already shipped, so a new story is the right response rather than a reset.
+  - A story branch that exists but carries no completion commit for the story still runs: a branch created and then abandoned before `_complete` is a normal state, not an error.
+  - A first run of a story whose branch does not exist is unaffected, and no refusal is produced.
+  - A resume of an escalated run is unaffected: an escalation's two commits carry the escalation subject rather than a completion subject, so `completion_commits` reports nothing for them and the resume proceeds to the recorded stage.
+  - A commit on the base branch that merely restores or adds a story artifact is not reported by `completion_commits` and does not refuse a run.
+  - A branch that does not exist, a target root that is not a git repository, and a git invocation that fails all produce no refusal: the check refuses only on positive evidence of finished work, matching the bias `dirty_paths` and `unchanged_since_escalation` already take.
+  - A run whose loaded `state.json` records `completed` still meets the existing already-ended refusal, byte for byte the message it produces today, rather than the new one.
+  - The bytes `_complete` commits are unchanged by the extraction: the subject is still `<story-id>: <title>` and the body is still the single marker sentence, demonstrated by an assertion on the composed message rather than by inspection.
+  - `completion_commits` and the code that composes the completion commit message name no branch name, no default base branch, and no story id of their own; the branch comes from the config prefix through `story_branch` and the story id from the run.
+  - The comment at the new check says in the code that the evidence is a finished run rather than the existence of commits, and why, so a later design that commits partial progress is not forced to unpick it.
+
+technical_plan:
+  implementation_steps:
+    - Add `COMPLETION_COMMIT_MARKER` beside `ESCALATION_COMMIT_MARKER`, holding the sentence `_complete`'s commit body carries today, with a comment saying it is what identifies a completion commit on a branch.
+    - Add `completion_commit_message(state, title) -> str` beside `escalation_commit_message`, returning exactly the string `_complete` builds today, and have `_complete` call it in place of the inline f-string.
+    - Add `story_branch(config, story_id) -> str` near the other small helpers, returning the configured prefix plus the story id, and call it from the fresh-run `RunState` construction so the name has one derivation.
+    - Add `completion_commits(target_root, branch, story_id) -> list[str]`. Verify the branch exists with `rev-parse --verify`; on failure return an empty list. Read the branch's log with a record separator between commits and a unit separator between sha, subject and body, and keep the commits whose subject is the completion subject for this story and whose body contains the marker. Return one `"<abbrev sha> <subject>"` line per match, newest first. A non-zero git exit returns an empty list.
+    - Add `_refuse_finished_branch(branch, run_dir, commits)`, calling the shared `refuse` with the commit lines as the problems, so the refusal shape stays one code path.
+    - In `run_story`, after the stage-exception refusal and after `load_state`, and above both the clean-tree check and the run-directory creation, resolve the branch (`state.branch` when a state was loaded, `story_branch(config, story_id)` otherwise) and refuse when `completion_commits` reports anything, unless the loaded state records `completed` — that case keeps its existing message, which has the run directory to point at and says more.
+    - Place the new check above the clean-tree check so a developer whose tree is also dirty meets the refusal that makes the run pointless before the one that makes it unaccountable, rather than in two round trips.
+    - Write the regression coverage against a repository the test builds, driving `run_story` with the fake runner: a completed run whose run directory is then removed, an abandoned branch with no completion commit, a first run with no branch, an escalated run resumed, and a base commit adding a story artifact.
+    - Run the suite, repoint any assertion the new pre-flight turns red without weakening it, and record the change in the architecture document.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The marker, the message function, `story_branch`, `completion_commits`, the refusal and its wiring into pre-flight all live here.
+    - file: tests/test_story_027_validation.py
+      stage: tester
+      reason: The story's regression coverage for the refusal, its evidence, and the cases that must still run.
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: The completion commit's subject and marker become something the coordinator is held to, and that file is the standing home for the coordinator's output contract.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the new pre-flight beside the other three, the evidence it uses, and why the ahead-of-base test was not the one adopted.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/
+    - workflows/
+    - schemas/
+    - scripts/
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - orchestration/context_assembler.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - orchestration/agent_runner.py
+    - .harness/requests/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm from the evidence that a run whose branch holds a completion commit for the story exits 1 and leaves no run directory, no `state.json`, no log file, no new branch, and no agent invocation.
+  - Confirm the refusal text carries every element the acceptance criteria name, read from the captured output rather than from the source that composes it.
+  - Confirm an abandoned story branch with no completion commit, a first run with no branch at all, and a resume of an escalated run each still proceed.
+  - Confirm the composed completion commit message is byte for byte what `_complete` produced before the extraction, and that the extraction changed no other part of `_complete`.
+  - Confirm the check establishes nothing from a branch that does not exist, from a root that is not a git repository, and from a failing git invocation, and refuses in none of those cases.
+  - Confirm the already-ended refusal for a `completed` state is unchanged.
+  - Confirm every assertion repointed because of the new pre-flight kept its subject and its strictness, and that reverting the repoint re-breaks the suite.
+  - Confirm the full suite passes, and that the new coverage fails when the check is removed.
+
+constraints:
+  - The coordinator resets no branch and deletes nothing. Discarding a completed run is the developer's decision; a coordinator that silently reset a branch would be a worse defect than the one this closes.
+  - The run directory is neither archived nor removed automatically. The refusal says what to do and stops.
+  - The check reads the target repository only: no commit, no branch, no checkout, no index change, no stash.
+  - What `_complete` commits, when it commits, and the branch naming scheme are unchanged. The only edit to `_complete` is that it calls the extracted message function, and the bytes it commits stay identical.
+  - Resume is unchanged. The new refusal must be a statement about finished work, not about commits existing, so a later design that commits partial progress is not forced to unpick it, and this must be said in the code and not only here.
+  - The refusal follows the established pre-flight shape and goes through the shared `refuse`: exit 1, one message per problem, nothing created, no agent invoked.
+  - No default base branch name and no hard-coded branch name enters orchestration; the branch comes from the configured prefix.
+  - An existing assertion the new pre-flight turns red is repointed, never weakened, skipped or deleted.
+  - This story's own run is not governed by the check it adds, for the sixth time in this pattern's history: the coordinator process imports its module at start, so the running coordinator carries the pre-flight as it stood before this story. Enforcement begins with the next run. Expected, not a defect.
