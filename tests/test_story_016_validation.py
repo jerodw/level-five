@@ -317,8 +317,12 @@ def test_the_baseline_resolution_the_prompt_scope_assertion_needs_is_intact():
     """Only the unreachable went. The resolution and the tests guarding it
     stay, because the surviving scope assertion depends on them."""
     source = STORY_011_FILE.read_text(encoding="utf-8")
+    # "def story_revision" was an eighth entry until story-026 folded that
+    # helper into the shared resolution in tests/conftest.py. The surviving
+    # prompt-scope assertion resolves its own commit range through
+    # conftest.story_diff now, so it no longer depends on that name.
     for name in ("def pre_story_revision", "def coordinator_source_at",
-                 "def story_revision", "def pre_story_coordinator_source",
+                 "def pre_story_coordinator_source",
                  "def test_the_comparison_baseline_is_not_this_implementation",
                  "def test_the_baseline_stays_pre_story_once_this_story_is_committed",
                  "def test_the_baseline_resolution_fails_loudly_when_there_is_nothing_older",
@@ -570,9 +574,18 @@ def test_every_surviving_assertion_in_story_011_is_unchanged():
 
 def test_the_functions_that_did_change_are_only_those_that_took_the_baseline():
     """The converse: nothing was removed or re-pointed that did not depend on
-    the historical coordinator."""
+    the historical coordinator.
+
+    Bounded at *this story's* endpoint, like its sibling above. Read against
+    today's working tree it asks what the file looks like now, so a later
+    story that legitimately removes a helper story-016 has nothing to say
+    about turns it red — which is what story-026 did to it by folding
+    story_revision into the shared resolution in tests/conftest.py. The
+    subject and the strictness are unchanged; only the upper bound moves,
+    onto the same `story_011_at_this_storys_endpoint` the sibling uses.
+    """
     before = functions_of(story_011_before_this_story())
-    after = functions_of(STORY_011_FILE.read_text(encoding="utf-8"))
+    after = functions_of(story_011_at_this_storys_endpoint())
     gone = set(before) - set(after)
     for name in gone:
         assert ("legacy_coordinator" in before[name]

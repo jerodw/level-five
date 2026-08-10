@@ -36,7 +36,7 @@ import run_status
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import commit_setup
+from conftest import commit_setup, story_diff
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 WORKFLOW = json.loads(
@@ -284,36 +284,6 @@ def pre_story_revision(repo: Path = REPO_ROOT) -> str:
     for revision in revisions:
         if "execution-history" not in coordinator_source_at(revision, repo):
             return revision
-    raise AssertionError(
-        "no committed revision of the coordinator predates this story; the "
-        "differential comparison has nothing to compare against"
-    )
-
-
-def story_revision(repo: Path = REPO_ROOT) -> str | None:
-    """This story's own commit, or None while it is still uncommitted.
-
-    Walks the same history pre_story_revision() walks and returns the oldest
-    revision that already carries the feature — this story's commit, whatever
-    hash a rebase or squash gave it. Returns None when no committed revision
-    carries it, which is the state during the run that produces it.
-
-    It exists to bound a scope assertion at both ends. Diffing the pre-story
-    revision against the working tree answers "has anyone touched these paths
-    since this story", which is a claim about the whole future of the
-    repository rather than about this story, and it turns red the first time
-    anybody edits a prompt. Bounded to this story's own commit, the assertion
-    keeps saying what its name says and lets the rest of the repository move.
-    """
-    revisions = subprocess.run(
-        ["git", "-C", str(repo), "log", "--format=%H", "--", COORDINATOR_REPO_PATH],
-        capture_output=True, text=True, check=True,
-    ).stdout.split()
-    newer = None
-    for revision in revisions:
-        if "execution-history" not in coordinator_source_at(revision, repo):
-            return newer
-        newer = revision
     raise AssertionError(
         "no committed revision of the coordinator predates this story; the "
         "differential comparison has nothing to compare against"
@@ -1026,24 +996,25 @@ def test_a_retry_recorded_without_its_decision_is_caught(
 
 
 def test_no_prompt_template_was_changed_by_this_story():
-    """Bounded at both ends: pre-story revision to this story's own commit.
+    """Bounded at both ends of this story's own commit range.
 
     `git diff HEAD` answers "is the working tree dirty here", which stops
     being a statement about this story the moment the story is committed.
-    Diffing the pre-story revision against the working tree fixes that and
+    Diffing a pre-story revision against the working tree fixes that and
     overshoots: it asserts nobody may ever change these paths again, and
     goes red on the next legitimate prompt edit by any later story.
 
     Both ends bounded, the question is the one the name asks — did *this
     story* touch these paths — and it stays answerable forever without
-    freezing them. While the story is still uncommitted, story_revision()
-    is None and the end bound is the working tree, which is the same
-    comparison and the correct one at that moment.
+    freezing them. The range is resolved by `conftest.story_diff`, the
+    shared resolution of a story's own commit range: the oldest commit that
+    added this validation file, against that commit's parent. story-026
+    folded this file's own copy of that resolution into the shared one, so
+    the subject and the strictness are unchanged and only the two bounds
+    come from somewhere else. While the story is still in flight the file
+    has no adding commit and the range degrades to HEAD against the working
+    tree, which is the correct pre-story baseline at that moment.
     """
-    end = story_revision()
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "diff", pre_story_revision(),
-         *([end] if end else []), "--", "prompts/", "workflows/", "rules/"],
-        capture_output=True, text=True, check=True,
-    )
-    assert result.stdout.strip() == ""
+    assert story_diff(
+        ["prompts/", "workflows/", "rules/"], validation_file=Path(__file__),
+    ).strip() == ""
