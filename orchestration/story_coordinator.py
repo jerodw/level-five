@@ -148,6 +148,64 @@ def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
     return problems
 
 
+def _clean_clone_route(stage: dict) -> context_assembler.RetryRoute | None:
+    """The route a clean-clone failure on this stage takes, if it declares one.
+
+    The clean-clone declaration names both artifacts of that check — the
+    result it writes and the stage a failure routes to — so one key still
+    turns the whole check on and its route is held to the same pre-flight as
+    the categories the verifier chooses between. It is not one of those
+    categories: nothing chooses it, so it carries no `when` and is never
+    rendered into a prompt.
+    """
+    declaration = stage.get("clean_clone")
+    if not isinstance(declaration, dict) or "retry_stage" not in declaration:
+        return None
+    return context_assembler.RetryRoute(
+        stage["name"], "clean_clone", declaration["retry_stage"], ""
+    )
+
+
+def retry_routing_problems(stages: list[dict]) -> list[str]:
+    """Check every route the workflow declares against the workflow itself.
+
+    A route is validated when the workflow loads rather than when a retry
+    happens, because a table naming a stage that does not exist is a defect
+    in the definition and a run that discovers it three stages in has
+    already spent an implementer, a tester and a verifier on it.
+
+    Two problems, and they are the only two a definition can state without
+    knowing what any run will do. A destination the workflow does not define
+    cannot be routed to at all. A destination at or after the stage that
+    declares the route routes *forward*, which would carry the run past the
+    verification that sent it back — the retry would never be checked.
+
+    Both the retry_routing entries and the clean-clone route are held to it.
+    No category name and no destination is written here; both come off the
+    loaded workflow definition.
+    """
+    names = [stage["name"] for stage in stages]
+    declared = list(context_assembler.retry_routes(stages))
+    declared += [
+        route for route in map(_clean_clone_route, stages) if route is not None
+    ]
+    problems = []
+    for route in declared:
+        if route.stage not in names:
+            problems.append(
+                f"the '{route.category}' route on stage '{route.declared_by}' "
+                f"names stage '{route.stage}', which the loaded workflow does "
+                f"not define"
+            )
+        elif names.index(route.stage) >= names.index(route.declared_by):
+            problems.append(
+                f"the '{route.category}' route on stage '{route.declared_by}' "
+                f"names stage '{route.stage}', which does not sit before it; "
+                f"routing forward would skip verification"
+            )
+    return problems
+
+
 def _granted_prefixes(story: dict, stage_name: str) -> list[str]:
     return [
         exception["create"]
@@ -196,6 +254,8 @@ def append_event(
     verifier_outcome: str | None = None,
     retry_decision: str | None = None,
     retry_reason: str | None = None,
+    retry_category: str | None = None,
+    retry_stage: str | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -228,6 +288,8 @@ def append_event(
         "verifier_outcome": verifier_outcome,
         "retry_decision": retry_decision,
         "retry_reason": retry_reason,
+        "retry_category": retry_category,
+        "retry_stage": retry_stage,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)
@@ -1063,6 +1125,7 @@ def _clean_clone_failed(
     run_dir: Path,
     stage: dict,
     artifact: str,
+    destination: str,
     retry_count: int,
     max_retries: int,
     duration_seconds: float | None,
@@ -1079,12 +1142,13 @@ def _clean_clone_failed(
     append_event(
         run_dir,
         f"clean-clone suite failed; retry {retry_count} of {max_retries} "
-        f"rerouted to {stage['on_failure']['retry_stage']}",
+        f"rerouted to {destination}",
         kind="clean-clone-failed",
         stage=stage["name"],
         artifacts=[artifact],
         duration_seconds=duration_seconds,
         retry_decision="retry",
+        retry_stage=destination,
         retry_reason=(
             "the suite failed in a clean clone with the story committed and "
             "the retry ceiling was not reached"
@@ -1813,6 +1877,22 @@ def refuse_bad_story(story_path: Path, problems: list[str]) -> int:
     )
 
 
+def _refuse_bad_routing(workflow: dict, problems: list[str]) -> int:
+    """Refuse a workflow whose retry routing cannot be followed.
+
+    The definition is wrong, not the story and not the tree, so the guidance
+    points at the file that has to change rather than at anything a developer
+    could do to their repository.
+    """
+    return refuse(
+        f"Workflow '{workflow['name']}' declares retry routes that cannot be "
+        f"followed:",
+        problems,
+        "Fix the workflow definition's retry routing before running a story "
+        "under it.",
+    )
+
+
 def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     """Refuse a run whose target tree already holds work no stage produced.
 
@@ -2018,6 +2098,17 @@ def run_story(
         )
         return 1
 
+    # Pre-flight: the routing table is checked when the workflow loads, not
+    # when a retry happens. A route that cannot be followed is a defect in the
+    # definition, and every run under that definition has it; discovering it at
+    # the first retry spends three stages first. Above the run-directory
+    # creation and the branch checkout with the other refusals, so a rejection
+    # leaves no run directory, no state.json, no log, no new branch, and
+    # invokes no agent.
+    routing_problems = retry_routing_problems(stages)
+    if routing_problems:
+        return _refuse_bad_routing(workflow, routing_problems)
+
     story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
     if not story_path.is_file():
         print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
@@ -2222,6 +2313,12 @@ def run_story(
     # duration the log only made derivable.
     stage_started_at: float | None = None
 
+    # What routed the attempt now running, for the stage receiving it to read.
+    # Set where a retry is routed and read where the next stage's context is
+    # assembled; the values themselves come off the loaded workflow.
+    routed_category: str | None = None
+    routed_stage: str | None = None
+
     def elapsed() -> float | None:
         if stage_started_at is None:
             return None
@@ -2244,7 +2341,10 @@ def run_story(
             harness_root=harness_root,
             config=config,
             rules=rules,
+            workflow=workflow,
             retry_count=state.retry_count,
+            retry_category=routed_category,
+            retry_stage=routed_stage,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
@@ -2441,6 +2541,15 @@ def run_story(
             # The artifacts an entry names come off the stage's declared
             # outputs in the loaded workflow, never a list written here.
             outputs = stage.get("outputs", [])
+            # Where a failed verification goes is read off the table this
+            # stage declares, keyed on the category the verifier reported.
+            # There is no default: a recommended retry naming no category, or
+            # one the table does not define, escalates below rather than being
+            # absorbed by a fallback route — a silent fallback is the drift the
+            # table exists to remove. No category name appears here.
+            routes = stage.get("on_failure", {}).get("retry_routing", {})
+            declared = ", ".join(routes) or "no retry categories"
+            target = verdict.get("retry_target")
             if verdict.get("status") == "passed":
                 append_event(
                     run_dir,
@@ -2456,7 +2565,12 @@ def run_story(
                 # where the code ships. The artifact name comes off the loaded
                 # workflow definition, so removing that declaration disables
                 # the check with no change here.
-                artifact = stage.get("clean_clone")
+                # Both names come off the one declaration: the result the
+                # check writes and the stage a failure routes to. One key
+                # still turns the whole check on, so removing the declaration
+                # disables it with no change here.
+                clean_clone = stage.get("clean_clone") or {}
+                artifact = clean_clone.get("result")
                 if artifact:
                     clean = clean_clone_check(run_dir, target_root, config, artifact)
                     if not clean.ran:
@@ -2488,13 +2602,14 @@ def run_story(
                         # The same retry path a failed verification takes:
                         # archive above the increment, so the attempt number
                         # names the attempt that just ended.
+                        destination = clean_clone["retry_stage"]
                         archive_attempt(
                             run_dir, archivable_artifacts(stages), state.retry_count + 1
                         )
                         append_retry_record(
                             run_dir,
                             state.retry_count + 1,
-                            stage["on_failure"]["retry_stage"],
+                            destination,
                             verdict,
                             artifacts_written_since(
                                 run_dir, conditional, artifacts_before
@@ -2506,13 +2621,56 @@ def run_story(
                             run_dir,
                             stage,
                             artifact,
+                            destination,
                             state.retry_count,
                             rules["max_retries"],
                             elapsed(),
                         )
-                        index = stage_names.index(stage["on_failure"]["retry_stage"])
+                        # A clean-clone failure carries no category: nothing
+                        # chose it, the declaration names the route outright.
+                        routed_category, routed_stage = None, destination
+                        index = stage_names.index(destination)
                         continue
                     _clean_clone_passed(run_dir, name, artifact)
+            elif verdict.get("retry_recommended") and not target:
+                # Above the ceiling comparison deliberately: a verdict that
+                # cannot be routed is a bug in what the verifier produced, and
+                # that is the reason a developer should read, not the budget.
+                # Through _escalate, so retry_count is untouched, and above
+                # archive_attempt, so no attempts/attempt-N/ is written — the
+                # artifacts at the run root already describe the attempt that
+                # failed, and nothing is being superseded.
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"the verifier recommended a retry without naming a "
+                    f"retry_target, so there is no category to route it on; "
+                    f"{workflow['name']} defines: {declared}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason="the recommended retry named no retry_target",
+                )
+            elif verdict.get("retry_recommended") and target not in routes:
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"the verifier recommended a retry to '{target}', which is "
+                    f"not a retry category {workflow['name']} defines; it "
+                    f"defines: {declared}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason=(
+                        f"the recommended retry named the unknown retry_target "
+                        f"'{target}'"
+                    ),
+                    retry_category=target,
+                )
             elif verdict.get("retry_recommended") and state.retry_count < rules["max_retries"]:
                 # Archive before the retry begins, while the root artifacts
                 # still describe the attempt that just failed. The attempt
@@ -2527,10 +2685,11 @@ def run_story(
                 # escalation path, which take no retry. Above the increment for
                 # the same reason the archive is: state.retry_count + 1 names
                 # the attempt that ended, matching attempts/attempt-N/.
+                destination = routes[target]["stage"]
                 append_retry_record(
                     run_dir,
                     state.retry_count + 1,
-                    stage["on_failure"]["retry_stage"],
+                    destination,
                     verdict,
                     artifacts_written_since(run_dir, conditional, artifacts_before),
                 )
@@ -2539,7 +2698,8 @@ def run_story(
                 append_event(
                     run_dir,
                     f"verification failed; retry {state.retry_count} of "
-                    f"{rules['max_retries']} rerouted to {stage['on_failure']['retry_stage']}",
+                    f"{rules['max_retries']} rerouted to {destination} "
+                    f"for {target}",
                     kind="verification-failed",
                     stage=name,
                     artifacts=outputs,
@@ -2550,8 +2710,11 @@ def run_story(
                         "the verifier recommended a retry and the retry ceiling "
                         "was not reached"
                     ),
+                    retry_category=target,
+                    retry_stage=destination,
                 )
-                index = stage_names.index(stage["on_failure"]["retry_stage"])
+                routed_category, routed_stage = target, destination
+                index = stage_names.index(destination)
                 continue
             elif verdict.get("retry_recommended"):
                 return _escalate(

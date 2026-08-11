@@ -50,6 +50,7 @@ import pytest
 
 import story_coordinator
 import test_story_012_validation as story012
+from conftest import first_retry_route
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -62,7 +63,11 @@ COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8"
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
 VERIFIER = VERIFIER_STAGE["name"]
-RETRY_STAGE = VERIFIER_STAGE["on_failure"]["retry_stage"]
+#: The route the verifier declares for the first category in its table,
+#: read off the loaded workflow through the shared resolution rather
+#: than the constant route story-028 replaced. The category travels
+#: with the stage because a verdict now has to name one to be routed.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
 RETRY_INDEX = STAGE_NAMES.index(RETRY_STAGE)
 VERIFIER_INDEX = STAGE_NAMES.index(VERIFIER)
 
@@ -88,6 +93,7 @@ def failing(attempt: int) -> dict:
         }],
         "unverified": [],
         "retry_recommended": True,
+        "retry_target": RETRY_CATEGORY,
     }
 
 

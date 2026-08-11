@@ -37,6 +37,12 @@ PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
 EMPTY_RECORD = {"modified": [], "created": [], "deleted": []}
 
 
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+
+
 def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -798,6 +804,7 @@ def build(target_root: Path, harness_root: Path, story_text: str) -> dict:
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules=harness_config.load_rules(harness_root),
+        workflow=WORKFLOW,
         retry_count=0,
     )
 

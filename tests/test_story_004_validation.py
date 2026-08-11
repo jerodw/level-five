@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 import context_assembler
+import harness_config
 import schema_validator
 import story_coordinator
 import story_parser
@@ -34,6 +35,18 @@ ORIGINAL_STORY_SECTIONS = (
 )
 
 PLACEHOLDER = re.compile(r"\{\{[a-z_]+\}\}")
+
+
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+#: Read on demand rather than at import: story-013 imports this module
+#: into a harness copy holding only orchestration/, schemas/ and tests/,
+#: where workflows/ does not exist.
+def workflow_definition() -> dict:
+    return harness_config.load_workflow(
+        Path(context_assembler.__file__).resolve().parents[1],
+        "story-workflow")
 
 
 def _write(path: Path, payload) -> None:
@@ -454,6 +467,7 @@ def test_rendered_prompts_carry_the_schema_file_verbatim(
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules=harness_config.load_rules(harness_root),
+        workflow=workflow_definition(),
         retry_count=0,
     )
     stages = _workflow(harness_root)
@@ -488,6 +502,7 @@ def test_a_missing_schemas_directory_does_not_break_context_assembly(
         harness_root=fake_root,
         config=harness_config.load_config(target_root),
         rules={"blocked_paths": [], "max_retries": 2},
+        workflow=workflow_definition(),
         retry_count=0,
     )
     assert not any(key.endswith("_schema") for key in context)

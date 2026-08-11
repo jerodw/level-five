@@ -7,6 +7,13 @@ import schema_validator
 import story_parser
 
 
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(
+    Path(context_assembler.__file__).resolve().parents[1], "story-workflow")
+
+
 def parsed_story(story_text: str) -> dict:
     return story_parser.parse(story_text, schema_validator.load_schema("story"))
 
@@ -34,6 +41,7 @@ def test_real_templates_render_without_leftover_placeholders(target_root, harnes
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
     for prompt_file in ("implementer.md", "tester.md", "verifier.md", "documenter.md"):
@@ -71,6 +79,7 @@ def test_both_changed_files_records_injected_separately(target_root, harness_roo
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
     assert "src/app.py" in context["changed_files"]
@@ -93,6 +102,7 @@ def test_tester_changed_files_renders_none_when_absent(target_root, harness_root
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
     assert context["tester_changed_files"] is None
@@ -121,7 +131,7 @@ def test_harness_layer_is_single_source_of_truth(target_root, harness_root, tmp_
     def render_stages():
         context = context_assembler.build_context(
             story_text=story_text, story=parsed_story(story_text), run_dir=run_dir, target_root=target_root,
-            harness_root=fake_root, config=config, rules=rules, retry_count=0,
+            harness_root=fake_root, config=config, rules=rules, workflow=WORKFLOW, retry_count=0,
         )
         return {
             name: context_assembler.render(context_assembler.load_template(fake_root, name), context)
@@ -160,6 +170,7 @@ def _context(target_root, harness_root):
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
 

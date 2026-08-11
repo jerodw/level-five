@@ -31,11 +31,18 @@ import pytest
 
 import story_coordinator
 from agent_runner import AgentResult
+from conftest import first_retry_route
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 WORKFLOW = json.loads(
     (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+
+#: The retry category a failing verdict names, read off the loaded workflow.
+#: Since story-028 a recommended retry must name a category the workflow's
+#: retry_routing table defines, or the coordinator escalates rather than
+#: routing it, so every failing verdict below carries one.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
 
 # Every status the coordinator may write. A run starts `running` and ends in
 # one of ENDING_STATUSES; the source check below fails if a fourth appears.
@@ -51,7 +58,8 @@ FAIL = {"status": "failed",
         "blocking_issues": [{"severity": "high", "issue": "sample behavior missing",
                              "location": "src/app.py",
                              "required_behavior": "sample behavior exists"}],
-        "unverified": [], "retry_recommended": True}
+        "unverified": [], "retry_recommended": True,
+        "retry_target": RETRY_CATEGORY}
 
 
 # --------------------------------------------------------------------------
