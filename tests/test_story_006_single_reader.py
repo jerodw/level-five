@@ -70,6 +70,12 @@ EXPECTED_CRITERIA = [
 ]
 
 
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+
+
 def parse(story_text: str) -> dict:
     return story_parser.parse(story_text, schema_validator.load_schema("story"))
 
@@ -85,6 +91,7 @@ def context_for(target_root: Path, harness_root: Path, story_text: str) -> dict:
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules=harness_config.load_rules(harness_root),
+        workflow=WORKFLOW,
         retry_count=0,
     )
 
@@ -335,6 +342,7 @@ def test_build_context_requires_a_keyword_only_story_argument(target_root, harne
             harness_root=harness_root,
             config=harness_config.load_config(target_root),
             rules=harness_config.load_rules(harness_root),
+            workflow=WORKFLOW,
             retry_count=0,
         )
 
@@ -375,6 +383,7 @@ def test_absent_acceptance_criteria_renders_as_none(target_root, harness_root):
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules=harness_config.load_rules(harness_root),
+        workflow=WORKFLOW,
         retry_count=0,
     )
     assert context["acceptance_criteria"] is None

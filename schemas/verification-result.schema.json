@@ -45,6 +45,10 @@
     "retry_recommended": {
       "type": "boolean",
       "description": "Whether the coordinator should route a bounded retry."
+    },
+    "retry_target": {
+      "type": "string",
+      "description": "The retry category the next attempt is routed on, named exactly as the workflow's retry_routing table declares it. The coordinator requires it whenever retry_recommended is true, and escalates on a missing or unrecognised one rather than falling back to a default route. It is not in required because this schema cannot express that condition: the validator subset has no if/then and no dependentRequired, so 'required when retry_recommended is true' is inexpressible, and requiring it unconditionally would force a routing key onto a passing verification that routes nowhere."
     }
   }
 }

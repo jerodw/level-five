@@ -44,6 +44,12 @@ NEW_PLACEHOLDERS = (
 NO_CONFIG_MESSAGE = "No .harness/config.yaml found here or above. Run l5-init first."
 
 
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+
+
 def planner_template() -> str:
     return PLANNER.read_text(encoding="utf-8")
 
@@ -248,6 +254,7 @@ def test_workflow_context_and_build_context_render_blocked_paths_identically(
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules=the_rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
     injected = context_assembler.workflow_context(workflow(), the_rules)

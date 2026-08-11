@@ -44,6 +44,16 @@ schema:
 
 {{verification_result_schema}}
 
+When you recommend a retry, name in retry_target the category that owns the
+defect, spelled exactly as it appears below. The workflow defines these
+categories, each with the stage the retry is routed to and when it applies:
+
+{{retry_routes}}
+
+The coordinator routes the next attempt on that category alone. There is no
+default route: a recommended retry naming no category, or one this workflow
+does not define, escalates the run rather than being routed somewhere.
+
 retry-guidance.json, written only when status is "failed" and a retry is
 recommended. It must satisfy this schema:
 

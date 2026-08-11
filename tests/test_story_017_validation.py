@@ -863,6 +863,7 @@ def test_the_record_is_not_injected_into_any_stage_prompt(target, harness_root):
         harness_root=REPO_ROOT,
         config=harness_config.load_config(target),
         rules=harness_config.load_rules(REPO_ROOT),
+        workflow=WORKFLOW,
         retry_count=0,
     )
     injected = {key: value for key, value in context.items()
@@ -909,7 +910,7 @@ def test_the_clean_clone_check_still_writes_its_record_and_event_and_routes(
     verifier = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
     assert run(target, harness_root, {"implementer": forced_repair})[0] == 0
     run_dir = run_dir_of(target)
-    clean = json.loads((run_dir / verifier["clean_clone"]).read_text())
+    clean = json.loads((run_dir / verifier["clean_clone"]["result"]).read_text())
     events = (run_dir / "events.log").read_text()
 
     assert clean["ran"] is True and clean["exit_code"] == 0

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
@@ -50,14 +51,48 @@ def schema_context(harness_root: Path) -> dict[str, str]:
     return context
 
 
+@dataclass(frozen=True)
+class RetryRoute:
+    """One entry of a stage's declared retry_routing table."""
+
+    declared_by: str
+    category: str
+    stage: str
+    when: str
+
+
+def retry_routes(stages: list[dict]) -> list[RetryRoute]:
+    """The workflow's declared retry routes, in declared order.
+
+    One derivation of "what does this workflow route", read by the
+    coordinator's pre-flight check on the table and by the rendering below
+    that injects the categories into the verifier's prompt, in the same
+    spirit as story_coordinator.stage_restrictions. It lives here rather
+    than in the coordinator because the coordinator imports this module and
+    not the reverse, and a second copy in either direction would be a
+    second answer to the same question.
+
+    No category name and no destination is written here; both come off the
+    loaded workflow definition.
+    """
+    return [
+        RetryRoute(stage["name"], category, route["stage"], route.get("when", ""))
+        for stage in stages
+        for category, route in stage.get("on_failure", {})
+        .get("retry_routing", {})
+        .items()
+    ]
+
+
 def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
     """Map the workflow's stage facts to injectable placeholder names.
 
-    The stage list, each stage's may_not_create prefixes, and the rules'
-    repository-wide blocked_paths are injected rather than restated in
-    prose, so the facts a planner is told are the definitions the
-    coordinator enforces. l5-plan calls this for the planner template,
-    which no coordinator renders.
+    The stage list, each stage's may_not_create prefixes, the rules'
+    repository-wide blocked_paths, and the declared retry routes are
+    injected rather than restated in prose, so the facts an agent is told
+    are the definitions the coordinator enforces. l5-plan calls this for
+    the planner template, which no coordinator renders; build_context
+    merges it for every workflow stage.
     """
     stages = workflow["stages"]
     restrictions = [
@@ -65,10 +100,15 @@ def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
         for stage in stages
         for prefix in stage.get("may_not_create", [])
     ]
+    routes = [
+        f"{route.category} -> {route.stage}: {route.when}"
+        for route in retry_routes(stages)
+    ]
     return {
         "workflow_stages": _dashed_lines([stage["name"] for stage in stages]),
         "stage_create_restrictions": _dashed_lines(restrictions),
         "blocked_paths": _dashed_lines(rules.get("blocked_paths")),
+        "retry_routes": _dashed_lines(routes),
     }
 
 
@@ -126,7 +166,10 @@ def build_context(
     harness_root: Path,
     config: dict,
     rules: dict,
+    workflow: dict,
     retry_count: int,
+    retry_category: str | None = None,
+    retry_stage: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -134,10 +177,21 @@ def build_context(
     ) if standards_dir.is_dir() else None
     doc_paths = config.get("architecture_docs", [])
 
+    # A stage receiving a retry is told it is on one, and since story-028 why:
+    # the category the verifier reported and the stage the coordinator routed
+    # to. The ceiling still comes from the rules, which hold the only copy of
+    # it. A field with nothing behind it is omitted rather than sent as null,
+    # the optional-by-absence convention the history schema already uses.
     retry_state = None
     if retry_count > 0:
+        recorded = {
+            "retry_iteration": retry_count,
+            "max_retries": rules["max_retries"],
+            "retry_category": retry_category,
+            "retry_stage": retry_stage,
+        }
         retry_state = json.dumps(
-            {"retry_iteration": retry_count, "max_retries": rules["max_retries"]},
+            {key: value for key, value in recorded.items() if value is not None},
             indent=2,
         )
 
@@ -170,6 +224,11 @@ def build_context(
     }
 
     context.update(schema_context(harness_root))
+    # The workflow's own facts — its stages, its create restrictions, its
+    # retry routes — come off the loaded definition rather than being restated
+    # in any template. blocked_paths is rendered identically by both, through
+    # the same helper, so the merge changes nothing about it.
+    context.update(workflow_context(workflow, rules))
 
     # Two-pass render: resolve the shared harness-layer partial (including its
     # own {{blocked_paths}} placeholder) against the assembled context before

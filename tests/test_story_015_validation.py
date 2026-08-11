@@ -81,6 +81,12 @@ SUBJECTS = [
 # --------------------------------------------------------------------------
 
 
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+
+
 def git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args],
@@ -740,6 +746,7 @@ def rendered(prompt_file: str, target_root: Path, harness_root: Path) -> str:
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules=harness_config.load_rules(harness_root),
+        workflow=WORKFLOW,
         retry_count=0,
     )
     return context_assembler.render(

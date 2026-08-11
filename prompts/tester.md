@@ -82,3 +82,9 @@ Implementation summary:
 
 Testing standards:
 {{testing_standards}}
+
+Retry guidance:
+{{retry_guidance}}
+
+Retry state:
+{{retry_state}}

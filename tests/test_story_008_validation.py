@@ -29,6 +29,7 @@ import pytest
 from conftest import story_diff
 
 import context_assembler
+import harness_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = REPO_ROOT / "orchestration"
@@ -56,6 +57,12 @@ section.
 A story may also carry an optional top-level stage_exceptions section,
 and most do not.
 """
+
+
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
 
 
 def planner_template() -> str:
@@ -323,6 +330,7 @@ def test_build_context_still_resolves_every_stage_schema_placeholder(
         harness_root=harness_root,
         config=harness_config.load_config(target_root),
         rules={"blocked_paths": [".git/"], "max_retries": 3},
+        workflow=WORKFLOW,
         retry_count=0,
     )
     for path in SCHEMAS_DIR.glob("*.schema.json"):

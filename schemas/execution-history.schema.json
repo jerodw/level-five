@@ -64,6 +64,14 @@
       "retry_reason": {
         "type": "string",
         "description": "Why that retry decision was taken."
+      },
+      "retry_category": {
+        "type": "string",
+        "description": "The retry category the verifier reported, as the workflow's retry_routing table declares it. Absent on a retry that carries no category, such as a clean-clone failure, and on events that route nothing."
+      },
+      "retry_stage": {
+        "type": "string",
+        "description": "The stage the retry was routed to, read off the workflow's declared route rather than a constant. With retry_category it makes the route a reader can reconstruct from the history alone."
       }
     }
   }

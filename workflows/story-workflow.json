@@ -33,10 +33,21 @@
         "verification-result.json": "verification-result",
         "retry-guidance.json": "retry-guidance"
       },
-      "clean_clone": "clean-clone-result.json",
+      "clean_clone": {
+        "result": "clean-clone-result.json",
+        "retry_stage": "implementer"
+      },
       "on_failure": {
-        "retry_stage": "implementer",
-        "max_retries": 2
+        "retry_routing": {
+          "implementation": {
+            "stage": "implementer",
+            "when": "the defect is in the code under test: behaviour the story asked for is missing, wrong, or incomplete, and the tests report it correctly"
+          },
+          "validation": {
+            "stage": "tester",
+            "when": "the defect is in the tests themselves: a wrong, missing or fragile assertion, an assertion that cannot fail, or coverage that does not exercise what it claims"
+          }
+        }
       }
     },
     {

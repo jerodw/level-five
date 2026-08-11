@@ -8,12 +8,21 @@ verifier's distinct harness layer and the non-stage prompts stay intact.
 These assertions are written against the story's acceptance criteria only,
 independently of how the extraction was implemented.
 """
+from pathlib import Path
+
 import context_assembler
 import harness_config
 import schema_validator
 import story_parser
 
 STAGE_TEMPLATES = ("implementer.md", "tester.md", "documenter.md")
+
+
+#: The loaded workflow build_context has taken as a required argument
+#: since story-028, which injects the workflow's own facts — its stages,
+#: its create restrictions, its retry routes — into every stage prompt.
+WORKFLOW = harness_config.load_workflow(
+    Path(context_assembler.__file__).resolve().parents[1], "story-workflow")
 
 
 def parsed_story(story_text: str) -> dict:
@@ -48,6 +57,7 @@ def _build(target_root, harness_root):
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
     return context, rules
@@ -133,7 +143,7 @@ def test_one_file_edit_changes_every_stage(target_root, harness_root, tmp_path):
     def render_all():
         context = context_assembler.build_context(
             story_text=story_text, story=parsed_story(story_text), run_dir=run_dir, target_root=target_root,
-            harness_root=fake_root, config=config, rules=rules, retry_count=0,
+            harness_root=fake_root, config=config, rules=rules, workflow=WORKFLOW, retry_count=0,
         )
         return {
             name: context_assembler.render(
@@ -170,7 +180,7 @@ def test_harness_layer_renders_none_when_partial_absent(target_root, harness_roo
 
     context = context_assembler.build_context(
         story_text=story_text, story=parsed_story(story_text), run_dir=run_dir, target_root=target_root,
-        harness_root=fake_root, config=config, rules=rules, retry_count=0,
+        harness_root=fake_root, config=config, rules=rules, workflow=WORKFLOW, retry_count=0,
     )
     assert context.get("harness_layer") is None
     rendered = context_assembler.render("x {{harness_layer}} y", context)

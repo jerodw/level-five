@@ -4,8 +4,20 @@ import sys
 from pathlib import Path
 
 import context_assembler
+import harness_config
 import story_coordinator
 from agent_runner import AgentResult
+from conftest import first_retry_route
+
+REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
+
+#: The retry category a failing verdict names, read off the loaded
+#: workflow. Since story-028 a recommended retry must name a category
+#: the workflow's retry_routing table defines, or the coordinator
+#: escalates rather than routing it, so every failing verdict below
+#: carries one.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(
+    harness_config.load_workflow(REPO_ROOT, "story-workflow"))
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -58,7 +70,8 @@ PASS = {"status": "passed", "blocking_issues": [], "unverified": [], "retry_reco
 FAIL = {"status": "failed",
         "blocking_issues": [{"severity": "high", "issue": "sample behavior missing",
                              "location": "src/app.py", "required_behavior": "sample behavior exists"}],
-        "unverified": [], "retry_recommended": True}
+        "unverified": [], "retry_recommended": True,
+        "retry_target": RETRY_CATEGORY}
 
 
 def read_state(target_root: Path) -> dict:

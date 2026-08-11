@@ -376,6 +376,24 @@ def commit_setup(root: Path, message: str = "setup for this test") -> None:
                    cwd=root, check=True)
 
 
+
+def first_retry_route(workflow: dict) -> tuple[str, str]:
+    """The first retry category a workflow declares, and where it routes.
+
+    story-028 replaced the verifier's constant `on_failure.retry_stage` with
+    a category-keyed routing table, so a verdict recommending a retry has to
+    name a category for the coordinator to route it on. A test that drives a
+    retry reads the pair off the loaded workflow here rather than writing its
+    own derivation of it, for the same reason the baseline resolution above
+    lives here: one home for one fact.
+    """
+    for stage in workflow["stages"]:
+        routes = stage.get("on_failure", {}).get("retry_routing", {})
+        for category, route in routes.items():
+            return category, route["stage"]
+    raise AssertionError("the loaded workflow declares no retry routes")
+
+
 @pytest.fixture
 def harness_root() -> Path:
     return HARNESS_ROOT
