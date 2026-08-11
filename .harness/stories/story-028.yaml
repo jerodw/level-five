@@ -1,0 +1,203 @@
+story:
+  id: story-028
+  title: Route a retry to the stage that owns the defect
+  description: |
+    Every failed verification returns to the implementer, whatever failed.
+    The route is a constant: `on_failure.retry_stage` in the workflow
+    definition, read literally as
+    `stage_names.index(stage["on_failure"]["retry_stage"])`. There is no
+    input to the decision. Neither verifier artifact names a stage —
+    `verification-result.json` carries `status`, `retry_recommended` and
+    `blocking_issues[].location`, and `retry-guidance.json` carries
+    `retry_scope`; both are file paths, and nothing maps a path to a stage.
+
+    story-011 is the observed case. Its verification failed on a defect
+    wholly inside a test file the tester had created, and the verifier scoped
+    the retry to exactly that one file. The coordinator routed to the
+    implementer anyway, which cost twice: the implementer was given the wrong
+    prompt for the job, and the stage that owned the artifact did not get to
+    repair its own output.
+
+    This story replaces the constant with a routing table in the workflow
+    definition, keyed on a category the verifier reports. The verifier names
+    a category on every retry it recommends; a missing or unrecognised one is
+    a bug and escalates rather than falling back, because a silent fallback
+    is the drift the table exists to remove. The categories and their
+    descriptions are injected into the verifier prompt from the same table
+    the coordinator routes on, so the prompt restates nothing.
+
+    The retry ceiling becomes single and global as part of the same change.
+    `max_retries: 2` lives in `rules/execution-rules.json` and in the
+    workflow's `on_failure`, and only the rules copy is ever read. Chapter 13
+    tells the reader not to leave it in both and this story creates the
+    two-route condition that passage leaves open, resolving it against the
+    per-route reading: `state.json` holds one `retry_count`, per-route
+    ceilings need per-route counters, and an implementer/tester alternation
+    would then run 2 + 2 attempts while neither route tripped its own ceiling
+    early. Alternation is precisely the non-convergence a ceiling exists to
+    catch. The ceiling protects the run's budget, which is a property of the
+    run; routing decides where an attempt goes, the ceiling decides how many
+    attempts exist at all.
+
+    Scope was settled with the developer on 2026-08-10: this story is the
+    verifier's category-keyed table and the single ceiling. The generalized
+    mechanism the request also describes — mechanical failures self-routing
+    in place, `self_route_count` against a per-stage `max_self_routes`, the
+    `prompt-<stage>-attempt-N-try-M.md` naming addition, and
+    coordinator-authored evidence for a self-routed stage — is deliberately
+    not in this story and stays in `.harness/requests/retry-routing.md` as
+    the follow-up. Nothing here may make that harder to land, and the
+    two budgets must not be conflated: what this story bounds is backward
+    routes only, which is what `retry_count` already means.
+
+    The book documents this design in Chapters 14 and 17 and states it as a
+    contract in `outputs/artifact-naming-changes-for-harness-repo.md`. That
+    manuscript is not in this checkout, so this story is planned against the
+    request's summary of the contract, and the conformance check against
+    Chapter 17's retry-management section is carried as an outstanding item
+    rather than performed here.
+
+tasks:
+  - Replace the verifier stage's `on_failure.retry_stage` and `on_failure.max_retries` with a `retry_routing` table whose entries carry a destination `stage` and a `when` description, defining the two categories `implementation` and `validation`.
+  - Widen the verifier's `clean_clone` declaration from a bare artifact name to an object naming both the result artifact and the stage a clean-clone failure routes to, in the same shape `revert_check` took in story-019, so one key still turns the whole check on.
+  - Add an optional `retry_target` property to `verification-result.schema.json`, with a description saying the coordinator requires it whenever a retry is recommended and that the schema cannot express the condition.
+  - Add `retry_category` and `retry_stage` properties to `execution-history.schema.json`, so a reader can reconstruct why a retry went where it went.
+  - Add a pre-flight `retry_routing_problems(stages)` to the coordinator, reporting a route whose destination is not a stage the workflow defines and a route whose destination does not sit before the stage that declares it, and refuse through the shared `refuse` before anything is created.
+  - Replace the coordinator's two constant route lookups with a lookup keyed on the verifier's reported category, and route a clean-clone failure from the widened declaration.
+  - Add the two new escalations — a recommended retry carrying no `retry_target`, and a `retry_target` naming a category the workflow does not define — each naming the offending value and the categories the workflow does define.
+  - Carry the category and the destination stage onto the execution-history entry through the existing `append_event` path.
+  - Add the routing table's categories to `workflow_context` as `{{retry_routes}}`, thread the loaded workflow into `build_context`, and inject the placeholder into the verifier prompt.
+  - Give `tester.md` the retry placeholders it has never needed, and carry the category and destination into the injected retry state, so a stage receiving a retry knows it is on one and why.
+  - Cover the new behaviour with regression tests that drive the coordinator with the fake runner and invoke no model, including an assertion by search that the retry ceiling is defined in exactly one file.
+  - Record the routing table, the single ceiling, the two new escalations and the divergence from Appendix A's excerpts in `.harness/docs/ARCHITECTURE.md`.
+
+acceptance_criteria:
+  - A failed verification whose `verification-result.json` carries `retry_target: "validation"` routes the next attempt to the tester, and one carrying `retry_target: "implementation"` routes it to the implementer, both demonstrated through the fake runner with no model invoked.
+  - A failed verification recommending a retry with no `retry_target` escalates, leaves `retry_count` at the value it had, and creates no `attempts/attempt-N/` directory.
+  - A failed verification whose `retry_target` names a category the workflow does not define escalates, leaves `retry_count` at the value it had, and creates no `attempts/attempt-N/` directory.
+  - Both new escalation reasons name the offending value and list the categories the workflow does define, so the escalation summary is actionable without opening the workflow definition.
+  - A verdict that is malformed in one of those two ways escalates on that ground even when the retry ceiling has also been reached, so the reason a developer reads is the bug rather than the budget.
+  - A run whose workflow declares a route to a stage the workflow does not define exits 1 with a message naming the category and the stage, creates no run directory, writes no `state.json`, appends no log, creates and checks out no branch, and invokes no agent.
+  - A run whose workflow declares a route to a stage at or after the stage that declares it is refused the same way, with a message saying that routing forward would skip verification.
+  - The clean-clone route is held to both of those checks, and a clean-clone failure routes to the stage the widened `clean_clone` declaration names, with the retry, archive and ceiling behaviour it has today otherwise unchanged.
+  - Removing the `clean_clone` declaration from the verifier stage still disables the check with no change to orchestration code, and the result artifact name and the route name both come off that declaration.
+  - The execution-history entry for a routed retry carries `retry_category` and `retry_stage` alongside `retry_decision` and `retry_reason`, and `events.log` and `execution-history.json` remain two renderings of one write.
+  - `retry-history.json` records the destination the run actually routed to rather than a constant, with no change to its schema.
+  - The rendered verifier prompt names every category the workflow defines, with its destination stage and its `when` description, and contains no unresolved placeholder.
+  - Adding a third category to `workflows/story-workflow.json` changes the rendered verifier prompt with no edit to `prompts/verifier.md`, demonstrated by a test that renders against a modified workflow.
+  - A test asserts by searching the repository — not by inspecting two known files — that the retry ceiling is defined exactly once, and that assertion fails when a second definition is reintroduced.
+  - A stage receiving a retry is given the retry guidance and the retry state, including the category and the destination, and this holds for the tester as well as the implementer.
+  - `orchestration/story_coordinator.py` and `orchestration/context_assembler.py` contain no category name and no routing destination of their own; both come off the loaded workflow.
+  - The full suite passes, and each new behaviour's coverage fails when the behaviour is removed.
+
+technical_plan:
+  implementation_steps:
+    - In `workflows/story-workflow.json`, replace the verifier's `on_failure` body with `{"retry_routing": {"implementation": {"stage": "implementer", "when": "..."}, "validation": {"stage": "tester", "when": "..."}}}`, writing `when` descriptions the verifier can choose between — the defect is in the code under test, against the defect is in the tests themselves, a wrong, missing or fragile assertion.
+    - In the same file, change `"clean_clone": "clean-clone-result.json"` to `{"result": "clean-clone-result.json", "retry_stage": "implementer"}`, and update the coordinator's two reads of that declaration to take the result name from `result`.
+    - Add `retry_target` to `verification-result.schema.json` as an optional string, with a description recording why it is not in `required` — the validator subset has no `if`/`then` and no `dependentRequired`, so "required when `retry_recommended` is true" is inexpressible, and requiring it unconditionally would force a routing key onto a passing verification.
+    - Add `retry_category` and `retry_stage` to `execution-history.schema.json`'s item properties, described as the category the verifier reported and the stage the retry was routed to.
+    - Add `retry_routes(stages) -> list[tuple[str, str, str]]` or an equivalent single derivation of the workflow's (declaring stage, category, destination) triples, so the pre-flight check and the prompt rendering read one answer to "what does this workflow route", in the same spirit as `stage_restrictions`.
+    - Add `retry_routing_problems(stages)` beside `stage_exception_problems`, reporting a destination that is not a defined stage and a destination whose index is not strictly less than the declaring stage's, covering both the `retry_routing` entries and the `clean_clone` route, and call it from `run_story`'s pre-flight beside the other refusals, above the run-directory creation.
+    - Replace `index = stage_names.index(stage["on_failure"]["retry_stage"])` on the verification-failed path with a lookup of `verdict.get("retry_target")` against the declared table, and the same expression on the clean-clone path with the stage the widened declaration names.
+    - Add the two escalations above the ceiling comparison on the verification-failed path, each through `_escalate` so `retry_count` is untouched, and each above `archive_attempt` so no attempt directory is written.
+    - Extend `append_event` with `retry_category` and `retry_stage` keyword arguments defaulting to `None`, and pass them from the retry and escalation sites that have them.
+    - In `context_assembler.workflow_context`, add a `retry_routes` value built through `_dashed_lines`, one line per category naming the category, its destination stage and its `when`; add a required keyword-only `workflow` to `build_context` and merge `workflow_context(workflow, rules)` into the assembled context; thread the loaded workflow from `run_story`'s `build_context` call.
+    - Extend the injected `retry_state` with the category and destination the retry was routed on, threaded from the coordinator, leaving `retry_iteration` and the ceiling as they are — the ceiling already comes from `rules` and no second lookup exists to remove.
+    - Add the `{{retry_routes}}` injection to `prompts/verifier.md` beside the verification-result schema, with a sentence saying a recommended retry must name one of the categories in `retry_target` and that the coordinator escalates on a missing or unknown one; name no category in the prose.
+    - Add `{{retry_guidance}}` and `{{retry_state}}` to `prompts/tester.md`'s runtime state layer, since the tester can now be a retry destination and has neither today.
+    - Write the regression coverage against a workflow and repository the test builds, driving `run_story` with the fake runner: each category routing to its stage, the two malformed verdicts, the two malformed workflows, the clean-clone route, the rendered verifier prompt against a two-category and a three-category workflow, and the single-definition search for the ceiling.
+    - Run the suite, repoint any assertion the reshaped `on_failure` or the widened `clean_clone` turns red without weakening it, and record the change in the architecture document.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The routing table replaces the constant route, the workflow's `max_retries` copy is deleted, and the `clean_clone` declaration is widened to name its route.
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: Adds the optional `retry_target` property the verifier reports and the coordinator routes on.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: Adds `retry_category` and `retry_stage` so the route taken is reconstructable from the history.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The route derivation, the pre-flight refusal, the category lookup on both retry paths, the two new escalations, and the new `append_event` fields.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: `workflow_context` gains the routes, `build_context` gains the workflow it has never received, and the injected retry state gains the category and destination.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: Injects the categories rather than restating them, and states the obligation to name one.
+    - file: prompts/tester.md
+      stage: implementer
+      reason: The tester can now be a retry destination and has no retry placeholders today.
+    - file: tests/test_story_028_validation.py
+      stage: tester
+      reason: The story's regression coverage for routing, the refusals, the escalations, the rendered prompt and the single ceiling definition.
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: The routing decision and the two new escalations become part of the coordinator's standing output contract, whose home this file is.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the routing table, the single ceiling and its reasoning, the two new escalations, the widened `clean_clone` declaration, and the divergence from Appendix A's excerpts.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - schemas/verification-result.schema.json
+    - schemas/execution-history.schema.json
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - prompts/verifier.md
+    - prompts/tester.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/retry-guidance.schema.json
+    - schemas/story.schema.json
+    - schemas/manifest.json
+    - prompts/implementer.md
+    - prompts/planner.md
+    - prompts/documenter.md
+    - prompts/assist.md
+    - prompts/harness-layer.md
+    - scripts/
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - orchestration/agent_runner.py
+    - .harness/requests/
+    - .harness/stories/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm from the run's evidence that a `validation` retry target routed the next attempt to the tester and an `implementation` target routed it to the implementer, reading the recorded route rather than the source that computes it.
+  - Confirm that a recommended retry with no `retry_target` and one with an unknown `retry_target` each escalated, that `retry_count` was unchanged across each, and that no `attempts/attempt-N/` directory was written on either.
+  - Confirm both escalation reasons name the offending value and the categories the workflow defines, read from the captured escalation output.
+  - Confirm the malformed-verdict escalations take precedence over the ceiling escalation when both conditions hold.
+  - Confirm a workflow declaring an undefined destination and one declaring a forward destination are each refused before a run directory, a state file, a log, a branch or an agent invocation exists.
+  - Confirm the clean-clone failure path routes to the declared stage and is otherwise unchanged, and that removing the `clean_clone` declaration still disables the check with no orchestration change.
+  - Confirm the execution-history entry for a routed retry carries the category and the destination, and that `events.log` and `execution-history.json` still come from one write.
+  - Confirm the rendered verifier prompt lists every declared category with its destination and description and carries no unresolved placeholder, and that adding a category to the workflow changes that prompt while `prompts/verifier.md` is unchanged.
+  - Confirm the ceiling-is-defined-once assertion searches the repository rather than inspecting two named files, and that it fails when a second definition is reintroduced.
+  - Confirm a retried tester receives the retry guidance and retry state, including the category and destination.
+  - Confirm by search that no category name and no routing destination appears in `orchestration/story_coordinator.py` or `orchestration/context_assembler.py`.
+  - Confirm the full suite passes, and that each new behaviour's coverage fails when the behaviour it covers is removed.
+  - Confirm nothing in the change implements or presumes the self-routing mechanism that was deliberately deferred, and that `retry_count` is still spent only by backward routes.
+
+constraints:
+  - No default route survives. `retry_stage` on `on_failure` is deleted rather than kept as a fallback, and a missing or unknown category escalates rather than being absorbed.
+  - No category name and no routing destination is written into orchestration code or into prompt prose. Both come off the loaded workflow, the way `stage_restrictions` and `may_not_create` already do.
+  - The routing table is validated when the workflow loads, not when a retry happens, and the refusal follows the established pre-flight shape through the shared `refuse`: exit 1, one message per problem, nothing created, no agent invoked.
+  - The two new escalations leave `retry_count` unchanged and write no `attempts/attempt-N/` directory. Nothing is being superseded, and the artifacts at the run-directory root already describe the attempt that failed.
+  - The retry ceiling stays global and keeps its value of 2. No per-route ceiling and no per-route counter is introduced, and `escalation_rules.max_retries_exceeded` is unaffected.
+  - `retry-guidance.json` and its schema are unchanged. `retry_scope` stays file paths and the route is never inferred from them.
+  - The routing rendering exists once. Whichever seam carries it, there is no second function turning workflow routes into prompt text.
+  - `retry_target` stays optional in `verification-result.schema.json`, with the reason recorded in the schema itself, and the requirement is enforced by the coordinator where the workflow-relative half of the check has to live regardless.
+  - Adding properties to `execution-history.schema.json` must leave the schema inventory tests untouched; no file is added to or removed from `schemas/`.
+  - Only the verifier declares retry routes. No `on_failure` block is added to another stage by this story.
+  - The mechanical-failure self-routing mechanism is out of scope and must not be partly built. Nothing added here may make it harder to land, and the two budgets it introduces must not be pre-empted by conflating them with `retry_count`.
+  - story-011 is not re-run or re-judged; it is cited as evidence only.
+  - An existing assertion the reshaped `on_failure` or the widened `clean_clone` turns red is repointed, never weakened, skipped or deleted.
+  - This story's own run executes under the workflow definition as this story leaves it, and the coordinator process imports its module at start, so the running coordinator carries the pre-flight and the routing as they stood before this story. Enforcement begins with the next run. Expected, not a defect.
