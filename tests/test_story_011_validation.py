@@ -35,12 +35,17 @@ import run_status
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import commit_setup, load_mutant, story_diff
+from conftest import commit_setup, first_retry_route, load_mutant, story_diff
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 WORKFLOW = json.loads(
     (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+#: Since story-028 a recommended retry must name a category the workflow's
+#: retry_routing table defines, or the coordinator escalates rather than
+#: routing it. Read off the loaded workflow, so this file still names no
+#: stage and no category the definition does not.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
 
 LINE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.*)$")
 
@@ -50,7 +55,8 @@ FAIL = {"status": "failed",
         "blocking_issues": [{"severity": "high", "issue": "sample behavior missing",
                              "location": "src/app.py",
                              "required_behavior": "sample behavior exists"}],
-        "unverified": [], "retry_recommended": True}
+        "unverified": [], "retry_recommended": True,
+        "retry_target": RETRY_CATEGORY}
 FAIL_NO_RETRY = {**FAIL, "retry_recommended": False}
 
 
@@ -575,7 +581,8 @@ def test_optional_fields_are_expressed_by_absence_from_required():
     assert set(item["required"]) == {"sequence", "timestamp", "event", "message"}
     optional = set(item["properties"]) - set(item["required"])
     assert optional == {"stage", "artifacts", "duration_seconds",
-                        "verifier_outcome", "retry_decision", "retry_reason"}
+                        "verifier_outcome", "retry_decision", "retry_reason",
+                        "retry_category", "retry_stage"}
 
 
 def test_no_union_keyword_appears_anywhere_in_the_schema():
@@ -733,6 +740,7 @@ def test_every_prompt_still_renders_with_no_leftover_placeholder(
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
     for prompt_file in sorted(p.name for p in (harness_root / "prompts").glob("*.md")):

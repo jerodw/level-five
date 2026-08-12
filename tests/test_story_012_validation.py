@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import load_mutant, story_diff
+from conftest import first_retry_route, load_mutant, story_diff
 
 import context_assembler
 import run_status
@@ -43,7 +43,10 @@ WORKFLOW = json.loads(
 #: Read off the loaded workflow rather than written here, so this file names
 #: no stage the definition does not.
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
-RETRY_STAGE = VERIFIER_STAGE["on_failure"]["retry_stage"]
+#: Since story-028 the route is a category-keyed table rather than a constant,
+#: so the category a failing verdict names and the stage it routes to are read
+#: off that table through the shared helper.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
 MAX_RETRIES = json.loads(
     (REPO_ROOT / "rules" / "execution-rules.json").read_text(encoding="utf-8")
 )["max_retries"]
@@ -82,6 +85,7 @@ def failing_verdict(attempt: int) -> dict:
         ],
         "unverified": [],
         "retry_recommended": True,
+        "retry_target": RETRY_CATEGORY,
     }
 
 
@@ -719,7 +723,8 @@ def test_execution_history_still_records_each_retry_decision(retries_exhausted):
 #: `return _escalate(` they precede.
 _PLANTED_APPEND = (
     '                append_retry_record(run_dir, state.retry_count + 1, '
-    'stage["on_failure"]["retry_stage"], verdict, conditional_artifacts(stage))\n'
+    'stage["on_failure"]["retry_routing"][verdict["retry_target"]]["stage"], '
+    'verdict, conditional_artifacts(stage))\n'
 )
 
 MUTANTS = {
