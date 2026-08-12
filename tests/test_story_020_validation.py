@@ -57,7 +57,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE as BASELINE_BOUND, ENDPOINT, function_source_at, load_script,
+from conftest import (BASELINE as BASELINE_BOUND, ENDPOINT, first_retry_route,
+                      function_source_at, load_script,
                       repository_file_at, story_commit_range, story_diff)
 
 import harness_config
@@ -68,7 +69,10 @@ REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
-RETRY_STAGE = VERIFIER_STAGE["on_failure"]["retry_stage"]
+#: Since story-028 the route is a category-keyed table rather than a constant,
+#: so the category a failing verdict names and the stage it routes to are read
+#: off that table through the shared helper.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
 IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"]
                          if "revert_check" in s)
 BASELINE = IMPLEMENTER_STAGE["revert_check"]["baseline"]
@@ -97,6 +101,7 @@ def failing(attempt: int, *, retry: bool) -> dict:
         }],
         "unverified": [],
         "retry_recommended": retry,
+        "retry_target": RETRY_CATEGORY,
     }
 
 

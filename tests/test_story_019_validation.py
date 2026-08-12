@@ -46,7 +46,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE as BASELINE_BOUND, STORY, repository_file_at, story_commit_range, story_diff)
+from conftest import (BASELINE as BASELINE_BOUND, STORY, first_retry_route,
+                      repository_file_at, story_commit_range, story_diff)
 
 import harness_config
 import schema_validator
@@ -82,6 +83,9 @@ FAIL = {
     }],
     "unverified": [],
     "retry_recommended": True,
+    #: Since story-028 a recommended retry names the category it routes on,
+    #: read off the loaded workflow's table rather than written here.
+    "retry_target": first_retry_route(WORKFLOW)[0],
 }
 
 TEST_COMMAND = shlex.join([sys.executable, "-m", "pytest", "tests", "-q",
@@ -1253,7 +1257,7 @@ def test_the_clean_clone_check_still_writes_its_record_and_event_and_routes(
     verifier = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
     assert run(target, harness_root, {"implementer": [forced_repair]})[0] == 0
     run_dir = run_dir_of(target)
-    clean = json.loads((run_dir / verifier["clean_clone"]).read_text())
+    clean = json.loads((run_dir / verifier["clean_clone"]["result"]).read_text())
     events = (run_dir / "events.log").read_text()
 
     assert clean["ran"] is True and clean["exit_code"] == 0

@@ -35,7 +35,7 @@ import harness_config
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import load_mutant
+from conftest import first_retry_route, load_mutant
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_PATH = Path(story_coordinator.__file__)
@@ -43,7 +43,16 @@ COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
 WORKFLOW = json.loads(
     (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
-ARTIFACT = VERIFIER_STAGE["clean_clone"]
+#: Since story-028 the clean-clone declaration names both artifacts of the
+#: check — the result it writes and the stage a failure routes to — so the
+#: result name is read off `result` rather than off the bare declaration.
+ARTIFACT = VERIFIER_STAGE["clean_clone"]["result"]
+#: The retry category a failing verdict names, read off the loaded workflow's
+#: routing table, which replaced the constant route in story-028.
+RETRY_CATEGORY, _RETRY_STAGE = first_retry_route(WORKFLOW)
+MAX_RETRIES = json.loads(
+    (REPO_ROOT / "rules" / "execution-rules.json").read_text(encoding="utf-8")
+)["max_retries"]
 
 SCHEMA = schema_validator.load_schema("clean-clone-result")
 HISTORY_SCHEMA = schema_validator.load_schema("execution-history")
@@ -56,7 +65,8 @@ FAIL = {"status": "failed",
         "blocking_issues": [{"severity": "high", "issue": "sample behavior missing",
                              "location": "src/app.py",
                              "required_behavior": "sample behavior exists"}],
-        "unverified": [], "retry_recommended": True}
+        "unverified": [], "retry_recommended": True,
+        "retry_target": RETRY_CATEGORY}
 
 #: The marker the fake implementer writes into the target's working tree.
 #: It stands in for a story's change: uncommitted in the target, committed
@@ -683,7 +693,7 @@ def test_a_clean_clone_failure_reroutes_to_the_workflows_declared_retry_stage(
     committed_failure_run,
 ):
     _, runner, _ = committed_failure_run
-    retry_stage = VERIFIER_STAGE["on_failure"]["retry_stage"]
+    retry_stage = VERIFIER_STAGE["clean_clone"]["retry_stage"]
     assert runner.calls == [
         "implementer", "tester", "verifier",
         "implementer", "tester", "verifier",
@@ -699,7 +709,7 @@ def test_each_clean_clone_failure_increments_the_retry_count_exactly_once(
     state = read_state(run_dir)
     failures = [e for e in history_of(run_dir) if e["event"] == "clean-clone-failed"]
     assert len(failures) == 2
-    assert state["retry_count"] == 2 == VERIFIER_STAGE["on_failure"]["max_retries"]
+    assert state["retry_count"] == 2 == MAX_RETRIES
 
 
 def test_the_superseded_attempt_is_archived_under_the_number_its_prompts_use(
@@ -874,7 +884,8 @@ def test_the_artifact_name_comes_off_the_workflow_definition(
     assert renamed not in COORDINATOR_SOURCE
     harness = probe_harness(
         tmp_path, "renamed-clean-clone",
-        lambda s: s.__setitem__("clean_clone", renamed))
+        lambda s: s.__setitem__(
+            "clean_clone", {**s["clean_clone"], "result": renamed}))
     configure(story_target, workflow="renamed-clean-clone",
               test_command=CORRECT_TEST_COMMAND)
 
@@ -951,7 +962,8 @@ def test_the_reroute_event_carries_its_decision_and_its_reason(
     assert entry["retry_decision"] == "retry"
     assert entry["retry_reason"]
     assert "1 of 2" in entry["message"]
-    assert VERIFIER_STAGE["on_failure"]["retry_stage"] in entry["message"]
+    assert VERIFIER_STAGE["clean_clone"]["retry_stage"] in entry["message"]
+    assert entry["retry_stage"] == VERIFIER_STAGE["clean_clone"]["retry_stage"]
 
 
 def test_the_new_events_go_through_append_event_and_nothing_else():
@@ -1055,6 +1067,7 @@ def build_context_for(target_root: Path, harness_root: Path, run_dir: Path) -> d
         harness_root=harness_root,
         config=config,
         rules=rules,
+        workflow=WORKFLOW,
         retry_count=0,
     )
 
@@ -1067,8 +1080,8 @@ def build_context_for(target_root: Path, harness_root: Path, run_dir: Path) -> d
 MUTANTS = {
     # The check itself removed.
     "a coordinator that never runs the check": (
-        '                artifact = stage.get("clean_clone")',
-        "                artifact = None",
+        '                clean_clone = stage.get("clean_clone") or {}',
+        "                clean_clone = {}",
     ),
     # A tree copy rather than a commit: the story is present as pending
     # edits, so a test reading git history never sees it.

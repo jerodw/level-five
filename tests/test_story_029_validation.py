@@ -913,9 +913,16 @@ def test_each_restated_assertion_fails_when_its_subject_is_violated(
     red, on the same copy.
     """
     coordinator = repo_copy / COORDINATOR_REL
-    pristine = repository_file_at(COORDINATOR_REL, revision=None,
-                                  validation_file=THIS_FILE, bound=ENDPOINT,
-                                  repo=REPO_ROOT)
+    # The control is the coordinator as it stands, not as it stood at this
+    # story's endpoint. Pinning it there paired a frozen coordinator with a
+    # workflow definition that keeps moving — story-028 reshaped the verifier's
+    # on_failure and clean_clone keys, and the pinned coordinator could no
+    # longer run against them, so every case failed its *control* rather than
+    # its subject. The subject here is that a restated assertion goes red when
+    # what it names is violated, which is a property of the assertion and the
+    # code it is about; each `old` below is still matched exactly once, and the
+    # green-then-red pair is unchanged.
+    pristine = (REPO_ROOT / COORDINATOR_REL).read_text(encoding="utf-8")
     coordinator.write_text(pristine, encoding="utf-8")
 
     before = run_one_test(repo_copy, rel, test)
