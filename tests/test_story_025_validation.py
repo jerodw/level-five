@@ -242,6 +242,11 @@ def install(planning: Planning, story_id: str, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     planning.git("add", "-A")
     planning.git("commit", "-q", "-m", f"install {story_id}")
+    # Setup, not subject: since story-030 a run whose base differs from its
+    # remote is refused above the checks these tests are about, and a developer
+    # who planned an artifact earlier would have had it pushed — l5-plan pushes
+    # it. Without this the refusal these tests read would be the base one.
+    planning.git("push", "-q", "origin", "main")
     return path
 
 

@@ -291,18 +291,181 @@ def dirty_paths(target_root: Path) -> list[str]:
 def story_branch(config: dict, story_id: str) -> str:
     """The branch a story's run works on, derived in one place.
 
-    The prefix comes from the target repository's config; no branch name and
-    no default base branch is written into orchestration. It exists because two
-    callers now need the name — the fresh run's RunState, and the pre-flight
-    that asks whether that branch already holds the story's finished work —
-    and two derivations would be one fact in two places.
+    The prefix comes from the target repository's config; no branch name is
+    written into orchestration. It exists because two callers now need the
+    name — the fresh run's RunState, and the pre-flight that asks whether that
+    branch already holds the story's finished work — and two derivations would
+    be one fact in two places.
+
+    This promise used to read "no branch name and no default base branch is
+    written into orchestration", and story-030 revised it rather than leaving
+    it standing beside code that contradicts it: `resolve_base` below ends in
+    the literal "main" when a repository states no base and publishes no
+    origin/HEAD to read one from. The revision is deliberate — a fallback that
+    is *only* documented is a fallback nobody has exercised — and the literal
+    is confined to that one line, which is the half of the sentence that still
+    holds and is the half worth keeping true.
     """
     return config.get("branch_prefix", "story/") + story_id
 
 
-def _checkout_story_branch(target_root: Path, branch: str) -> None:
+def resolve_base(target_root: Path, config: dict, base: str | None) -> str:
+    """The branch a story's branch is cut from, settled in one place.
+
+    Four steps, first answer winning: the `base` argument when the developer
+    declared one, the target repository's optional `base_branch` config key,
+    the branch `refs/remotes/origin/HEAD` names, and the literal "main". The
+    normal case is the third — a developer standing on the repository's own
+    default branch needs no flag and no configuration — and the fourth exists
+    only so a repository that publishes no origin/HEAD still has an answer.
+
+    Both entry points read this; the base is derived here and nowhere else, so
+    `l5-run` and `l5-plan` cannot disagree about what a story branches from.
+    """
+    if base is not None:
+        return base
+    configured = config.get("base_branch")
+    if configured:
+        return configured
+    # A ref that is unset returns non-zero, which is the same as having no
+    # answer here: fall through rather than reporting a failure.
+    result = _git(target_root, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+    if result.returncode == 0:
+        prefix = "refs/remotes/origin/"
+        ref = result.stdout.strip()
+        if ref.startswith(prefix) and ref[len(prefix):]:
+            return ref[len(prefix):]
+    return "main"
+
+
+def _base_tracking_ref(target_root: Path, base: str) -> str | None:
+    """The base's remote-tracking counterpart, or None when there is none.
+
+    The configured upstream first, because a branch that states one has stated
+    the answer; the base's own name under the resolved remote otherwise, which
+    is what a branch pushed without tracking configuration has. Anything that
+    does not resolve is no counterpart at all, and the caller then says
+    nothing rather than something false.
+    """
+    upstream = _git(
+        target_root, "rev-parse", "--verify", "--symbolic-full-name", f"{base}@{{upstream}}"
+    )
+    if upstream.returncode == 0 and upstream.stdout.strip():
+        return upstream.stdout.strip()
+    configured = _git(target_root, "config", f"branch.{base}.remote")
+    remote = configured.stdout.strip() if configured.returncode == 0 else ""
+    if not remote:
+        remotes = _git(target_root, "remote")
+        if remotes.returncode != 0 or not remotes.stdout.split():
+            return None
+        remote = "origin" if "origin" in remotes.stdout.split() else remotes.stdout.split()[0]
+    candidate = f"refs/remotes/{remote}/{base}"
+    if _git(target_root, "rev-parse", "--verify", candidate).returncode != 0:
+        return None
+    return candidate
+
+
+def base_problems(target_root: Path, base: str, declared: bool) -> list[str]:
+    """What refuses a run or a plan that would cut a branch from `base`.
+
+    The empty list is the whole of "go ahead". A declared base is checked for
+    one thing only — that the ref resolves — because stating a base is stating
+    a deliberate departure: branching one story from another's branch is the
+    case it exists for, so neither leg below applies to it.
+
+    Otherwise two legs, in this order, returning after the first that has
+    something to say. Leg one is that HEAD is standing on the base, because a
+    branch is cut from what is checked out. Leg two is that the base matches
+    its remote-tracking counterpart in *either* direction — behind, ahead or
+    diverged — because a branch cut from a local base that is not the shared
+    one is a branch nobody else can see the history of. Only the first is
+    printed when both hold: the second is not actionable until the first is
+    fixed, and two refusals for one act read as two problems.
+
+    It carries the one-directional bias `unchanged_since_escalation` and
+    `dirty_paths` already take: a root that is not a git repository, a base
+    with no remote-tracking counterpart, a repository with no remote and any
+    git invocation that fails all report *no* problem rather than a false one.
+    A detached HEAD is the exception, and it is not an inconsistency — it is
+    establishably not on the base, so it refuses like any other branch would.
+    """
+    if _git(target_root, "rev-parse", "--git-dir").returncode != 0:
+        return []
+    if _git(target_root, "rev-parse", "--verify", f"{base}^{{commit}}").returncode != 0:
+        # A declared base that does not resolve is the developer naming
+        # something that is not there. An undeclared one that does not resolve
+        # is the harness having guessed, which establishes nothing.
+        if declared:
+            return [f"the base {base} does not resolve to a commit in {target_root}"]
+        return []
+    if declared:
+        return []
+
+    head = _git(target_root, "rev-parse", "--abbrev-ref", "HEAD")
+    if head.returncode == 0 and head.stdout.strip():
+        current = head.stdout.strip()
+        if current != base:
+            where = "a detached HEAD" if current == "HEAD" else f"branch {current}"
+            return [
+                f"HEAD is on {where}, not on the base {base}, so a new story "
+                f"branch would be cut from there instead"
+            ]
+
+    tracking = _base_tracking_ref(target_root, base)
+    if tracking is None:
+        return []
+    counts = _git(target_root, "rev-list", "--left-right", "--count", f"{tracking}...{base}")
+    if counts.returncode != 0:
+        return []
+    fields = counts.stdout.split()
+    if len(fields) != 2:
+        return []
+    try:
+        behind, ahead = int(fields[0]), int(fields[1])
+    except ValueError:
+        return []
+    if not behind and not ahead:
+        return []
+    short = tracking.removeprefix("refs/remotes/")
+    differences = []
+    if ahead:
+        differences.append(f"{ahead} commit(s) ahead of")
+    if behind:
+        differences.append(f"{behind} commit(s) behind")
+    return [
+        f"the base {base} is {' and '.join(differences)} {short}, so a new "
+        f"story branch would be cut from a base that is not the shared one"
+    ]
+
+
+def branch_behind(target_root: Path, branch: str, base: str) -> int | None:
+    """How many commits of `base` are not reachable from `branch`.
+
+    None when that cannot be established, on the same bias as everything else
+    reading the target repository here. It feeds a note on an existing story
+    branch and no refusal: an existing branch is reported, never refused,
+    because resume must keep working whatever the base has done since.
+    """
+    result = _git(target_root, "rev-list", "--count", f"{branch}..{base}")
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _checkout_story_branch(
+    target_root: Path, branch: str, start_point: str | None = None
+) -> None:
     exists = _git(target_root, "rev-parse", "--verify", branch).returncode == 0
-    args = ["checkout", branch] if exists else ["checkout", "-b", branch]
+    if exists:
+        args = ["checkout", branch]
+    else:
+        # A declared base is branched from explicitly. With no declaration the
+        # start point is HEAD, exactly as before, and the pre-flight above is
+        # what establishes that HEAD is the base.
+        args = ["checkout", "-b", branch] + ([start_point] if start_point else [])
     result = _git(target_root, *args)
     if result.returncode != 0:
         raise RuntimeError(f"Could not check out branch {branch}: {result.stderr.strip()}")
@@ -1664,6 +1827,23 @@ def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     )
 
 
+def _refuse_base(base: str, problems: list[str]) -> int:
+    """Refuse a run or a plan that would branch or commit from the wrong base.
+
+    Thin, like every other caller of `refuse`, and shared by both entry points
+    on purpose: the same condition must read the same way whether l5-run met it
+    at pre-flight or l5-plan met it before committing an artifact.
+    """
+    return refuse(
+        f"The base for this story is {base}, and the repository is not standing "
+        f"where a branch cut from it would be the branch you meant:",
+        problems,
+        f"Check out {base} and bring it level with its remote, then try again. "
+        f"To branch deliberately from something else, pass --base <branch>; it "
+        f"states a base, it does not skip the check.",
+    )
+
+
 def _refuse_finished_branch(branch: str, run_dir: Path, commits: list[str]) -> int:
     """Refuse a run whose branch already carries the story's finished work.
 
@@ -1805,6 +1985,8 @@ def run_story(
     target_root: Path,
     runner=agent_runner.run_agent,
     start_stage: str | None = None,
+    *,
+    base: str | None = None,
 ) -> int:
     """Execute one story, from a fresh run or from where a run left off.
 
@@ -1813,6 +1995,9 @@ def run_story(
     `start_stage` rather than `stage` because `stage` is the loop's name for
     the stage being executed, and one name for two things is how this
     repository has repeatedly confused itself.
+
+    `base` declares what a *new* story branch is cut from. None is the normal
+    case and means the repository's own default branch; see `resolve_base`.
     """
     config = harness_config.load_config(target_root)
     workflow = harness_config.load_workflow(harness_root, config.get("workflow", "story-workflow"))
@@ -1881,6 +2066,28 @@ def run_story(
         finished = completion_commits(target_root, branch, story_id)
         if finished:
             return _refuse_finished_branch(branch, run_dir, finished)
+
+    # Pre-flight: a story branch is cut from something, and until this check
+    # that something was whatever happened to be checked out. The base is
+    # resolved once here and read again below for the stale-base note.
+    #
+    # The check is creation-time. It answers "what will this branch be cut
+    # from", which is a question only a branch that does not exist yet has, so
+    # an existing story branch is never refused for its base however far the
+    # base has moved — resume must keep working, and a resume that met this
+    # would be refused for a decision a previous run already made. It sits
+    # above the clean-tree check and above the run-directory creation, so a
+    # refusal leaves no run directory, no state.json, no log, no new branch,
+    # and invokes no agent.
+    story_branch_name = state.branch if state else story_branch(config, story_id)
+    branch_existed = (
+        _git(target_root, "rev-parse", "--verify", story_branch_name).returncode == 0
+    )
+    resolved_base = resolve_base(target_root, config, base)
+    if not branch_existed:
+        problems = base_problems(target_root, resolved_base, base is not None)
+        if problems:
+            return _refuse_base(resolved_base, problems)
 
     # Pre-flight: a run commits the tree it ends on, so it has to start from a
     # tree it can account for. Which runs this applies to is decided by the
@@ -1989,7 +2196,26 @@ def run_story(
             run_dir, f"workflow started for {story_id}", kind="workflow-started"
         )
 
-    _checkout_story_branch(target_root, state.branch)
+    # A declared base is where the new branch is cut from. Undeclared, the
+    # start point stays HEAD exactly as it was, and the pre-flight above is
+    # what establishes HEAD is the base.
+    start_point = resolved_base if base is not None else None
+    _checkout_story_branch(target_root, state.branch, start_point)
+
+    # A branch that already existed was cut from the base as it stood then, and
+    # the base has moved since or it has not. Say so once, as a note: what to
+    # do about it is the developer's call, and nothing here rebases, resets or
+    # routes on it. One append_event call, so events.log and
+    # execution-history.json stay two renderings of one write.
+    if branch_existed:
+        behind = branch_behind(target_root, state.branch, resolved_base)
+        if behind:
+            append_event(
+                run_dir,
+                f"branch {state.branch} is {behind} commit(s) behind base "
+                f"{resolved_base}",
+                kind="note",
+            )
 
     # Stage timing: started where the stage-started event is appended, read at
     # whichever event ends the stage, so a completed stage carries an elapsed

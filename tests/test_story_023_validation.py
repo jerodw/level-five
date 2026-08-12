@@ -393,6 +393,11 @@ def test_a_session_that_only_edits_an_existing_artifact_commits_nothing(
     existing.write_text(artifact("story-800"), encoding="utf-8")
     planning.git("add", "-A")
     planning.git("commit", "-q", "-m", "an artifact that already existed")
+    # Setup, not subject: since story-030 l5-plan refuses to commit onto a base
+    # that differs from its remote, so this commit is pushed the way a
+    # developer who really had planned it earlier would have. Nothing about
+    # what this test asserts changes.
+    planning.git("push", "-q", "origin", "main")
     before = planning.head()
 
     result = run_plan(planning, L5_STUB_WRITE=writes(
