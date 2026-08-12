@@ -24,6 +24,6 @@
       "current_coordinator_exit_code_once_it_is_committed": 0,
       "current_coordinator_absorbed_the_artifact": false
     },
-    "why_it_cannot_be_rerun": "the recovered coordinator runs against today's workflow, in which `clean_clone` is an object-valued declaration rather than a string, and raises TypeError before reaching the behaviour it was recovered to show"
+    "why_it_cannot_be_rerun": "the reproduction worked by loading a coordinator recovered out of git history, and story-029 retired that capability: no module under tests/ may build a module at runtime, and the scans in tests/test_baseline_honesty.py refuse one that does. Rerunning it would mean reintroducing the practice this record exists to replace"
   }
 }

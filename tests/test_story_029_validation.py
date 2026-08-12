@@ -548,20 +548,28 @@ def test_no_deleted_recovery_helper_name_appears_in_the_scans_module():
     deleted recovery helpers do not appear anywhere in the module that holds
     the new scans.
 
-    Its control is the modules that did carry them at this story's baseline —
-    the shared module and three of the four — read the same way, which the
-    same search reports. Otherwise "the name is not here" would look the same
-    as a search that had stopped matching.
+    Its control is the modules that did carry them at this story's baseline,
+    read the same way, which the same search reports. Otherwise "the name is
+    not here" would look the same as a search that had stopped matching.
+
+    The control names the three helpers that existed at this story's baseline
+    and the modules that held them. `runnable_against_current_modules` is
+    deliberately not among them: it was added by story-028, which is not an
+    ancestor of this branch, so it is a name that never existed here rather
+    than one this story removed. It stays in RETIRED_NAMES for the absence
+    half above, which holds either way.
     """
     source = honesty_source()
     for name in RETIRED_NAMES:
         assert name not in source, name
 
-    for rel in ("tests/conftest.py",
-                "tests/test_story_021_validation.py",
-                "tests/test_story_024_validation.py",
-                "tests/test_story_027_validation.py"):
-        assert any(name in baseline_text(rel) for name in RETIRED_NAMES), rel
+    carried_at_baseline = ("pre_story_coordinator_source",
+                           "coordinator_source_at",
+                           "pre_story_revision")
+    for rel in ("tests/test_story_011_validation.py",
+                "tests/test_story_016_validation.py",
+                "tests/test_story_026_validation.py"):
+        assert any(name in baseline_text(rel) for name in carried_at_baseline), rel
 
 
 # --------------------------------------------------------------------------
@@ -654,15 +662,23 @@ def test_where_the_retired_names_still_occur_and_that_it_is_only_as_text():
         assert live_references(source, RETIRED_NAMES) == set(), rel
 
 
-def test_the_shared_module_no_longer_carries_the_compatibility_shim():
-    """`runnable_against_current_modules` is deleted rather than adapted, and
-    it was there at this story's baseline — so this is a removal and not a
-    name that never existed."""
+def test_the_shared_module_carries_the_replacement_and_no_shim():
+    """The shared module holds the reader that replaced the practice, and none
+    of the retired names.
+
+    This asserted a *removal* while story-028 was this branch's baseline:
+    `runnable_against_current_modules` was story-028's shim over the loaders,
+    and the claim was that this story deleted rather than adapted it. story-028
+    is no longer an ancestor, so that shim never existed here and no removal
+    can be shown. What survives the change of baseline is the half that was
+    always this story's own: `repository_file_at` is absent at the baseline and
+    present now, and no retired name is in the shared module at either end.
+    """
     before = baseline_text("tests/conftest.py")
     after = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
-    assert "def runnable_against_current_modules" in before
-    assert "runnable_against_current_modules" not in after
-    assert "def repository_file_at" not in before      # what replaced it
+    for name in RETIRED_NAMES:
+        assert name not in after, name
+    assert "def repository_file_at" not in before      # what replaced the practice
     assert "def repository_file_at" in after
 
 
@@ -1134,15 +1150,25 @@ def test_the_story_021_record_agrees_with_the_committed_archive_it_points_at():
 
 
 def test_neither_record_claims_to_have_been_produced_by_rerunning_the_code():
-    """Both records say why they are records: the recovered coordinator does
-    not execute against today's workflow. That is the story's own argument, and
-    a record that omitted it would read as a run that was simply not repeated.
+    """Both records say why they are records: the reproduction needed a
+    coordinator loaded out of git history, and this story retired that
+    capability. A record that omitted the reason would read as a run that was
+    simply not repeated.
+
+    The reason was originally written as a TypeError the recovered coordinator
+    raised against an object-valued `clean_clone` declaration. That was true of
+    the workflow story-028 left on the branch this story was first built on,
+    and stopped being true when that ancestry was dropped — a reason with the
+    shelf life of the thing it described. The durable reason is the retirement
+    itself, which is this story's own subject and cannot expire while the scans
+    stand.
     """
     for directory, _, _ in FROZEN:
         evidence = json.loads(
             (ARCHIVE / directory / "evidence.json").read_text(encoding="utf-8"))
         why = evidence["reproduction"]["why_it_cannot_be_rerun"]
-        assert "clean_clone" in why and "workflow" in why, directory
+        assert "git history" in why, directory
+        assert "test_baseline_honesty.py" in why, directory
 
 
 # --------------------------------------------------------------------------
