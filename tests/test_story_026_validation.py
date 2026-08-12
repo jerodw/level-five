@@ -43,7 +43,8 @@ import conftest
 import test_baseline_honesty as honesty
 import test_story_011_validation as story011
 import test_story_016_validation as story016
-from conftest import story_commit_range, story_diff
+from conftest import (BASELINE, ENDPOINT, repository_file_at,
+                      story_commit_range, story_diff)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -84,15 +85,24 @@ def pre_story_source(rel: str) -> str:
     story-026 is in flight, the parent of this story's own run commit once it
     commits. No pinned SHA, so a rebase or a squash does not move the answer.
     """
-    baseline = story_commit_range(Path(__file__)).baseline
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{baseline}:{rel}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    return repository_file_at(rel, validation_file=Path(__file__),
+                              bound=BASELINE, repo=REPO_ROOT)
 
 
 def current_source(rel: str) -> str:
-    return (REPO_ROOT / rel).read_text(encoding="utf-8")
+    """One file as *this* story's own run left it.
+
+    The upper bound of every comparison below, and it is resolved rather than
+    read from the working tree for the reason the architecture document
+    records: today's tree is the wrong end of the range, so a later story
+    editing one of these files turns an assertion about *story-026* red for a
+    change story-026 has nothing to say about. story-028 is where it bit — it
+    repointed a call site in story-011's file that this story had folded
+    nothing of. While this story is in flight there is no endpoint and the
+    working tree is the right answer.
+    """
+    return repository_file_at(rel, validation_file=Path(__file__),
+                              bound=ENDPOINT, repo=REPO_ROOT)
 
 
 def test_the_recovered_pre_story_sources_are_the_pre_story_sources():
@@ -314,52 +324,73 @@ def test_story_011_now_imports_the_shared_resolution():
 # --------------------------------------------------------------------------
 
 
-PRE_STORY_HELPERS = ("COORDINATOR_REPO_PATH", "coordinator_source_at",
-                     "pre_story_revision", FOLDED_AWAY)
+#: The coordinator file the deleted mechanism keyed on, and the marker it
+#: searched for: `pre_story_revision` walked that file's history newest-first
+#: for the last revision whose source does not know `execution-history`, which
+#: is the artifact story-011 introduced.
+COORDINATOR_REL = "orchestration/story_coordinator.py"
+STORY_011_MARKER = "execution-history"
 
 
-def _lift(source: str, names: tuple[str, ...]) -> str:
-    """The named top-level definitions of a module, on their own.
+def test_the_shared_resolution_names_the_pair_the_deleted_mechanism_named():
+    """The fold was a change of mechanism, not of subject: the pair it named.
 
-    Lifted rather than imported: the module they come from no longer exists
-    in the working tree, and the point is to run *the deleted code*, not a
-    restatement of it.
-    """
-    tree = ast.parse(source)
-    kept = [node for node in tree.body
-            if (isinstance(node, ast.FunctionDef) and node.name in names)
-            or (isinstance(node, ast.Assign)
-                and any(isinstance(target, ast.Name) and target.id in names
-                        for target in node.targets))]
-    assert len(kept) == len(names), [getattr(n, "name", n) for n in kept]
-    return ast.unparse(ast.Module(body=kept, type_ignores=[]))
+    Stated as a direct assertion of that commit pair, checkable against git
+    from both ends, rather than by recovering the deleted helpers out of
+    history and running them — story-029 retired that practice, and a
+    comparison that has to execute a deleted module to state its subject is
+    the practice.
 
+    Both ends, and they are the two questions the deleted pair asked:
 
-@functools.lru_cache(maxsize=None)
-def deleted_mechanism() -> dict:
-    namespace = {"subprocess": subprocess, "Path": Path, "REPO_ROOT": REPO_ROOT}
-    exec(_lift(pre_story_source(STORY_011_REL), PRE_STORY_HELPERS), namespace)
-    return namespace
+      * the endpoint is the commit that *added* story-011's validation file,
+        which is what the shared resolution answers, and it is the oldest
+        revision whose coordinator knows the artifact story-011 introduced,
+        which is what `story_revision` answered;
+      * the baseline is the newest revision whose coordinator does *not* know
+        it — which is what `pre_story_revision` answered — and it is the
+        endpoint's parent, so nothing sits between the two and the two
+        mechanisms cannot have picked different commits.
 
-
-def test_the_deleted_mechanism_and_the_shared_one_resolve_the_same_pair():
-    """The fold is a change of mechanism, not of subject — shown by running
-    both against this repository and comparing the commits they name.
-
-    The deleted helper is recovered from history and executed, so this is a
-    comparison of two answers rather than of two descriptions.
+    Each clause is read out of git here, so the pair is established rather
+    than remembered, and no sha is written down for a rebase to invalidate.
     """
     shared = story_commit_range(REPO_ROOT / STORY_011_REL)
-    deleted = deleted_mechanism()
-    assert deleted[FOLDED_AWAY]() == shared.endpoint
-    assert deleted["pre_story_revision"]() == shared.baseline
-    # And the pair is a real range: the two ends are different commits and the
-    # baseline is the endpoint's parent.
+    assert shared.committed, "story-011 is in this history"
+
+    # The endpoint: the commit that added the file, and the first one whose
+    # coordinator carries the marker.
+    added = git(REPO_ROOT, "log", "--diff-filter=A", "--format=%H", "--",
+                STORY_011_REL).split()
+    assert added[-1] == shared.endpoint
+    assert STORY_011_MARKER in repository_file_at(
+        COORDINATOR_REL, revision=shared.endpoint, repo=REPO_ROOT)
+
+    # The baseline: the endpoint's parent, and the newest revision whose
+    # coordinator does not carry it.
     assert shared.baseline != shared.endpoint
-    parent = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "rev-parse", f"{shared.endpoint}^"],
-        capture_output=True, text=True, check=True).stdout.strip()
+    parent = git(REPO_ROOT, "rev-parse", f"{shared.endpoint}^").strip()
     assert parent == shared.baseline
+    assert STORY_011_MARKER not in repository_file_at(
+        COORDINATOR_REL, revision=shared.baseline, repo=REPO_ROOT)
+
+
+def test_the_pair_that_assertion_names_is_the_pair_it_named_before():
+    """The other half of "same pair": the deleted mechanism is read as text
+    and its two keys are the two this assertion checks.
+
+    Read rather than run — this is the whole distinction story-029 draws —
+    and it is what stops the assertion above from being a restatement that
+    quietly changed the question. The control is the marker itself: it is in
+    the deleted helper's own source, so a rewritten helper keying on
+    something else would not match.
+    """
+    before = pre_story_source(STORY_011_REL)
+    for name in ("pre_story_revision", FOLDED_AWAY):
+        body = conftest.function_source(before, name)
+        assert STORY_011_MARKER in body, name
+        assert "COORDINATOR_REPO_PATH" in body, name
+    assert f'COORDINATOR_REPO_PATH = "{COORDINATOR_REL}"' in before
 
 
 # --------------------------------------------------------------------------
@@ -608,11 +639,21 @@ def test_the_surviving_intact_list_still_fails_when_its_subject_is_violated(
     """Seven absences reduced to seven demonstrations: strip each surviving
     name out of the file the assertion reads and it must say so. Without this
     the shortened list would be indistinguishable from a list that stopped
-    looking."""
+    looking.
+
+    The stripped text is fed in by monkeypatching the bound the assertion
+    reads rather than the path it used to read: story-029 bounded that
+    assertion at story-016's own endpoint, because it is a statement about a
+    finished commit range, and the demonstration follows the bound. What is
+    demonstrated — that each of the seven names being absent is reported — is
+    unchanged, and this is how the sibling below has always driven the other
+    repointed assertion.
+    """
     stripped = current_source(STORY_011_REL).replace(dropped, "def removed_by_a_test")
     assert stripped != current_source(STORY_011_REL), dropped
-    path = write(tmp_path, "tests/test_story_011_validation.py", stripped)
-    monkeypatch.setattr(story016, "STORY_011_FILE", path)
+    write(tmp_path, "tests/test_story_011_validation.py", stripped)
+    monkeypatch.setattr(story016, "story_011_at_this_storys_endpoint",
+                        lambda: stripped)
     with pytest.raises(AssertionError):
         story016.test_the_baseline_resolution_the_prompt_scope_assertion_needs_is_intact()
 

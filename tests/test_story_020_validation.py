@@ -46,8 +46,8 @@ whose dirty tree is that run's own unfinished work.
 Nothing here invokes a model: every run goes through a fake agent runner and
 every clone source is a local filesystem path.
 """
-import importlib.machinery
-import importlib.util
+import ast
+import dataclasses
 import inspect
 import json
 import re
@@ -57,7 +57,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_commit_range, story_diff
+from conftest import (BASELINE as BASELINE_BOUND, ENDPOINT, function_source_at, load_script,
+                      repository_file_at, story_commit_range, story_diff)
 
 import harness_config
 import story_coordinator
@@ -431,20 +432,24 @@ def executable_source(text: str) -> str:
     return "\n".join(kept)
 
 
+COORDINATOR_REL = "orchestration/story_coordinator.py"
+
+
 def pre_story(path: str) -> str:
     """A repository file as it stood before this story's own run.
 
-    Resolved through the shared range in conftest.py rather than as HEAD, so
-    the comparison survives this story's own commit.
+    Through `conftest.repository_file_at` since story-029, which folded the
+    eleven private copies of this reader into one. Subject and strictness
+    unchanged; only where the text comes from moved.
     """
-    revision = story_commit_range(Path(__file__)).baseline
-    return git(REPO_ROOT, "show", f"{revision}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=BASELINE_BOUND, repo=REPO_ROOT)
 
 
 def at_story_endpoint(path: str) -> str:
     """A repository file as *this* story's own run left it.
 
-    The counterpart of `pre_story` and the upper bound every "this story did
+    The counterpart of `pre_story`, and the upper bound every "this story did
     not change X" comparison needs. Read against today's working tree such a
     comparison asks what the file looks like *now*, which a later story
     changes without this story having done anything — the HEAD-baseline trap
@@ -452,48 +457,24 @@ def at_story_endpoint(path: str) -> str:
     the escalation summary, whose content story-020 deliberately left to a
     later request, and the comparison below went red for a change story-020
     has nothing to say about. While this story is still in flight there is no
-    endpoint and the working tree is the right answer.
+    endpoint and the working tree is the right answer, which the shared
+    reader decides in one place rather than in each caller.
     """
-    endpoint = story_commit_range(Path(__file__)).endpoint
-    if endpoint is None:
-        return (REPO_ROOT / path).read_text(encoding="utf-8")
-    return git(REPO_ROOT, "show", f"{endpoint}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=ENDPOINT, repo=REPO_ROOT)
 
 
-def pre_story_coordinator(tmp_path: Path):
-    """The coordinator as it stood before this story, loaded as its own module.
+def coordinator_function(name: str, bound: str) -> str:
+    """One coordinator function's source text at one end of this story's range.
 
-    Every claim of the form "this story did not change X" is made against this
-    rather than against a phrase written here, so the control for each is the
-    thing the story *did* change, compared the same way.
+    story-029 retired the pre-story and endpoint *modules* this file used to
+    load — a coordinator recovered out of history runs against today's
+    workflow, schemas and config, and stops running as soon as any of them
+    legitimately changes. The comparisons that only ever read a function's
+    text never needed a running module, so they read the text.
     """
-    return _loaded_coordinator(
-        tmp_path, "pre_story_coordinator",
-        pre_story("orchestration/story_coordinator.py"))
-
-
-def endpoint_coordinator(tmp_path: Path):
-    """The coordinator as this story's own run left it, loaded the same way."""
-    return _loaded_coordinator(
-        tmp_path, "endpoint_coordinator",
-        at_story_endpoint("orchestration/story_coordinator.py"))
-
-
-def _loaded_coordinator(tmp_path: Path, name: str, source: str):
-    module_path = tmp_path / f"{name}.py"
-    write(module_path, source)
-    loader = importlib.machinery.SourceFileLoader(name, str(module_path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    # Registered before execution because `@dataclass` resolves a field's
-    # annotations through sys.modules[cls.__module__], which is None for a
-    # module that has been created but never registered.
-    sys.modules[loader.name] = module
-    try:
-        loader.exec_module(module)
-    finally:
-        sys.modules.pop(loader.name, None)
-    return module
+    return function_source_at(COORDINATOR_REL, name, validation_file=Path(__file__),
+                              bound=bound, repo=REPO_ROOT)
 
 
 # --------------------------------------------------------------------------
@@ -807,12 +788,10 @@ def test_the_completion_commit_is_byte_for_byte_the_code_it_was(tmp_path):
     it extracted `_complete`'s inline message into `completion_commit_message`,
     which story-020 has nothing to say about — and the extraction is held to
     producing identical bytes by its own story's coverage, not by this."""
-    before = pre_story_coordinator(tmp_path)
-    after = endpoint_coordinator(tmp_path)
-    assert inspect.getsource(after._complete) \
-        == inspect.getsource(before._complete)
-    assert inspect.getsource(after._escalate) \
-        != inspect.getsource(before._escalate)
+    assert coordinator_function("_complete", ENDPOINT) \
+        == coordinator_function("_complete", BASELINE_BOUND)
+    assert coordinator_function("_escalate", ENDPOINT) \
+        != coordinator_function("_escalate", BASELINE_BOUND)
 
 
 def test_a_successful_run_still_commits_its_work_under_the_completion_subject(
@@ -852,11 +831,23 @@ def test_an_escalated_run_resumes_at_the_recorded_stage(target, harness_root):
 
 
 def test_a_completed_run_still_refuses_with_the_message_it_always_had(
-    target, harness_root, tmp_path, capsys,
+    target, harness_root, capsys,
 ):
-    """The refusal is not compared with a phrase written here. The pre-story
-    coordinator is run against the same finished run directory and its stderr
-    is compared byte for byte with the current one."""
+    """The message, named rather than compared against a module that produced
+    it once.
+
+    Two statements, and both are needed. What the refusal *says* today is
+    asserted as its own text: the status, the run directory, the branch, and
+    each of the three things it tells the developer to do about them. That the
+    story did not change it is asserted where the text lives — the print
+    statement is byte-identical at both ends of this story's own commit range,
+    read as text rather than by running the module that produced it.
+
+    The control is the guard's *condition*, read the same way at the same two
+    ends, which did change: this story narrowed it. So the equality above is
+    the message being untouched rather than two readings of one unchanged
+    file.
+    """
     code, _ = run(target, harness_root, {"implementer": [edits_the_module]})
     assert code == 0
     capsys.readouterr()
@@ -864,16 +855,34 @@ def test_a_completed_run_still_refuses_with_the_message_it_always_had(
     again = story_coordinator.run_story(
         STORY_ID, harness_root, target, Runner(target))
     now = capsys.readouterr().err
-    before_module = pre_story_coordinator(tmp_path)
-    strip_new_fields(target)
-    was = before_module.run_story(STORY_ID, harness_root, target, Runner(target))
-    then = capsys.readouterr().err
 
-    assert again == was == 1
-    assert now == then
-    assert str(run_dir_of(target)) in now
-    assert f"story/{STORY_ID}" in now
-    assert "completed" in now
+    assert again == 1
+    assert f"{STORY_ID} already ended with status 'completed'." in now
+    assert f"Inspect {run_dir_of(target)} to review it." in now
+    assert f"delete {run_dir_of(target)} *and* reset branch" in now
+    assert f"story/{STORY_ID}, which still holds the finished work." in now
+    assert "gitignored" in now
+
+    assert already_ended_message(ENDPOINT) == already_ended_message(BASELINE_BOUND)
+    assert already_ended_condition(ENDPOINT) != already_ended_condition(BASELINE_BOUND)
+
+
+#: The two halves of the already-ended refusal, sliced out of `run_story`'s
+#: own text: what it prints, and what decides that it prints.
+_MESSAGE_HEAD = 'f"{story_id} already ended with status'
+_MESSAGE_TAIL = "file=sys.stderr,"
+
+
+def already_ended_message(bound: str) -> str:
+    body = coordinator_function("run_story", bound)
+    head = body.index(_MESSAGE_HEAD)
+    return body[head:body.index(_MESSAGE_TAIL, head)]
+
+
+def already_ended_condition(bound: str) -> str:
+    body = coordinator_function("run_story", bound)
+    head = body.rindex("if state", 0, body.index(_MESSAGE_HEAD))
+    return body[head:body.index("\n", head)]
 
 
 def test_the_completed_refusal_starts_no_agent_and_the_escalated_one_does(
@@ -897,22 +906,33 @@ def test_the_completed_refusal_starts_no_agent_and_the_escalated_one_does(
     assert resumed.calls != []
 
 
-def test_the_pre_story_coordinator_refused_the_run_this_one_resumes(
-    target, harness_root, tmp_path, capsys,
+def test_the_refusal_this_story_narrowed_is_named_at_both_ends_of_its_range(
+    target, harness_root,
 ):
-    """What "narrowed" means, read against the code it narrowed. The same
-    escalated run directory: the pre-story coordinator refuses it and starts
-    nothing, the current one resumes it."""
+    """What "narrowed" means, stated as the two conditions rather than by
+    running the code that carried the first one.
+
+    Before this story the already-ended refusal fired on any status that was
+    not `running`, which is what refused an escalated run; after it, on
+    `completed` alone. Both are read as text at the two ends of this story's
+    own commit range, so the change is established from both sides and stays
+    established once the range is history.
+
+    The behavioural half sits beside it and is what the narrowing is *for*:
+    the same escalated run directory resumes, at the recorded stage. Its
+    control is the completed status on the same repository, which still
+    refuses and starts nothing — that is
+    `test_the_completed_refusal_starts_no_agent_and_the_escalated_one_does`
+    above, driven through today's coordinator alone.
+    """
+    before = already_ended_condition(BASELINE_BOUND)
+    after = already_ended_condition(ENDPOINT)
+    assert 'status != "running"' in before
+    assert 'status == "completed"' in after
+    assert "escalated" not in after
+
     escalate(target, harness_root)
     change_the_code(target)
-    before_module = pre_story_coordinator(tmp_path)
-
-    refused = Runner(target)
-    original = strip_new_fields(target)
-    assert before_module.run_story(
-        STORY_ID, harness_root, target, refused) == 1
-    assert refused.calls == []
-    restore_state(target, original)
     ready_to_resume(target)
 
     code, resumed = run(target, harness_root, verdicts=[PASS])
@@ -1162,12 +1182,13 @@ def test_a_fresh_run_started_at_a_later_stage_records_that_stage(
 
 
 def load_l5_run():
-    loader = importlib.machinery.SourceFileLoader(
-        "l5_run_script", str(REPO_ROOT / "scripts" / "l5-run"))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
+    """`scripts/l5-run` as a module, through the shared script loader.
+
+    story-029 folded the extensionless-script loader this file shared with
+    `tests/test_story_025_validation.py` into `conftest.load_script`, so
+    building a module happens in one place under tests/.
+    """
+    return load_script("l5-run", name="l5_run_script")
 
 
 def test_l5_run_passes_the_stage_through_and_decides_nothing_itself(
@@ -1623,24 +1644,47 @@ def test_the_whole_run_including_the_escalation_and_the_resume_reconstructs(
 NEW_FIELDS = {"story_digest", "escalation_commit", "harness_revision"}
 
 
-def test_a_state_file_written_before_this_story_still_loads(target, tmp_path):
-    """Loaded rather than reasoned about: the pre-story module writes the
-    file, and the current module reads it.
+def pre_story_state_fields() -> list[str]:
+    """The fields `RunState` declared before this story, read as text.
 
-    The control is a field neither module declares, which still fails to load
-    — so the tolerance above is the defaults rather than a loader that has
-    stopped checking anything.
+    Out of the pre-story `RunState` declaration rather than out of a module
+    loaded from it: the field set is a fact stated in the source, and reading
+    it is what this ever needed. story-029 retired the loading.
     """
-    before_module = pre_story_coordinator(tmp_path)
+    for node in ast.parse(pre_story(COORDINATOR_REL)).body:
+        if isinstance(node, ast.ClassDef) and node.name == "RunState":
+            return [item.target.id for item in node.body
+                    if isinstance(item, ast.AnnAssign)]
+    raise AssertionError("the pre-story coordinator declares no RunState")
+
+
+def test_a_state_file_written_before_this_story_still_loads(target):
+    """A state.json in the pre-story shape loads, with the new fields
+    defaulting.
+
+    The shape is named rather than produced by a recovered module: the field
+    set is read out of the pre-story `RunState` declaration as text, held to
+    being today's set minus exactly the three fields this story added, and a
+    file carrying precisely those fields is what is written and loaded.
+
+    The control is a field neither shape declares, which still fails to load —
+    so the tolerance is the defaults rather than a loader that has stopped
+    checking anything.
+    """
+    fields = pre_story_state_fields()
+    assert set(fields) == {field.name for field in
+                           dataclasses.fields(story_coordinator.RunState)} - NEW_FIELDS
+    assert set(fields) & NEW_FIELDS == set()
+
     run_dir = run_dir_of(target)
     run_dir.mkdir(parents=True)
-    before_module.save_state(run_dir, before_module.RunState(
+    today = dataclasses.asdict(story_coordinator.RunState(
         story_id=STORY_ID, branch=f"story/{STORY_ID}", status="escalated",
         current_stage=VERIFIER_STAGE["name"], retry_count=1,
         verification_iterations=2))
-
-    written = json.loads((run_dir / "state.json").read_text())
-    assert set(written) & NEW_FIELDS == set()
+    written = {name: today[name] for name in fields}
+    (run_dir / "state.json").write_text(
+        json.dumps(written, indent=2) + "\n", encoding="utf-8")
 
     loaded = story_coordinator.load_state(run_dir)
     assert loaded.status == "escalated"
@@ -1833,12 +1877,10 @@ def test_the_escalation_summary_is_the_text_it_was(tmp_path):
     `at_story_endpoint` above: story-024 is the separate request, and its
     rewrite of the summary is not this story changing it.
     """
-    before_module = pre_story_coordinator(tmp_path)
-    after_module = endpoint_coordinator(tmp_path)
-    summary_body = inspect.getsource(after_module._escalate).split(
+    summary_body = coordinator_function("_escalate", ENDPOINT).split(
         "summary = (", 1)[1]
-    before_body = inspect.getsource(before_module._escalate).split(
+    before_body = coordinator_function("_escalate", BASELINE_BOUND).split(
         "summary = (", 1)[1]
     assert summary_body == before_body
-    assert inspect.getsource(after_module._escalate) \
-        != inspect.getsource(before_module._escalate)
+    assert coordinator_function("_escalate", ENDPOINT) \
+        != coordinator_function("_escalate", BASELINE_BOUND)

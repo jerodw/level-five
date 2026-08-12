@@ -41,7 +41,8 @@ import pytest
 import conftest
 import context_assembler
 import schema_validator
-from conftest import story_commit_range, story_diff
+from conftest import (ENDPOINT, NothingToCompareAgainst, repository_file_at,
+                      story_commit_range, story_diff)
 from test_story_015_validation import committed_story
 
 REPO_ROOT = Path(schema_validator.__file__).resolve().parents[1]
@@ -123,10 +124,13 @@ def _baseline() -> str:
 
 
 def _blob(revision: str, rel: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{revision}:{rel}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    """One file's text at one revision, through the shared reader.
+
+    story-029 folded this module's private `git show` into
+    `conftest.repository_file_at`. The subject and the strictness of every
+    caller are unchanged; only where the text comes from moved.
+    """
+    return repository_file_at(rel, revision=revision, repo=REPO_ROOT)
 
 
 def _endpoint_listing(directory: str) -> set[str]:
@@ -151,10 +155,8 @@ def _endpoint_text(rel: str) -> str:
     working tree asks what the repository looks like *now*, which a later
     story changes without this story having done anything.
     """
-    endpoint = story_commit_range(Path(__file__)).endpoint
-    if endpoint is None:
-        return (REPO_ROOT / rel).read_text(encoding="utf-8")
-    return _blob(endpoint, rel)
+    return repository_file_at(rel, validation_file=Path(__file__),
+                              bound=ENDPOINT, repo=REPO_ROOT)
 
 
 def _schema_stems(names: set[str]) -> set[str]:
@@ -774,7 +776,7 @@ def test_every_file_differing_under_tests_is_accounted_for():
             continue
         try:
             before = _blob(_baseline(), rel)
-        except subprocess.CalledProcessError:
+        except NothingToCompareAgainst:
             differing.add(rel)
             continue
         if before != _endpoint_text(rel):

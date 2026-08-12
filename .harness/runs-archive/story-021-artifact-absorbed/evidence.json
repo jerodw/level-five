@@ -1,0 +1,29 @@
+{
+  "story": "story-021",
+  "frozen_by": "story-029",
+  "defect": "a story artifact left uncommitted in the target tree is absorbed into the story's own commit by _complete's `git add -A`, and the run's own record of what changed does not name it",
+  "observed_instance": {
+    "archive": ".harness/runs-archive/story-013-vacuous-tests",
+    "patch": "pre-reset-branch.patch",
+    "record": "run/changed-files.json",
+    "artifact": ".harness/stories/story-013.yaml",
+    "artifact_in_the_story_commit": true,
+    "artifact_named_by_the_runs_own_record": false,
+    "commit_subject_prefix": "story-013:"
+  },
+  "reproduction": {
+    "module": "tests/test_story_021_validation.py",
+    "test": "test_a_story_artifact_no_longer_reaches_a_story_commit",
+    "control_deleted_by": "story-029",
+    "fixture_story_id": "story-002",
+    "fixture_artifact": ".harness/stories/story-002.yaml",
+    "demonstrated": {
+      "earlier_coordinator_exit_code": 0,
+      "earlier_coordinator_absorbed_the_artifact": true,
+      "current_coordinator_exit_code_with_the_artifact_uncommitted": 1,
+      "current_coordinator_exit_code_once_it_is_committed": 0,
+      "current_coordinator_absorbed_the_artifact": false
+    },
+    "why_it_cannot_be_rerun": "the recovered coordinator runs against today's workflow, in which `clean_clone` is an object-valued declaration rather than a string, and raises TypeError before reaching the behaviour it was recovered to show"
+  }
+}

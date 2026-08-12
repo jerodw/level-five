@@ -40,8 +40,6 @@ can report the violation it exists to catch:
 Nothing here invokes a model: every run goes through a fake agent runner.
 """
 import ast
-import importlib.machinery
-import importlib.util
 import json
 import subprocess
 import sys
@@ -49,7 +47,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_commit_range
+from conftest import (BASELINE, ENDPOINT, function_source_at,
+                      repository_file_at,
+                      story_commit_range)
 
 import story_coordinator
 from agent_runner import AgentResult
@@ -61,6 +61,8 @@ COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
 STORY_ID = "story-001"
 DEFAULT_BRANCH = "main"
 STORY_BRANCH = f"story/{STORY_ID}"
+#: The sample story's title, which `_complete` puts in the commit subject.
+STORY_TITLE = "Sample story for coordinator tests"
 
 #: The file the documenter edits in the target, so "the documenter's outputs"
 #: in the completion commit is a real edit rather than an argument.
@@ -356,14 +358,18 @@ def crashed_run(target_root: Path, stage: str = "tester") -> None:
 # --------------------------------------------------------------------------
 
 
+COORDINATOR_REL = "orchestration/story_coordinator.py"
+
+
 def pre_story(path: str) -> str:
     """A repository file as it stood before this story's own run.
 
-    Resolved through the shared range in conftest.py rather than as HEAD, so
-    the comparison survives this story's own commit.
+    Through `conftest.repository_file_at` since story-029, which folded the
+    eleven private copies of this reader into one. Subject and strictness
+    unchanged; only where the text comes from moved.
     """
-    revision = story_commit_range(Path(__file__)).baseline
-    return git(REPO_ROOT, "show", f"{revision}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=BASELINE, repo=REPO_ROOT)
 
 
 def at_story_endpoint(path: str) -> str:
@@ -375,45 +381,23 @@ def at_story_endpoint(path: str) -> str:
     having done anything — the HEAD-baseline trap the architecture document
     records. story-024 is where it bit: it moved the escalation summary's
     construction out of `_escalate`, which story-021 left exactly as it found
-    it. While this story is still in flight there is no endpoint and the
-    working tree is the right answer.
+    it.
     """
-    endpoint = story_commit_range(Path(__file__)).endpoint
-    if endpoint is None:
-        return (REPO_ROOT / path).read_text(encoding="utf-8")
-    return git(REPO_ROOT, "show", f"{endpoint}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=ENDPOINT, repo=REPO_ROOT)
 
 
-@pytest.fixture
-def pre_story_coordinator(tmp_path: Path):
-    return _loaded_coordinator(
-        tmp_path, "pre_story_coordinator",
-        pre_story("orchestration/story_coordinator.py"))
+def coordinator_function(name: str, bound: str) -> str:
+    """One coordinator function's source text at one end of this story's range.
 
-
-@pytest.fixture
-def endpoint_coordinator(tmp_path: Path):
-    """The coordinator as this story's own run left it, loaded the same way."""
-    return _loaded_coordinator(
-        tmp_path, "endpoint_coordinator",
-        at_story_endpoint("orchestration/story_coordinator.py"))
-
-
-def _loaded_coordinator(tmp_path: Path, name: str, source: str):
-    module_path = tmp_path / f"{name}.py"
-    write(module_path, source)
-    loader = importlib.machinery.SourceFileLoader(name, str(module_path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    # Registered before execution because `@dataclass` resolves a field's
-    # annotations through sys.modules[cls.__module__], which is None for a
-    # module that has been created but never registered.
-    sys.modules[loader.name] = module
-    try:
-        loader.exec_module(module)
-    finally:
-        sys.modules.pop(loader.name, None)
-    return module
+    story-029 retired the pre-story and endpoint *modules* this file used to
+    load: a coordinator recovered out of history runs against today's
+    workflow, schemas and config, and stops running as soon as any of them
+    legitimately changes. A comparison that only ever read a function's text
+    never needed a running module, so it reads the text.
+    """
+    return function_source_at(COORDINATOR_REL, name, validation_file=Path(__file__),
+                              bound=bound, repo=REPO_ROOT)
 
 
 # --------------------------------------------------------------------------
@@ -555,50 +539,85 @@ def test_a_gitignored_path_is_not_what_the_check_is_about(
 # --------------------------------------------------------------------------
 
 
-def test_a_clean_fresh_run_is_what_it_was_before_the_check_existed(
-    make_target, harness_root, pre_story_coordinator,
-):
-    """Same artifacts, same events, same routing, same commit — compared
-    against the coordinator as it stood before this story, run against an
-    identically built target rather than against a shape written here."""
-    now = make_target("after-target")
-    before = make_target("before-target")
+#: What a clean fresh run of the sample story produces, named rather than
+#: recovered: the stages it invokes in order, the run-directory artifacts it
+#: leaves, the events it logs, the state keys it records, and the commit it
+#: ends on. Every entry is something the pre-story coordinator produced and
+#: this one still produces; the point of the check this story adds is that it
+#: changes none of them when the tree is clean.
+CLEAN_RUN_STAGES = ["implementer", "tester", "verifier", "documenter"]
+CLEAN_RUN_ARTIFACTS = [
+    "changed-files.json", "clean-clone-result.json", "escalation-summary.md",
+    "events.log", "execution-history.json", "implementation-summary.md",
+    "state.json", "test-results.json", "tester-changed-files.json",
+    "verification-result.json",
+]
+CLEAN_RUN_EVENTS = [
+    "workflow started for story-001",
+    "implementer stage started", "implementer stage completed",
+    "tester stage started", "tester stage completed",
+    "verifier stage started", "verification passed",
+    "clean-clone suite passed with the story committed",
+    "documenter stage started", "documenter stage completed",
+    "story completed on branch story/story-001",
+]
 
-    after_code, after_runner = run(now, harness_root)
-    before_code, before_runner = run(before, harness_root,
-                                     coordinator=pre_story_coordinator)
 
-    assert after_code == before_code == 0
-    assert after_runner.calls == before_runner.calls            # routing
-    assert artifacts_in(now) == artifacts_in(before)            # artifacts
-    assert messages(now) == messages(before)                    # events
-    assert event_kinds(now) == event_kinds(before)
-    assert state_of(now) == state_of(before)
-    assert subject_of(now) == subject_of(before)                # the commit
-    assert files_in(now) == files_in(before)
+def test_a_clean_fresh_run_is_what_it_was_before_the_check_existed(target,
+                                                                   harness_root):
+    """The check changes nothing about a run whose tree is clean, stated as
+    the run's own output rather than as equality with a module recovered out
+    of git history.
 
+    Each thing the comparison used to compare is named here: the stages
+    invoked and their order, the artifacts the run directory holds, the events
+    logged and their order, the state keys recorded and the terminal values
+    among them, and the commit the run ends on. A regression in any of them
+    fails this by name instead of failing as "the two runs differ".
 
-def test_the_module_that_comparison_used_really_is_the_one_without_the_check(
-    make_target, harness_root, pre_story_coordinator,
-):
-    """The control for the test above, which would hold trivially if both runs
-    had gone through the same code. The earlier module proceeds on the very
-    tree the current one refuses, and it absorbs the stray file into the
-    story's commit — which is the defect this story closes."""
-    assert "dirty_paths" in COORDINATOR_SOURCE
-    assert "dirty_paths" not in pre_story("orchestration/story_coordinator.py")
-    assert not hasattr(pre_story_coordinator, "dirty_paths")
+    Its own control is the dirty-tree run above, which produces none of them:
+    that is what distinguishes "the check leaves a clean run alone" from "the
+    check never fires".
+    """
+    code, runner = run(target, harness_root)
 
-    older = make_target("older-target")
-    write(older / STRAY, "no stage wrote this\n")
-    code, runner = run(older, harness_root, coordinator=pre_story_coordinator)
     assert code == 0
-    assert runner.calls != []
-    assert STRAY in files_in(older)
+    assert runner.calls == CLEAN_RUN_STAGES                       # routing
+    present = artifacts_in(target)
+    assert set(CLEAN_RUN_ARTIFACTS) - {"escalation-summary.md"} <= set(present)
+    assert "escalation-summary.md" not in present                 # artifacts
+    assert messages(target) == CLEAN_RUN_EVENTS                   # events
+    # Both renderings of the same stream, which is what `append_event` is for.
+    assert len(event_kinds(target)) == len(CLEAN_RUN_EVENTS)
+    assert event_kinds(target)[0] == "workflow-started"
+    assert event_kinds(target)[-1] == "story-completed"
 
-    current = make_target("current-target")
-    write(current / STRAY, "no stage wrote this\n")
-    assert run(current, harness_root)[0] == 1
+    state = state_of(target)                                      # state keys
+    assert state["status"] == "completed"
+    assert state["story_id"] == STORY_ID
+    assert state["branch"] == STORY_BRANCH
+    assert state["retry_count"] == 0
+    assert state["escalation_commit"] == ""
+
+    assert subject_of(target) == f"{STORY_ID}: {STORY_TITLE}"     # the commit
+    assert set(files_in(target)) == recorded_paths(target) | {DOC_OUTPUT}
+
+
+def test_each_clean_run_expectation_above_can_fail(target, harness_root):
+    """The control for the assertion above, which names its subjects rather
+    than deriving them: a named subject that no run could violate would be
+    indistinguishable from one no run does.
+
+    So each list is checked against a run that did *not* happen — the same
+    repository refused for a dirty tree — and every one of them differs.
+    """
+    write(target / STRAY, "no stage wrote this\n")
+    code, runner = run(target, harness_root)
+
+    assert code == 1
+    assert runner.calls != CLEAN_RUN_STAGES
+    assert not run_dir_of(target).exists()
+    assert subject_of(target) != f"{STORY_ID}: {STORY_TITLE}"
 
 
 # --------------------------------------------------------------------------
@@ -806,15 +825,29 @@ def test_story_013s_archived_commit_is_the_regression_this_closes():
     assert ".harness/stories/story-013.yaml" not in named
 
 
+#: What the defect looked like when it happened, and what the reproduction
+#: that used to sit here demonstrated. Frozen by story-029, which deleted the
+#: reproduction: its control recovered the pre-story coordinator out of git
+#: history and ran it, and that module no longer executes against today's
+#: workflow at all. A defect whose only account was a deleted test has lost
+#: its account, so the account is committed evidence.
+ABSORBED_EVIDENCE = (REPO_ROOT / ".harness" / "runs-archive"
+                     / "story-021-artifact-absorbed" / "evidence.json")
+
+
 def test_a_story_artifact_no_longer_reaches_a_story_commit(
-    make_target, harness_root, pre_story_coordinator,
+    make_target, harness_root,
 ):
     """story-013's shape reproduced on a fresh fixture: the artifact written
     before the run and left uncommitted.
 
-    The control is the pre-story coordinator on the identical fixture, which
-    reproduces the archived patch exactly — the artifact inside the story's own
-    commit — so the absence below is the check and not the fixture.
+    The control is the frozen evidence beside the archive, which records what
+    the same fixture did before the check existed — the artifact inside the
+    story's own commit — so the absence below is the check and not the
+    fixture. The evidence is read rather than described, and it is
+    cross-checked against the archived patch it points at by
+    `test_story_013s_archived_commit_is_the_regression_this_closes` above and
+    by the assertion below.
     """
     now = make_target("regression-target")
     plan(now, commit_it=False)
@@ -828,12 +861,37 @@ def test_a_story_artifact_no_longer_reaches_a_story_commit(
         NEW_STORY_ID, harness_root, now, runner) == 0
     assert f".harness/stories/{NEW_STORY_ID}.yaml" not in files_in(now)
 
-    before = make_target("regression-control-target")
-    plan(before, commit_it=False)
-    runner = Runner(before, story_id=NEW_STORY_ID)
-    assert pre_story_coordinator.run_story(
-        NEW_STORY_ID, harness_root, before, runner) == 0
-    assert f".harness/stories/{NEW_STORY_ID}.yaml" in files_in(before)
+    evidence = json.loads(ABSORBED_EVIDENCE.read_text(encoding="utf-8"))
+    demonstrated = evidence["reproduction"]["demonstrated"]
+    assert evidence["reproduction"]["fixture_artifact"] \
+        == f".harness/stories/{NEW_STORY_ID}.yaml"
+    assert demonstrated["earlier_coordinator_absorbed_the_artifact"] is True
+    assert demonstrated["earlier_coordinator_exit_code"] == 0
+    assert demonstrated["current_coordinator_exit_code_with_the_artifact_uncommitted"] == 1
+    assert demonstrated["current_coordinator_absorbed_the_artifact"] is False
+
+
+def test_the_frozen_evidence_says_what_the_archive_says():
+    """The evidence is only evidence if it agrees with the committed instance
+    it points at, so the two are read together rather than trusted apart.
+
+    The archive is read-only committed evidence, and every fact the record
+    claims about it is checked against the archive's own files.
+    """
+    evidence = json.loads(ABSORBED_EVIDENCE.read_text(encoding="utf-8"))
+    observed = evidence["observed_instance"]
+    archive = REPO_ROOT / observed["archive"]
+
+    patch = (archive / observed["patch"]).read_text(encoding="utf-8")
+    record = json.loads((archive / observed["record"]).read_text(encoding="utf-8"))
+    named = set(record["modified"]) | set(record["created"]) | set(record["deleted"])
+
+    assert f"diff --git a/{observed['artifact']}" in patch
+    assert f"Subject: [PATCH] {observed['commit_subject_prefix']}" in patch
+    assert observed["artifact_in_the_story_commit"] is True
+    assert (observed["artifact"] in named) \
+        is observed["artifact_named_by_the_runs_own_record"]
+    assert observed["artifact_named_by_the_runs_own_record"] is False
 
 
 # --------------------------------------------------------------------------
@@ -975,9 +1033,7 @@ def executable_source(text: str) -> str:
     return "\n".join(kept)
 
 
-def test_neither_terminal_commit_was_changed_to_achieve_any_of_this(
-    pre_story_coordinator, endpoint_coordinator,
-):
+def test_neither_terminal_commit_was_changed_to_achieve_any_of_this():
     """What the story forbade, checked against the earlier module rather than
     against a phrase: `_complete` and `_escalate` still stage what they staged.
 
@@ -988,12 +1044,11 @@ def test_neither_terminal_commit_was_changed_to_achieve_any_of_this(
     `at_story_endpoint` above: story-024 later moved the summary's
     construction out of `_escalate`, and that is not story-021 changing it.
     """
-    import inspect
     for name in ("_complete", "_escalate"):
-        assert inspect.getsource(getattr(endpoint_coordinator, name)) \
-            == inspect.getsource(getattr(pre_story_coordinator, name)), name
-    assert inspect.getsource(endpoint_coordinator.run_story) \
-        != inspect.getsource(pre_story_coordinator.run_story)
+        assert coordinator_function(name, ENDPOINT) \
+            == coordinator_function(name, BASELINE), name
+    assert coordinator_function("run_story", ENDPOINT) \
+        != coordinator_function("run_story", BASELINE)
 
 
 # --------------------------------------------------------------------------

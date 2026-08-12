@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_diff
+from conftest import load_mutant, story_diff
 
 import context_assembler
 import run_status
@@ -600,7 +600,8 @@ def record_readers(source: str) -> list[str]:
     return offenders
 
 
-COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8")
+COORDINATOR_PATH = Path(story_coordinator.__file__)
+COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
 
 
 def test_no_routing_decision_reads_the_retry_history():
@@ -714,15 +715,6 @@ def test_execution_history_still_records_each_retry_decision(retries_exhausted):
 # --------------------------------------------------------------------------
 
 
-def load_variant(source: str, path: Path, name: str):
-    path.write_text(source, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 #: The call the two escalation-path mutants insert, at the indentation of the
 #: `return _escalate(` they precede.
 _PLANTED_APPEND = (
@@ -772,13 +764,18 @@ MUTANTS = {
 
 
 def mutant(name: str, tmp_path: Path):
-    old, new = MUTANTS[name]
-    assert old in COORDINATOR_SOURCE, name
-    return load_variant(
-        COORDINATOR_SOURCE.replace(old, new, 1),
-        tmp_path / f"mutant_{abs(hash(name))}.py",
-        f"mutant_story_coordinator_{abs(hash(name))}",
-    )
+    """The named mutation applied to the working-tree coordinator.
+
+    Built through `conftest.load_mutant` since story-029: the mutation-loading
+    idiom this file shared byte for byte with `tests/test_story_014_validation.py`
+    lives in one place, and it takes a working-tree path and its replacements
+    rather than arbitrary source text, so source recovered out of git history
+    is not a value it accepts. The mutations, their anchors and every
+    assertion below are unchanged.
+    """
+    return load_mutant(
+        COORDINATOR_PATH, [MUTANTS[name]],
+        name=f"mutant_story_coordinator_{abs(hash(name))}", tmp_path=tmp_path)
 
 
 def test_an_artifact_created_in_advance_is_caught(tmp_path, target_root,

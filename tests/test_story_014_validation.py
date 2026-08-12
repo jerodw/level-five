@@ -35,9 +35,11 @@ import harness_config
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
+from conftest import load_mutant
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8")
+COORDINATOR_PATH = Path(story_coordinator.__file__)
+COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
 WORKFLOW = json.loads(
     (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
@@ -1062,17 +1064,6 @@ def build_context_for(target_root: Path, harness_root: Path, run_dir: Path) -> d
 # --------------------------------------------------------------------------
 
 
-def load_variant(source: str, path: Path, name: str):
-    """Load a mutated coordinator as its own module. Nothing here writes to
-    orchestration/."""
-    path.write_text(source, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 MUTANTS = {
     # The check itself removed.
     "a coordinator that never runs the check": (
@@ -1099,14 +1090,16 @@ MUTANTS = {
 
 
 def variant(name: str, tmp_path: Path):
-    old, new = MUTANTS[name]
-    assert old in COORDINATOR_SOURCE, name
-    module_name = "mutant_" + re.sub(r"\W+", "_", name)
-    return load_variant(
-        COORDINATOR_SOURCE.replace(old, new, 1),
-        tmp_path / f"{module_name}.py",
-        module_name,
-    )
+    """The named mutation applied to the working-tree coordinator.
+
+    Built through `conftest.load_mutant` since story-029, which folded the
+    loader this file shared byte for byte with
+    `tests/test_story_012_validation.py`. The mutations, their anchors and
+    every assertion below are unchanged.
+    """
+    return load_mutant(
+        COORDINATOR_PATH, [MUTANTS[name]],
+        name="mutant_" + re.sub(r"\W+", "_", name), tmp_path=tmp_path)
 
 
 def test_a_coordinator_that_skips_the_check_is_caught(

@@ -30,16 +30,18 @@ with the violation constructed against the same subject and the same check:
   * "this story added no schema" sits beside the file this story did change,
     compared the same way.
 
-The four pre-existing sections are checked against the summary the *pre-story*
-coordinator writes for the same run rather than against text written here, so
-"unchanged" means unchanged from what shipped and not from what this file
-remembers.
+The four pre-existing sections were checked against the summary the *pre-story*
+coordinator writes for the same run, which meant recovering that coordinator
+out of git history and running it. story-029 retired that instrument — a
+recovered module runs against today's workflow and stops running when the
+workflow legitimately changes, which is what happened. Each of those sections
+now states what it says, against the summary a real escalation wrote, and
+"unchanged by this story" is asserted where the text lives: the composing
+source at the two ends of this story's own commit range, read as text.
 
 Nothing here invokes a model: every run goes through a fake agent runner and
 every clone source is a local filesystem path.
 """
-import importlib.machinery
-import importlib.util
 import json
 import subprocess
 import sys
@@ -47,7 +49,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_diff, story_commit_range
+from conftest import (BASELINE, ENDPOINT, function_source_at, story_diff, story_commit_range)
 
 import harness_config
 import story_coordinator
@@ -713,110 +715,196 @@ UNCHANGED_SECTIONS = ["Status", "Reason", "Where Execution Stopped",
                       "Where to Look"]
 
 
-def pre_story_coordinator(tmp_path: Path):
-    """The coordinator as it stood before this story, loaded as its own module.
+COORDINATOR_REL = "orchestration/story_coordinator.py"
 
-    Resolved through the shared range in conftest.py rather than as HEAD, so
-    the comparison survives this story's own commit.
-    """
-    revision = story_commit_range(Path(__file__)).baseline
-    source = git(REPO_ROOT, "show",
-                 f"{revision}:orchestration/story_coordinator.py").stdout
-    module_path = tmp_path / "pre_story_coordinator.py"
-    write(module_path, source)
-    loader = importlib.machinery.SourceFileLoader(
-        "pre_story_coordinator", str(module_path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    # Registered before execution because `@dataclass` resolves annotations
-    # through sys.modules[cls.__module__].
-    sys.modules[loader.name] = module
-    try:
-        loader.exec_module(module)
-    finally:
-        sys.modules.pop(loader.name, None)
-    return module
+#: The escalation this section is about: three failing verdicts, so the run
+#: retries to its ceiling and escalates at the verifier with a verdict, a
+#: retry history and a committed tree behind it. It is the shape that
+#: exercises every section of the summary at once.
+EXHAUSTING_VERDICTS = 3
 
 
 @pytest.fixture
-def the_same_escalation_before_and_after(tmp_path, harness_root):
-    """One escalation shape driven twice: by the pre-story coordinator and by
-    this one, against two identically built repositories."""
-    before_module = pre_story_coordinator(tmp_path)
-    verdicts = [failing(1, retry=True), failing(2, retry=True),
-                failing(3, retry=True)]
+def exhausted_escalation(tmp_path, harness_root):
+    """One escalation, driven by today's coordinator alone.
 
-    before_target = build_target(tmp_path / "before-target")
-    assert before_module.run_story(
-        STORY_ID, harness_root, before_target,
-        Runner(before_target, verdicts=verdicts)) == 2
+    It used to be two: the same shape driven by a coordinator recovered out of
+    git history beside this one, with every assertion below stated as equality
+    between their outputs. story-029 retired that instrument — the recovered
+    module runs against today's workflow and stops running when the workflow
+    legitimately changes — so each assertion states what it is about instead,
+    and this fixture builds only the run those statements are about.
 
-    after_target = build_target(tmp_path / "after-target")
+    Splitting it is also what lets
+    `test_reason_is_still_the_section_immediately_after_status` stand on
+    today's output alone: it never had anything to say about the earlier
+    module, and it was failing to *collect* because the fixture it shared
+    could no longer build.
+    """
+    target = build_target(tmp_path / "escalated-target")
+    verdicts = [failing(attempt, retry=True)
+                for attempt in range(1, EXHAUSTING_VERDICTS + 1)]
     assert story_coordinator.run_story(
-        STORY_ID, harness_root, after_target,
-        Runner(after_target, verdicts=verdicts)) == 2
+        STORY_ID, harness_root, target,
+        Runner(target, verdicts=verdicts)) == 2
+    return target
 
-    return before_module, before_target, after_target
+
+def summary_composition(bound: str) -> str:
+    """The source that composes the escalation summary, at one bound.
+
+    Read as text at the two ends of this story's own commit range rather than
+    by running a module recovered out of history: what the four pre-existing
+    sections *say* is the subject, and that is stated in the source. Before
+    this story the summary was built inline in `_escalate`; after it, in the
+    extracted `escalation_summary`, which is the whole of what the story did
+    to the composition — so the function to read is whichever of the two
+    exists at that bound.
+    """
+    for name in ("escalation_summary", "_escalate"):
+        try:
+            return function_source_at(COORDINATOR_REL, name,
+                                      validation_file=Path(__file__),
+                                      bound=bound, repo=REPO_ROOT)
+        except AssertionError:
+            continue
+    raise AssertionError(f"no source at {bound} composes the summary")
 
 
 def test_the_four_pre_existing_sections_carry_the_text_they_carried(
-    the_same_escalation_before_and_after,
+    exhausted_escalation,
 ):
-    """Byte for byte against the summary the pre-story coordinator writes for
-    the same escalation, rather than against text remembered here."""
-    _, before_target, after_target = the_same_escalation_before_and_after
-    before, after = summary_of(before_target), summary_of(after_target)
+    """The four sections named, with their bodies stated rather than compared
+    against a summary a recovered module wrote once.
 
-    assert before.splitlines()[0] == after.splitlines()[0]
+    Two statements, and both are needed. What each section *says* today is
+    asserted as its own text: the heading line, the status, the reason, the
+    stage and attempt execution stopped at, and the three places the reader is
+    sent. That this story did not change them is asserted where the text
+    lives — each section's composing source is byte-identical at the two ends
+    of this story's own commit range.
+
+    The control is the section this story added, absent at the baseline and
+    present at the endpoint, so the equalities above are not four readings of
+    one unchanged file.
+    """
+    text = summary_of(exhausted_escalation)
+    state = state_of(exhausted_escalation)
+
+    assert text.splitlines()[0] == f"# {STORY_ID} Escalation Summary"
+    assert section_body(text, "Status") == "Escalated"
+    assert section_body(text, "Reason") == (
+        "verification failed and retries are exhausted")
+    assert section_body(text, "Where Execution Stopped") == (
+        f"Stage: {state['current_stage']}, retry count: {state['retry_count']}")
+    assert section_body(text, "Where to Look") == (
+        "See events.log for the run history and the verification/ directory "
+        "for verifier findings.")
+
+    before = summary_composition(BASELINE)
     for heading in UNCHANGED_SECTIONS:
-        assert section_body(before, heading) == section_body(after, heading), heading
-    # The control: the summary did change, so the equalities above are not
-    # over two copies of one unchanged file.
-    assert before != after
+        assert f"## {heading}" in before, heading
+    for literal in ("Escalation Summary",
+                    "## Status\\nEscalated",
+                    "## Where Execution Stopped\\nStage: ",
+                    "retry count: ",
+                    "See events.log for the run history and the ",
+                    "verification/ directory for verifier findings."):
+        assert literal in before, literal
+
+    # The control: the sections this story added, absent at the baseline and
+    # present in what the run wrote — so the presences above are not a search
+    # that matches anything.
+    assert "## Recommended Investigation" in text
     assert "## Recommended Investigation" not in before
+    assert "## Outstanding Issues" not in before
 
 
 def test_reason_is_still_the_section_immediately_after_status(
-    the_same_escalation_before_and_after,
+    exhausted_escalation,
 ):
     """`escalation_reason` splits on the next `##`, so a section inserted
-    between the two would truncate every reason it reads."""
-    _, _, after_target = the_same_escalation_before_and_after
-    headings = [line for line in summary_of(after_target).splitlines()
+    between the two would truncate every reason it reads.
+
+    It stands on today's output alone: it never had anything to say about a
+    coordinator recovered out of history, and shared the two-escalation
+    fixture only because the fixture was there. story-029 split it off.
+    """
+    headings = [line for line in summary_of(exhausted_escalation).splitlines()
                 if line.startswith("## ")]
     assert headings[:2] == ["## Status", "## Reason"]
 
 
 def test_escalation_reason_returns_the_string_it_returned_before(
-    the_same_escalation_before_and_after,
+    exhausted_escalation,
 ):
-    """The one reader of this file, reading both summaries with both
-    implementations: four answers, one string."""
-    before_module, before_target, after_target = the_same_escalation_before_and_after
-    answers = {
-        module.escalation_reason(run_dir_of(target))
-        for module in (before_module, story_coordinator)
-        for target in (before_target, after_target)
-    }
-    assert len(answers) == 1, answers
-    reason = answers.pop()
-    assert reason and "verification failed" in reason
+    """The one reader of this file, held to the string it returns rather than
+    to agreement between two implementations.
+
+    The reason is named outright, and it is the same string the escalation
+    event and `state.json`'s own reason carry — so this is the reader agreeing
+    with the run rather than with itself.
+
+    The control is a summary with a section inserted between Status and
+    Reason, which the same reader truncates: that is what makes the equality
+    above the reader working rather than the reader having stopped reading.
+    """
+    run_dir = run_dir_of(exhausted_escalation)
+    reason = story_coordinator.escalation_reason(run_dir)
+
+    assert reason == "verification failed and retries are exhausted"
+    assert reason in (run_dir / "events.log").read_text(encoding="utf-8")
+
+    summary = summary_of(exhausted_escalation)
+    (run_dir / "escalation-summary.md").write_text(
+        summary.replace(reason, "something else entirely", 1), encoding="utf-8")
+    assert story_coordinator.escalation_reason(run_dir) == "something else entirely"
+
+
+#: The files an escalation at the retry ceiling leaves at the run-directory
+#: root. Every one of them predates this story: each section the story added
+#: renders an artifact that already existed, so the story added no file to
+#: this list and none of these names is one it introduced.
+ESCALATION_RUN_DIRECTORY = {
+    "changed-files.json", "escalation-summary.md", "events.log",
+    "execution-history.json", "implementation-summary.md",
+    "retry-history.json", "state.json", "test-results.json",
+    "tester-changed-files.json", "verification-result.json",
+    "retry-guidance.json",
+}
+
+#: The rendered prompts, one per stage and attempt. Named by shape rather than
+#: enumerated, because how many there are is a property of the run's retry
+#: count rather than of what this story did.
+RENDERED_PROMPT = "prompt-"
 
 
 def test_an_escalation_writes_no_new_file_to_the_run_directory(
-    the_same_escalation_before_and_after,
+    exhausted_escalation,
 ):
-    """Every new section renders an artifact that already existed."""
-    _, before_target, after_target = the_same_escalation_before_and_after
-    before = {path.name for path in run_dir_of(before_target).iterdir()}
-    after = {path.name for path in run_dir_of(after_target).iterdir()}
+    """Every new section renders an artifact that already existed, stated as
+    the run directory's own contents rather than as equality with a directory
+    a recovered module produced.
 
-    assert before == after
-    # The controls: the comparison is over populated directories, and it does
-    # report a file that only one of them holds.
-    assert "escalation-summary.md" in after
-    (run_dir_of(after_target) / "a-new-artifact.json").write_text("{}\n")
-    assert {path.name for path in run_dir_of(after_target).iterdir()} != before
+    The set is named, and each name is checked to be a file this story did not
+    introduce: the story's own commit range added nothing under `schemas/` and
+    no artifact to the workflow, which
+    `test_this_story_added_no_schema` states from the other side.
+
+    The controls: the directory is populated rather than empty, and a file
+    added to it is reported — so "no new file" is a reading that can see one.
+    """
+    run_dir = run_dir_of(exhausted_escalation)
+    present = {path.name for path in run_dir.iterdir() if path.is_file()
+               and not path.name.startswith(RENDERED_PROMPT)}
+
+    assert present <= ESCALATION_RUN_DIRECTORY, present - ESCALATION_RUN_DIRECTORY
+    assert "escalation-summary.md" in present
+    assert "state.json" in present
+
+    (run_dir / "a-new-artifact.json").write_text("{}\n", encoding="utf-8")
+    assert {path.name for path in run_dir.iterdir() if path.is_file()
+            and not path.name.startswith(RENDERED_PROMPT)} != present
 
 
 def test_this_story_added_no_schema():

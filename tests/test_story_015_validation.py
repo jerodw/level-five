@@ -35,7 +35,8 @@ import test_story_007_validation as story007
 import test_story_008_validation as story008
 import test_story_009_validation as story009
 import test_story_010_validation as story010
-from conftest import (NothingToCompareAgainst, story_commit_range, story_diff)
+from conftest import (BASELINE, NothingToCompareAgainst, repository_file_at,
+                      story_commit_range, story_diff)
 
 import context_assembler
 import harness_config
@@ -522,11 +523,8 @@ def pre_repair_source(rel: str) -> str:
     story-015 is in flight, the pre-story revision once it commits. No pinned
     SHA, so a rebase or a squash does not move the answer.
     """
-    baseline = story_commit_range(Path(__file__)).baseline
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{baseline}:{rel}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    return repository_file_at(rel, validation_file=Path(__file__),
+                              bound=BASELINE, repo=REPO_ROOT)
 
 
 def test_the_recovered_pre_repair_sources_are_the_pre_repair_sources():

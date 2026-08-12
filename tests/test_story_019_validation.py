@@ -46,7 +46,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import STORY, story_commit_range, story_diff
+from conftest import (BASELINE as BASELINE_BOUND, STORY, repository_file_at, story_commit_range, story_diff)
 
 import harness_config
 import schema_validator
@@ -476,9 +476,8 @@ def pre_story(path: str) -> str:
     this repository keeps making and the one the baseline being tested here
     is a version of.
     """
-    story_range = story_commit_range(Path(__file__))
-    revision = story_range.baseline
-    return git(REPO_ROOT, "show", f"{revision}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=BASELINE_BOUND, repo=REPO_ROOT)
 
 
 # --------------------------------------------------------------------------

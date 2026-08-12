@@ -48,7 +48,6 @@ them.
 
 No model is invoked anywhere in this file.
 """
-import importlib.util
 import json
 import os
 import re
@@ -58,7 +57,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_commit_range
+from conftest import (BASELINE, NothingToCompareAgainst, load_script,
+                      repository_file_at, story_commit_range)
 from test_story_023_validation import (
     ARTIFACT,
     Planning,
@@ -190,11 +190,14 @@ def baseline() -> str:
 
 
 def show(path: str) -> str:
-    """One file as it was before this story."""
-    return subprocess.run(
-        ["git", "-C", str(HARNESS_ROOT), "show", f"{baseline()}:{path}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    """One file as it was before this story.
+
+    story-029 folded this module's private `git show` into
+    `conftest.repository_file_at`, which resolves the same baseline this
+    already resolved for itself. Subject and strictness unchanged.
+    """
+    return repository_file_at(path, validation_file=VALIDATION_FILE,
+                              bound=BASELINE, repo=HARNESS_ROOT)
 
 
 def pre_story_harness(tmp_path: Path) -> Path:
@@ -362,10 +365,10 @@ def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinato
     assert set(now) == {"orchestration/story_coordinator.py"}
 
     def at_baseline(relative: str) -> str:
-        result = subprocess.run(
-            ["git", "-C", str(HARNESS_ROOT), "show", f"{baseline()}:{relative}"],
-            capture_output=True, text=True)
-        return result.stdout if result.returncode == 0 else ""
+        try:
+            return show(relative)
+        except NothingToCompareAgainst:
+            return ""
 
     assert now == callers(at_baseline)
 
@@ -627,14 +630,14 @@ def test_plan_time_and_pre_flight_print_the_same_text(defect: str,
 
 
 def load_l5_plan():
-    """`scripts/l5-plan` as a module, so `report` can be called directly."""
-    spec = importlib.util.spec_from_loader(
-        "l5_plan_under_test",
-        importlib.machinery.SourceFileLoader("l5_plan_under_test", str(L5_PLAN)),
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """`scripts/l5-plan` as a module, so `report` can be called directly.
+
+    Through `conftest.load_script`, the shared loader for the extensionless
+    entry points, since story-029: building a module is done in one place
+    under tests/ so that recovering one out of git history has nowhere to
+    happen quietly.
+    """
+    return load_script("l5-plan", name="l5_plan_under_test")
 
 
 def test_both_paths_print_through_the_one_refusal_function(monkeypatch,

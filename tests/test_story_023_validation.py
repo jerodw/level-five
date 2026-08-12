@@ -61,7 +61,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_commit_range
+from conftest import BASELINE, repository_file_at, story_commit_range
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
@@ -646,6 +646,17 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
 # --------------------------------------------------------------------------
 
 
+def pre_story_text(rel: str) -> str:
+    """One repository file as it stood before this story's own run.
+
+    story-029 folded this module's three private `git show` calls into
+    `conftest.repository_file_at`, which resolves the same shared baseline
+    they each resolved for themselves. Subject and strictness unchanged.
+    """
+    return repository_file_at(rel, validation_file=VALIDATION_FILE,
+                              bound=BASELINE, repo=HARNESS_ROOT)
+
+
 def pre_story_script(tmp_path: Path) -> Path:
     """scripts/l5-plan as it was before this story, runnable.
 
@@ -654,11 +665,7 @@ def pre_story_script(tmp_path: Path) -> Path:
     the old script loads the same config, workflow, rules and template the
     new one does without anything being written into the repository.
     """
-    baseline = story_commit_range(VALIDATION_FILE).baseline
-    source = subprocess.run(
-        ["git", "-C", str(HARNESS_ROOT), "show", f"{baseline}:scripts/l5-plan"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    source = pre_story_text("scripts/l5-plan")
     root = tmp_path / "pre-story-harness"
     (root / "scripts").mkdir(parents=True)
     for name in ("orchestration", "prompts", "schemas", "workflows", "rules"):
@@ -845,11 +852,7 @@ def test_scripts_l5_plan_no_longer_execs():
     assert "subprocess.run(" in source
     # Control: the pre-story script, read at the same baseline, does exec —
     # so "execvp is absent" is a change rather than a word that was never here.
-    baseline = story_commit_range(VALIDATION_FILE).baseline
-    old = subprocess.run(
-        ["git", "-C", str(HARNESS_ROOT), "show", f"{baseline}:scripts/l5-plan"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    old = pre_story_text("scripts/l5-plan")
     assert "execvp" in python_code(old)
 
 
@@ -882,11 +885,7 @@ def test_the_planner_prompt_no_longer_asks_the_planner_to_commit():
     # Control: the same scanner over the pre-story text of this same file,
     # read at the story's baseline. It told the planner to commit, and the
     # scanner says so.
-    baseline = story_commit_range(VALIDATION_FILE).baseline
-    old = subprocess.run(
-        ["git", "-C", str(HARNESS_ROOT), "show", f"{baseline}:prompts/planner.md"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    old = pre_story_text("prompts/planner.md")
     assert commit_instructions(old) != []
 
 
