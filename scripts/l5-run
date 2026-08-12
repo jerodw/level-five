@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Execute an approved story through the story workflow.
 
-Usage: l5-run <story-id> [--stage <stage>]
+Usage: l5-run <story-id> [--stage <stage>] [--base <branch>]
 The target repository is found by walking up from the current directory
 to the nearest .harness/config.yaml.
 
 A run whose state.json says it escalated resumes at the recorded stage.
 --stage overrides that with a stage the loaded workflow defines; the
 coordinator refuses one it does not.
+
+--base declares what a new story branch is cut from. Unstated, it is the
+repository's own default branch, and the coordinator refuses a run that
+would cut the branch from somewhere else.
 """
 import sys
 from pathlib import Path
@@ -21,15 +25,29 @@ import story_coordinator  # noqa: E402
 
 def main() -> int:
     argv = sys.argv[1:]
-    stage = None
-    if len(argv) == 3 and argv[1] == "--stage":
-        argv, stage = argv[:1], argv[2]
-    if len(argv) != 1:
+    options: dict[str, str | None] = {"--stage": None, "--base": None}
+    positional = []
+    index = 0
+    while index < len(argv):
+        if argv[index] in options:
+            if index + 1 >= len(argv):
+                print(__doc__.strip(), file=sys.stderr)
+                return 1
+            options[argv[index]] = argv[index + 1]
+            index += 2
+        else:
+            positional.append(argv[index])
+            index += 1
+    if len(positional) != 1:
         print(__doc__.strip(), file=sys.stderr)
         return 1
     target_root = harness_config.find_target_root(Path.cwd())
     return story_coordinator.run_story(
-        argv[0], HARNESS_ROOT, target_root, start_stage=stage
+        positional[0],
+        HARNESS_ROOT,
+        target_root,
+        start_stage=options["--stage"],
+        base=options["--base"],
     )
 
 

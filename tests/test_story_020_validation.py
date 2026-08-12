@@ -1201,7 +1201,11 @@ def test_l5_run_passes_the_stage_through_and_decides_nothing_itself(
     script = load_l5_run()
     seen: list[dict] = []
 
-    def spy(story_id, harness_root, target_root, runner=None, start_stage=None):
+    # `base` is story-030's addition to run_story's signature; the spy accepts
+    # it so this test keeps asking what it asked — that the script forwards the
+    # stage it was given and defaults nothing itself.
+    def spy(story_id, harness_root, target_root, runner=None, start_stage=None,
+            base=None):
         seen.append({"story_id": story_id, "start_stage": start_stage})
         return 0
 

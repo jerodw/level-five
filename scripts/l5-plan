@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Plan a story interactively with the planner agent.
 
-Usage: l5-plan "<story request>"
+Usage: l5-plan [--base <branch>] "<story request>"
 Starts an interactive Claude Code session carrying the planner prompt.
 The planner interviews you, iterates on the plan, and writes the approved
 story artifact to .harness/stories/. When the session ends, this script
 commits the artifact it caused to appear and pushes it, so committing is a
 mechanism rather than something an agent is asked to remember.
+
+The commit lands on whatever branch is checked out, so the same base check
+l5-run runs at pre-flight runs here before the commit: an unstated base is
+the repository's own default branch, and --base states another deliberately.
 """
 import subprocess
 import sys
@@ -23,9 +27,17 @@ import story_coordinator  # noqa: E402
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
+    argv = sys.argv[1:]
+    base = None
+    # --base comes ahead of the request; everything after it is the request
+    # text, passed to the session unchanged.
+    if argv[:1] == ["--base"]:
+        if len(argv) < 2:
+            sys.exit(__doc__.strip())
+        base, argv = argv[1], argv[2:]
+    if not argv:
         sys.exit(__doc__.strip())
-    request = " ".join(sys.argv[1:])
+    request = " ".join(argv)
     target_root = harness_config.find_target_root(Path.cwd())
     config = harness_config.load_config(target_root)
     workflow = harness_config.load_workflow(
@@ -71,11 +83,13 @@ def main() -> None:
     # before the status is consulted at all. The session's own status then
     # wins; the commit's is what is left to say when the session ended
     # cleanly and the push did not.
-    committing = report(target_root, stories_dir, before, workflow["stages"])
+    committing = report(
+        target_root, stories_dir, before, workflow["stages"], config, base
+    )
     sys.exit(status or committing)
 
 
-def report(target_root: Path, stories_dir: Path, before, stages) -> int:
+def report(target_root: Path, stories_dir: Path, before, stages, config=None, base=None) -> int:
     """Say what plan_validation and plan_commit did with the session's artifacts.
 
     Both modules return what happened rather than printing it, so this is
@@ -101,6 +115,26 @@ def report(target_root: Path, stories_dir: Path, before, stages) -> int:
             # The coordinator's own refusal helper, so the text a developer
             # reads here is the text l5-run's pre-flight would print.
             story_coordinator.refuse_bad_story(path, found)
+        print(
+            "l5-plan: committed nothing; "
+            f"{', '.join(str(path) for path in artifacts)} "
+            "remain in the working tree."
+        )
+        return 1
+    # The base check sits here for the same reason validation does: this script
+    # commits and pushes, and a plan artifact committed onto whatever happened
+    # to be checked out is how a story branch came to be cut from another
+    # story's unaccepted work. The base is resolved by the coordinator's own
+    # function and printed through the coordinator's own refusal, so l5-run and
+    # l5-plan cannot report the same defect differently. Nothing is committed
+    # and nothing is pushed on this path; the artifacts stay where the session
+    # wrote them.
+    resolved_base = story_coordinator.resolve_base(target_root, config or {}, base)
+    base_found = story_coordinator.base_problems(
+        target_root, resolved_base, base is not None
+    )
+    if base_found:
+        story_coordinator._refuse_base(resolved_base, base_found)
         print(
             "l5-plan: committed nothing; "
             f"{', '.join(str(path) for path in artifacts)} "
