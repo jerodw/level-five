@@ -1,0 +1,210 @@
+story:
+  id: story-029
+  title: Retire loading code out of git history, and enforce the rule mechanically
+  description: |
+    Several validation modules prove "my change broke nothing else" by
+    recovering an older `orchestration/story_coordinator.py` out of git
+    history, writing it to a temporary file, importing it as a live module and
+    running a workflow through it. The instrument decays: the recovered code
+    runs against today's workflow, schemas and config, so a legitimate change
+    to any of those breaks it for reasons unrelated to what it tested.
+    story-028 reshaped two workflow keys and ten tests went red — six failures
+    and four collection errors in a suite that is otherwise 1247 green — every
+    one of them decay rather than a defect in story-028's work.
+
+    `.harness/docs/ARCHITECTURE.md` already records the whole argument and
+    ends "No module under `tests/` loads a coordinator implementation out of
+    git history any longer." That sentence is false. Four modules do it, and
+    all four postdate the story that wrote it.
+
+    Prose is not the only mechanism that failed here, and the sharper fact is
+    the reason this story's check is shaped the way it is:
+    `tests/test_story_016_validation.py` already carries a mechanical scan
+    against this exact practice. It matches on the names of two helper
+    functions, and all four offending modules simply defined their own under
+    different names. A check that can be evaded by renaming a helper is the
+    thing being replaced, not the precedent being followed.
+
+    This story restates what each comparison protects as a direct assertion,
+    deletes the capability rather than only its callers, supplies the shared
+    helpers whose absence produced eleven hand-rolled copies, and replaces the
+    name-matching scan with a flat structural rule: no module under `tests/`
+    may build a module at runtime except the one shared file. That rule cannot
+    be evaded by renaming, because it names no helper — it names the closed
+    set of language constructs that are the only way to run source in-process.
+
+    The order of operations is the repository's own, from the paragraph this
+    story makes true again: the restatement must land before the removal, and
+    each new assertion must be demonstrated red. That is the story's main risk
+    — a deletion that quietly takes coverage with it — and the rule that
+    manages it.
+
+tasks:
+  - Add to tests/conftest.py the shared reader the eleven private copies stand in for - a repository file's text, and a named function's source, at a story's own commit bounds or at a given revision - beside the existing shared commit-range and diff resolutions.
+  - Repoint every private history-reading helper in tests/ at that shared reader and delete the private copies, including the one tests/test_baseline_honesty.py uses to recover its own regression set.
+  - Fold the mutation-loader duplicated between tests/test_story_012_validation.py and tests/test_story_014_validation.py into one shared helper in tests/conftest.py that takes a working-tree path and its replacements rather than arbitrary source text.
+  - Fold the extensionless-script loader duplicated between tests/test_story_020_validation.py and tests/test_story_025_validation.py into one shared helper in tests/conftest.py that takes a script name.
+  - Restate each of the six comparisons that assert today's output equals what a recovered module produced as a direct assertion naming the artifacts, events, state keys, section bodies and messages that must hold.
+  - Retarget the four assertions that recover source only to compare its text, so they read the text through the shared reader instead of loading it as a module, keeping each assertion's subject, strictness and control unchanged.
+  - Delete test_the_module_that_comparison_used_really_is_the_one_without_the_check in tests/test_story_021_validation.py, which controls only the comparison it accompanies and has no independent subject.
+  - Capture as frozen evidence under .harness/runs-archive/ what each of the two defect reproductions demonstrated, and assert against the captured evidence rather than by re-running the code that had the defect.
+  - Restate the comparison in tests/test_story_026_validation.py that lifts two deleted helpers out of recovered source and executes them, as a direct assertion of the commit pair it established, checkable against git from both ends.
+  - Split the fixture in tests/test_story_024_validation.py that builds two escalations, so test_reason_is_still_the_section_immediately_after_status stands on today's output alone.
+  - Delete the recovery and loading capability - the pre-story and endpoint coordinator fixtures and their private loaders in four modules, the three source-recovery helpers and their three guard tests in tests/test_story_011_validation.py, and runnable_against_current_modules in tests/conftest.py.
+  - Add to tests/test_baseline_honesty.py a scan asserting that no module under tests/ constructs a module at runtime except the single exempt shared module, with the exemption stated by name.
+  - Add to tests/test_baseline_honesty.py a second and separately stated scan asserting that no module under tests/ other than the exempt shared module invokes git for a repository file's text.
+  - Give each new scan a deliberately planted violation that it reports, and assert that it reports the four offending modules as they stand at this story's baseline.
+  - Delete test_no_module_under_tests_loads_a_coordinator_out_of_git_history and its HISTORY_SOURCE_READERS and MODULE_LOADERS name lists from tests/test_story_016_validation.py, superseded by the structural scan.
+  - Repoint the assertions in tests/test_story_016_validation.py and tests/test_story_026_validation.py that require the deleted helper names to be present, keeping each assertion's subject and strictness.
+  - Correct the false sentence at .harness/docs/ARCHITECTURE.md, record that the rule is now enforced mechanically and where, record why the name-matching scan was insufficient, and record that the earlier decision preserving one of these helpers does not survive this one.
+
+acceptance_criteria:
+  - No module under tests/ builds a module at runtime except the single shared module named in the new scan's stated exemption, and the scan reports this rather than an inspection asserting it.
+  - The new construction scan matches on language constructs rather than on helper names, and grep for the names of the deleted recovery helpers over tests/test_baseline_honesty.py returns nothing.
+  - Each new scan carries a deliberately planted violation that it reports, so its reach is demonstrated rather than asserted.
+  - Each new scan reports every one of the four modules that carry the practice as those modules stand at this story's baseline revision, which is the only direct evidence it would have caught this.
+  - Each new scan states in writing what it does not cover, following the narrowness tests/test_baseline_honesty.py already states about itself, and names at least these three - source run in a subprocess rather than in-process, historical text written to a file and passed in as a path, and deliberate obfuscation of a banned construct.
+  - The two scans are stated as separate rules with separate purposes, and neither is described as deriving its enforcement from the other.
+  - For each of the six restated comparisons, a replacement assertion exists, names its subject explicitly, and fails when that subject is violated.
+  - The four text-only assertions read recovered source as text and load no module, and each keeps the subject, strictness and control it had.
+  - The defect that each of the two deleted reproductions demonstrated is recorded as frozen evidence a reader can find, and an assertion reads that evidence.
+  - test_reason_is_still_the_section_immediately_after_status passes with its fixture split and depends on no recovered source.
+  - The comparison in tests/test_story_026_validation.py establishes the same commit pair it established before, with both ends checked against git and no recovered code executed.
+  - tests/conftest.py holds one reader for a repository file's text at a bound and no module under tests/ carries a private copy of it.
+  - The shared mutation-loader takes a working-tree path and its replacements rather than arbitrary source text, so recovered source is not a value it naturally accepts.
+  - grep for runnable_against_current_modules, pre_story_coordinator_source, coordinator_source_at and pre_story_revision over tests/ returns nothing.
+  - The full suite passes, including the ten tests that fail at this story's baseline, and it passes because those tests have been replaced rather than because a shim made the recovered modules runnable again.
+
+technical_plan:
+  implementation_steps:
+    - Read .harness/docs/ARCHITECTURE.md on the shelf life of a differential instrument, on the both-ends bounding of a per-story assertion, and on the shared baseline resolution, before changing anything - this story is the fourth episode in that sequence and the earlier bullets say what the repairs cost.
+    - Add the shared reader to tests/conftest.py first, beside story_commit_range and story_diff, and prove it against one existing caller before repointing the rest.
+    - Repoint the eleven private history-reading helpers one module at a time, deleting each private copy as its callers move, so a repoint that changes an answer is visible as one module going red rather than as a suite-wide failure.
+    - Fold the two duplicated loader idioms into shared helpers next. Until they are folded, four modules legitimately need the constructs the new scan bans, and the scan cannot be written flat.
+    - Restate each of the six comparisons as a direct assertion and show the new assertion failing on violation before deleting the comparison it replaces. Never the other order, and per test rather than in aggregate.
+    - Produce the frozen evidence for the two defect reproductions and assert against it before deleting either reproduction.
+    - Delete the recovery and loading capability last, after every replacement has landed and been shown red - the fixtures, the private loaders, the three recovery helpers with their three guard tests, and the compatibility shim.
+    - Add the two scans to tests/test_baseline_honesty.py, each with its planted violation and its stated limits, and assert both against the four offending modules recovered at this story's baseline.
+    - Delete the name-matching scan from tests/test_story_016_validation.py only once the structural scan reports everything it reported.
+    - Repoint the knock-on assertions in tests/test_story_016_validation.py and tests/test_story_026_validation.py that require the deleted names, bounding each at both ends of its own story's commit range rather than reading its after side from the working tree.
+  likely_file_changes:
+    - file: tests/conftest.py
+      stage: implementer
+      reason: Gains the shared history reader, the shared mutation-loader and the shared script loader; loses runnable_against_current_modules.
+    - file: tests/test_baseline_honesty.py
+      stage: implementer
+      reason: Home of the two new scans, their planted violations and their stated limits; its private regression-set reader is repointed at the shared one.
+    - file: tests/test_story_011_validation.py
+      stage: implementer
+      reason: Loses the three source-recovery helpers, the two module-loading helpers and the three tests that guard them; the surviving prompt-scope assertion is untouched.
+    - file: tests/test_story_012_validation.py
+      stage: implementer
+      reason: Its mutation-loader is folded into the shared helper.
+    - file: tests/test_story_014_validation.py
+      stage: implementer
+      reason: Its mutation-loader is folded into the shared helper, and its private history reader is repointed.
+    - file: tests/test_story_016_validation.py
+      stage: implementer
+      reason: Loses the name-matching scan the structural one supersedes, and the assertions requiring the deleted helper names are repointed.
+    - file: tests/test_story_020_validation.py
+      stage: implementer
+      reason: Loses its coordinator loader fixtures, folds its script loader into the shared one, and repoints its private history reader.
+    - file: tests/test_story_021_validation.py
+      stage: implementer
+      reason: Two comparisons restated, one control deleted, one text-only assertion retargeted, loader fixtures and private loader removed.
+    - file: tests/test_story_024_validation.py
+      stage: implementer
+      reason: Three comparisons restated, the two-escalation fixture split, loader and private loader removed.
+    - file: tests/test_story_025_validation.py
+      stage: implementer
+      reason: Its script loader is folded into the shared helper.
+    - file: tests/test_story_026_validation.py
+      stage: implementer
+      reason: The lift-and-execute comparison is restated as a direct assertion of the commit pair, and its name lists are repointed.
+    - file: tests/test_story_027_validation.py
+      stage: implementer
+      reason: Two comparisons restated, one defect reproduction replaced by frozen evidence, two text-only assertions retargeted, loader fixtures and private loader removed.
+    - file: tests/test_story_013_validation.py
+      stage: implementer
+      reason: Its private history reader is repointed at the shared one.
+    - file: tests/test_story_019_validation.py
+      stage: implementer
+      reason: Its private history reader is repointed at the shared one.
+    - file: tests/test_story_023_validation.py
+      stage: implementer
+      reason: Its private history reader is repointed at the shared one.
+    - file: .harness/runs-archive/
+      stage: implementer
+      reason: Frozen evidence for the two defects whose only account was a reproduction being deleted.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The sentence claiming the practice was eliminated is false and must become true; the paragraph must record the mechanical enforcement and where it lives, why the name-matching scan was insufficient, and that the earlier decision preserving one of these helpers does not survive this one.
+
+scope:
+  modify:
+    - tests/conftest.py
+    - tests/test_baseline_honesty.py
+    - tests/test_story_011_validation.py
+    - tests/test_story_012_validation.py
+    - tests/test_story_013_validation.py
+    - tests/test_story_014_validation.py
+    - tests/test_story_016_validation.py
+    - tests/test_story_019_validation.py
+    - tests/test_story_020_validation.py
+    - tests/test_story_021_validation.py
+    - tests/test_story_023_validation.py
+    - tests/test_story_024_validation.py
+    - tests/test_story_025_validation.py
+    - tests/test_story_026_validation.py
+    - tests/test_story_027_validation.py
+    - .harness/runs-archive/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - workflows/
+    - schemas/
+    - prompts/
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/runs-archive/story-013-vacuous-tests/
+    - tests/test_coordinator_contract.py
+    - tests/test_story_002_validation.py
+    - tests/test_story_004_validation.py
+    - tests/test_story_005_validation.py
+    - tests/test_story_006_single_reader.py
+    - tests/test_story_007_validation.py
+    - tests/test_story_008_validation.py
+    - tests/test_story_009_validation.py
+    - tests/test_story_010_validation.py
+    - tests/test_story_015_validation.py
+    - tests/test_story_017_validation.py
+    - tests/test_story_022_validation.py
+
+verification_requirements:
+  - Confirm by running the new scan, rather than by inspection, that no module under tests/ constructs a module at runtime outside the single stated exemption.
+  - Confirm each new scan reports its planted violation, since a scan without one asserts nothing about its own reach.
+  - Confirm each new scan reports the four modules carrying the practice as they stand at this story's baseline revision. This is the only direct evidence the check would have caught what it is for.
+  - Confirm the new construction scan reports a module that renames its helpers, since renaming is exactly how the scan being replaced was evaded.
+  - Confirm the new scans state their own limits in writing and that the three named limits are among them, and that neither scan is described as drawing its enforcement from the other.
+  - For each of the six restated comparisons individually, confirm the replacement assertion exists, names its subject explicitly, and fails when that subject is violated. Per assertion, not in aggregate.
+  - For each of the four retargeted text-only assertions, confirm the subject, the strictness and the control are unchanged, and that no module is constructed.
+  - For each of the two deleted defect reproductions, confirm the defect it demonstrated is recorded as frozen evidence a reader can find, and that an assertion reads that evidence. A defect whose only account was a deleted test has lost its account.
+  - Confirm the restated comparison in tests/test_story_026_validation.py names the same commit pair the executed helpers named, with both ends checked against git.
+  - Confirm test_reason_is_still_the_section_immediately_after_status still holds with its fixture split.
+  - Confirm no private copy of the history reader, the mutation-loader or the script loader survives anywhere under tests/ outside the shared module.
+  - Confirm the full suite passes, including the ten tests failing at this story's baseline, and that it passes because those tests were replaced and not because any shim was added or widened to make recovered modules runnable.
+  - Confirm no assertion was weakened, skipped or deleted whose subject is not one of the recovery helpers, the module loaders, or a comparison this story restates.
+
+constraints:
+  - Every replacement assertion lands and is shown to fail on violation before the comparison it replaces is deleted. This ordering is the whole risk management of the story and is the repository's own rule.
+  - Do not make the ten failing tests pass by freezing a copy of the workflow, schemas or config beside the frozen code. That would turn the failures green while deepening the practice being retired, and is the reason to write this story rather than an alternative to it.
+  - Do not extend, widen or repair runnable_against_current_modules. It is deleted, not adapted.
+  - Do not weaken, skip or delete any assertion whose subject is not one of the recovery helpers, the module loaders, or a comparison this story restates.
+  - An assertion repointed onto the shared reader keeps its subject, its strictness, its output options and its controls. Repoint, never relax.
+  - A per-story assertion repointed by this story is bounded at both ends of its own story's commit range, never with its after side read from the working tree. That trap has produced the same repair six times in this repository.
+  - The scan is not claimed to be tamper-proof. An edit that deletes a check alongside a genuinely forced repair is not caught, at any granularity, because deleting the check that fails you satisfies the revert rule's own definition of a forced edit. Record this as a stated limit; do not attempt to close it here.
+  - Nothing in orchestration/, workflows/, schemas/, prompts/ or scripts/ changes. This story's subject is the test suite and the document that describes it.
+  - Leave story-028's subject, the retry routing table, untouched.
+  - The archived evidence under .harness/runs-archive/story-013-vacuous-tests/ is read-only committed evidence and is not edited.
+  - This story's own run is not governed by the scans it adds, since the suite it runs is the one it is changing. That is expected rather than a defect, and follows the pattern six earlier enforcement stories recorded.
