@@ -10,6 +10,7 @@ leaves on disk, and — for the criterion that the rule is data-driven — what
 happens when the declaration is moved to a different stage in a workflow
 definition the code has never seen.
 """
+import ast
 import inspect
 import json
 import subprocess
@@ -707,11 +708,26 @@ ERA_DEFINITIONS = ("tests/test_story_parser.py", "tests/test_story_005_validatio
 
 
 def era_constant(relative: str) -> str:
-    namespace: dict = {}
-    for line in (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines():
-        if line.startswith("FIRST_SCHEMA_ERA_STORY"):
-            exec(line, namespace)
-    return namespace["FIRST_SCHEMA_ERA_STORY"]
+    """The era constant one module defines, read out of its assignment.
+
+    Parsed rather than executed. story-029 states, mechanically, that no
+    module under `tests/` runs source in-process except the one shared loader
+    in `conftest.py`, because that is the only way to say "no recovered module
+    is loaded here" without naming helpers a rename can evade — and `exec` of
+    a line lifted out of another module is running source. `ast.literal_eval`
+    answers the same question and cannot run anything.
+
+    Subject and strictness are unchanged: the value comes from the module's
+    own assignment, and a module that does not define it still raises.
+    """
+    for node in ast.parse(
+            (REPO_ROOT / relative).read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name)
+                and target.id == "FIRST_SCHEMA_ERA_STORY"
+                for target in node.targets):
+            return ast.literal_eval(node.value)
+    raise KeyError("FIRST_SCHEMA_ERA_STORY")
 
 
 def test_both_definitions_of_the_era_constant_are_story_007():

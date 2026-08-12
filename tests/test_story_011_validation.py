@@ -26,7 +26,6 @@ import re
 import shutil
 import subprocess
 import sys
-import importlib.util
 from pathlib import Path
 
 import pytest
@@ -36,7 +35,7 @@ import run_status
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import commit_setup, story_diff
+from conftest import commit_setup, load_mutant, story_diff
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 WORKFLOW = json.loads(
@@ -244,136 +243,6 @@ def test_an_escalated_runs_history_ends_with_its_escalation(escalated):
     assert history[0]["event"] == "workflow-started"
     assert history[-1]["event"] == "escalated"
     assert "retries are exhausted" in history[-1]["message"]
-
-
-# --------------------------------------------------------------------------
-# events.log is byte-identical to what it was before this story
-# --------------------------------------------------------------------------
-
-
-def load_variant(source: str, path: Path, name: str):
-    """Load a coordinator source as its own module, leaving the real one alone.
-
-    Used for the deliberate mutants the non-vacuity checks run against.
-    Nothing here writes to orchestration/.
-    """
-    path.write_text(source, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-COORDINATOR_REPO_PATH = "orchestration/story_coordinator.py"
-
-
-def coordinator_source_at(revision: str, repo: Path = REPO_ROOT) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), "show", f"{revision}:{COORDINATOR_REPO_PATH}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-
-
-def pre_story_revision(repo: Path = REPO_ROOT) -> str:
-    """The newest commit whose coordinator predates this story. See below."""
-    revisions = subprocess.run(
-        ["git", "-C", str(repo), "log", "--format=%H", "--", COORDINATOR_REPO_PATH],
-        capture_output=True, text=True, check=True,
-    ).stdout.split()
-    for revision in revisions:
-        if "execution-history" not in coordinator_source_at(revision, repo):
-            return revision
-    raise AssertionError(
-        "no committed revision of the coordinator predates this story; the "
-        "differential comparison has nothing to compare against"
-    )
-
-
-def pre_story_coordinator_source(repo: Path = REPO_ROOT) -> str:
-    """The newest committed coordinator that predates this story.
-
-    Deliberately not HEAD. `_complete` commits the working tree at the end of
-    a successful run, so once this story's own commit lands HEAD carries the
-    new coordinator and the differential comparison would compare the
-    implementation with itself. Walking this file's own history to the last
-    revision that does not know the artifact's name stays pre-story after the
-    commit, after a rebase and after a squash, without pinning a hash that
-    any of those would invalidate.
-
-    `repo` is a parameter so the resolution can be exercised against a
-    synthetic history in which the story is already committed — the condition
-    this whole comparison has to survive, and one the repository under test
-    cannot be in while these tests are what decide whether it commits.
-    """
-    return coordinator_source_at(pre_story_revision(repo), repo)
-
-
-def test_the_comparison_baseline_is_not_this_implementation():
-    """Guards the resolution itself: whatever revision it picked, the source
-    it returned is the old coordinator and not the one under test."""
-    baseline = pre_story_coordinator_source()
-    assert "execution-history" not in baseline
-    assert "execution-history" in COORDINATOR_SOURCE
-    assert baseline != COORDINATOR_SOURCE
-    assert "def run_story" in baseline and "def append_event" in baseline
-
-
-def synthetic_history(root: Path, revisions: list[str]) -> Path:
-    """A repository whose coordinator has one commit per given source."""
-    root.mkdir(parents=True)
-    coordinator = root / COORDINATOR_REPO_PATH
-    coordinator.parent.mkdir(parents=True)
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
-    for setting, value in (("user.email", "t@example.com"), ("user.name", "T")):
-        subprocess.run(["git", "-C", str(root), "config", setting, value], check=True)
-    for index, source in enumerate(revisions):
-        coordinator.write_text(source, encoding="utf-8")
-        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
-        subprocess.run(
-            ["git", "-C", str(root), "commit", "-q", "-m", f"revision-{index}"],
-            check=True,
-        )
-    return root
-
-
-def test_the_baseline_stays_pre_story_once_this_story_is_committed(tmp_path: Path):
-    """The condition that broke the previous attempt, asserted rather than
-    reproduced by hand.
-
-    `_complete` commits the working tree at the end of a successful run, so
-    the tree these tests pass in is not the tree they will next be read from:
-    the very next revision of the coordinator is this story's. Resolving the
-    baseline against a history whose newest revision already carries the
-    story must still return the revision before it, or every differential
-    comparison in this file silently starts comparing the implementation with
-    itself.
-    """
-    before = pre_story_coordinator_source()
-    repo = synthetic_history(tmp_path / "after-the-commit", [before, COORDINATOR_SOURCE])
-
-    resolved = pre_story_coordinator_source(repo)
-    assert resolved == before
-    assert "execution-history" not in resolved
-    assert resolved != coordinator_source_at("HEAD", repo)
-
-    # And the walk skips however many post-story revisions have piled up.
-    later = synthetic_history(
-        tmp_path / "later-still",
-        [before, COORDINATOR_SOURCE, COORDINATOR_SOURCE + "\n# a later change\n"],
-    )
-    assert pre_story_coordinator_source(later) == before
-
-
-def test_the_baseline_resolution_fails_loudly_when_there_is_nothing_older(
-    tmp_path: Path,
-):
-    """The failure mode a silent fallback would hide: with no pre-story
-    revision to find, the comparison must refuse rather than compare this
-    implementation against itself and report agreement."""
-    repo = synthetic_history(tmp_path / "story-all-the-way-down", [COORDINATOR_SOURCE])
-    with pytest.raises(AssertionError, match="nothing to compare against"):
-        pre_story_coordinator_source(repo)
 
 
 # --------------------------------------------------------------------------
@@ -877,7 +746,8 @@ def test_every_prompt_still_renders_with_no_leftover_placeholder(
 # --------------------------------------------------------------------------
 
 
-COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8")
+COORDINATOR_PATH = Path(story_coordinator.__file__)
+COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
 
 # Each mutant breaks exactly one guarantee this story is responsible for. The
 # mutation is applied to a copy loaded as its own module; the repository's
@@ -907,14 +777,15 @@ MUTANTS = {
 
 
 def mutant_history(name: str, tmp_path: Path, target_root: Path, harness_root: Path):
-    """Run a retry-then-pass run through the named mutant; return its run dir."""
-    old, new = MUTANTS[name]
-    assert old in COORDINATOR_SOURCE, name
-    module = load_variant(
-        COORDINATOR_SOURCE.replace(old, new, 1),
-        tmp_path / "mutant_story_coordinator.py",
-        "mutant_story_coordinator",
-    )
+    """Run a retry-then-pass run through the named mutant; return its run dir.
+
+    Built through `conftest.load_mutant` since story-029, the one place under
+    tests/ that builds a module. The mutations, their anchors and every
+    assertion below are unchanged.
+    """
+    module = load_mutant(
+        COORDINATOR_PATH, [MUTANTS[name]], name="mutant_story_coordinator",
+        tmp_path=tmp_path)
     runner = HistoryRunner(target_root, [FAIL, PASS])
     assert module.run_story("story-001", harness_root, target_root, runner) == 0
     return run_dir_of(target_root)
@@ -965,12 +836,10 @@ def test_a_history_that_restarts_on_resume_is_caught(
     """Non-vacuity for the resume seam: a coordinator that starts a fresh
     history instead of reading back the one on disk breaks the
     line-for-entry correspondence, and the seam test must see it."""
-    module = load_variant(
-        COORDINATOR_SOURCE.replace(
-            "    history = load_history(run_dir)", "    history = []", 1),
-        tmp_path / "restarting_story_coordinator.py",
-        "restarting_story_coordinator",
-    )
+    module = load_mutant(
+        COORDINATOR_PATH,
+        [("    history = load_history(run_dir)", "    history = []")],
+        name="restarting_story_coordinator", tmp_path=tmp_path)
     assert "    history = load_history(run_dir)" in COORDINATOR_SOURCE
 
     run_dir = run_dir_of(target_root)

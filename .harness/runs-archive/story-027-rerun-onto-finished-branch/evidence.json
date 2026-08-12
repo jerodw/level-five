@@ -1,0 +1,25 @@
+{
+  "story": "story-027",
+  "frozen_by": "story-029",
+  "defect": "with its run directory deleted, a finished story runs again onto the branch that already holds its finished work: every stage does its job, the run reports success, and the story's own commit changes nothing",
+  "reproduction": {
+    "module": "tests/test_story_027_validation.py",
+    "test": "test_the_earlier_coordinator_reruns_the_finished_story_and_reports_success",
+    "deleted_by": "story-029",
+    "move": "finish the story, delete the run directory, run the story again",
+    "demonstrated": {
+      "earlier_coordinator_declares_completion_commits": false,
+      "earlier_coordinator_exit_code": 0,
+      "earlier_coordinator_invoked_agents": true,
+      "earlier_coordinator_recorded_status": "completed",
+      "diff_against_the_finished_work": "",
+      "current_coordinator_exit_code": 1
+    },
+    "why_it_cannot_be_rerun": "the recovered coordinator runs against today's workflow, in which `clean_clone` is an object-valued declaration rather than a string, and raises TypeError before reaching the behaviour it was recovered to show"
+  },
+  "what_holds_now": {
+    "refusal_names": ["the branch", "each completion commit found", "the run directory"],
+    "recogniser": "completion_commits",
+    "evidence_it_uses": "a commit whose subject is completion_commit_subject(story_id, title) and whose body carries COMPLETION_COMMIT_MARKER"
+  }
+}

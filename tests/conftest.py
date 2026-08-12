@@ -1,5 +1,9 @@
+import ast
+import importlib.machinery
+import importlib.util
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,6 +125,165 @@ def story_diff(paths: list[str], *, validation_file: Path,
     return subprocess.run(
         command, capture_output=True, text=True, check=True,
     ).stdout
+
+
+# --------------------------------------------------------------------------
+# The one reader of a repository file's text at a bound
+#
+# Eleven modules under tests/ carried a private copy of `git show <rev>:<path>`
+# — usually a `pre_story`/`at_story_endpoint` pair resolved through
+# `story_commit_range` above. One question, eleven answers, and each copy was
+# a place the both-ends bounding could be re-derived slightly differently;
+# the architecture document records six repairs of exactly that.
+#
+# So the reader lives here, beside the resolution it is built on, and
+# `tests/test_baseline_honesty.py` holds the suite to it: no module under
+# tests/ other than this one invokes git for a repository file's text.
+# --------------------------------------------------------------------------
+
+
+BASELINE = "baseline"
+ENDPOINT = "endpoint"
+
+
+def _resolved_revision(*, revision: str | None, validation_file: Path | None,
+                       bound: str | None, repo: Path) -> str | None:
+    """The revision a caller named, directly or as one end of a story's range.
+
+    Returns None only for the endpoint of a story still in flight, which has
+    no commit yet and whose correct answer is the working tree.
+    """
+    if revision is not None:
+        if validation_file is not None or bound is not None:
+            raise TypeError("name a revision or a story bound, not both")
+        return revision
+    if validation_file is None or bound is None:
+        raise TypeError("name either a revision or a validation file and bound")
+    if bound not in (BASELINE, ENDPOINT):
+        raise ValueError(f"bound must be {BASELINE!r} or {ENDPOINT!r}")
+    return getattr(story_commit_range(validation_file, repo), bound)
+
+
+def repository_file_at(relative: str, *, revision: str | None = None,
+                       validation_file: Path | None = None,
+                       bound: str | None = None,
+                       repo: Path = HARNESS_ROOT) -> str:
+    """One repository file's text, at a revision or at a story's own bound.
+
+    `bound=BASELINE` is the parent of the commit that added `validation_file`;
+    `bound=ENDPOINT` is that commit itself, falling back to the working tree
+    while the story is still in flight, which is the only moment the working
+    tree is that story's endpoint. Reading an endpoint from the working tree
+    at any other moment is the trap the architecture document records under
+    the HEAD-baseline bullets, and it is written here once so no caller can
+    re-derive it wrongly.
+    """
+    resolved = _resolved_revision(revision=revision,
+                                  validation_file=validation_file,
+                                  bound=bound, repo=repo)
+    if resolved is None:
+        return (Path(repo) / relative).read_text(encoding="utf-8")
+    result = _git(repo, "show", f"{resolved}:{relative}")
+    if result.returncode != 0:
+        raise NothingToCompareAgainst(
+            f"{relative} cannot be read at {resolved} in {repo}: "
+            f"{result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def function_source(source: str, name: str) -> str:
+    """One top-level function's own text, decorators included.
+
+    Decorators are part of what a comparison of a function's source is about —
+    `_escalate` carries one that decides when its work is committed — so they
+    are included, as `inspect.getsource` includes them.
+    """
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == name:
+            first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            lines = source.splitlines(keepends=True)
+            return "".join(lines[first - 1:node.end_lineno])
+    raise AssertionError(f"{name} is not defined at the top level of this source")
+
+
+def function_source_at(relative: str, name: str, *, revision: str | None = None,
+                       validation_file: Path | None = None,
+                       bound: str | None = None,
+                       repo: Path = HARNESS_ROOT) -> str:
+    """A named function's source, read out of a file's text at a bound.
+
+    The text half of what a differential test used to get by loading the file
+    as a module: comparing what a function *says* needs no running module, and
+    a module recovered out of history stops running as soon as anything it
+    imports changes shape.
+    """
+    return function_source(
+        repository_file_at(relative, revision=revision,
+                           validation_file=validation_file, bound=bound,
+                           repo=repo),
+        name)
+
+
+# --------------------------------------------------------------------------
+# The two loaders, and the only place under tests/ that builds a module
+# --------------------------------------------------------------------------
+
+
+def load_mutant(source_path: Path, replacements: Sequence[tuple[str, str]], *,
+                name: str, tmp_path: Path):
+    """A working-tree module with named substitutions applied, as its own module.
+
+    Deliberately takes a *path in the working tree* and the substitutions to
+    make in it, rather than arbitrary source text. Every mutation-loading
+    caller under tests/ mutates today's code to show a check can fail, and
+    taking a path means source recovered out of git history is not a value
+    this helper naturally accepts — the practice being retired cannot come
+    back through it without a caller reading the history itself, which
+    `tests/test_baseline_honesty.py` reports.
+
+    Each `old` must occur, so a mutation whose anchor has moved fails as
+    itself rather than as a mutant that silently changed nothing.
+    """
+    source = source_path.read_text(encoding="utf-8")
+    for old, new in replacements:
+        assert old in source, (name, old)
+        source = source.replace(old, new, 1)
+    module_path = Path(tmp_path) / f"{name}.py"
+    module_path.write_text(source, encoding="utf-8")
+    return _load_module(name, module_path)
+
+
+def load_script(script_name: str, *, name: str | None = None):
+    """One of `scripts/`'s extensionless entry points, as a module.
+
+    They have no `.py` suffix, so they cannot be imported; a loader named
+    explicitly is the only way to call `main` or `report` directly. One
+    helper rather than one per module, for the reason the reader above is
+    shared.
+    """
+    module_name = name or f"{script_name.replace('-', '_')}_under_test"
+    return _load_module(module_name, HARNESS_ROOT / "scripts" / script_name)
+
+
+def _load_module(name: str, path: Path):
+    """Build and execute a module. The one construction site under tests/.
+
+    Registered in `sys.modules` before execution because `@dataclass` resolves
+    a field's annotations through `sys.modules[cls.__module__]`, which is None
+    for a module that has been created but never registered; removed
+    afterwards so the real module of that name is never shadowed.
+    """
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    return module
 
 
 def _relative_to(path: Path, repo: Path) -> str:

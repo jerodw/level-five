@@ -37,8 +37,6 @@ Nothing here invokes a model: every run goes through a fake agent runner.
 """
 import ast
 import difflib
-import importlib.machinery
-import importlib.util
 import inspect
 import json
 import shutil
@@ -48,7 +46,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_commit_range
+from conftest import (BASELINE, ENDPOINT, function_source_at,
+                      repository_file_at, story_commit_range)
 
 import story_coordinator
 from agent_runner import AgentResult
@@ -341,14 +340,18 @@ def abandon_the_branch(target_root: Path) -> None:
 # --------------------------------------------------------------------------
 
 
+COORDINATOR_REL = "orchestration/story_coordinator.py"
+
+
 def pre_story(path: str) -> str:
     """A repository file as it stood before this story's own run.
 
-    Resolved through the shared range in conftest.py rather than as HEAD, so
-    the comparison survives this story's own commit.
+    Through `conftest.repository_file_at` since story-029, which folded the
+    eleven private copies of this reader into one. Subject and strictness
+    unchanged; only where the text comes from moved.
     """
-    revision = story_commit_range(Path(__file__)).baseline
-    return git(REPO_ROOT, "show", f"{revision}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=BASELINE, repo=REPO_ROOT)
 
 
 def at_story_endpoint(path: str) -> str:
@@ -356,46 +359,25 @@ def at_story_endpoint(path: str) -> str:
 
     The counterpart of `pre_story`. Against today's working tree a "this story
     changed only X" comparison asks what the file looks like *now*, which a
-    later story changes without this story having done anything. While this
-    story is still in flight there is no endpoint and the working tree is the
-    right answer.
+    later story changes without this story having done anything.
     """
-    endpoint = story_commit_range(Path(__file__)).endpoint
-    if endpoint is None:
-        return (REPO_ROOT / path).read_text(encoding="utf-8")
-    return git(REPO_ROOT, "show", f"{endpoint}:{path}").stdout
+    return repository_file_at(path, validation_file=Path(__file__),
+                              bound=ENDPOINT, repo=REPO_ROOT)
 
 
-@pytest.fixture
-def pre_story_coordinator(tmp_path: Path):
-    return _loaded_coordinator(
-        tmp_path, "pre_story_027_coordinator",
-        pre_story("orchestration/story_coordinator.py"))
+def coordinator_function(name: str, bound: str,
+                         validation_file: Path | None = None) -> str:
+    """One coordinator function's source text at one end of a story's range.
 
-
-@pytest.fixture
-def endpoint_coordinator(tmp_path: Path):
-    """The coordinator as this story's own run left it, loaded the same way."""
-    return _loaded_coordinator(
-        tmp_path, "endpoint_027_coordinator",
-        at_story_endpoint("orchestration/story_coordinator.py"))
-
-
-def _loaded_coordinator(tmp_path: Path, name: str, source: str):
-    module_path = tmp_path / f"{name}.py"
-    write(module_path, source)
-    loader = importlib.machinery.SourceFileLoader(name, str(module_path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    # Registered before execution because `@dataclass` resolves a field's
-    # annotations through sys.modules[cls.__module__], which is None for a
-    # module that has been created but never registered.
-    sys.modules[loader.name] = module
-    try:
-        loader.exec_module(module)
-    finally:
-        sys.modules.pop(loader.name, None)
-    return module
+    story-029 retired the pre-story and endpoint *modules* this file used to
+    load: a coordinator recovered out of history runs against today's
+    workflow, schemas and config, and stops running as soon as any of them
+    legitimately changes. Every comparison here only ever read a function's
+    text, so it reads the text.
+    """
+    return function_source_at(COORDINATOR_REL, name,
+                              validation_file=validation_file or Path(__file__),
+                              bound=bound, repo=REPO_ROOT)
 
 
 # --------------------------------------------------------------------------
@@ -614,27 +596,79 @@ def test_a_branch_that_exists_but_never_finished_still_runs(
     assert rerun_after_deleting_the_run_directory(kept, harness_root)[0] == 1
 
 
+#: What a first run of this story produces on a repository whose story branch
+#: does not exist: the stages it invokes in order, the run-directory artifacts
+#: it leaves, the events it logs, and the commit it ends on. Named rather than
+#: recovered — the check this story adds must change none of them, and a
+#: regression in any one fails by name rather than as "the two runs differ".
+#: The artifacts are required rather than exhaustive, per the standing rule
+#: that a run directory is not asserted as an exact set: every story that adds
+#: an artifact would otherwise fail an assertion about something else.
+FIRST_RUN_STAGES = ["implementer", "tester", "verifier", "documenter"]
+FIRST_RUN_ARTIFACTS = [
+    "changed-files.json", "clean-clone-result.json", "completion-report.md",
+    "events.log", "execution-history.json", "implementation-summary.md",
+    "state.json", "test-results.json", "tester-changed-files.json",
+    "verification-result.json", "verification/iteration-1.json",
+]
+FIRST_RUN_EVENTS = [
+    f"workflow started for {STORY_ID}",
+    "implementer stage started", "implementer stage completed",
+    "tester stage started", "tester stage completed",
+    "verifier stage started", "verification passed",
+    "clean-clone suite passed with the story committed",
+    "documenter stage started", "documenter stage completed",
+    f"story completed on branch {STORY_BRANCH}",
+]
+
+
 def test_a_first_run_of_a_story_whose_branch_does_not_exist_is_unaffected(
-    make_target, harness_root, pre_story_coordinator,
+    target, harness_root,
 ):
-    """Same artifacts, same events, same routing, same commit — compared
-    against the coordinator as it stood before the check existed, run against
-    an identically built target rather than against a shape written here."""
-    now = make_target("first-run-target")
-    before = make_target("first-run-control-target")
-    assert STORY_BRANCH not in branches(now)
+    """The check changes nothing about a run whose branch carries no finished
+    work, stated as the run's own output rather than as equality with a module
+    recovered out of git history.
 
-    after_code, after_runner = run(now, harness_root)
-    before_code, before_runner = run(before, harness_root,
-                                     coordinator=pre_story_coordinator)
+    Each thing the comparison used to compare is named: the stages invoked and
+    their order, the artifacts the run directory holds, the events logged and
+    their order, the state the run records, and the commit message it ends on.
 
-    assert after_code == before_code == 0
-    assert after_runner.calls == before_runner.calls
-    assert artifacts_in(now) == artifacts_in(before)
-    assert messages(now) == messages(before)
-    assert state_of(now) == state_of(before)
-    assert git(now, "log", "-1", "--format=%B").stdout \
-        == git(before, "log", "-1", "--format=%B").stdout
+    Its control is the re-run below on the same repository once it *has*
+    finished, which produces none of this and is refused — so "unaffected" is
+    the branch being empty of finished work rather than the check never
+    firing.
+    """
+    assert STORY_BRANCH not in branches(target)
+
+    code, runner = run(target, harness_root)
+
+    assert code == 0
+    assert runner.calls == FIRST_RUN_STAGES
+    present = artifacts_in(target)
+    assert set(FIRST_RUN_ARTIFACTS) <= set(present)
+    assert "escalation-summary.md" not in present
+    assert messages(target) == FIRST_RUN_EVENTS
+
+    state = state_of(target)
+    assert state["status"] == "completed"
+    assert state["branch"] == STORY_BRANCH
+    assert state["retry_count"] == 0
+
+    assert git(target, "log", "-1", "--format=%B").stdout.rstrip("\n") \
+        == PRE_EXTRACTION_MESSAGE
+
+
+def test_each_first_run_expectation_above_can_fail(target, harness_root):
+    """The control for the assertion above, which names its subjects: a named
+    subject no run could violate would be indistinguishable from one no run
+    does. The same repository, one finished run later, satisfies none of
+    them."""
+    finished(target, harness_root)
+    code, runner = rerun_after_deleting_the_run_directory(target, harness_root)
+
+    assert code == 1
+    assert runner.calls != FIRST_RUN_STAGES
+    assert not run_dir_of(target).exists()
 
 
 def test_a_resume_of_an_escalated_run_is_unaffected(make_target, harness_root):
@@ -892,16 +926,19 @@ def test_that_same_comparison_reports_each_thing_the_check_must_not_do(
 # --------------------------------------------------------------------------
 
 
-def test_the_composed_message_is_byte_for_byte_the_pre_extraction_string(
-    pre_story_coordinator,
-):
+def test_the_composed_message_is_byte_for_byte_the_pre_extraction_string():
     """Asserted against the string the old inline f-string produced, written
-    out here and read back off the earlier module, rather than by inspection."""
+    out here and read back off `_complete` as it stood before the extraction,
+    rather than by inspection.
+
+    The old text is *read* rather than loaded as a module: what it says is the
+    whole subject, and a recovered coordinator no longer runs anyway.
+    """
     state = story_coordinator.RunState(story_id=STORY_ID, branch=STORY_BRANCH)
     composed = story_coordinator.completion_commit_message(state, STORY_TITLE)
     assert composed == PRE_EXTRACTION_MESSAGE
 
-    old = inspect.getsource(pre_story_coordinator._complete)
+    old = coordinator_function("_complete", BASELINE)
     assert '"commit", "-m", f"{state.story_id}: {title}\\n\\n' \
         'Implemented by the l5 harness story workflow."' in old
 
@@ -922,18 +959,20 @@ def test_the_message_a_real_run_commits_is_that_message(target, harness_root):
         != PRE_EXTRACTION_MESSAGE
 
 
-def test_the_extraction_is_the_only_edit_the_story_made_to_complete(
-    pre_story_coordinator,
-):
-    """`_complete` differs from the earlier module in the commit-message line
+def test_the_extraction_is_the_only_edit_the_story_made_to_complete():
+    """`_complete` differs from its pre-story text in the commit-message line
     and in nothing else.
 
     The control is `run_story`, read the same way, which differs in many lines —
     so "one changed line" is a diff that can report more.
+
+    Both sides are read as text, at this story's own two bounds. The "after"
+    side is this story's endpoint rather than today's working tree, so a later
+    story editing `_complete` is not story-027 editing it.
     """
     def changed_lines(name: str) -> list[str]:
-        before = inspect.getsource(getattr(pre_story_coordinator, name))
-        after = inspect.getsource(getattr(story_coordinator, name))
+        before = coordinator_function(name, BASELINE)
+        after = coordinator_function(name, ENDPOINT)
         return [line for line in difflib.unified_diff(
             before.splitlines(), after.splitlines(), n=0)
             if line[:1] in "+-" and not line.startswith(("---", "+++"))]
@@ -1036,37 +1075,49 @@ def test_the_check_says_in_the_code_that_the_evidence_is_a_finished_run():
 # --------------------------------------------------------------------------
 
 
+#: The already-ended refusal's message, sliced out of `run_story`'s own text.
+_ALREADY_ENDED_HEAD = 'f"{story_id} already ended with status'
+_ALREADY_ENDED_TAIL = "file=sys.stderr,"
+
+
+def already_ended_message(bound: str) -> str:
+    body = coordinator_function("run_story", bound)
+    head = body.index(_ALREADY_ENDED_HEAD)
+    return body[head:body.index(_ALREADY_ENDED_TAIL, head)]
+
+
 def test_a_completed_state_still_meets_the_already_ended_refusal(
-    make_target, harness_root, capsys, pre_story_coordinator,
+    target, harness_root, capsys,
 ):
-    """Byte for byte the message it produced before this story, compared
-    against the earlier module run against an identically built target.
+    """The refusal this story did not replace, named rather than compared
+    against a module that produced it once.
+
+    Two statements. What the refusal *says* is asserted as its own text — the
+    status, the run directory, the branch, and what to do about each — against
+    a repository whose run directory is still there. That this story left it
+    alone is asserted where the text lives: the print statement is
+    byte-identical at both ends of this story's own commit range, read as text
+    rather than by running the module that produced it.
 
     The control is the new refusal on the same repository with only the run
-    directory deleted, which is a different message — so the equality is the
+    directory deleted, which is a different message — so this is the
     completed-state path being untouched rather than both refusals having
     collapsed into one.
     """
-    now = make_target("completed-state-target")
-    before = make_target("completed-state-control-target")
-    finished(now, harness_root)
-    assert pre_story_coordinator.run_story(
-        STORY_ID, harness_root, before, Runner(before)) == 0
+    finished(target, harness_root)
 
     capsys.readouterr()
-    assert run(now, harness_root)[0] == 1
+    assert run(target, harness_root)[0] == 1
     current_message = capsys.readouterr().err
 
-    capsys.readouterr()
-    assert pre_story_coordinator.run_story(
-        STORY_ID, harness_root, before, Runner(before)) == 1
-    earlier_message = capsys.readouterr().err
-
-    assert current_message == earlier_message.replace(str(before), str(now))
-    assert "already ended with status 'completed'" in current_message
+    assert f"{STORY_ID} already ended with status 'completed'." in current_message
+    assert f"Inspect {run_dir_of(target)} to review it." in current_message
+    assert f"delete {run_dir_of(target)} *and* reset branch" in current_message
+    assert f"{STORY_BRANCH}, which still holds the finished work." in current_message
+    assert already_ended_message(ENDPOINT) == already_ended_message(BASELINE)
 
     capsys.readouterr()
-    assert rerun_after_deleting_the_run_directory(now, harness_root)[0] == 1
+    assert rerun_after_deleting_the_run_directory(target, harness_root)[0] == 1
     assert capsys.readouterr().err != current_message
 
 
@@ -1075,36 +1126,45 @@ def test_a_completed_state_still_meets_the_already_ended_refusal(
 # --------------------------------------------------------------------------
 
 
-def test_the_earlier_coordinator_reruns_the_finished_story_and_reports_success(
-    make_target, harness_root, pre_story_coordinator,
+#: What the defect looked like, and what the reproduction that used to sit
+#: here demonstrated. Frozen by story-029, which deleted the reproduction: it
+#: recovered the pre-story coordinator out of git history and ran it, and that
+#: module no longer executes against today's workflow at all. A defect whose
+#: only account was a deleted test has lost its account, so the account is
+#: committed evidence a reader can find.
+RERUN_EVIDENCE = (REPO_ROOT / ".harness" / "runs-archive"
+                  / "story-027-rerun-onto-finished-branch" / "evidence.json")
+
+
+def test_the_defect_this_closes_is_recorded_and_the_same_move_is_refused(
+    target, harness_root,
 ):
-    """The observed defect, reproduced on the module that had no check: the run
-    directory is deleted, the run is asked for again, and it completes on a
-    branch that already held the finished work — changing nothing.
+    """The defect, read out of the frozen evidence, and the same move made
+    against today's coordinator.
 
-    This is also the control for every refusal above: the same repository, the
-    same move, one module apart.
+    The evidence records what the earlier coordinator did on exactly this
+    move: completed, invoked agents, recorded `completed`, and left the branch
+    byte-identical to the finished work it re-ran onto. Today's coordinator is
+    put through the identical move and refuses it, leaving the branch where it
+    was — so the record is a control rather than a description.
     """
-    assert "completion_commits" in COORDINATOR_SOURCE
-    assert not hasattr(pre_story_coordinator, "completion_commits")
+    evidence = json.loads(RERUN_EVIDENCE.read_text(encoding="utf-8"))
+    demonstrated = evidence["reproduction"]["demonstrated"]
 
-    older = make_target("older-target")
-    finished(older, harness_root)
-    head_before = git(older, "rev-parse", STORY_BRANCH).stdout.strip()
-    code, runner = rerun_after_deleting_the_run_directory(
-        older, harness_root, coordinator=pre_story_coordinator)
+    assert demonstrated["earlier_coordinator_declares_completion_commits"] is False
+    assert demonstrated["earlier_coordinator_exit_code"] == 0
+    assert demonstrated["earlier_coordinator_recorded_status"] == "completed"
+    assert demonstrated["diff_against_the_finished_work"] == ""
+    assert demonstrated["current_coordinator_exit_code"] == 1
+    assert evidence["what_holds_now"]["recogniser"] in COORDINATOR_SOURCE
 
-    assert code == 0
-    assert runner.calls != []
-    assert state_of(older)["status"] == "completed"
-    # The tree it "produced" is the tree it started from: the story's own
-    # commit is empty of change against the finished work it re-ran onto.
-    assert git(older, "diff", "--name-only", head_before,
-               STORY_BRANCH).stdout.strip() == ""
+    finished(target, harness_root)
+    head_before = git(target, "rev-parse", STORY_BRANCH).stdout.strip()
+    code, runner = rerun_after_deleting_the_run_directory(target, harness_root)
 
-    current = make_target("current-target")
-    finished(current, harness_root)
-    assert rerun_after_deleting_the_run_directory(current, harness_root)[0] == 1
+    assert code == demonstrated["current_coordinator_exit_code"]
+    assert runner.calls == []
+    assert git(target, "rev-parse", STORY_BRANCH).stdout.strip() == head_before
 
 
 # --------------------------------------------------------------------------
@@ -1112,7 +1172,7 @@ def test_the_earlier_coordinator_reruns_the_finished_story_and_reports_success(
 # --------------------------------------------------------------------------
 
 
-def test_reverting_the_repointed_story_020_assertion_re_breaks_it(tmp_path):
+def test_reverting_the_repointed_story_020_assertion_re_breaks_it():
     """story-020's `_complete` comparison read its "after" side from today's
     working tree, and this story extracted `_complete`'s message.
 
@@ -1125,17 +1185,12 @@ def test_reverting_the_repointed_story_020_assertion_re_breaks_it(tmp_path):
     span = story_commit_range(story_020)
     assert span.committed, "story-020 is in this history"
 
-    def coordinator_at(revision: str, name: str):
-        return _loaded_coordinator(tmp_path, name, git(
-            REPO_ROOT, "show",
-            f"{revision}:orchestration/story_coordinator.py").stdout)
-
-    before = coordinator_at(span.baseline, "pre_story_020_coordinator")
-    endpoint = coordinator_at(span.endpoint, "story_020_endpoint_coordinator")
+    def at(name: str, bound: str) -> str:
+        return coordinator_function(name, bound, validation_file=story_020)
 
     assert inspect.getsource(story_coordinator._complete) \
-        != inspect.getsource(before._complete)          # the reverted form: red
-    assert inspect.getsource(endpoint._complete) \
-        == inspect.getsource(before._complete)          # the repointed form
-    assert inspect.getsource(endpoint._escalate) \
-        != inspect.getsource(before._escalate)          # its control, unchanged
+        != at("_complete", BASELINE)                    # the reverted form: red
+    assert at("_complete", ENDPOINT) \
+        == at("_complete", BASELINE)                    # the repointed form
+    assert at("_escalate", ENDPOINT) \
+        != at("_escalate", BASELINE)                    # its control, unchanged

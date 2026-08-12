@@ -41,7 +41,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (NothingToCompareAgainst, story_commit_range, story_diff)
+from conftest import (BASELINE, NothingToCompareAgainst, repository_file_at,
+                      story_commit_range, story_diff)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -465,15 +466,579 @@ def test_the_exemption_is_by_name_and_covers_nothing_else():
 
 
 # --------------------------------------------------------------------------
-# The regression set: five instances, all committed evidence
+# A second rule: no module under tests/ builds a module at runtime
+#
+# Its own rule, with its own purpose, and it draws nothing from the baseline
+# rule above. That one is about a *comparison that cannot fail*. This one is
+# about an *instrument with a shelf life*: a module built at runtime out of
+# source recovered from git history runs against today's workflow, schemas and
+# config, so a legitimate change to any of those breaks it for reasons
+# unrelated to what it tested. story-028 reshaped two workflow keys and ten
+# tests went red, every one of them decay.
+#
+# It matches on **language constructs**, never on helper names. The scan it
+# replaced (`tests/test_story_016_validation.py`, deleted by story-029) named
+# two history readers and five loaders; four modules written after it defined
+# their own helpers under different names and went unreported for three
+# stories. A rule that names no helper cannot be evaded by renaming one.
+#
+# What it does not cover, stated here because this is where a reader meets it:
+#
+#   * **source run in a subprocess rather than in-process.** A module that
+#     writes recovered source to a file and runs `sys.executable` over it is
+#     not building a module in this process and is not seen. This is a real
+#     idiom in the suite — `tests/test_story_016_validation.py` copies
+#     `orchestration/` into a throwaway repository and runs pytest there — and
+#     it must stay unflagged, so the boundary is drawn at this process.
+#   * **historical text written to a file and passed in as a path.** The
+#     shared loader takes a path, and the scan does not evaluate expressions or
+#     track values, so it cannot tell a working-tree path from a path a caller
+#     wrote recovered text into. That is why the shared mutation-loader takes a
+#     working-tree path and its replacements rather than arbitrary source text:
+#     the shape of the helper is what makes recovered source an unnatural
+#     argument, and the scan is not what stops it.
+#   * **deliberate obfuscation of a banned construct.** `getattr(builtins,
+#     "ex" + "ec")`, an alias assigned at runtime, or a construct reached
+#     through a local rebinding is not seen. The scan reads what the source
+#     states; it does not evaluate it.
+#
+# And the limit it shares with everything mechanical in this repository: it is
+# not tamper-proof. An edit that deletes a check alongside a genuinely forced
+# repair is not caught, at any granularity, because deleting the check that
+# fails you satisfies the revert rule's own definition of a forced edit.
 # --------------------------------------------------------------------------
 
 
-def _blob(revision: str, rel: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", f"{revision}:{rel}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+#: Constructs that build or execute a module, reached through a module or
+#: bound directly. Matched on the name alone, whatever qualifies it — the same
+#: reasoning `_is_subprocess_call` uses for a spawn: requiring `importlib.util`
+#: to be spelled a particular way would make the check evadable by an import
+#: statement.
+MODULE_CONSTRUCTORS = (
+    "spec_from_file_location", "spec_from_loader", "module_from_spec",
+    "exec_module", "SourceFileLoader", "SourcelessFileLoader",
+    "ExtensionFileLoader", "ModuleType", "import_module",
+    "run_path", "run_module",
+)
+
+#: Builtins that run source in this process. Matched **only** as bare calls,
+#: because a builtin is never qualified: `re.compile` compiles a regular
+#: expression and `ast.literal_eval` evaluates a literal, and neither runs
+#: source. Reaching a builtin through an attribute is the obfuscation case the
+#: docstring above puts outside this scan.
+SOURCE_EXECUTORS = ("exec", "eval", "compile", "__import__")
+
+#: The one module allowed to do it, stated here rather than inferred. It holds
+#: the shared loaders — the mutation-loader every non-vacuity check goes
+#: through, and the loader for the extensionless entry points under
+#: `scripts/`, which have no suffix and so cannot be imported.
+CONSTRUCTION_EXEMPT_MODULES = ("conftest.py",)
+
+
+def _construction_reason(name: str) -> str:
+    return (f"builds or runs a module at runtime with `{name}`; the shared "
+            f"loaders in tests/conftest.py are the one place under tests/ "
+            f"that may")
+
+
+def module_construction(source: str, module: str) -> list[Flag]:
+    """Every construct in one module's source that builds or runs a module.
+
+    Exemptions are not applied here, exactly as `flagged_calls` does not apply
+    its own: this is the scan, and a caller that means to exempt a module does
+    not scan it. That is what lets the regression set below be fed to the same
+    function the live suite is held to.
+    """
+    flags = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in MODULE_CONSTRUCTORS:
+            flags.append(Flag(module=module, line=node.lineno,
+                              reason=_construction_reason(func.attr)))
+        elif isinstance(func, ast.Name) and func.id in (
+                MODULE_CONSTRUCTORS + SOURCE_EXECUTORS):
+            flags.append(Flag(module=module, line=node.lineno,
+                              reason=_construction_reason(func.id)))
+    return flags
+
+
+def constructing_modules() -> list[Path]:
+    """Every module this rule covers. Discovered by globbing, never by naming."""
+    return [path for path in sorted(TESTS_DIR.glob("*.py"))
+            if path.name not in CONSTRUCTION_EXEMPT_MODULES]
+
+
+def test_no_module_under_tests_builds_a_module_at_runtime():
+    """The rule, run rather than inspected."""
+    flags = [
+        flag
+        for path in constructing_modules()
+        for flag in module_construction(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert flags == [], "\n".join(str(flag) for flag in flags)
+
+
+def test_exactly_one_module_may_build_one_and_it_holds_the_shared_loaders():
+    """The exemption is by name and covers nothing else."""
+    assert CONSTRUCTION_EXEMPT_MODULES == ("conftest.py",)
+    shared = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
+    assert "def load_mutant" in shared
+    assert "def load_script" in shared
+    assert module_construction(shared, "conftest.py"), \
+        "the exempt module is exempt because it is the one that does this"
+
+    covered = {path.name for path in constructing_modules()}
+    assert covered.isdisjoint(CONSTRUCTION_EXEMPT_MODULES)
+    assert len(covered) + len(CONSTRUCTION_EXEMPT_MODULES) \
+        == len(list(TESTS_DIR.glob("*.py")))
+
+
+@pytest.mark.parametrize("planted,expected", [
+    pytest.param(
+        "import importlib.util\n"
+        "def probe(path):\n"
+        "    spec = importlib.util.spec_from_file_location('x', path)\n"
+        "    module = importlib.util.module_from_spec(spec)\n"
+        "    spec.loader.exec_module(module)\n",
+        3, id="spec-from-file-location"),
+    pytest.param(
+        "import importlib.machinery\n"
+        "def probe(path):\n"
+        "    loader = importlib.machinery.SourceFileLoader('x', path)\n"
+        "    loader.exec_module(object())\n",
+        2, id="source-file-loader"),
+    pytest.param(
+        "def probe(source):\n"
+        "    namespace = {}\n"
+        "    exec(source, namespace)\n"
+        "    return namespace\n",
+        1, id="exec-into-a-namespace"),
+    pytest.param(
+        "import types\n"
+        "def probe(source):\n"
+        "    module = types.ModuleType('x')\n"
+        "    exec(compile(source, 'x', 'exec'), module.__dict__)\n",
+        3, id="module-type-and-compile"),
+])
+def test_the_construction_scan_reports_a_planted_violation(planted, expected):
+    """Its reach demonstrated rather than asserted. A scan with no planted
+    violation is indistinguishable from one that has stopped looking, which
+    is the failure mode this whole module exists about."""
+    flags = module_construction(planted, "probe.py")
+    assert len(flags) == expected, flags
+
+
+def test_the_construction_scan_reports_a_module_that_renamed_its_helpers():
+    """Renaming is exactly how the scan this replaces was evaded, so it is the
+    case that must be shown rather than argued.
+
+    Two sources, identical in what they do and sharing not one helper name.
+    Both are reported, because the rule names constructs and no helper.
+    """
+    one = ("import importlib.machinery, importlib.util\n"
+           "def load_variant(name, path):\n"
+           "    loader = importlib.machinery.SourceFileLoader(name, str(path))\n"
+           "    spec = importlib.util.spec_from_loader(loader.name, loader)\n"
+           "    module = importlib.util.module_from_spec(spec)\n"
+           "    loader.exec_module(module)\n"
+           "    return module\n")
+    renamed = (one.replace("load_variant", "_summon_the_old_one")
+               .replace("(name, path)", "(label, where)")
+               .replace("name, str(path)", "label, str(where)"))
+
+    assert "load_variant" not in renamed
+    assert "_summon_the_old_one" in renamed
+    assert len(module_construction(one, "one.py")) == 4
+    assert len(module_construction(renamed, "renamed.py")) == 4
+
+
+@pytest.mark.parametrize("benign", [
+    pytest.param("import re\nPATTERN = re.compile('x')\n", id="re-compile"),
+    pytest.param("import ast\nV = ast.literal_eval('1')\n", id="literal-eval"),
+    pytest.param("import ast\nT = ast.parse('x = 1')\n", id="ast-parse"),
+    pytest.param("import subprocess, sys\n"
+                 "subprocess.run([sys.executable, '-m', 'pytest'], cwd='x')\n",
+                 id="a-subprocess-which-is-a-stated-limit"),
+])
+def test_the_construction_scan_leaves_these_alone(benign):
+    """What it must not report, including one of its own stated limits: a
+    suite run in a subprocess is outside this rule by construction, and
+    `tests/test_story_016_validation.py` depends on that staying true."""
+    assert module_construction(benign, "probe.py") == []
+
+
+# --------------------------------------------------------------------------
+# A third rule: only the shared reader asks git for a repository file's text
+#
+# Its own rule again, and it is not the construction rule's enforcement. That
+# one says a module may not be built here; this one says a file's historical
+# text is read in one place. Either could hold without the other: a module
+# could be built from text read some other way, and text can be read for a
+# hundred honest reasons that never build anything.
+#
+# The purpose is the one `story_commit_range` was written for and that six
+# repairs have re-derived: a per-story assertion has to be bounded at *both*
+# ends of its own story's commit range, and every private copy of the reader
+# was a place that bounding could be got wrong again. Eleven copies existed
+# when story-029 folded them.
+#
+# What it does not cover, stated here rather than implied:
+#
+#   * **git run in a subprocess this scan cannot attribute** — a call assembled
+#     through `functools.partial` or a local helper is not seen, for the same
+#     reason `_is_subprocess_call` does not see it: this check reads what the
+#     source states and does not track values. The throwaway-repository tests
+#     are written that way and must stay unflagged.
+#   * **a file's text obtained without asking git for it** — reading a path a
+#     caller has already written historical text into, or a `git worktree` or
+#     clone built elsewhere and read with `read_text`, is outside this rule.
+#   * **deliberate obfuscation** — a subcommand assembled from pieces, or a
+#     revision spec built by concatenation at runtime, is not seen.
+#
+# And the same tamper limit: an edit that deletes this check alongside a
+# genuinely forced repair is not caught, and no granularity closes that.
+# --------------------------------------------------------------------------
+
+
+#: The subcommands that hand back a file's *content*. `git show <rev>` and
+#: `git show --name-only` name commits and paths, which is a different
+#: question and not this rule's business.
+CONTENT_SUBCOMMANDS = ("show", "cat-file")
+
+#: The module holding the shared reader, stated by name. The same file the
+#: other two rules exempt, and for a third reason: it is where reading a
+#: repository file's text at a bound is the *correct* thing to do.
+READER_EXEMPT_MODULES = ("conftest.py",)
+
+
+def _joined_literal(node: ast.AST) -> str:
+    """Every literal fragment of an argument, joined.
+
+    An f-string's computed fields contribute nothing, so `f"{revision}:{path}"`
+    reads as `":"` — which is the revision-and-path shape this looks for, and
+    is what a computed revision cannot hide.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(value.value for value in node.values
+                       if isinstance(value, ast.Constant)
+                       and isinstance(value.value, str))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _joined_literal(node.left) + _joined_literal(node.right)
+    return ""
+
+
+def _asks_for_a_files_text(elements: list[ast.expr]) -> bool:
+    """Whether these arguments ask git to hand back a file's content.
+
+    A content subcommand, plus either a `<revision>:<path>` argument — read
+    through its literal fragments, so a computed revision cannot hide the
+    shape — or the object type `cat-file` prints.
+    """
+    literals = [_literal_text(element) for element in elements]
+    if not any(text in CONTENT_SUBCOMMANDS for text in literals if text):
+        return False
+    for element in elements:
+        joined = _joined_literal(element)
+        if ":" in joined and not joined.startswith("--"):
+            return True
+    return any(text in ("blob", "-p") for text in literals if text)
+
+
+def _git_words(node: ast.Call) -> list[ast.expr] | None:
+    """The arguments of a git invocation, in either of the two forms.
+
+    The spawned form, `subprocess.run(["git", ...])`, is the one the baseline
+    rule above reads. The *wrapped* form, `git(REPO_ROOT, "show", ...)`, is
+    the one every per-story module actually writes: a one-line local helper
+    around `subprocess.run`, which the baseline rule deliberately does not
+    chase because it does not track values.
+
+    This rule cannot afford to skip it — all four modules that carried the
+    retired practice wrote it that way — so it reads the wrapped form by its
+    *shape* rather than by the helper's name: a call naming one of the
+    repository-root names among its arguments, with a content subcommand and
+    a revision-and-path argument beside it. No helper name appears here, so
+    renaming one changes nothing.
+    """
+    if node.args:
+        first = node.args[0]
+        if isinstance(first, ast.List) and first.elts \
+                and _literal_text(first.elts[0]) == "git":
+            return list(first.elts)
+    if any(_names_the_repository_root(argument) for argument in node.args):
+        return list(node.args)
+    return None
+
+
+def git_text_reads(source: str, module: str) -> list[Flag]:
+    """Every git invocation in one module that asks this repository for a
+    file's text.
+
+    Which repository is read the way the baseline rule above reads it — a
+    `-C` or `cwd=` naming one of the names that stand for this repository, or
+    no stated target at all — with the wrapped form recognized by a
+    repository-root name among its arguments. A throwaway repository a test
+    built for itself is somebody else's history and is not this rule's
+    business.
+    """
+    flags = []
+    tree = ast.parse(source)
+    imported = _imported_spawners(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        elements = _git_words(node)
+        if elements is None:
+            continue
+        spawned = bool(node.args) and isinstance(node.args[0], ast.List)
+        if spawned:
+            if not _is_subprocess_call(node, imported):
+                continue
+            if not _targets_the_repository_root(node, elements):
+                continue
+        if _asks_for_a_files_text(elements):
+            flags.append(Flag(
+                module=module, line=node.lineno,
+                reason=("asks git for a repository file's text; "
+                        "tests/conftest.py holds the one reader, which bounds "
+                        "it at a story's own commit range"),
+            ))
+    return flags
+
+
+def reading_modules() -> list[Path]:
+    return [path for path in sorted(TESTS_DIR.glob("*.py"))
+            if path.name not in READER_EXEMPT_MODULES]
+
+
+def test_no_module_under_tests_reads_a_repository_file_out_of_git():
+    """The rule, run rather than inspected."""
+    flags = [
+        flag
+        for path in reading_modules()
+        for flag in git_text_reads(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert flags == [], "\n".join(str(flag) for flag in flags)
+
+
+def test_exactly_one_module_may_read_one_and_it_holds_the_shared_reader():
+    """The exemption is by name and covers nothing else.
+
+    That the exempt module really is the one doing the reading is asserted on
+    its source rather than by scanning it: `conftest.py` reaches git through
+    its own one-line wrapper with the repository passed in as a parameter, so
+    the shape this rule matches on is not written there — which is one of the
+    limits stated above, met by the exemption being a name rather than a
+    derivation.
+    """
+    assert READER_EXEMPT_MODULES == ("conftest.py",)
+    shared = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
+    assert "def repository_file_at" in shared
+    assert "def function_source_at" in shared
+    assert '"show", f"{resolved}:{relative}"' in shared
+
+    covered = {path.name for path in reading_modules()}
+    assert covered.isdisjoint(READER_EXEMPT_MODULES)
+    assert len(covered) + len(READER_EXEMPT_MODULES) \
+        == len(list(TESTS_DIR.glob("*.py")))
+
+
+@pytest.mark.parametrize("planted,expected", [
+    pytest.param(
+        "import subprocess\n"
+        "def probe(revision, path):\n"
+        "    return subprocess.run(\n"
+        "        ['git', '-C', str(REPO_ROOT), 'show', f'{revision}:{path}'],\n"
+        "        capture_output=True, text=True).stdout\n",
+        1, id="show-a-blob"),
+    pytest.param(
+        "import subprocess\n"
+        "def probe(path):\n"
+        "    subprocess.check_output(\n"
+        "        ['git', '-C', str(HARNESS_ROOT), 'show', 'HEAD~3:' + path])\n",
+        1, id="show-a-blob-at-a-fixed-revision"),
+    pytest.param(
+        "import subprocess\n"
+        "def probe(sha):\n"
+        "    subprocess.run(['git', 'cat-file', 'blob', sha], cwd=REPO_ROOT)\n",
+        1, id="cat-file-blob"),
+    pytest.param(
+        "import subprocess\n"
+        "def probe(revision, path):\n"
+        "    subprocess.run(['git', 'show', f'{revision}:{path}'])\n",
+        1, id="no-stated-target-inherits-this-repository"),
+])
+def test_the_reader_scan_reports_a_planted_violation(planted, expected):
+    """Its reach demonstrated rather than asserted, on the same terms as the
+    construction scan's planted violations."""
+    flags = git_text_reads(planted, "probe.py")
+    assert len(flags) == expected, flags
+
+
+def test_the_reader_scan_reports_a_module_that_renamed_its_helpers():
+    """Renaming is how the superseded scan was evaded, so this rule is shown
+    against it too: two readers with no name in common, both reported."""
+    one = ("import subprocess\n"
+           "def pre_story(path):\n"
+           "    revision = baseline()\n"
+           "    return subprocess.run(\n"
+           "        ['git', '-C', str(REPO_ROOT), 'show', f'{revision}:{path}'],\n"
+           "        capture_output=True, text=True).stdout\n")
+    renamed = (one.replace("pre_story", "recover_the_old_text")
+               .replace("revision", "moment").replace("baseline", "way_back"))
+
+    assert "pre_story" not in renamed
+    assert len(git_text_reads(one, "one.py")) == 1
+    assert len(git_text_reads(renamed, "renamed.py")) == 1
+
+
+@pytest.mark.parametrize("benign", [
+    pytest.param("import subprocess\n"
+                 "subprocess.run(['git', '-C', str(REPO_ROOT), 'log',\n"
+                 "                '--format=%H', '--', 'x'])\n",
+                 id="a-commit-list"),
+    pytest.param("import subprocess\n"
+                 "subprocess.run(['git', '-C', str(REPO_ROOT), 'show',\n"
+                 "                '--name-only', '--format=', revision])\n",
+                 id="a-commits-file-list"),
+    pytest.param("import subprocess\n"
+                 "subprocess.run(['git', '-C', str(root), 'show',\n"
+                 "                f'HEAD:{path}'], cwd=root)\n",
+                 id="a-throwaway-repository"),
+    pytest.param("import subprocess\n"
+                 "subprocess.run(['git', '-C', str(REPO_ROOT), 'diff',\n"
+                 "                '--pretty=format:%H'])\n",
+                 id="a-colon-inside-an-option"),
+])
+def test_the_reader_scan_leaves_these_alone(benign):
+    """What it must not report: naming commits and paths is a different
+    question from reading a file's content, and another repository's history
+    is not this rule's business."""
+    assert git_text_reads(benign, "probe.py") == []
+
+
+def test_the_two_new_rules_are_stated_separately_and_neither_derives_the_other():
+    """Two rules, two purposes, two exemption lists. Neither is described as
+    getting its enforcement from the other, and neither scan calls the other.
+
+    Read off the source rather than asserted about it, because "these are
+    separate" is exactly the kind of claim that stays written down after it
+    has stopped being true.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    functions = {node.name: node for node in ast.parse(source).body
+                 if isinstance(node, ast.FunctionDef)}
+    for name, other in (("module_construction", "git_text_reads"),
+                        ("git_text_reads", "module_construction")):
+        called = {inner.func.id for inner in ast.walk(functions[name])
+                  if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)}
+        assert other not in called, name
+
+    # Two vocabularies, disjoint: neither rule's subject is expressible in the
+    # other's terms, which is what "separate rules" means here.
+    assert set(MODULE_CONSTRUCTORS + SOURCE_EXECUTORS).isdisjoint(
+        CONTENT_SUBCOMMANDS)
+    for rule in ("no module under tests/ builds a module at runtime",
+                 "only the shared reader asks git for a repository file's text"):
+        assert rule in source, rule
+
+
+@pytest.mark.parametrize("scan", ["module_construction", "git_text_reads"])
+def test_each_new_rule_states_what_it_does_not_cover(scan):
+    """The narrowness this module already states about itself, required of
+    each new rule as well — and the three limits named by this story's
+    acceptance criteria are checked by name, so a rewritten paragraph that
+    quietly drops one goes red.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    where = source.index(f"def {scan}(")
+    stated = source[:where]
+    heading = stated.rindex("What it does not cover")
+    limits = stated[heading:]
+
+    assert "subprocess" in limits
+    assert "written" in limits and "path" in limits
+    assert "obfuscation" in limits
+    assert "tamper-proof" in stated or "not tamper-proof" in stated
+
+
+# --------------------------------------------------------------------------
+# The regression set for the two new rules: the four modules that carried the
+# practice, recovered at this story's own baseline
+# --------------------------------------------------------------------------
+
+
+#: This story's own validation file. It does not exist while the implementer
+#: is running and is written by the tester, so the shared resolution reports
+#: the story as in flight and the baseline as HEAD — which is this story's
+#: baseline — and reports the run commit and its parent once the story
+#: commits. Named rather than pinned, so a rebase does not move it.
+THIS_STORYS_VALIDATION_FILE = "tests/test_story_029_validation.py"
+
+#: The four modules that carried the retired practice at this story's
+#: baseline. Every one of them postdates the name-matching scan that was
+#: supposed to prevent it, and every one of them evaded it by defining its own
+#: helpers under different names. This is the only direct evidence the
+#: replacement would have caught what it is for.
+CARRIED_THE_PRACTICE = (
+    "tests/test_story_020_validation.py",
+    "tests/test_story_021_validation.py",
+    "tests/test_story_024_validation.py",
+    "tests/test_story_027_validation.py",
+)
+
+
+def at_this_storys_baseline(rel: str) -> str:
+    """One file as it stood before this story touched it."""
+    return repository_file_at(
+        rel, validation_file=REPO_ROOT / THIS_STORYS_VALIDATION_FILE,
+        bound=BASELINE, repo=REPO_ROOT)
+
+
+def test_the_recovered_baseline_sources_are_the_baseline_sources():
+    """The regression set below leans on this recovery, so it is asserted
+    rather than assumed: each recovered text differs from today's and carries
+    the practice's own shape."""
+    for rel in CARRIED_THE_PRACTICE:
+        before = at_this_storys_baseline(rel)
+        assert before != (REPO_ROOT / rel).read_text(encoding="utf-8"), rel
+        assert "def test_" in before, rel
+
+
+@pytest.mark.parametrize("rel", CARRIED_THE_PRACTICE)
+def test_the_construction_scan_reports_each_module_at_this_storys_baseline(rel):
+    flags = module_construction(at_this_storys_baseline(rel), Path(rel).name)
+    assert flags, rel
+
+
+@pytest.mark.parametrize("rel", CARRIED_THE_PRACTICE)
+def test_the_reader_scan_reports_each_module_at_this_storys_baseline(rel):
+    flags = git_text_reads(at_this_storys_baseline(rel), Path(rel).name)
+    assert flags, rel
+
+
+def test_all_four_are_caught_by_both_rules_and_none_survives_in_the_suite():
+    """The regression set stated as one assertion each way, so a rule that
+    was quietly narrowed while its modules were repaired shows up here."""
+    recovered = {rel: at_this_storys_baseline(rel) for rel in CARRIED_THE_PRACTICE}
+    for scan in (module_construction, git_text_reads):
+        caught = {rel for rel, source in recovered.items()
+                  if scan(source, Path(rel).name)}
+        assert caught == set(recovered), scan.__name__
+
+    for rel in CARRIED_THE_PRACTICE:
+        after = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert module_construction(after, Path(rel).name) == [], rel
+        assert git_text_reads(after, Path(rel).name) == [], rel
+
+
+# --------------------------------------------------------------------------
+# The regression set: five instances, all committed evidence
+# --------------------------------------------------------------------------
 
 
 def pre_repair_source(rel: str) -> str:
@@ -483,8 +1048,15 @@ def pre_repair_source(rel: str) -> str:
     the commit that added *this* module. While this story is in flight that
     is HEAD, and once it commits it is the revision before it — the pre-repair
     text either way, without a pinned SHA that a rebase would invalidate.
+
+    Read through `conftest.repository_file_at` since story-029, which folded
+    this module's own `git show` into the shared reader along with the ten
+    others. This module states the rule that no module but that one may read
+    a repository file's text out of git, so carrying a private copy of the
+    call would have been the first thing the rule reports.
     """
-    return _blob(story_commit_range(Path(__file__)).baseline, rel)
+    return repository_file_at(rel, validation_file=Path(__file__),
+                              bound=BASELINE, repo=REPO_ROOT)
 
 
 @pytest.mark.parametrize("rel", REPAIRED_FILES)

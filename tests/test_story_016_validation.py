@@ -14,9 +14,14 @@ every other top-level path is symlinked back at the real one, and pytest
 runs there. Nothing under `orchestration/` in this repository is written.
 
 The rest is static: that the six comparisons and the machinery that served
-only them are gone, that nothing under `tests/` still loads a coordinator
-out of git history, and that every surviving assertion in
+only them are gone, and that every surviving assertion in
 `tests/test_story_011_validation.py` is the one that was there before.
+
+The name-matching scan this file used to carry — "no module under `tests/`
+loads a coordinator out of git history", matched on the names of two helpers
+— was superseded by story-029. Four modules written after it defined their
+own helpers under different names and went unreported; the replacement is a
+structural rule in `tests/test_baseline_honesty.py` that names no helper.
 """
 import ast
 import functools
@@ -28,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import story_commit_range
+from conftest import repository_file_at, story_commit_range
 
 import story_coordinator
 
@@ -36,15 +41,6 @@ REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
 CONTRACT_FILE = TESTS_DIR / "test_coordinator_contract.py"
 STORY_011_FILE = TESTS_DIR / "test_story_011_validation.py"
-
-#: The functions that read a coordinator implementation out of git history.
-#: A test may call these for their text — the surviving prompt-scope
-#: assertion resolves its baseline through them — but no test may hand the
-#: result to a module loader.
-HISTORY_SOURCE_READERS = {"coordinator_source_at", "pre_story_coordinator_source"}
-MODULE_LOADERS = {"load_variant", "spec_from_file_location", "exec_module",
-                  "module_from_spec", "exec"}
-
 
 # --------------------------------------------------------------------------
 # Running the contract file against a mutated coordinator
@@ -282,41 +278,28 @@ def test_the_helpers_that_served_only_them_are_gone(name):
         assert name not in top_level_names(path.read_text(encoding="utf-8")), path.name
 
 
-def loader_call_arguments(tree: ast.AST) -> list[ast.AST]:
-    """Every argument handed to something that turns source into a module."""
-    arguments: list[ast.AST] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(
-            func, "id", None)
-        if name in MODULE_LOADERS:
-            arguments.extend(node.args)
-            arguments.extend(keyword.value for keyword in node.keywords)
-    return arguments
-
-
-def test_no_module_under_tests_loads_a_coordinator_out_of_git_history():
-    """By search, not by inspection: nothing hands a historical source to a
-    module loader. Reading the old source as *text* stays legal — the
-    surviving prompt-scope assertion resolves its baseline that way — but
-    running it is what has a shelf life."""
-    for path in sorted(TESTS_DIR.glob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for argument in loader_call_arguments(tree):
-            names = {node.id for node in ast.walk(argument)
-                     if isinstance(node, ast.Name)} | {
-                node.attr for node in ast.walk(argument)
-                if isinstance(node, ast.Attribute)}
-            leaked = names & HISTORY_SOURCE_READERS
-            assert not leaked, f"{path.name} loads {sorted(leaked)} as a module"
+# The scan that used to sit here matched on the *names* of two history
+# readers and five module loaders, and four modules written after it simply
+# defined their own helpers under other names. story-029 replaced it with a
+# structural rule in `tests/test_baseline_honesty.py` — no module under tests/
+# may build a module at runtime except the single shared one — which names no
+# helper and so cannot be evaded by renaming one.
 
 
 def test_the_baseline_resolution_the_prompt_scope_assertion_needs_is_intact():
     """Only the unreachable went. The resolution and the tests guarding it
-    stay, because the surviving scope assertion depends on them."""
-    source = STORY_011_FILE.read_text(encoding="utf-8")
+    stayed, because the surviving scope assertion depended on them.
+
+    Bounded at *this story's* endpoint rather than at today's working tree,
+    like its two siblings below. Read against the working tree it asks what
+    that file holds now, which a later story changes without story-016 having
+    done anything: story-029 deleted the three recovery helpers and their
+    three guard tests outright, having replaced the mechanism they served, and
+    that is not story-016 failing to keep them. What story-016 did — leave
+    them intact — is a fact about a finished commit range and stays checkable
+    at both of its ends.
+    """
+    source = story_011_at_this_storys_endpoint()
     # "def story_revision" was an eighth entry until story-026 folded that
     # helper into the shared resolution in tests/conftest.py. The surviving
     # prompt-scope assertion resolves its own commit range through
@@ -371,12 +354,14 @@ def functions_of(source: str) -> dict[str, str]:
 
 
 def story_011_file_at(revision: str) -> str:
-    """The story-011 validation file's text at one revision."""
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show",
-         f"{revision}:tests/{STORY_011_FILE.name}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    """The story-011 validation file's text at one revision.
+
+    Through `conftest.repository_file_at` since story-029, which folded the
+    eleven private copies of this call into one shared reader. Subject and
+    strictness unchanged; only where the text comes from moved.
+    """
+    return repository_file_at(f"tests/{STORY_011_FILE.name}", revision=revision,
+                              repo=REPO_ROOT)
 
 
 @functools.lru_cache(maxsize=None)
@@ -509,10 +494,8 @@ def test_a_head_baseline_would_make_the_diff_assertions_vacuous(tmp_path,
 
 def story_011_file_at_in(root: Path, revision: str) -> str:
     """`story_011_file_at`, against a repository other than this one."""
-    return subprocess.run(
-        ["git", "-C", str(root), "show", f"{revision}:tests/{STORY_011_FILE.name}"],
-        capture_output=True, text=True, check=True,
-    ).stdout
+    return repository_file_at(f"tests/{STORY_011_FILE.name}", revision=revision,
+                              repo=root)
 
 
 def test_the_baseline_resolution_refuses_rather_than_comparing_nothing(
