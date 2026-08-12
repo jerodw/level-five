@@ -1,0 +1,127 @@
+story:
+  id: story-030
+  title: Branch a story from a declared base, defaulting to the repository's own
+  description: |
+    A story's branch is created from whatever happens to be checked out, and
+    l5-plan commits and pushes the plan artifact to whatever happens to be
+    checked out. Neither command knows what a base branch is. story-029 was
+    planned and run while story/story-028 was checked out: origin/story-028
+    came to hold "Plan story-029", and story/story-029 was cut from thirty
+    files of escalated, unaccepted work, costing a rebase and three
+    hand-repointed assertions that had been written against the wrong tree.
+
+    This story gives both entry points a base, with no declaration required.
+    An unstated base is the repository's default branch, read from
+    refs/remotes/origin/HEAD, so the normal case needs no configuration and
+    no flag. A run or a plan refuses when HEAD is not standing on that base,
+    and refuses separately when the base does not match its remote. A --base
+    flag branches deliberately from something else and suppresses both legs.
+
+    The check is creation-time: it answers "what will this branch be cut
+    from", so it applies only when the story branch does not yet exist. An
+    existing story branch is reported, never refused — resume must keep
+    working — and a run whose branch predates the current base says so.
+
+tasks:
+  - Add resolve_base(target_root, config, base) to orchestration/story_coordinator.py, beside story_branch, settling the base in this order with the first answer winning - the base argument when it is not None, then an optional base_branch key in the target repository's config, then the branch named by refs/remotes/origin/HEAD, then the literal "main".
+  - Add base_problems(target_root, base, declared) to the same module, returning the problems that refuse a run or a plan - the empty list when there are none. When declared is true the only check is that the base ref resolves. Otherwise leg one is that HEAD is on the base and leg two is that the base matches its remote-tracking counterpart in either direction, checked in that order, returning after the first leg that has something to say.
+  - Give base_problems the one-directional bias unchanged_since_escalation and dirty_paths already take - a target that is not a git repository, a base with no remote-tracking counterpart, a repository with no remote, and any git invocation that fails all report no problem rather than a false one. A detached HEAD is the exception - it is establishable as not being on the base and refuses.
+  - Add branch_behind(target_root, branch, base) returning how many commits of the base are not reachable from the branch, and None when that cannot be established, for the stale-base note on an existing story branch.
+  - Add _refuse_base(base, problems) as a thin caller of the shared refuse, naming the base and saying how to reach it.
+  - Give run_story a keyword-only base parameter defaulting to None, resolve the base through resolve_base, and run the guard immediately after the finished-branch pre-flight and above the clean-tree check, only when the story branch does not already exist in the target repository.
+  - Append one note event after the story branch is checked out, when that branch already existed and is behind the resolved base, naming the base and the count, through the existing append_event path with kind "note" so events.log and execution-history.json stay two renderings of one write.
+  - Teach scripts/l5-run to parse an optional --base <branch> alongside the existing --stage option and pass it to run_story as base.
+  - Teach scripts/l5-plan to parse an optional --base <branch> ahead of the free-text request, resolve the base through the same resolve_base, and run base_problems before plan_commit.commit_artifacts, printing through _refuse_base and returning non-zero without committing or pushing anything.
+  - Amend story_branch's docstring, which promises that no branch name and no default base branch is written into orchestration, since the literal fallback breaks the second half of that sentence, and say why the promise was revised rather than leaving it standing beside code that contradicts it.
+  - Document the optional base_branch key in .harness/config.yaml as a commented example, for a repository whose base is not its git default.
+  - Record the base resolution, the two legs, the creation-time scope, the stale-base note and the revised docstring promise in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - With no --base and no base_branch key, in a repository whose refs/remotes/origin/HEAD resolves to refs/remotes/origin/main, resolve_base returns "main" and a run standing on main proceeds without any configuration having been written.
+  - resolve_base returns the config's base_branch key when refs/remotes/origin/HEAD would have answered differently, and returns the --base value when both a config key and an origin/HEAD ref are present.
+  - resolve_base returns the literal "main" when refs/remotes/origin/HEAD is unset and when the repository has no remote at all, and that fallback is exercised by a test rather than only documented.
+  - A run of a story whose branch does not yet exist, started while HEAD is on a branch other than the resolved base, is refused with a message naming the branch actually checked out and the base, and the run creates no run directory, no state.json, no log and no branch, and invokes no agent.
+  - A run of a story whose branch does not yet exist, started while HEAD is on the base but the base does not match its remote-tracking counterpart, is refused with a message naming the base and how far it differs, in whichever direction, and that run likewise creates nothing and invokes no agent.
+  - The base refuses on any difference from the remote-tracking counterpart - behind, ahead, or diverged - and proceeds when they are identical.
+  - When HEAD is not on the base and the base has also drifted, only the not-on-base message is printed, and a test asserts which of the two conditions was reported rather than only that something was refused.
+  - A run passing --base branches the new story branch from the named ref, and a --base naming a ref that does not resolve is refused.
+  - A run passing --base is not refused for HEAD being elsewhere and is not refused for the named ref differing from its remote, so a story branched from another story's branch is permitted.
+  - A repository with no remote, a base with no remote-tracking counterpart, and a target root that is not a git repository each produce no base refusal.
+  - A run whose story branch already exists is never refused for its base, whatever the state of the base, and this holds for a resume of an escalated run.
+  - A resume of a story whose existing branch is behind the resolved base emits one note into events.log and the matching entry into execution-history.json, naming the base and the number of commits the branch is behind, and the run proceeds.
+  - l5-plan refuses on the same two conditions before writing a commit - a test asserts the repository's HEAD is unmoved and the stories directory holds the artifact uncommitted after the refusal, and that nothing was pushed.
+  - l5-plan accepts --base <branch> ahead of the request text, passes the remaining arguments to the session as the request unchanged, and does not refuse for either leg when it is given.
+  - The base problems l5-run and l5-plan print for the same condition come from one function and print through the shared refuse, so the two entry points cannot report the same defect differently.
+  - A search over orchestration/ finds exactly one literal branch name, the fallback in resolve_base, and story_branch's docstring no longer claims that no default base branch is written into orchestration.
+  - The full test suite passes under the configured test command.
+
+technical_plan:
+  implementation_steps:
+    - Add resolve_base, base_problems, branch_behind and _refuse_base to orchestration/story_coordinator.py beside story_branch and the other pre-flight helpers, reading the base ref through the existing _git helper so the new code inherits the module's one git invocation path.
+    - Read refs/remotes/origin/HEAD with git symbolic-ref and reduce the returned ref to its branch name; treat a non-zero return as the ref being unset and fall through to the literal.
+    - Establish the remote-tracking counterpart of the base through git rev-parse --verify on the base's configured upstream, falling back to the base's name under the resolved remote, and compare with git rev-list --left-right --count so the message can say ahead, behind or both.
+    - In run_story, resolve the base once, then run the guard in the block immediately below the finished-branch pre-flight, gated on the story branch not existing in the target repository, so a refusal happens above run_dir.mkdir and above the clean-tree check.
+    - After _checkout_story_branch, when the branch existed before the run and branch_behind reports a positive count, append one event through append_event with kind "note" naming the base and the count.
+    - Parse --base in scripts/l5-run beside the existing --stage handling and pass it through as the base keyword.
+    - Parse --base in scripts/l5-plan before the request text is joined, and call resolve_base and base_problems in report() above plan_commit.commit_artifacts, returning 1 through _refuse_base when there are problems and leaving the artifacts in the working tree.
+    - Amend story_branch's docstring and add the commented base_branch example to .harness/config.yaml.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Owns story_branch, the shared refuse and every pre-flight, so the base derivation and its guard belong beside them and are read by both entry points.
+    - file: scripts/l5-run
+      stage: implementer
+      reason: Parses --base and passes it to run_story.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Parses --base and runs the guard before the commit, so a plan artifact is never committed onto the wrong branch.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Documents the optional base_branch key as a commented example.
+    - file: tests/test_story_030_validation.py
+      stage: tester
+      reason: Drives run_story and the l5-plan script against repositories the test builds, covering each leg, each refusal's inertness, the flag, the fallback and the stale-base note.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the base resolution, the two legs, the creation-time scope, the stale-base note and the revised docstring promise.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - scripts/l5-run
+    - scripts/l5-plan
+    - .harness/config.yaml
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - orchestration/context_assembler.py
+    - orchestration/harness_config.py
+    - workflows/
+    - schemas/
+    - prompts/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the base resolution order by exercising all four steps - the flag, the config key, refs/remotes/origin/HEAD, and the literal fallback - against repositories the tests build, and confirm the no-configuration case is the one a developer standing on the default branch meets.
+  - Confirm each of the two legs refuses separately, with an assertion on which condition was reported rather than only that a refusal occurred, and confirm the not-on-base message is the one printed when both conditions hold at once.
+  - Confirm each base refusal leaves no run directory, no state.json, no log and no new branch, and invokes no agent, asserted the way the existing pre-flight refusals already are.
+  - Confirm the guard runs only when the story branch does not already exist, so no resume of an existing story branch is refused for its base.
+  - Confirm the stale-base note reaches both events.log and execution-history.json from one append_event call, carries the base name and the count, and does not change where execution goes.
+  - Confirm l5-plan's refusal happens before the commit by asserting the repository's HEAD is unmoved, the artifact is still uncommitted in the stories directory, and no push was attempted.
+  - Confirm a repository with no remote and a base with no remote-tracking counterpart both proceed without a refusal, matching the one-directional bias the existing guards take.
+  - Confirm by search that orchestration/ contains exactly one literal branch name and that story_branch's docstring no longer claims no default base branch is written into orchestration.
+  - Confirm the full suite passes under the configured test command, with no existing assertion weakened, skipped or deleted.
+
+constraints:
+  - The base is derived in exactly one place and read by both entry points; no second derivation is added to plan_commit or to either script.
+  - The target repository is only read by the guard - no commit, no branch, no checkout, no index change, no stash, and nothing is reset or rebased on the developer's behalf.
+  - There is no flag, environment variable or configuration key that skips the guard; --base states a base deliberately, it does not bypass the check.
+  - An existing story branch is reported, never refused, so resuming an escalated run keeps working.
+  - The refusal goes through the shared refuse helper and takes the shape the existing pre-flight refusals take - exit 1, one message per problem, nothing created.
+  - No change to _complete, to _escalate, or to what either commits; push_commit's behaviour once the branch is correct is unchanged, and a rejected push is still reported rather than retried.
+  - No new schema and no new artifact - the stale-base note uses the note event kind execution-history.schema.json already defines.
+  - Rebasing a stale story branch, automatically or on request, is out of scope; the note says the branch is behind and what to do about it stays the developer's call.
+  - Worktrees and concurrent runs of two stories are out of scope.
+  - This story's own run is not governed by the pre-flight it adds - the coordinator process imports its module at start, so the run that lands this carries the pre-flight as it stood before. Enforcement begins with the next story, which is the expected shape for a story that adds a guard rather than a defect in it.
