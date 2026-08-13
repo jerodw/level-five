@@ -1,0 +1,108 @@
+story:
+  id: story-033
+  title: Clone over the normal transport instead of copying a live object store
+  description: |
+    _build_clone builds its clone with `git clone --no-hardlinks`, which copies
+    the source repository's .git/objects as a directory tree: git enumerates the
+    tree, then copies what it enumerated, and anything that disappears in
+    between is a hard failure. Three CI runs across two days failed exactly that
+    way. One of the files git could not copy was
+    .git/objects/pack/multi-pack-index.lock, a lock that exists only while
+    something is writing a multi-pack index in the source repository, which
+    names the mechanism: the source was being repacked while the clone read it.
+
+    gc.auto was ruled out correctly and the investigation stopped there, on the
+    assumption that no other writer existed. The multi-pack-index writer is a
+    separate mechanism with its own trigger. Two commits on main (1f7ad7e,
+    50378df) describe the cause as not established; they were accurate when
+    written and this story supersedes them without rewriting them.
+
+    The fix is to stop copying a live object store at all. `--no-local` makes
+    git negotiate a pack over a pipe instead of walking a directory, so no
+    transient file in the source is ever touched, whatever is writing it. That
+    holds against writers nobody has identified, which is why it is preferred
+    over disabling the one writer that was found. It costs wall-clock on every
+    clean-clone and revert check; the story measures that cost and records it
+    rather than guessing at it. There is one clone site and it serves both
+    checks, so the fix lands once.
+
+tasks:
+  - Replace --no-hardlinks with --no-local in the git clone invocation in _build_clone, keeping the source a filesystem path so no URL literal enters orchestration/story_coordinator.py.
+  - Record in the _build_clone docstring which property each flag carried - --no-hardlinks made the clone independent of the source's object files, and the normal transport gives that inherently by never reading them - so the removal is a stated decision rather than a deletion.
+  - State in that same docstring why the transport was chosen over disabling the writer that was found - the failure becomes impossible rather than unlikely, and the copy path is fragile against any writer, not only the one observed.
+  - Add tests/test_story_033_validation.py driving a clone from a source repository that holds a file under .git/objects a directory copy cannot copy, standing in for the lock file CI met, and showing the same fixture fails under the old command so the new assertion is not vacuous.
+  - Assert in that module, against the argument list the harness actually runs rather than by reading the source, that the clone is built over the normal transport and carries no directory-copy flag.
+  - Confirm in that module that both checks still see what they are supposed to - a clone carrying the working tree as a commit, carrying no gitignored file, and with governed paths restorable from a captured baseline.
+  - Measure the wall-clock cost of building a clone under the old command and under the new one on this repository, and record the measurement so the next reader can judge the trade.
+  - Record in .harness/docs/ARCHITECTURE.md that the clone is built over the normal transport, why, what the removed flag carried, the measured cost, and that the CI retry in .github/workflows/tests.yml is a backstop for the next unknown rather than this problem's solution.
+
+acceptance_criteria:
+  - The git clone invocation in _build_clone passes --no-local and does not pass --no-hardlinks, asserted against the argument list the harness runs rather than against the text of the module.
+  - A clone built from a source repository holding an unreadable or dangling entry under .git/objects succeeds, and the same fixture cloned with the previous command fails, so the regression assertion is shown to be non-vacuous.
+  - orchestration/story_coordinator.py contains no string constant carrying :// or git@, so the existing story-014 assertion that the clone source is a local path and never a URL still holds unmodified.
+  - Exactly one function in orchestration/story_coordinator.py invokes git clone, and it is _build_clone, so the story-019 single-cloner assertion still holds.
+  - A clone built by the new command carries the working tree as a commit reachable from HEAD, reports a clean status, and carries neither gitignored files nor .harness/runs.
+  - A revert check driven end to end still restores a governed path from the captured baseline inside the clone, deletes a governed path the baseline does not hold, and reaches the same permitted verdict it reaches today for both a forced edit and an unforced one.
+  - The three tests named in the request - test_files_gitignore_excludes_do_not_reach_the_clone, test_the_command_keeps_its_arguments_when_the_interpreter_is_replaced and test_the_reconstructed_bug_fails_once_the_story_is_committed - pass unmodified.
+  - The measured wall-clock cost of building a clone under both commands on this repository is reported in the run's evidence and stated in .harness/docs/ARCHITECTURE.md as a number rather than as a characterisation.
+  - .harness/docs/ARCHITECTURE.md describes the clone as built over the normal transport, says what --no-hardlinks carried and why it is gone, and says the CI retry is a backstop for the next unknown rather than this problem's solution.
+  - No file under .github/ is changed by this story, and neither commit message describing the cause as unestablished is rewritten.
+
+technical_plan:
+  implementation_steps:
+    - Change the clone argument list in _build_clone from --no-hardlinks to --no-local, leaving str(target_root) as the source and every other argument as it reads today.
+    - Rewrite the paragraph of the _build_clone docstring that explains the clone, so it states the transport, the property the removed flag carried, and why the transport was preferred to removing the writer.
+    - Leave the working-tree application, the untracked-file copy, the revert restore, the add and the commit untouched - this story changes how the clone is obtained and nothing about what is put into it.
+    - Drive the new module's fixtures through _build_clone and through the revert check rather than through a reimplementation of either, so the assertions are about the harness's own path.
+    - Take the measurement by timing _build_clone on this repository under both commands, several runs each, and report the numbers.
+    - Record the change and the measurement in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Holds _build_clone, the single clone site both checks reach, and the docstring that must say what each flag carried.
+    - file: tests/test_story_033_validation.py
+      stage: tester
+      reason: Drives a clone from a fixture a directory copy cannot handle, shows the old command failing on it, and asserts the transport against the argument list the harness runs.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the transport, the removed flag, the measured cost, and the standing of the CI retry.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .github/
+    - workflows/story-workflow.json
+    - rules/execution-rules.json
+    - schemas/
+    - prompts/
+    - scripts/
+    - orchestration/plan_validation.py
+    - orchestration/plan_commit.py
+    - orchestration/context_assembler.py
+    - orchestration/harness_config.py
+    - orchestration/schema_validator.py
+    - orchestration/story_parser.py
+    - .harness/config.yaml
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm by capturing the argument list the harness passes to git that the clone is built over the normal transport and that no directory-copy flag remains, rather than by reading orchestration/story_coordinator.py.
+  - Confirm the regression fixture is a control that works - the source repository holding an entry under .git/objects a directory copy cannot copy fails under the previous command and succeeds under the new one, both demonstrated in the same run.
+  - Confirm the clean-clone check still passes end to end on a story target whose working tree is dirty, and that the clone holds the working tree as a commit, holds no gitignored file, and leaves the target repository's HEAD, status, branches, stash and index unchanged.
+  - Confirm the revert check still reaches both verdicts end to end - permitted for an edit that survives reverting and refused for one that does not - with the baseline restore and the delete-what-the-baseline-lacks behaviour both exercised inside a clone built the new way.
+  - Confirm the three CI tests the request names pass without modification, and confirm the full suite passes under the configured test command with no existing assertion weakened, skipped or deleted.
+  - Confirm the measurement was actually taken on this repository and report both numbers, so the recorded cost is evidence rather than an estimate.
+  - Confirm nothing under .github/ changed and that the CI retry behaviour is untouched by this story.
+
+constraints:
+  - There is one clone site and it stays one - the change lands in _build_clone and both checks inherit it; no second clone builder is added.
+  - The clone source stays a filesystem path; no URL scheme and no remote literal enters orchestration/story_coordinator.py.
+  - What goes into the clone is unchanged - the working-tree diff, the untracked-but-not-ignored copy, the baseline restore, the add and the commit all behave exactly as they do today.
+  - The clone keeps the source's full history; nothing about this story shallows it, because the checks exist so a test resolving a baseline out of git history sees what it would see where the code ships.
+  - The clean-clone and revert checks keep their current semantics, artifacts, verdicts and routing; this story changes how the clone is obtained and nothing about what either check decides.
+  - The removed flag is documented rather than silently deleted - the docstring says what it carried and why the transport supersedes it.
+  - The CI retry and fail-fast settings stay as they are; they are a backstop for the next unknown and are not this story's fix.
+  - The two commit messages that describe the cause as unestablished are not rewritten; this story supersedes them in the record instead.
