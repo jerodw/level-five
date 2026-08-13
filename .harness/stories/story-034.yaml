@@ -1,0 +1,115 @@
+story:
+  id: story-034
+  title: The resume guard can refuse when the harness is its own target
+  description: |
+    `unchanged_since_escalation` refuses a resume that would provably repeat
+    itself: the story artifact, the branch and the harness all unchanged since
+    the escalation. In this repository, where the harness is also the target,
+    it can never refuse. The harness revision is recorded as the first act of
+    `_escalate`, before `commit_escalated_work` and `commit_escalated_tree`
+    move HEAD, so the third comparison reads a pre-escalation revision against
+    a post-escalation one and always differs. The one case where HEAD does not
+    move — an escalation with a clean tree, which commits nothing — is already
+    ended by the second comparison returning early on an empty
+    `escalation_commit`. There is no path on which the guard refuses here, and
+    story-028 resumed for that reason rather than because anything about it
+    had changed.
+
+    In a separate-repository deployment the guard is correct: a run touches the
+    target and never the harness checkout, so the third comparison compares
+    what it was written to compare. This is drift into a configuration the
+    guard was not reasoned about in, not a design error.
+
+    The fix recognises the shared-root case and lets the branch comparison
+    stand for the harness one. If the harness and the target are one tree, the
+    established fact that the branch is exactly the escalation commit with
+    nothing uncommitted already covers every change to the harness source, so
+    the third comparison is redundant under a shared root rather than broken.
+    Moving where the revision is recorded would not work and the story does not
+    attempt it: any revision recorded before the escalation's commits is stale
+    afterwards, and any recorded after cannot be inside the commit that records
+    it — the same circularity the two-commit shape already solves for
+    `escalation_commit`.
+
+    A consequence worth stating before it is met as a surprise: once this
+    lands, story-028-shaped escalations stop resuming with no argument.
+    `--stage` is the intended override, already exists and is already named in
+    the refusal message, but the working habit changes, and the escalation
+    summary's standing promise — that the resume is refused while the story
+    artifact, the branch and the harness are all unchanged — starts being true
+    in this repository for the first time.
+
+tasks:
+  - Add a helper to orchestration/story_coordinator.py that establishes whether two roots are one git repository, by comparing `git rev-parse --show-toplevel` for each and reporting shared only when both are establishable and equal.
+  - Make the third comparison in `unchanged_since_escalation` defer to the second when the roots are one repository, appending a third evidence line that names the shared checkout instead of a recorded revision, and leaving the revision comparison exactly as it is when the roots are separate or the shared-root question cannot be established.
+  - Record in the code, at the comparison itself, why a tree hash over the harness's own source directories was considered and not taken, so the next reader does not re-derive it.
+  - Write the regression suite as tests/test_story_034_validation.py, driven from a shared-root fixture in which the harness root and the target root are one checkout, covering both the guard called directly and a full run driven through `run_story`.
+  - Update .harness/docs/ARCHITECTURE.md to describe the shared-root leg, the rejected alternative, and the change in what a shared-root resume now does.
+
+acceptance_criteria:
+  - In a fixture where the harness root and the target root are one git checkout, an escalated run resumed with the story artifact unamended and the branch untouched is refused, no agent is invoked, and the recorded status stays `escalated`.
+  - That refusal names three pieces of evidence: the story artifact being byte for byte the one the escalated run read, the branch being exactly the escalation commit with nothing uncommitted, and the harness being the same checkout as the target.
+  - In the same shared-root fixture, amending the story artifact resumes the run rather than refusing it.
+  - In the same shared-root fixture, a commit made on the story branch after the escalation resumes the run rather than refusing it.
+  - An escalation that committed nothing — the clean-tree shape, where `escalation_commit` is empty — still produces no refusal, in the shared-root fixture as in the separate-root one.
+  - A separate-root fixture produces exactly the behaviour it produces today, asserted at both the state before this story's change and the state after it.
+  - The shared-root question is decided from `git rev-parse --show-toplevel` on both roots; when either side cannot be established the guard falls through to the revision comparison it makes today, so a root that is not a git repository produces no refusal rather than a false one.
+  - `unchanged_since_escalation` still makes three comparisons and returns evidence only when all three are establishable and identical; no fourth comparison is added and none is removed.
+  - No flag, environment variable or configuration key that skips or weakens the guard is introduced.
+  - The full suite passes, including tests/test_story_020_validation.py, whose subject is this guard.
+
+technical_plan:
+  implementation_steps:
+    - Add a module-level helper to orchestration/story_coordinator.py — for example `same_repository(target_root, harness_root) -> bool` — that runs `git rev-parse --show-toplevel` in each root through the existing `_git` helper and returns True only when both invocations succeed and their outputs are equal. A failing invocation on either side returns False, which is the not-established answer, matching the one-directional bias `_revision`, `dirty_paths`, `completion_commits` and `base_problems` already take.
+    - In `unchanged_since_escalation`, replace the third comparison's body with a branch on that helper. Under a shared root, append an evidence line stating that the harness is the same checkout as the target and is therefore covered by the branch comparison above. Otherwise keep the existing `state.harness_revision` comparison and its existing evidence line unchanged, character for character, so a separate-root deployment reads identically.
+    - Extend the function's docstring to state the shared-root case and why deferring is sound: leg two has established the branch is exactly the escalation commit with nothing uncommitted, and under one tree that covers the harness source. State beside it why a tree hash over the harness's source directories was not taken — it is a second definition of "has the harness changed" living alongside the branch comparison that already answers it, and it would have to choose which directories count, a choice nothing else in the harness makes.
+    - Leave `_escalate`'s assignment of `state.harness_revision`, the two escalation commits, `_revision`, and `_resume_refusal`'s guidance sentence alone. The recorded revision keeps its meaning for separate-root deployments and remains the value the separate-root leg compares.
+    - Build the shared-root fixture in tests/test_story_034_validation.py by constructing a target repository as the existing suites do and copying the harness's `workflows/`, `rules/` and `prompts/` directories into it, so a single root can serve as both `harness_root` and `target_root` for `run_story`. Assert the refusal, the three evidence lines, the untouched status, and that the fake runner recorded no calls.
+    - Add the guard-level cases against the same fixture by calling `unchanged_since_escalation` directly: nothing changed refuses, an amended story artifact does not, a commit on the branch does not, and an empty `escalation_commit` does not.
+    - Add the separate-root control, asserting the behaviour both at this story's baseline and at its endpoint, so the story is shown to have changed nothing for a separate-repository deployment.
+    - Update .harness/docs/ARCHITECTURE.md under the resume sections: the shared-root leg and how it is established, why the tree-hash alternative was rejected, that the fail-open bias is unchanged, and that a shared-root escalation now needs `--stage` to resume unchanged — with the note that the escalation summary's promise about the refusal becomes true in this repository for the first time.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The shared-root helper and the third comparison's branch live here, beside the guard.
+    - file: tests/test_story_034_validation.py
+      stage: tester
+      reason: The story's regression suite, including the shared-root fixture the harness is developed under and currently the least tested.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The resume guard's description names three comparisons and one of them now has two forms; the rejected alternative and the changed resume behaviour belong with it.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - scripts/
+    - workflows/
+    - schemas/
+    - prompts/
+    - orchestration/plan_validation.py
+    - orchestration/plan_commit.py
+    - orchestration/context_assembler.py
+    - .harness/config.yaml
+    - .harness/requests/
+
+verification_requirements:
+  - Confirm that a shared-root fixture — one checkout serving as both harness root and target root — refuses an escalated resume with nothing changed, and that the printed refusal carries all three pieces of evidence and the escalation reason.
+  - Confirm the refusal path leaves the run as it found it: status `escalated`, no agent invoked, no attempt archived.
+  - Confirm that amending the story artifact and that committing on the story branch each still resume in the shared-root fixture, so a fail-open guard has not become a fail-closed one.
+  - Confirm an escalation that committed nothing produces no refusal in either fixture.
+  - Confirm a separate-root deployment behaves exactly as it did before this story, by asserting on it at both ends of the story's own commit range rather than only after.
+  - Confirm the shared-root decision reports not-shared when either `git rev-parse --show-toplevel` invocation fails, and that the guard then falls through to the revision comparison rather than refusing.
+  - Confirm no bypass — no flag, environment variable or configuration key — was introduced, and that the guard still makes exactly three comparisons.
+  - Confirm the full suite passes with `.venv/bin/python -m pytest tests/ -q`, tests/test_story_020_validation.py included.
+
+constraints:
+  - The fail-open bias is the designed behaviour and must survive: anything the guard cannot establish counts as not-the-same, so this story may make a refusal possible where none was, and must not make a false refusal possible.
+  - The three-comparison structure stands; no fourth comparison is added.
+  - The escalation's two-commit shape is correct and load-bearing and is left alone, as is where `state.harness_revision` is recorded.
+  - `--stage` remains the override for a refused resume and is not altered.
+  - Separate-root deployments are unaffected: the revision comparison and its evidence line are unchanged for them.
+  - `_revision`, `dirty_paths`, `completion_commits` and `base_problems` keep their existing behaviour and their one-directional bias.
+  - Existing assertions are not weakened or skipped to make the suite pass.
