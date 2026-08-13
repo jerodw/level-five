@@ -29,6 +29,7 @@
           "verification-failed",
           "clean-clone-passed",
           "clean-clone-failed",
+          "self-routed",
           "escalated",
           "story-completed",
           "note"
@@ -71,7 +72,7 @@
       },
       "retry_stage": {
         "type": "string",
-        "description": "The stage the retry was routed to, read off the workflow's declared route rather than a constant. With retry_category it makes the route a reader can reconstruct from the history alone."
+        "description": "The stage the retry was routed to, read off the workflow's declared route rather than a constant. With retry_category it makes the route a reader can reconstruct from the history alone. On a self-routed entry it names the entry's own stage, because a self-route has no destination other than itself; counting the self-routed entries for a stage is therefore a query against this history rather than a number kept anywhere."
       }
     }
   }

@@ -6,6 +6,7 @@
     "retry-guidance",
     "retry-history",
     "revert-check-result",
+    "self-route-result",
     "story",
     "test-results",
     "verification-result"

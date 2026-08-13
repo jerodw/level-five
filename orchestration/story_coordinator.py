@@ -59,6 +59,14 @@ class RunState:
     escalation_commit: str = ""
     #: The harness revision at the moment the run escalated.
     harness_revision: str = ""
+    #: How many times the stage named by current_stage has re-run itself in
+    #: place after a mechanical failure. The *live* count only, scoped
+    #: implicitly by current_stage: it is reset every time a stage is entered
+    #: other than by a self-route, so nothing here accumulates across stages
+    #: and nothing reads it to learn what happened earlier. How many times a
+    #: stage self-routed over the run is a query against the history, where
+    #: one `self-routed` entry per self-route names its stage.
+    self_route_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -214,6 +222,35 @@ def retry_routing_problems(stages: list[dict]) -> list[str]:
                 f"the '{route.category}' route on stage '{route.declared_by}' "
                 f"names stage '{route.stage}', which does not sit before it; "
                 f"routing forward would skip verification"
+            )
+    return problems
+
+
+def self_route_problems(stages: list[dict]) -> list[str]:
+    """Check every declared self-route budget against what a budget can be.
+
+    Beside `retry_routing_problems` and for its reason: a budget that is not a
+    count is a defect in the definition, every run under that definition has
+    it, and discovering it at the first mechanical failure has already spent
+    the stages before it.
+
+    A stage that declares nothing is not checked — declaring no budget is the
+    normal case and means the stage escalates on a mechanical failure exactly
+    as it always has. A declared value must be a non-negative integer: zero is
+    a deliberate declaration of no budget and is accepted, a negative one is a
+    count that cannot be spent, and `True` is not a budget however much Python
+    is willing to treat it as one. No stage name and no budget value is written
+    here; both come off the loaded workflow definition.
+    """
+    problems = []
+    for stage in stages:
+        if "max_self_routes" not in stage:
+            continue
+        budget = stage["max_self_routes"]
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
+            problems.append(
+                f"stage '{stage['name']}' declares max_self_routes "
+                f"{budget!r}, which is not a non-negative integer"
             )
     return problems
 
@@ -714,7 +751,9 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
     return archived
 
 
-def interrupted_attempt_artifacts(stages: list[dict], attempt: int) -> list[str]:
+def interrupted_attempt_artifacts(
+    stages: list[dict], attempt: int, *, run_dir: Path | None = None
+) -> list[str]:
     """What a resumed run would write over if the interrupted attempt stayed.
 
     The stage artifacts archive_attempt already derives from the workflow, plus
@@ -724,10 +763,21 @@ def interrupted_attempt_artifacts(stages: list[dict], attempt: int) -> list[str]
     re-renders under the same attempt number and would write over the prompt
     the interrupted stage was actually given. No stage name and no artifact
     name is written here; both come off the loaded workflow.
+
+    A resume also zeroes self_route_count, so a resumed stage's first mechanical
+    failure is try 1 of that same attempt again and lands on exactly the names
+    the interrupted attempt's own self-routes wrote. Those names cannot be
+    derived from the workflow alone — the count that produced them is live state
+    the resume has already discarded — so when the run directory is given they
+    are read off it by self_route_artifacts. It is optional so a caller asking
+    only what the workflow declares gets exactly what it got before.
     """
-    return archivable_artifacts(stages) + [
-        f"prompt-{stage['name']}-attempt-{attempt}.md" for stage in stages
+    names = archivable_artifacts(stages) + [
+        prompt_file(stage["name"], attempt) for stage in stages
     ]
+    if run_dir is not None:
+        names += self_route_artifacts(run_dir, stages, attempt)
+    return names
 
 
 def conditional_artifacts(stage: dict) -> list[str]:
@@ -1513,6 +1563,210 @@ def _revert_check_permitted(
 
 
 # --------------------------------------------------------------------------
+# The self-route
+#
+# Mechanical failures route differently from verdicts. There is no defect to
+# categorize and no other stage to send the work to, so the failed stage runs
+# again: a self-route. A stage that failed to produce something may plausibly
+# produce it next time. That is exactly the reasoning that does not apply to a
+# boundary violation, where retrying the same instructions would produce the
+# same violation again, so boundary violations still escalate — as do schema
+# violations, stage output ownership, the revert check's two escalations and
+# the clean-clone check's two.
+#
+# The global ceiling survives the exception, because a self-route cannot
+# alternate: when it succeeds the workflow advances, and the only way it
+# repeats is by failing again in the same place. A self-route therefore spends
+# neither retry_count nor max_retries and reads neither; it archives nothing
+# under attempts/attempt-N/, appends nothing to retry-history.json, and does
+# not move the attempt number in any rendered prompt filename.
+#
+# A self-routed stage has no agent-authored guidance — no verifier looked at
+# the work — so the coordinator states why the stage is re-running itself,
+# naming the output that was missing or stale. It writes that statement as an
+# artifact on disk as well as injecting it, so a run directory can say why a
+# stage ran twice. A routable failure without injected evidence replays the
+# conditions that produced it.
+# --------------------------------------------------------------------------
+
+#: The three mechanical failures. Each is a fact about what the stage did not
+#: produce rather than a judgement about the work, which is what makes running
+#: the stage again a plausible answer to all three.
+AGENT_PROCESS_FAILED = "agent-process-failed"
+MISSING_REQUIRED_ARTIFACTS = "missing-required-artifacts"
+STALE_REQUIRED_ARTIFACTS = "stale-required-artifacts"
+
+
+def self_route_result_file(
+    stage_name: str, attempt: int, try_number: int | str
+) -> str:
+    """Where one self-route's evidence is written, keyed so none overwrites another.
+
+    The stage, the attempt and the try together, because a stage can self-route
+    more than once within one attempt and more than one stage can self-route in
+    one run. The try number is the self-route count the state carries, which is
+    the same number the re-run prompt's filename uses, so the two agree by
+    construction rather than by two derivations that match today.
+
+    A caller may pass `"*"` for the try number to build the glob that finds
+    every such name already written for one stage and attempt. That is why the
+    number is not an int alone: the discovery and the writing then share one
+    spelling of the name rather than two that agree today.
+    """
+    return f"self-route-{stage_name}-attempt-{attempt}-try-{try_number}.json"
+
+
+def prompt_file(stage_name: str, attempt: int, try_number: int | str = 0) -> str:
+    """Where one invocation's rendered prompt is written.
+
+    The one place the prompt filename is shaped. A first invocation writes the
+    name it has always written, with no try suffix; a self-route adds the
+    suffix, keyed by the same count self_route_result_file uses, so a re-run
+    does not write over the prompt the failed invocation was actually given.
+    As there, `"*"` builds the glob over what is already written.
+    """
+    suffix = f"-try-{try_number}" if try_number else ""
+    return f"prompt-{stage_name}-attempt-{attempt}{suffix}.md"
+
+
+def self_route_artifacts(run_dir: Path, stages: list[dict], attempt: int) -> list[str]:
+    """The self-route evidence and try-suffixed prompts one attempt left behind.
+
+    Read off the run directory rather than derived, because a self-route's
+    names are keyed by a count that is live state: by the time a resume asks,
+    the count has been zeroed and nothing records how high it reached. The two
+    globs come from the same functions that write the names, with the try
+    number wildcarded, so what is found cannot drift from what was written, and
+    the stage names come off the loaded workflow as everywhere else.
+    """
+    names: list[str] = []
+    for stage in stages:
+        for pattern in (
+            self_route_result_file(stage["name"], attempt, "*"),
+            prompt_file(stage["name"], attempt, "*"),
+        ):
+            names.extend(sorted(path.name for path in run_dir.glob(pattern)))
+    return names
+
+
+def self_route_statement(failure: str, artifacts: list[str]) -> str:
+    """What the coordinator tells a stage it is re-running, in its own words.
+
+    Nothing here is an agent's judgement and the text says so. The failed
+    process gets a different statement from the other two deliberately: there
+    is no output to name, because the invocation did not reach the point of
+    declaring what it had done, and what the stage most needs to know is that
+    the tree already holds whatever that invocation wrote before it exited.
+    """
+    named = ", ".join(artifacts)
+    if failure == AGENT_PROCESS_FAILED:
+        return (
+            "The previous invocation of this stage exited without completing, "
+            "so there is no output to name: it did not reach the point of "
+            "declaring what it had done. This is not a judgement about the "
+            "work — no verifier saw it. The working tree already holds "
+            "whatever that invocation wrote before it exited, so read what is "
+            "there before repeating it."
+        )
+    if failure == MISSING_REQUIRED_ARTIFACTS:
+        return (
+            f"The previous invocation of this stage ended without writing "
+            f"required output it declared: {named}. This is not a judgement "
+            f"about the work — no verifier saw it. Produce the named output "
+            f"this time."
+        )
+    return (
+        f"The previous invocation of this stage left required output "
+        f"unwritten: {named}. What sits at the run directory root under those "
+        f"names is a previous attempt's, not that invocation's. This is not a "
+        f"judgement about the work — no verifier saw it. Write the named "
+        f"output afresh this time."
+    )
+
+
+@dataclass(frozen=True)
+class SelfRouteDecision:
+    """What one mechanical failure decided: run the stage again, or escalate.
+
+    `reason` is the escalation reason when the stage did not self-route, and it
+    names the mechanical failure in the words that site already used. When the
+    budget was declared and is spent it names the exhausted budget too, so a
+    developer reading the escalation learns both what failed and why the stage
+    stopped trying.
+    """
+
+    taken: bool
+    reason: str
+
+
+def self_route(
+    run_dir: Path,
+    state: RunState,
+    stage: dict,
+    *,
+    failure: str,
+    reason: str,
+    artifacts: list[str],
+    attempt: int,
+) -> SelfRouteDecision:
+    """Decide one mechanical failure, and record it when the stage runs again.
+
+    The one decision behind all three mechanical failure sites, so they share a
+    rule rather than repeating it three times. A stage that declares no budget
+    escalates with exactly the reason it escalated with before this existed,
+    which is what makes landing this change nothing until a workflow opts in.
+
+    When there is budget left the count is incremented, the coordinator's own
+    evidence is written under a name keyed by stage, attempt and try, one
+    `self-routed` event is appended, and the state is saved so a crash mid-stage
+    leaves a count a reader can trust. The budget comes off the loaded stage
+    dict exactly as may_not_create and clean_clone do; no stage name and no
+    budget value is written here.
+    """
+    name = stage["name"]
+    budget = stage.get("max_self_routes", 0)
+    if state.self_route_count >= budget:
+        if budget:
+            return SelfRouteDecision(
+                False,
+                f"{reason}; {name} has exhausted its self-route budget of "
+                f"{budget}",
+            )
+        return SelfRouteDecision(False, reason)
+
+    state.self_route_count += 1
+    record: dict = {
+        "stage": name,
+        "attempt": attempt,
+        "try": state.self_route_count,
+        "failure": failure,
+        "reason": reason,
+        "statement": self_route_statement(failure, artifacts),
+    }
+    # Optional by absence, as clean-clone-result and execution-history already
+    # are: a failed process names no artifact, and null would claim it named
+    # none rather than that naming one does not apply.
+    if artifacts:
+        record["artifacts"] = list(artifacts)
+    (run_dir / self_route_result_file(name, attempt, state.self_route_count)).write_text(
+        json.dumps(record, indent=2) + "\n", encoding="utf-8"
+    )
+    append_event(
+        run_dir,
+        f"self-routed: {name} runs again in place ({reason}); self-route "
+        f"{state.self_route_count} of {budget}",
+        kind="self-routed",
+        stage=name,
+        # A self-route names its own stage: there is no other destination, and
+        # recording it keeps the route reconstructable from the history alone.
+        retry_stage=name,
+        retry_reason=reason,
+    )
+    save_state(run_dir, state)
+    return SelfRouteDecision(True, reason)
+
+
+# --------------------------------------------------------------------------
 # Ending a run so it can be resumed
 #
 # A successful run's work is durable: _complete commits it. An escalated run's
@@ -2028,6 +2282,22 @@ def _refuse_bad_routing(workflow: dict, problems: list[str]) -> int:
     )
 
 
+def _refuse_bad_self_routes(workflow: dict, problems: list[str]) -> int:
+    """Refuse a workflow whose self-route budget is not a count.
+
+    Thin, like every other caller of `refuse`. The definition is wrong, not the
+    story and not the tree, so the guidance points at the file that has to
+    change.
+    """
+    return refuse(
+        f"Workflow '{workflow['name']}' declares a self-route budget that "
+        f"cannot be spent:",
+        problems,
+        "Fix the workflow definition's max_self_routes before running a story "
+        "under it.",
+    )
+
+
 def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     """Refuse a run whose target tree already holds work no stage produced.
 
@@ -2244,6 +2514,13 @@ def run_story(
     if routing_problems:
         return _refuse_bad_routing(workflow, routing_problems)
 
+    # The same pre-flight for the other budget the definition declares. A
+    # max_self_routes that is not a count cannot be spent, and every run under
+    # that definition carries the defect.
+    budget_problems = self_route_problems(stages)
+    if budget_problems:
+        return _refuse_bad_self_routes(workflow, budget_problems)
+
     story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
     if not story_path.is_file():
         print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
@@ -2381,6 +2658,10 @@ def run_story(
                 return 1
         if start_stage:
             state.current_stage = start_stage
+        # A resumed stage starts with its full self-route budget. The count is
+        # the live count for one stage invocation and nothing carries it across
+        # a resume: the stage is being entered afresh, not re-running itself.
+        state.self_route_count = 0
         if state.status == "escalated":
             # The interrupted attempt is archived before the resumed stage
             # runs, under the attempt number it was written with. Refuse rather
@@ -2398,7 +2679,9 @@ def run_story(
                 )
                 return 1
             archive_attempt(
-                run_dir, interrupted_attempt_artifacts(stages, attempt), attempt
+                run_dir,
+                interrupted_attempt_artifacts(stages, attempt, run_dir=run_dir),
+                attempt,
             )
             state.status = "running"
             save_state(run_dir, state)
@@ -2459,14 +2742,40 @@ def run_story(
             return None
         return round(time.monotonic() - stage_started_at, 3)
 
+    # Whether the iteration about to begin is a stage re-running itself. Every
+    # other way of entering a stage — advancing, a retry's reroute, the first
+    # iteration after a resume — starts that stage with its full budget, so the
+    # count is zeroed unless this is set.
+    self_routed = False
+
     index = stage_names.index(state.current_stage)
     while index < len(stages):
         stage = stages[index]
         name = stage["name"]
         state.current_stage = name
+        if not self_routed:
+            state.self_route_count = 0
+        self_routed = False
         save_state(run_dir, state)
         stage_started_at = time.monotonic()
         append_event(run_dir, f"{name} stage started", kind="stage-started", stage=name)
+
+        attempt = state.retry_count + 1
+
+        # A stage running again after a mechanical failure carries the
+        # coordinator's own statement of why. It is read back off the artifact
+        # just written rather than passed along in memory, so what the prompt
+        # says and what the run directory records are one thing. A stage that
+        # did not self-route has a zero count and renders None — including a
+        # stage running after another stage self-routed earlier, because the
+        # count is reset at every entry that is not itself a self-route.
+        self_route_result = None
+        if state.self_route_count:
+            evidence = run_dir / self_route_result_file(
+                name, attempt, state.self_route_count
+            )
+            if evidence.is_file():
+                self_route_result = evidence.read_text(encoding="utf-8")
 
         context = context_assembler.build_context(
             story_text=story_text,
@@ -2481,11 +2790,18 @@ def run_story(
             retry_category=routed_category,
             retry_stage=routed_stage,
             allowed_tools=config.get("allowed_tools"),
+            self_route_result=self_route_result,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
-        attempt = state.retry_count + 1
-        (run_dir / f"prompt-{name}-attempt-{attempt}.md").write_text(prompt, encoding="utf-8")
+        # A self-route does not move the attempt number, so the re-run's prompt
+        # would otherwise be written over the prompt the failed invocation was
+        # actually given — the evidence a re-run exists to build on. The try
+        # suffix appears only when a self-route occurred; a first invocation
+        # writes exactly the filename it has always written.
+        (run_dir / prompt_file(name, attempt, state.self_route_count)).write_text(
+            prompt, encoding="utf-8"
+        )
 
         # What this stage's artifacts looked like before it ran. One snapshot,
         # covering the conditional artifacts and the required ones together,
@@ -2529,11 +2845,27 @@ def run_story(
             model=config.get("model"),
             allowed_tools=config.get("allowed_tools"),
         )
+        # The first of the three mechanical failures. Each is routed through
+        # one decision: re-enter the loop at this same index when the stage has
+        # unspent budget, escalate with the same reason it always escalated
+        # with when it has none.
         if not result.ok:
+            decision = self_route(
+                run_dir,
+                state,
+                stage,
+                failure=AGENT_PROCESS_FAILED,
+                reason=f"{name} agent process failed",
+                artifacts=[],
+                attempt=attempt,
+            )
+            if decision.taken:
+                self_routed = True
+                continue
             return _escalate(
                 run_dir,
                 state,
-                f"{name} agent process failed",
+                decision.reason,
                 target_root=target_root,
                 harness_root=harness_root,
                 duration_seconds=elapsed(),
@@ -2541,10 +2873,25 @@ def run_story(
 
         missing = [out for out in stage.get("outputs", []) if not (run_dir / out).is_file()]
         if missing:
+            decision = self_route(
+                run_dir,
+                state,
+                stage,
+                failure=MISSING_REQUIRED_ARTIFACTS,
+                reason=(
+                    f"{name} did not produce required artifacts: "
+                    f"{', '.join(missing)}"
+                ),
+                artifacts=missing,
+                attempt=attempt,
+            )
+            if decision.taken:
+                self_routed = True
+                continue
             return _escalate(
                 run_dir,
                 state,
-                f"{name} did not produce required artifacts: {', '.join(missing)}",
+                decision.reason,
                 target_root=target_root,
                 harness_root=harness_root,
                 duration_seconds=elapsed(),
@@ -2555,17 +2902,32 @@ def run_story(
         # carrying a record of an attempt that no longer describes it. Read
         # after the missing case so an absent artifact keeps its own reason;
         # the two are indistinguishable to a reader of the run directory
-        # afterwards, which is what let one ship unnoticed. Escalation is
-        # provisional: this is a mechanical failure the retry-routing story
-        # will send back to the stage itself, and _escalate leaves
-        # retry_count alone, so no attempt number is consumed here.
+        # afterwards, which is what let one ship unnoticed. story-022 recorded
+        # the escalation here as provisional, pending a route from a stage that
+        # skipped its output back to that stage; this is that route, so a stage
+        # with unspent budget now runs again in place and only a stage without
+        # one escalates. Either way no attempt number is consumed.
         stale = stale_artifacts(run_dir, required, artifacts_before)
         if stale:
+            decision = self_route(
+                run_dir,
+                state,
+                stage,
+                failure=STALE_REQUIRED_ARTIFACTS,
+                reason=(
+                    f"{name} left required artifacts unwritten; these are a "
+                    f"previous attempt's, not this one's: {', '.join(stale)}"
+                ),
+                artifacts=stale,
+                attempt=attempt,
+            )
+            if decision.taken:
+                self_routed = True
+                continue
             return _escalate(
                 run_dir,
                 state,
-                f"{name} left required artifacts unwritten; these are a "
-                f"previous attempt's, not this one's: {', '.join(stale)}",
+                decision.reason,
                 target_root=target_root,
                 harness_root=harness_root,
                 duration_seconds=elapsed(),

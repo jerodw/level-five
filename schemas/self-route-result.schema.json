@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "self-route-result",
+  "description": "The coordinator's record of one self-route: a stage that failed mechanically — its agent process died, or it did not write a required output, or the required output at the run root is a previous attempt's — running again in place, bounded by the budget its stage declares. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a run directory can say why a stage ran twice, rather than the reason living only in the re-run's prompt. A self-route spends neither retry_count nor max_retries, archives nothing under attempts/attempt-N/ and appends nothing to retry-history.json, so this file and the self-routed entry in execution-history.json are the whole of what it leaves. One is written per self-route under a name keyed by the stage, the attempt and the try, so no self-route overwrites another's. Optional fields are expressed by absence rather than by null, as clean-clone-result and execution-history do.",
+  "type": "object",
+  "required": ["stage", "attempt", "try", "failure", "reason", "statement"],
+  "properties": {
+    "stage": {
+      "type": "string",
+      "description": "The workflow stage that failed mechanically and is running again. A self-route has no destination other than itself, so this is both where the failure happened and where execution went."
+    },
+    "attempt": {
+      "type": "integer",
+      "description": "The 1-based attempt this self-route happened within, unchanged by it: a self-route consumes no attempt number, so this matches the attempt of the rendered prompt the failed invocation was given and of any attempts/attempt-N/ directory of the same number."
+    },
+    "try": {
+      "type": "integer",
+      "description": "The 1-based count of this stage's consecutive self-routes within this attempt, at or below the stage's declared max_self_routes. It is the same number the re-run's prompt filename carries as prompt-<stage>-attempt-N-try-M.md, so the prompt and this record can be read together."
+    },
+    "failure": {
+      "type": "string",
+      "description": "Which mechanical failure occurred. None of the three is a judgement about the work: the stage simply did not produce what it declared, which is why running it again is a plausible answer to all three and why a boundary or schema violation is not among them.",
+      "enum": [
+        "agent-process-failed",
+        "missing-required-artifacts",
+        "stale-required-artifacts"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "description": "The failure in the same words the escalation for it would have used, so a self-route and an escalation of the same failure name it identically."
+    },
+    "statement": {
+      "type": "string",
+      "description": "What the coordinator tells the re-running stage: why it is running again and, for the two failures that have one, which output was missing or stale. A failed agent process names no output — the invocation did not reach the point of declaring what it had done — and says instead that it exited without completing and that the working tree already holds whatever it wrote before it did. This is the coordinator's own statement and says so: a self-routed stage has no agent-authored guidance behind it, because no verifier saw the work."
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "The required outputs the failure named, as the check reported them. Absent for a failed agent process, which names none.",
+      "items": { "type": "string" }
+    }
+  }
+}
