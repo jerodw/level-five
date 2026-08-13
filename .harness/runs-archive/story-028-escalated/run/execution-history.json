@@ -1,0 +1,131 @@
+[
+  {
+    "sequence": 1,
+    "timestamp": "2026-08-10 20:07:05",
+    "event": "workflow-started",
+    "message": "workflow started for story-028"
+  },
+  {
+    "sequence": 2,
+    "timestamp": "2026-08-10 20:07:05",
+    "event": "stage-started",
+    "message": "implementer stage started",
+    "stage": "implementer"
+  },
+  {
+    "sequence": 3,
+    "timestamp": "2026-08-10 21:14:25",
+    "event": "escalated",
+    "message": "escalated: implementer agent process failed",
+    "stage": "implementer",
+    "duration_seconds": 2065.802
+  },
+  {
+    "sequence": 4,
+    "timestamp": "2026-08-12 16:13:24",
+    "event": "resumed",
+    "message": "resumed at stage implementer",
+    "stage": "implementer"
+  },
+  {
+    "sequence": 5,
+    "timestamp": "2026-08-12 16:13:24",
+    "event": "stage-started",
+    "message": "implementer stage started",
+    "stage": "implementer"
+  },
+  {
+    "sequence": 6,
+    "timestamp": "2026-08-12 16:30:58",
+    "event": "revert-check-permitted",
+    "message": "implementer edits under tests/ permitted: the suite fails with tests/conftest.py, tests/test_context_assembler.py, tests/test_coordinator_contract.py, tests/test_harness_layer_extraction.py, tests/test_story_004_validation.py, tests/test_story_006_single_reader.py, tests/test_story_007_validation.py, tests/test_story_008_validation.py, tests/test_story_009_validation.py, tests/test_story_010_validation.py, tests/test_story_011_validation.py, tests/test_story_012_validation.py, tests/test_story_014_validation.py, tests/test_story_015_validation.py, tests/test_story_017_validation.py, tests/test_story_019_validation.py, tests/test_story_020_validation.py, tests/test_story_022_validation.py, tests/test_story_024_validation.py, tests/test_story_029_validation.py, tests/test_story_coordinator.py reverted",
+    "stage": "implementer",
+    "artifacts": [
+      "revert-check-result.json"
+    ]
+  },
+  {
+    "sequence": 7,
+    "timestamp": "2026-08-12 16:30:58",
+    "event": "stage-completed",
+    "message": "implementer stage completed",
+    "stage": "implementer",
+    "artifacts": [
+      "changed-files.json",
+      "implementation-summary.md"
+    ],
+    "duration_seconds": 1053.784
+  },
+  {
+    "sequence": 8,
+    "timestamp": "2026-08-12 16:30:58",
+    "event": "stage-started",
+    "message": "tester stage started",
+    "stage": "tester"
+  },
+  {
+    "sequence": 9,
+    "timestamp": "2026-08-12 16:44:53",
+    "event": "stage-completed",
+    "message": "tester stage completed",
+    "stage": "tester",
+    "artifacts": [
+      "test-results.json",
+      "tester-changed-files.json"
+    ],
+    "duration_seconds": 834.619
+  },
+  {
+    "sequence": 10,
+    "timestamp": "2026-08-12 16:44:53",
+    "event": "stage-started",
+    "message": "verifier stage started",
+    "stage": "verifier"
+  },
+  {
+    "sequence": 11,
+    "timestamp": "2026-08-12 16:50:58",
+    "event": "verification-passed",
+    "message": "verification passed",
+    "stage": "verifier",
+    "artifacts": [
+      "verification-result.json"
+    ],
+    "duration_seconds": 365.314,
+    "verifier_outcome": "passed"
+  },
+  {
+    "sequence": 12,
+    "timestamp": "2026-08-12 16:56:12",
+    "event": "clean-clone-passed",
+    "message": "clean-clone suite passed with the story committed",
+    "stage": "verifier",
+    "artifacts": [
+      "clean-clone-result.json"
+    ]
+  },
+  {
+    "sequence": 13,
+    "timestamp": "2026-08-12 16:56:12",
+    "event": "stage-started",
+    "message": "documenter stage started",
+    "stage": "documenter"
+  },
+  {
+    "sequence": 14,
+    "timestamp": "2026-08-12 16:59:51",
+    "event": "stage-completed",
+    "message": "documenter stage completed",
+    "stage": "documenter",
+    "artifacts": [
+      "documentation-report.md"
+    ],
+    "duration_seconds": 218.875
+  },
+  {
+    "sequence": 15,
+    "timestamp": "2026-08-12 16:59:51",
+    "event": "story-completed",
+    "message": "story completed on branch story/story-028"
+  }
+]

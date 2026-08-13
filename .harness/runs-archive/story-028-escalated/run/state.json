@@ -1,0 +1,12 @@
+{
+  "story_id": "story-028",
+  "branch": "story/story-028",
+  "status": "completed",
+  "current_stage": "",
+  "retry_count": 0,
+  "verification_iterations": 1,
+  "artifacts": [],
+  "story_digest": "ff9825134add3e41d270548a23deaf517d7986eb8cd87e9fd0ee2cb69c328f4d",
+  "escalation_commit": "e9e6ecc46f58ded64ac37e737773b8cb8e53670d",
+  "harness_revision": "cb556fd74657917e5ad3305c9159196a8ea6bd31"
+}

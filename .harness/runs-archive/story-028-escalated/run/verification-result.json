@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "blocking_issues": [],
+  "unverified": [
+    "The ARCHITECTURE.md record of the routing table, the single ceiling and the two new escalations is a documenter-stage task and that stage has not run; `.harness/docs/ARCHITECTURE.md` is unchanged on this branch. Not evaluated here.",
+    "The conformance check against the manuscript's Chapter 17 retry-management section could not be performed: the manuscript is not in this checkout, as the story itself records.",
+    "`tests/test_story_029_validation.py` changed its control from a coordinator pinned at story-029's endpoint to the coordinator as it stands, because the pinned copy cannot run against the reshaped `on_failure`/`clean_clone` keys. I read the diff: each `old` literal still matches once and the green-then-red pair is intact, so the assertion's strictness is preserved. Whether story-029's intent was specifically the pinned revision is a judgement I flag rather than rule on."
+  ],
+  "retry_recommended": false
+}
