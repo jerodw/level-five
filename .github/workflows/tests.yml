@@ -32,11 +32,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install pytest
       # One retry, of the failures only, and only here. The clean-clone and
-      # revert checks clone the target repository, and twice that clone has
-      # failed on a runner with ENOENT on an object it was copying. The cause
-      # is not established: it is CI-only, has not reproduced in 25 local runs
-      # of the affected test, and auto-gc is ruled out because a fixture
-      # repository holds three loose objects against a threshold of 6700.
+      # revert checks clone the target repository with `--no-hardlinks`, which
+      # copies .git/objects as a directory tree: git enumerates the tree, then
+      # copies it, and three CI runs have failed because a file vanished in
+      # between. One names objects/pack/multi-pack-index.lock, which exists
+      # only while something is writing a multi-pack index in the *source*
+      # repository — so the source is being repacked while the clone reads it,
+      # and copying a live object store cannot be correct under that condition.
+      #
+      # This retry does not fix that. The fix is one call site,
+      # orchestration/story_coordinator.py:984, and it belongs in a story:
+      # .harness/requests/clone-without-copying-a-live-object-store.md. This
+      # keeps one flake from blocking a merge while that lands, and stays
+      # afterwards for the next unknown.
       #
       # The retry lives here rather than in orchestration/ deliberately. A
       # harness that retries its own clone behaves differently depending on
