@@ -103,7 +103,7 @@
     },
     "stage_exceptions": {
       "type": "array",
-      "description": "Optional, and rare: explicit grants lifting a stage's may_not_create declaration for this story only. A story whose deliverable is itself a regression suite needs the implementer's tests/ restriction lifted; the reason is required because the grant is a judgement the reviewer must be able to weigh. Not in the top-level required list — almost every story declares none. The coordinator cross-checks each entry against the loaded workflow at pre-flight and refuses a grant that names an undefined stage or a prefix that stage was never restricted on.",
+      "description": "Optional, and rare: explicit grants lifting a stage's may_not_create declaration for this story only. A granted path is one the story declares that stage owns, so neither the ownership check nor the revert check governs it and the reviewer weighs the reason instead — which is why the reason is required: the grant is a judgement, not a flag. A story whose deliverable is itself a regression suite needs the implementer's tests/ restriction lifted. Not in the top-level required list — almost every story declares none. The coordinator cross-checks each entry against the loaded workflow at pre-flight and refuses a grant that names an undefined stage or a value beneath no prefix that stage was restricted on.",
       "items": {
         "type": "object",
         "required": ["stage", "create", "reason"],
@@ -114,7 +114,7 @@
           },
           "create": {
             "type": "string",
-            "description": "The repository-relative path prefix that stage may create under, matching a prefix in that stage's may_not_create list."
+            "description": "A repository-relative path that stage may create, at or beneath one of the prefixes in that stage's may_not_create list. Naming the whole prefix exempts everything beneath it, exactly as it always has; naming a single file exempts that file alone, leaving every other path beneath the prefix governed. A value ending in a slash is read as a directory and covers every path beneath it; any other value covers exactly and only itself. A value beneath none of that stage's declared prefixes is refused, because it grants nothing."
           },
           "reason": {
             "type": "string",

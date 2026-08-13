@@ -9,7 +9,7 @@ the commit it makes after: a failing artifact is left in the working tree,
 uncommitted, with its problems reported, which is the state a developer can
 fix and re-run from.
 
-Three classes of problem are reported and this module invents none of the
+Four classes of problem are reported and this module invents none of the
 first two. Schema conformance is story_coordinator.read_story; agreement of a
 story's stage_exceptions with the loaded workflow is
 story_coordinator.stage_exception_problems. Neither parsing, schema
@@ -18,9 +18,15 @@ check with its own reader is the divergence story-005 existed to remove — and
 the messages are the coordinator's own, so a given defect reads the same at
 plan time as at pre-flight.
 
-The third class is this module's own and runs at plan time only. It is never
-refused by l5-run, which is why plan time is the only place it can be caught;
-adding it to pre-flight would refuse committed artifacts that already ran.
+The third and fourth classes are this module's own and both run at plan time
+only, for one shared reason: neither is refused by l5-run, because adding
+either to pre-flight would start refusing committed artifacts that have
+already run. They are otherwise unlike each other, and the difference is
+worth stating rather than blending. The third scans English prose and carries
+the hedging that entails. The fourth is structural — two literals compared,
+one in the artifact and one in the workflow definition — and inherits none of
+that hedging: it has no clause split, no vocabulary of scoping words, no
+paraphrase it can be evaded by, and nothing it declines to decide.
 
 What the third check is
 -----------------------
@@ -70,6 +76,26 @@ It errs the other way too, and deliberately: a clause that merely *describes*
 the restriction, or grants something wider than it, is reported if it names
 both halves without a creation word. Refusing a well-meant sentence costs one
 rephrasing at plan time, which is where a human is present to do it.
+
+What the fourth check is
+------------------------
+A plan must not assign work to a stage that cannot own it. A
+technical_plan.likely_file_changes entry naming a file beneath a prefix its
+own stage is restricted from creating under, with no grant covering that
+file, describes a run that can only end one way: the stage does exactly what
+the plan named, and the coordinator refuses the result. Both halves of the
+conflict are literals — one in the artifact, one in the workflow definition —
+so it is fully decidable before the run starts, and the decision belongs
+where a developer is present to repair it in one exchange.
+
+That is why it is structural rather than a scan of English. It compares an
+entry's declared file against an entry's declared stage; it does not read
+prose, does not guess at intent, and does not err in either direction.
+Nothing about it is hedged, and the limits recorded above for the third check
+are not its limits. likely_file_changes is its subject because it is the only
+field carrying a file and a stage together — scope.modify names paths with no
+stage and cannot state this conflict at all. A story with no technical_plan,
+or an entry missing either field, yields nothing rather than raising.
 
 Nothing here repairs an artifact and nothing here deletes one. The problems
 are returned rather than printed, and the caller decides.
@@ -138,6 +164,51 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
     return problems
 
 
+def assignment_problems(story: dict, stages: list[dict]) -> list[str]:
+    """Report plan entries assigning a file to a stage that cannot own it.
+
+    The subject is technical_plan.likely_file_changes and it is the only place
+    this conflict can be stated: an entry carries an explicit file and stage
+    pair, while scope.modify names paths with no stage at all and so cannot
+    say who was meant to write one. One problem per offending entry and
+    restriction.
+
+    An entry offends when its file falls under a prefix the entry's own stage
+    is restricted from creating under and no grant on that stage covers the
+    file. Both halves come off story_coordinator.stage_restrictions and the
+    grant is decided by story_coordinator.grant_covers, so no stage name and
+    no prefix is written here — the same promise the check beside this one
+    makes.
+
+    A story carrying no technical_plan, and an entry missing either field,
+    yield no problem rather than an error: this reports a conflict it can see
+    both halves of, and an absent half is nothing to report.
+    """
+    restrictions = story_coordinator.stage_restrictions(stages)
+    plan = story.get("technical_plan")
+    entries = plan.get("likely_file_changes", []) if isinstance(plan, dict) else []
+    problems: list[str] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        path, name = entry.get("file"), entry.get("stage")
+        if not path or not name:
+            continue
+        granted = story_coordinator.granted_paths(story, name)
+        if story_coordinator.grant_covers(granted, path):
+            continue
+        for stage, prefix in restrictions:
+            if stage == name and path.startswith(prefix):
+                problems.append(
+                    f"$.technical_plan.likely_file_changes[{index}]: assigns "
+                    f"'{path}' to stage '{name}', which the workflow declares: "
+                    f"{stage} may not create files under {prefix}. Either "
+                    f"assign '{path}' to a stage that may own it, or declare a "
+                    f"stage_exceptions grant naming '{path}' for {stage}."
+                )
+    return problems
+
+
 def artifact_problems(
     artifacts: Iterable[Path], stages: list[dict]
 ) -> dict[Path, list[str]]:
@@ -148,7 +219,7 @@ def artifact_problems(
     the artifacts given is preserved, because the caller reports in it.
 
     read_story is called once per artifact — the same one reading the run
-    itself makes — and its parse is what the two structural checks are given.
+    itself makes — and its parse is what the later checks are given.
     An artifact read_story has something to say about yields that and nothing
     further, which is run_story's own pre-flight order rather than a second
     one: a story that failed to parse has no parse to check, and a story that
@@ -168,6 +239,7 @@ def artifact_problems(
         if not found:
             found += story_coordinator.stage_exception_problems(reading.parsed, stages)
             found += strictness_problems(reading.parsed, stages)
+            found += assignment_problems(reading.parsed, stages)
         if found:
             problems[Path(artifact)] = found
     return problems

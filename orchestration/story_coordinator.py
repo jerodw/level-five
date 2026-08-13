@@ -128,6 +128,15 @@ def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
     never restricted on, grants nothing — a planning error rather than a
     harmless one, so both refuse the run. Stage names and prefixes come from
     the workflow definition; none is named here.
+
+    A granted value is accepted when it *equals* one of that stage's declared
+    prefixes or falls *under* one of them, so a grant may name a single file,
+    or a directory, beneath a declared prefix rather than only the whole
+    prefix. Widening what is accepted narrows nothing: a whole-prefix grant
+    keeps its meaning and its effect on both checks. A value beneath no
+    declared prefix is still refused with the message it prints today — a
+    grant that is no subset of something the stage was restricted on grants
+    nothing — as is a stage the loaded workflow does not define.
     """
     restricted: dict[str, list[str]] = {stage["name"]: [] for stage in stages}
     for name, prefix in stage_restrictions(stages):
@@ -140,7 +149,10 @@ def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
                 f"$.stage_exceptions[{index}]: names stage '{name}', which the "
                 f"loaded workflow does not define"
             )
-        elif granted not in restricted[name]:
+        elif not any(
+            granted == prefix or granted.startswith(prefix)
+            for prefix in restricted[name]
+        ):
             problems.append(
                 f"$.stage_exceptions[{index}]: grants '{granted}' to stage "
                 f"'{name}', which was never restricted from creating it"
@@ -206,12 +218,42 @@ def retry_routing_problems(stages: list[dict]) -> list[str]:
     return problems
 
 
-def _granted_prefixes(story: dict, stage_name: str) -> list[str]:
+def granted_paths(story: dict, stage_name: str) -> list[str]:
+    """The values this story's stage_exceptions grant to one stage, in order.
+
+    Public because plan_validation reads it: the plan-time check asks whether
+    a grant already covers a file, which is the same question the run-time
+    checks ask, and a second reader of the story's grants would be a second
+    answer to it.
+    """
     return [
         exception["create"]
         for exception in story.get("stage_exceptions", [])
         if exception["stage"] == stage_name
     ]
+
+
+def grant_covers(granted: list[str], path: str) -> bool:
+    """Whether any granted value covers this path.
+
+    One function decides this, and the three readers that need it — the
+    plan-time assignment check, the ownership check and the revert check —
+    all call it, so a grant cannot mean one thing when a plan is written and
+    another when it runs.
+
+    A granted value ending in a slash is a directory and covers every path
+    beneath it, which is what a whole-prefix grant has always meant. Any other
+    granted value names one path and covers exactly and only that path — it is
+    not a prefix match, so granting one file beneath a prefix leaves every
+    other file beneath it governed.
+    """
+    for value in granted:
+        if value.endswith("/"):
+            if path.startswith(value):
+                return True
+        elif path == value:
+            return True
+    return False
 
 
 def _state_path(run_dir: Path) -> Path:
@@ -552,7 +594,7 @@ class OwnershipViolation:
 
 
 def _ownership_violation(
-    run_dir: Path, record_name: str, prefixes: list[str]
+    run_dir: Path, record_name: str, prefixes: list[str], granted: list[str]
 ) -> OwnershipViolation | None:
     """Hold a stage to the outputs it declared it does not own.
 
@@ -561,9 +603,16 @@ def _ownership_violation(
     implementer must be able to update an existing test whose call site its
     own signature change broke, but validation it authors itself checks what
     it built rather than what was asked.
+
+    The enforced prefix list arrives whole; a path the story's grants cover is
+    exempted rather than the prefix being removed, so a grant naming one path
+    leaves every other path beneath the same prefix governed. Whether a grant
+    covers a path is grant_covers's decision and no other's.
     """
     changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     for path in changed.get("created", []):
+        if grant_covers(granted, path):
+            continue
         for prefix in prefixes:
             if path.startswith(prefix):
                 return OwnershipViolation(path, prefix)
@@ -1278,18 +1327,23 @@ class GovernedEdits:
 
 
 def governed_edits(
-    run_dir: Path, record_name: str, prefixes: list[str]
+    run_dir: Path, record_name: str, prefixes: list[str], granted: list[str]
 ) -> GovernedEdits:
     """Read a stage's record for the edits the revert check decides on.
 
-    Names no stage and no prefix; the caller passes the enforced list it has
-    already narrowed by the story's grants. Sorted, so the record and the
-    escalation reason are deterministic.
+    Names no stage and no prefix; the caller passes the stage's enforced list
+    whole and, beside it, the values the story grants that stage. A path a
+    grant covers is skipped, so it is exempt from this check exactly as it is
+    exempt from the ownership check, and by the same decision — grant_covers,
+    which both read. Sorted, so the record and the escalation reason are
+    deterministic.
     """
     changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     paths, matched = set(), set()
     for group in ("modified", "deleted"):
         for path in changed.get(group, []):
+            if grant_covers(granted, path):
+                continue
             for prefix in prefixes:
                 if path.startswith(prefix):
                     paths.add(path)
@@ -2464,17 +2518,20 @@ def run_story(
             # way blocked paths are read from the rules. A story may lift a
             # declared prefix for one stage; the grant is recorded so the
             # routing stays reconstructable from events.log.
+            # The enforced list stays whole; a grant is an exemption on the
+            # paths it covers rather than the removal of a prefix, so a story
+            # granting one file beneath a prefix leaves the rest of that
+            # prefix governed. One event per grant whatever its granularity.
             enforced = list(stage.get("may_not_create", []))
-            for granted in _granted_prefixes(reading.parsed, name):
-                if granted in enforced:
-                    enforced.remove(granted)
-                    append_event(
-                        run_dir,
-                        f"stage exception applied: {name} may create {granted}",
-                        kind="stage-exception-applied",
-                        stage=name,
-                    )
-            ownership = _ownership_violation(run_dir, record_name, enforced)
+            exempt = granted_paths(reading.parsed, name)
+            for granted in exempt:
+                append_event(
+                    run_dir,
+                    f"stage exception applied: {name} may create {granted}",
+                    kind="stage-exception-applied",
+                    stage=name,
+                )
+            ownership = _ownership_violation(run_dir, record_name, enforced, exempt)
             if ownership:
                 return _escalate(
                     run_dir,
@@ -2486,8 +2543,9 @@ def run_story(
                     duration_seconds=elapsed(),
                 )
 
-            # The revert check, on the same record and the same enforced
-            # prefixes the ownership check just used — the one record whose
+            # The revert check, on the same record, the same enforced
+            # prefixes and the same exemption the ownership check just used —
+            # so a granted path is exempt from both — the one record whose
             # edits under those prefixes are known to be this stage's alone.
             # The artifact name comes off the loaded workflow definition, so
             # removing that declaration disables the check with no change here.
@@ -2495,7 +2553,7 @@ def run_story(
             # here for the other name it carries.
             revert_artifact = declaration.get("result")
             edits = (
-                governed_edits(run_dir, record_name, enforced)
+                governed_edits(run_dir, record_name, enforced, exempt)
                 if revert_artifact
                 else GovernedEdits((), ())
             )
