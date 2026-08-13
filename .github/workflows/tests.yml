@@ -31,4 +31,26 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install pytest
-      - run: python -m pytest tests/ -q
+      # One retry, of the failures only, and only here. The clean-clone and
+      # revert checks clone the target repository, and twice that clone has
+      # failed on a runner with ENOENT on an object it was copying. The cause
+      # is not established: it is CI-only, has not reproduced in 25 local runs
+      # of the affected test, and auto-gc is ruled out because a fixture
+      # repository holds three loose objects against a threshold of 6700.
+      #
+      # The retry lives here rather than in orchestration/ deliberately. A
+      # harness that retries its own clone behaves differently depending on
+      # where it runs, and a developer running the suite locally should see
+      # the failure rather than a green run that quietly needed two attempts.
+      # So the harness is unchanged and the environment that produces the
+      # flake is the one that absorbs it.
+      #
+      # `--last-failed` re-runs only what failed, so the log names exactly
+      # what needed a second attempt, and the warning puts it in the run
+      # summary. A job that is green *because* of this step says so.
+      - name: tests (one retry of failures on a second attempt)
+        run: |
+          set -o pipefail
+          if python -m pytest tests/ -q; then exit 0; fi
+          echo "::warning title=Suite retried::The first attempt failed; re-running only the failed tests once. If this job is green, it needed two attempts — check the list below before trusting it."
+          python -m pytest tests/ -q --last-failed
