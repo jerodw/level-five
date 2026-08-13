@@ -1,0 +1,131 @@
+story:
+  id: story-032
+  title: Refuse a plan that assigns work to a stage that cannot own it
+  description: |
+    story-031 escalated seventeen minutes into its implementer on a conflict
+    that was fully decidable before the run started. Its plan named
+    tests/test_baseline_honesty.py in likely_file_changes with the stage the
+    workflow stops from creating files under tests/, and declared no grant
+    lifting that restriction. The implementer changed exactly the one file the
+    plan named; the harness refused the result correctly. Both halves of the
+    conflict are literals in the artifact and in the workflow definition, and
+    nothing about it depends on what any agent would later write.
+
+    story-029 made the same assignment and passed. Its change was destructive,
+    so reverting it broke seventeen other modules and the revert check read the
+    edits as forced. That plan was not more correct, it was luckier: an
+    additive change reverts cleanly by construction, so there is no version of
+    story-031's work that check could ever permit.
+
+    This story moves the decision to plan time, where a developer is present to
+    repair it in one exchange, and gives the conflict a resolution finer than
+    the one that exists today. Three parts. plan_validation refuses such a
+    plan, naming the file, the stage, the prefix and both ways out. A
+    stage_exceptions grant may name a path under a declared prefix rather than
+    only the whole prefix, which turns the enforcement from subtracting a
+    prefix into exempting a set of paths. And the convention that a standing
+    test module belongs to the tester is written down, with its cost, so the
+    common case needs no grant at all.
+
+tasks:
+  - Add assignment_problems(story, stages) to orchestration/plan_validation.py, reporting one problem per technical_plan.likely_file_changes entry whose file falls under a prefix the entry's own stage is restricted from creating under, unless a grant on that stage covers the file. Both halves of the match come off story_coordinator.stage_restrictions - no stage name and no prefix is written into the module, which is the promise its docstring already makes for the check beside it.
+  - Make technical_plan.likely_file_changes the authoritative subject of that check and say so in the docstring - it carries an explicit file and stage pair, while scope.modify names paths with no stage and cannot state this conflict. A story carrying no technical_plan, or an entry missing either field, yields no problem from this check rather than an error.
+  - Word each problem so it names the file, the stage, the prefix in the workflow's own words, and both resolutions - assign the file to a stage that may own it, or declare a stage_exceptions grant naming it.
+  - Call assignment_problems from artifact_problems beside strictness_problems, keeping the existing order in which a story that fails to parse or fails its schema yields that and nothing further.
+  - State in the plan_validation module docstring that this check is structural rather than a clause-level scan of English, that it is plan-time only for the same reason the strictness check is - pre-flight would refuse committed artifacts that have already run - and that it inherits none of the hedging the scan beside it correctly carries.
+  - Widen story_coordinator.stage_exception_problems to accept a create value that equals or falls under one of that stage's declared prefixes, while still refusing a value that falls under none of them and still refusing a stage the loaded workflow does not define.
+  - Add one shared matcher to orchestration/story_coordinator.py answering whether a story's grants for a named stage cover a given path - a granted value ending in a slash covers every path beneath it, any other granted value covers exactly itself - and read it from plan_validation and from both run-time consumers so the three cannot disagree.
+  - Replace the grant handling in the stage loop - the enforced prefix list stays whole and a per-stage exemption is computed beside it, replacing the removal of a granted prefix from that list. Both _ownership_violation and governed_edits skip a path the exemption covers, so a granted path is exempt from the ownership check and from the revert check the way a granted prefix is today.
+  - Keep one stage-exception-applied event per grant, carrying the granted value whatever its granularity, so the routing stays reconstructable from events.log.
+  - Amend schemas/story.schema.json - the create field accepts a path at or beneath a declared prefix, and the description states what a grant exempts - a granted path is one the story declares that stage owns, so neither the ownership check nor the revert check governs it and the reviewer weighs the reason instead.
+  - Add the standing-test-module convention to prompts/planner.md beside the existing stage_exceptions guidance - a standing test module is enforcement infrastructure that outlives the stories touching it, so a story whose deliverable is such a module assigns it to the tester and needs no grant - and note there that a grant may name a single path.
+  - Record in .harness/docs/ARCHITECTURE.md the new plan-time check and what makes it structural, the shift from prefix subtraction to path exemption and the one matcher all three readers share, the widened create contract with what a grant exempts, the convention with its cost and the two things that bound it, and that story-029's committed artifact is refused by the new check as intended rather than as a regression.
+
+acceptance_criteria:
+  - A story whose likely_file_changes assigns a file beneath a declared prefix to the very stage restricted from creating files under that prefix, with no grant, is reported by assignment_problems, and l5-plan leaves that artifact uncommitted in the working tree with the problem printed.
+  - The reported problem text contains the file path, the stage name, the prefix, and both resolutions - reassigning the file to a stage that may own it, and declaring a stage_exceptions grant naming it.
+  - The same plan yields no problem once the entry names the tester instead, and yields no problem once a stage_exceptions grant names that exact file.
+  - A file assigned to a stage carrying no create restriction, and a file outside every declared prefix, both yield no problem, whatever stage the entry names.
+  - A story with no technical_plan, an entry with no stage, and an entry with no file each yield no problem from assignment_problems and raise nothing.
+  - assignment_problems contains no stage name and no path prefix as a literal, and returns an empty list when handed a workflow whose stages declare no restrictions at all.
+  - stage_exception_problems accepts a create value naming a single file beneath a declared prefix, accepts a value naming a directory beneath one, accepts a declared prefix itself unchanged, and still refuses a value beneath no declared prefix and a stage the workflow does not define, with the messages it prints today.
+  - The shared grant matcher covers every path beneath a granted value that ends in a slash, covers exactly and only the named path for a granted value that does not, and is the single function plan_validation, the ownership check and the revert check all read.
+  - In a run whose story grants one path beneath a prefix, a file created at that path by the granted stage is permitted and its edits are not put to the revert check, while a second file beneath the same prefix, created or edited by the same stage in the same run, still escalates on the ownership check and is still put to the revert check.
+  - A run whose story grants a whole declared prefix behaves exactly as it does today - every path beneath it is exempt from both checks - and events.log carries one stage-exception-applied line per grant, naming the granted value.
+  - The enforced list the stage loop passes to the ownership check and to the revert check is the stage's declared may_not_create list unshortened, with grants expressed as an exemption rather than as a removal from that list.
+  - prompts/planner.md states the standing-test-module convention and that a grant may name a single path, and still names no stage and no restricted prefix as a literal, as the existing template promise requires.
+  - .harness/docs/ARCHITECTURE.md records all three parts, including that story-029's committed artifact is refused by the new check and that this is intended.
+
+technical_plan:
+  implementation_steps:
+    - Add the grant matcher to orchestration/story_coordinator.py beside _granted_prefixes, make it public since plan_validation reads it, and express _granted_prefixes in terms of it or retire it in favour of it.
+    - Widen stage_exception_problems from equality against the declared prefixes to containment beneath one of them, leaving both refusal messages as they read today.
+    - Rework the grant handling in the stage loop - stop removing granted values from the enforced list, compute the exemption for the stage beside it, and give _ownership_violation and governed_edits the exemption so each skips a covered path.
+    - Add assignment_problems to orchestration/plan_validation.py, reading stage_restrictions and the shared matcher, and call it from artifact_problems after strictness_problems.
+    - Rewrite the parts of the plan_validation module docstring that describe what the module checks, so the third class and the fourth are distinguished rather than blended.
+    - Amend the stage_exceptions section of schemas/story.schema.json for the widened create contract and for what a grant exempts.
+    - Add the convention and the path-level grant note to prompts/planner.md.
+    - Record the whole change in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: Gains the new check and the docstring that distinguishes it from the clause-level scan already there.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Owns stage_restrictions, stage_exception_problems, the grant reader, the ownership check and governed_edits, so the widened contract and the exemption model land together in one module.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: States what create accepts and what a grant exempts; it is the file the planner and the coordinator both read.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Carries the standing-test-module convention and the note that a grant may name one path, so the refusal becomes rare.
+    - file: tests/test_story_032_validation.py
+      stage: tester
+      reason: Drives the new check over fixtures and over the committed corpus, and drives a run whose story carries a path-level grant, covering the exemption's granularity at the coordinator.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the plan-time check, the exemption model, the widened create contract and the convention with its cost.
+
+scope:
+  modify:
+    - orchestration/plan_validation.py
+    - orchestration/story_coordinator.py
+    - schemas/story.schema.json
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - orchestration/plan_commit.py
+    - orchestration/story_parser.py
+    - orchestration/context_assembler.py
+    - orchestration/harness_config.py
+    - orchestration/schema_validator.py
+    - scripts/
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the new check reports the conflict for a fixture reproducing story-031's exact entry - the file path and the stage that artifact carried - and confirm the message carries the file, the stage, the prefix and both resolutions, asserted on the text rather than only on a problem having been returned.
+  - Confirm the committed story-029 artifact under .harness/stories/ is reported by the new check when read from disk, and confirm the run-time pre-flight l5-run performs is unchanged by this story, so no committed artifact that has already run becomes unrunnable.
+  - Confirm through l5-plan that an artifact carrying this conflict is not committed, that the repository HEAD is unmoved, that nothing was pushed, and that the artifact is still in the working tree exactly as written.
+  - Confirm the two clean resolutions - the entry naming the tester, and a grant naming the file - each produce an artifact l5-plan commits.
+  - Confirm a grant naming a path beneath no declared prefix is still refused at pre-flight with the message it prints today, and confirm a whole-prefix grant produces the behaviour observable in the committed runs that carry one.
+  - Confirm at the coordinator, by driving a run rather than by reading the code, that a path-level grant exempts only the path it names - a second file beneath the same prefix, touched by the same stage in the same run, still escalates on the ownership check and is still put to the revert check. Confirm the grant is not implemented as a prefix match by asserting the second file's escalation names it.
+  - Confirm by search that orchestration/plan_validation.py names no stage and no restricted prefix, and that prompts/planner.md still names none either.
+  - Confirm the full suite passes under the configured test command with no existing assertion weakened, skipped or deleted, and in particular that the story-025 tests covering the clause-level scan and the story-029 tests covering the grant behaviour still pass unmodified.
+
+constraints:
+  - The new check is plan-time only. It is not added to l5-run's pre-flight, because pre-flight refusal would make committed artifacts that have already run unrunnable.
+  - Both halves of the new check are read off the loaded workflow through stage_restrictions; no stage name and no path prefix is written into plan_validation.
+  - The clause-level strictness scan is not modified, not widened and not reworded; the new check sits beside it as a separate function with its own docstring.
+  - Whether a grant covers a path is decided by exactly one function, read by plan_validation, by the ownership check and by the revert check.
+  - A grant naming a whole declared prefix keeps its current meaning and its current effect on both checks; widening the accepted values narrows none of them.
+  - The story schema stays the single contract - the widened create rule is written there, not only in the coordinator that enforces it.
+  - No change to the revert check's own semantics, to what it reverts, or to how it decides; this story routes work away from it rather than changing what it decides.
+  - No may_not_create declaration is added to, removed from or changed on any stage in workflows/story-workflow.json.
+  - story-031 is not re-planned by this story and no story artifact under .harness/stories/ is edited by it.
+  - The convention about standing test modules is guidance in the prompt and the architecture document; nothing enforces it, and the refusal is what holds.
