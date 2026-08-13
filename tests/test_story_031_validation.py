@@ -278,6 +278,125 @@ def test_a_read_and_an_execution_split_across_functions_is_the_stated_limit():
 
 
 # --------------------------------------------------------------------------
+# The two forms of a bounded read, held to the same behaviour
+#
+# The story says a revision bound is recognised two ways — stated in a keyword,
+# or reached by asking git directly — and the acceptance criteria say the
+# *pairing* is what gets reported in either form. Those two claims interact in
+# one place, and it is where this file's first pass found the scan wrong: a
+# spawned `git show` is itself a process spawn, so the read supplied its own
+# execution half and a bounded read written to a path but never run was
+# reported in the git form and not in the keyword form.
+#
+# So the forms are not asserted separately. The same control is written twice,
+# differing only in how the bound is stated, and the two are required to agree
+# case for case. A scan that recognises only one form, or that lets either form
+# stand in for its own second half, disagrees somewhere in this table.
+# --------------------------------------------------------------------------
+
+
+#: The bound stated in a keyword — the shared reader's form.
+A_KEYWORD_BOUND = "read_file(rel, revision=at)"
+
+#: The same bound reached without the shared reader, which is the form the rule
+#: exists to see: a spawned `git show` asking for a file's text at a revision.
+A_SPAWNED_GIT_BOUND = (
+    "subprocess.check_output(['git', 'show', f'{at}:{rel}'], text=True)")
+
+THE_TWO_FORMS = {"a-revision-keyword": A_KEYWORD_BOUND,
+                 "a-spawned-git-show": A_SPAWNED_GIT_BOUND}
+
+
+def a_control(read: str, *, executes: bool) -> str:
+    """One mutation control, parameterised by how its subject is bounded and by
+    whether anything runs the text it writes."""
+    source = ("import subprocess, sys\n"
+              "def control(clone, rel, at):\n"
+              f"    pinned = {read}\n"
+              "    (clone / rel).write_text(pinned)\n")
+    if executes:
+        source += ("    return subprocess.run([sys.executable, '-m', 'pytest'],\n"
+                   "                          cwd=clone)\n")
+    return source
+
+
+@pytest.mark.parametrize("form", list(THE_TWO_FORMS), ids=list(THE_TWO_FORMS))
+def test_both_forms_of_a_bound_are_reported_when_the_written_text_is_run(form):
+    """The positive half of the table, and the control for the negative half
+    below: in either form, the complete pairing is reported."""
+    assert len(flags_for(a_control(THE_TWO_FORMS[form], executes=True))) == 1
+
+
+@pytest.mark.parametrize("form", list(THE_TWO_FORMS), ids=list(THE_TWO_FORMS))
+def test_neither_form_is_reported_when_nothing_runs_what_was_written(form):
+    """The defect this file reported at the first attempt, stated as the claim
+    it always was: a bounded read written to a path and never executed is two
+    thirds of a control and is unreported — in the git form exactly as in the
+    keyword form, because the read is not its own execution."""
+    read = THE_TWO_FORMS[form]
+    assert flags_for(a_control(read, executes=False)) == []
+    assert flags_for(a_control(read, executes=True)), \
+        "the near-neighbour that does execute was not reported"
+
+
+def test_the_two_forms_agree_case_for_case():
+    """The table read as a whole rather than row by row. Stated this way
+    because the failure it guards is a *divergence*: each form was defensible
+    on its own, and only the disagreement between them showed that one of them
+    had stopped reporting the pairing."""
+    verdicts = {
+        (form, executes): bool(flags_for(a_control(read, executes=executes)))
+        for form, read in THE_TWO_FORMS.items()
+        for executes in (True, False)
+    }
+    for executes in (True, False):
+        by_form = {form: verdicts[(form, executes)] for form in THE_TWO_FORMS}
+        assert len(set(by_form.values())) == 1, (executes, by_form)
+    assert verdicts[("a-revision-keyword", True)] is True
+    assert verdicts[("a-revision-keyword", False)] is False
+
+
+def test_a_bounded_read_is_never_counted_as_the_execution_of_what_it_wrote():
+    """The narrow form of the fix, held so an over-correction is visible too.
+
+    Two spawned reads and a write, with nothing else running: still unreported,
+    so the exclusion is not satisfied by there merely being one read. Add a
+    spawn that is not a read and it is reported, so the exclusion has not been
+    widened into "a control that spawns git is never reported".
+    """
+    two_reads_and_a_write = (
+        "import subprocess\n"
+        "def control(clone, rel, at, other):\n"
+        "    pinned = subprocess.check_output(\n"
+        "        ['git', 'show', f'{at}:{rel}'], text=True)\n"
+        "    also = subprocess.check_output(\n"
+        "        ['git', 'show', f'{at}:{other}'], text=True)\n"
+        "    (clone / rel).write_text(pinned)\n"
+        "    (clone / other).write_text(also)\n"
+    )
+    assert flags_for(two_reads_and_a_write) == []
+
+    and_then_run = two_reads_and_a_write + (
+        "    subprocess.run(['python', '-m', 'pytest'], cwd=clone)\n")
+    assert len(flags_for(and_then_run)) == 2, flags_for(and_then_run)
+
+
+def test_the_execution_half_still_accepts_a_spawn_that_is_not_a_read():
+    """The other side of the same over-correction: a `git` spawn that is not
+    asking for a file's text at a revision — checking out a clone, say — is not
+    a bounded read, so it is not excluded from the execution half."""
+    checkout_then_run = (
+        "import subprocess, sys\n"
+        "def control(clone, rel, at):\n"
+        "    pinned = read_file(rel, revision=at)\n"
+        "    subprocess.run(['git', '-C', str(clone), 'checkout', '-b', 'w'])\n"
+        "    (clone / rel).write_text(pinned)\n"
+        "    return subprocess.run([sys.executable, '-m', 'pytest'], cwd=clone)\n"
+    )
+    assert len(flags_for(checkout_then_run)) == 1
+
+
+# --------------------------------------------------------------------------
 # No exemption list, shown rather than stated
 # --------------------------------------------------------------------------
 
