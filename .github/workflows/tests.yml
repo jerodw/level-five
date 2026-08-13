@@ -9,6 +9,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # One failing version must not cancel the others. Twice now a single
+      # transient `git clone` failure inside the clean-clone check has taken
+      # the whole matrix down, and on the first occurrence a job that had
+      # already reported "1257 passed" was marked failed because it was
+      # cancelled mid-cleanup — which made one flake read as three. Letting
+      # every version finish is what distinguishes an environment failure
+      # from a real one, and that distinction is the reason to run three.
+      fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12']
     steps:
