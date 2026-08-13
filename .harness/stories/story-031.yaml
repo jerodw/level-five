@@ -1,0 +1,145 @@
+story:
+  id: story-031
+  title: A mutation control mutates the working tree, never a pinned revision
+  description: |
+    story-029 retired the practice of recovering an older module out of git
+    history and running it, and enforced the retirement with two scans in
+    tests/test_baseline_honesty.py: module_construction, which reports a module
+    built at runtime, and git_text_reads, which reports a repository file's text
+    read out of git anywhere but the shared reader. One call site survived both,
+    legitimately: story-029's own validation file pinned the coordinator's source
+    at that story's endpoint commit, wrote it into a copy of the repository, and
+    ran a test against it under pytest. It wrote a file into a copy and shelled
+    out, which is a shape neither scan recognises.
+
+    The decay arrived one story later. story-028 reshaped the verifier's
+    on_failure and clean_clone keys, the pinned coordinator could no longer run
+    against the workflow definition it was paired with, and every case failed its
+    control rather than its subject. story-028 repaired it in passing by reading
+    the working tree instead, and that fix is merged; this story is about the
+    rule the repair implies and the check that would have caught it.
+
+    The rule: a control that mutates code to demonstrate an assertion can fail
+    must mutate the code as it stands. The property being demonstrated - this
+    assertion goes red when what it names is violated - is a property of the
+    assertion and of the code it is about, both of which are present in the
+    working tree. Pinning the subject at a revision adds a second variable that
+    can only ever make the control fail for reasons unrelated to what it shows.
+
+    This is narrower than "never pin a revision", and it says so. Reading a
+    pinned revision to establish what a story changed is correct and is what
+    story_diff, repository_file_at and function_source_at exist for. The rule is
+    about mutation controls specifically.
+
+    This artifact re-plans a story that was planned once and reverted before it
+    landed. The first plan named tests/test_baseline_honesty.py as the work of a
+    stage the workflow restricts from adding files under tests/, with nothing
+    lifting the restriction, and the run escalated when the revert check read a
+    green suite with those edits reverted. The conflict was decidable before the
+    run started, which is what story-032 made the harness say at plan time. The
+    substance below is the first plan's; the ownership is stated correctly and
+    the grant that a purely additive scan needs is declared.
+
+tasks:
+  - Add a fourth rule to tests/test_baseline_honesty.py, stated in its own comment block beside the three already there, saying what it is about, why it derives none of them, and what it does not cover.
+  - Implement mutation_controls(source, module) -> list[Flag] as a per-function pairing scan - a value from a revision-bounded read that flows into a write to a path, inside a function that also executes source - returning the same Flag records the other scans return, applying no exemptions of its own.
+  - State in the rule's comment block that this rule names no exempt module, and why - the two story-029 rules exempt tests/conftest.py because it is the one place the thing they forbid is correct, and a mutation of pinned source has no such place, since load_mutant takes a working-tree path precisely so pinned text is not a value it accepts.
+  - Run the rule over every module under tests/, conftest.py included, and hold the suite to reporting nothing.
+  - Demonstrate the scan's reach on the one known true positive - tests/test_story_029_validation.py as it stood before story-028 repaired it - resolved through the shared reader at a story bound rather than at a pinned SHA.
+  - Demonstrate the scan on a planted instance of each shape the rule covers, and on the benign cases it must leave alone.
+  - Extend the two meta-assertions story-029 landed from its two rules to three, so the new scan is held to stating what it does not cover and to deriving neither of its neighbours.
+  - Write this story's own validation file, holding the delivered scan to the acceptance criteria independently of the module that defines it.
+  - Record the narrowing in .harness/docs/ARCHITECTURE.md, where the paragraph on differential instruments decaying already says story-029 retired the loaders.
+
+acceptance_criteria:
+  - tests/test_baseline_honesty.py defines a scan function taking a module's source and name and returning a list of Flag records, reporting a mutation control whose subject was resolved at a revision.
+  - The new rule is the module's fourth, stated separately from the baseline rule story-015 landed and from the two rules story-029 landed, and it calls none of them.
+  - The scan reports the pairing rather than either half - a revision-bounded read that is only compared, and a mutation of working-tree source, are each unreported on their own.
+  - A revision-bounded read is recognised both as a call carrying a revision= or bound= keyword argument and as a git invocation asking for a file's text at a revision, so a caller that reaches the history without the shared reader is still seen.
+  - The flow from the read to the mutation is followed within one function, directly and through a .replace(...) of the read value, and the function must also execute source - a subprocess spawn, a load_mutant call, or an exec-family builtin - for anything to be reported.
+  - The scan applies no exemption list, and a test asserts that the module names none for this rule and states why in prose beside it.
+  - Running the scan over every module under tests/, including conftest.py, reports nothing.
+  - A test resolves tests/test_story_029_validation.py as it stood before story-028's repair through conftest.repository_file_at at a story bound, with no commit SHA written into the source, and asserts the scan reports it.
+  - A test asserts the same file in the working tree today is reported by nothing, so the regression set shows the instance flagged before its repair and clean after.
+  - The scan reports a planted instance of each shape covered - a pinned read written to a path and run under pytest in a subprocess, a pinned read written to a path and then loaded through load_mutant, and a pinned git show read written to a path and executed - each demonstrated rather than asserted.
+  - The scan reports nothing for each benign case - load_mutant against a working-tree path, a revision-bounded read whose value is only compared, a revision-bounded read written to a path that is never executed, and a working-tree read written into a repository copy and run under pytest, which is the repaired shape story-028 merged.
+  - The rule's comment block states what it does not cover, naming at least a read and an execution split across functions or laundered through a helper or fixture, source text obtained without asking git for it, deliberate obfuscation, and the standing limit that no scan here is tamper-proof.
+  - The existing test that each rule states what it does not cover covers the new scan too, and the existing test that the rules are stated separately covers all three of the rules it governs - none of them calls another, and the assertion is read off the module's source rather than asserted about it.
+  - tests/test_story_031_validation.py holds the delivered scan to these criteria, including that each planted case is reported and each benign case is not, and that the assertions it adds are shown able to fail.
+  - .harness/docs/ARCHITECTURE.md records that a mutation control is subject to the same decay as a differential instrument through a different door, and that a check rather than the paragraph is what holds it.
+
+technical_plan:
+  implementation_steps:
+    - Read the three existing rules in tests/test_baseline_honesty.py end to end first - the comment blocks, the constants, the scans, the module discovery, the live-suite tests, the planted positives, the benign cases, and the regression sets - and follow that shape rather than inventing a new one.
+    - Write the new rule's comment block above its constants - what it is about, why it derives none of the other three, that it names no exempt module and why, and the paragraph headed with the same "What it does not cover" wording the existing meta-assertion indexes on.
+    - Implement the scan over one ast.parse of the module, walking each top-level function - collect the local names bound to a revision-bounded read, collect the names written to a path, and report only when a bound name reaches a write and the same function also executes source.
+    - Recognise a revision-bounded read by shape and not by helper name, as the existing scans do - a call carrying a revision= or bound= keyword, or a git invocation whose arguments ask for a file's text at a revision - so renaming a helper changes nothing.
+    - Reuse the module's existing helpers where they already answer the question - _literal_text, _joined_literal, _imported_spawners, _is_subprocess_call and the reader rule's git-argument helpers - rather than writing second copies of them.
+    - Add the live-suite test over every module under tests/ with no exemption filtering, the planted-positive parametrization, and the benign-case parametrization.
+    - Add the regression case, resolving the pre-repair text through conftest.repository_file_at with validation_file naming tests/test_story_028_validation.py and bound=BASELINE, which is the parent of the commit that repaired it; assert the pre-repair text is reported and the working-tree text is not.
+    - Extend story-029's two meta-assertions from two rules to three, including the disjoint-vocabulary check and the rule sentences read out of the module source.
+    - Run the full suite and confirm the new rule reports nothing across tests/.
+    - Write tests/test_story_031_validation.py against the delivered scan - its reach on the true positive at a story bound, each planted shape, each benign shape, the absence of an exemption list, and the extended meta-assertions.
+  likely_file_changes:
+    - file: tests/test_baseline_honesty.py
+      stage: implementer
+      reason: The fourth rule, its comment block, its scan, its planted and benign cases, its regression case, and story-029's two meta-assertions extended to three rules.
+    - file: tests/test_story_031_validation.py
+      stage: tester
+      reason: This story's own validation file, holding the acceptance criteria to the delivered scan independently of the module that defines it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that a mutation control decays the same way a differential instrument does, and that the fourth check rather than the paragraph is what holds it.
+
+scope:
+  modify:
+    - tests/test_baseline_honesty.py
+    - tests/test_story_031_validation.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - tests/conftest.py
+    - tests/test_story_029_validation.py
+    - orchestration/
+    - prompts/
+    - workflows/
+    - schemas/
+    - scripts/
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the new scan reports the pre-repair text of tests/test_story_029_validation.py, which is the only known true positive, and that the text is resolved at a story bound with no commit SHA written into the source.
+  - Confirm the new scan reports a planted instance of each shape the rule claims to cover, and that each planted case fails the scan rather than merely being described in prose.
+  - Confirm the new scan leaves each benign case alone, including the repaired working-tree shape story-028 merged, a revision-bounded read that is only compared, and a revision-bounded read written but never executed.
+  - Confirm no module under tests/, conftest.py included, is reported by the new scan today.
+  - Confirm the rule's comment block states its limits and that the extended meta-assertion checks those limits by name for every rule it governs.
+  - Confirm the rules remain separately stated, that no scan calls another, and that the separateness is read off the module's source rather than asserted about it.
+  - Confirm the three existing scans are unchanged in reach - their constants, their matching, their exemption lists and their planted and benign cases are what they were.
+  - Confirm tests/test_story_031_validation.py holds the delivered scan to the criteria rather than restating them, and that its assertions are shown able to fail.
+  - Confirm the full suite passes in the clean clone.
+
+constraints:
+  - The fix itself is already merged and is not this story's subject - tests/test_story_029_validation.py stays as story-028 left it.
+  - No existing scan is widened - this is a fourth rule, and story-029's own test says the rules do not derive one another.
+  - load_mutant, repository_file_at, function_source_at and story_diff stay exactly as they are - a pinned read that establishes what a story changed is correct and is not what this rule is about.
+  - No commit SHA is written into the new code - every historical bound is resolved through the shared reader and the shared commit-range resolution.
+  - No helper name is written into the scan's matching - the existing scans match on constructs and shapes so that renaming a helper changes nothing, and this one holds to that.
+  - Nothing about what a story's validation file must contain changes.
+  - The scan reads what the source states and does not evaluate it, which is the same reach the existing rules claim and the same limits they state.
+  - No behaviour of the harness changes. This story touches no production code and no harness artifact shape.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_baseline_honesty.py
+    reason: The rule and its scan are this story's deliverable and their home is
+      this one standing module, which already holds the three rules it joins.
+      The grant is needed for the revert check rather than for creation - the
+      file exists and is only modified, but the revert check governs a
+      modification under a restricted prefix too, and it permits an edit only
+      when reverting it makes the suite fail. This rule is purely additive
+      against a tree that is green, so reverting it leaves a green suite and the
+      run would escalate on correct work; that is exactly how the first plan of
+      this story died. story-026 took the same grant for the same reason, and
+      the single-file form story-032 enabled makes it the narrowest one that
+      does the job: every other path under tests/ stays governed. Independence
+      is preserved - tests/test_story_031_validation.py is written by the stage
+      that validates, against the delivered scan.
