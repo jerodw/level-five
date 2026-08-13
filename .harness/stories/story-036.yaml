@@ -1,0 +1,195 @@
+story:
+  id: story-036
+  title: A stage that failed mechanically runs again, in place
+  description: |
+    Three failures end a run today that a second attempt would plausibly fix: the agent
+    process died, a required output was never written, or a required output is a previous
+    attempt's. None is a judgement about the work — the stage simply did not produce what
+    it declared. story-028's implementer is the observed case: it died on a dropped
+    connection 127 turns and 34 minutes in, and the coordinator escalated with retry_count
+    untouched, leaving $14.12 of substantial work needing a manual resume.
+
+    This story lets a stage declare a small consecutive budget for running again in place.
+    A stage that declares none escalates exactly as it does today, so landing the mechanism
+    changes nothing until a workflow opts in.
+
+    The book settled the design on 2026-08-08 and Ch 17's retry-management section teaches
+    it. The sentences this story is held to are quoted here so the implementation can be
+    checked against them without reading the manuscript, which lives outside this
+    repository and outside every path the harness governs:
+
+      "Mechanical failures route differently from verdicts. There is no defect to
+      categorize and no other stage to send the work to, so the failed stage runs again: a
+      self-route. A stage that failed to produce something may plausibly produce it next
+      time. That is exactly the reasoning that does not apply to a boundary violation,
+      where retrying the same instructions would produce the same violation again, so
+      boundary violations still escalate."
+
+      "The global ceiling survives the exception, because a self-route cannot alternate:
+      when it succeeds the workflow advances, and the only way it repeats is by failing
+      again in the same place."
+
+      "A self-routed stage has no agent-authored guidance, so the coordinator states why
+      the stage is re-running, naming the output that was missing or stale. A routable
+      failure without injected evidence replays the conditions that produced it."
+
+    The term is "mechanical failures" — the book's, chosen over "production failures",
+    which reads as failures-in-production. Schema violations, blocked paths, stage output
+    ownership, the revert check's two escalations and the clean-clone check's two are
+    unchanged: a malformed artifact suggests confusion rather than bad luck, and retrying
+    the same instructions after a boundary violation produces the same violation again.
+
+    This is the self-route half of the generalized routing settlement. The verifier's
+    category-keyed table landed as story-028 and this story does not touch on_failure.
+    It also discharges a debt already shipped: story-022's escalation on a stale required
+    output is recorded in the code as provisional, pending exactly this mechanism, because
+    at the time there was no route from a stage that skipped its output back to that stage.
+
+tasks:
+  - Add an optional stage-level max_self_routes key to the workflow definition and declare it as 1 on the implementer stage, leaving every other stage undeclared.
+  - Add a self_route_count field to RunState, defaulted so an existing state.json still loads, scoped implicitly by current_stage and holding only the live count.
+  - Convert the three mechanical escalation points in run_story — the agent process failure, the missing required artifacts, and the stale required artifacts — into self-routes when the current stage declares an unspent budget, and leave them as escalations when it does not.
+  - Escalate when a declared budget is exhausted, with a reason naming both the mechanical failure and the exhausted budget.
+  - Add a self-route-result schema and its manifest entry, and write one such artifact per self-route under a name keyed by stage, attempt and try.
+  - Give context_assembler an optional keyword for the self-route evidence and expose it as a placeholder, rendering as None when nothing applies.
+  - Inject that placeholder into the runtime state layer of the implementer, tester, verifier and documenter templates.
+  - Render the re-run prompt under prompt-<stage>-attempt-N-try-M.md, only when a self-route occurred, leaving the first invocation's filename as it is today.
+  - Add a self-routed event to the execution-history schema's event enum and append one entry per self-route.
+  - Record in retry-history.schema.json's description that a self-route is deliberately not written there, and why.
+  - Refuse at pre-flight a workflow whose declared max_self_routes is not a non-negative integer, through the existing refusal path.
+  - Repoint the assertions in tests/test_story_022_validation.py that the implementer's grant converts, keeping the escalate-when-no-budget property asserted against a stage that declares none.
+  - Update ARCHITECTURE.md for the mechanism, the two budgets, the evidence artifact and the decisions recorded here.
+
+acceptance_criteria:
+  - A stage that declares no max_self_routes escalates on all three mechanical failures exactly as it does today, with retry_count untouched and no run directory artifact named for a self-route.
+  - A stage that declares max_self_routes 1 and fails mechanically once re-runs in place at the same stage, and the run can then complete.
+  - A second consecutive mechanical failure at that same stage escalates, and the escalation reason names both what failed mechanically and that the stage exhausted its self-route budget.
+  - A self-route leaves retry_count unchanged, writes no attempts/attempt-N/ directory, appends no entry to retry-history.json, and does not move the attempt number in any rendered prompt filename.
+  - The self-route count is zero at the start of every stage invocation that is not itself a self-route: a stage that self-routes, succeeds, and whose run later fails mechanically at another stage gets that stage's full budget.
+  - A resumed run starts the resumed stage with a self-route count of zero.
+  - Each self-route writes a coordinator-authored evidence artifact named for the stage, the attempt and the try, validating against the new self-route-result schema, and no self-route overwrites another's.
+  - The re-run prompt carries that evidence, stating why the stage is running again and naming the output that was missing or stale.
+  - The evidence for a failed agent process states that the previous invocation exited without completing and that the tree already holds whatever that invocation wrote, rather than naming an output.
+  - A stage that did not self-route renders no self-route evidence in its prompt, including a stage that runs after another stage self-routed earlier in the same run.
+  - The re-run prompt is written to prompt-<stage>-attempt-N-try-M.md, and a run with no self-route writes exactly the prompt filenames it writes today.
+  - Every self-route appends one execution-history entry whose event is self-routed, naming the stage and the reason, so counting self-routes per stage is a history query.
+  - The stage baseline the revert check decides against is the one the stage's first invocation captured, not a fresh capture taken after the failed invocation left partial work in the tree.
+  - Schema violations, blocked paths, stage output ownership, the revert check's two escalations and the clean-clone check's two still escalate for a stage that declares a budget.
+  - A workflow declaring a max_self_routes that is not a non-negative integer is refused at pre-flight: exit 1, one message per problem, no run directory, no state.json, no branch created and no agent invoked.
+  - rules/execution-rules.json still holds exactly one definition of max_retries, and no self-route reads or writes it.
+
+technical_plan:
+  implementation_steps:
+    - Declare max_self_routes as an optional integer on a workflow stage, and add it to the implementer stage of workflows/story-workflow.json with the value 1.
+    - Add self_route_count to RunState with a default of 0 and a comment saying it is the live count only, scoped by current_stage, and that history is where past self-routes are read from.
+    - Add a self_route_problems(stages) function beside retry_routing_problems, returning one problem per stage whose declared max_self_routes is not a non-negative integer, and call it at pre-flight through the existing refuse path above run-directory creation.
+    - Write schemas/self-route-result.schema.json describing the coordinator-written record — the stage, the attempt, the try, the failure class, the reason, the artifacts it names — and add its stem to schemas/manifest.json.
+    - Add a single module-level helper that decides one mechanical failure - budget spent or not - writes the evidence artifact, appends the self-routed event and increments the count, so the three call sites share one decision rather than repeating it three times.
+    - Route the three mechanical failure sites through that helper - escalate when it reports no budget left, re-enter the loop at the same index when it self-routes - keeping each site's existing reason text as what the evidence and the escalation both name.
+    - Keep the try number derived from self_route_count so the prompt filename and the evidence filename agree, and leave the first invocation of a stage writing today's prompt-<stage>-attempt-N.md unchanged.
+    - Reset self_route_count where a stage is entered other than by a self-route, and on resume, and save the state so a crash mid-stage leaves a count a reader can trust.
+    - Give build_context an optional keyword-only argument carrying the evidence text and add it to the context under a self_route_result key, defaulting to None so a call that omits it renders exactly what it renders today.
+    - Add the placeholder to the runtime state layer of prompts/implementer.md, prompts/tester.md, prompts/verifier.md and prompts/documenter.md, with one sentence saying the coordinator wrote it and what it means.
+    - Add self-routed to the event enum in schemas/execution-history.schema.json, and note in the retry_stage description that a self-route names its own stage.
+    - Add to schemas/retry-history.schema.json's description that a self-route is not recorded there, because it has no verdict, no destination other than itself, and no archive.
+    - Repoint the story-022 assertions the implementer's new budget converts, then extend them so a stage declaring no budget still proves the escalation.
+    - Update .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Declares the optional budget key and grants the implementer one self-route.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The counter, the pre-flight check, the three converted escalation points, the evidence artifact and the self-routed event.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: The optional evidence argument and its placeholder.
+    - file: schemas/self-route-result.schema.json
+      stage: implementer
+      reason: The shape of the coordinator-authored evidence.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: The schema inventory is declared there and the tests assert exact set equality with the directory.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: The new self-routed event value.
+    - file: schemas/retry-history.schema.json
+      stage: implementer
+      reason: Records the decision that a self-route is not written there.
+    - file: prompts/implementer.md
+      stage: implementer
+      reason: Injects the self-route evidence in the runtime state layer.
+    - file: prompts/tester.md
+      stage: implementer
+      reason: Injects the self-route evidence in the runtime state layer.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: Injects the self-route evidence in the runtime state layer.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: Injects the self-route evidence in the runtime state layer.
+    - file: tests/test_story_036_validation.py
+      stage: tester
+      reason: The regression suite for this story's properties.
+    - file: tests/test_story_022_validation.py
+      stage: tester
+      reason: Its stale-output assertions load the shipped workflow and are converted by the implementer's grant; they are repointed rather than deleted.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The mechanism, the two budgets, the evidence artifact and the decisions recorded here.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - schemas/self-route-result.schema.json
+    - schemas/manifest.json
+    - schemas/execution-history.schema.json
+    - schemas/retry-history.schema.json
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - the verifier stage's on_failure block, including its retry_routing table and the categories it declares
+    - orchestration/agent_runner.py
+    - orchestration/plan_validation.py
+    - orchestration/plan_commit.py
+    - orchestration/run_status.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/harness_config.py
+    - scripts/
+    - templates/
+    - schemas/story.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/changed-files.schema.json
+    - .harness/stories/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm that a stage declaring no budget still escalates on all three mechanical failures, so landing this changes nothing until a workflow opts in — that is the compatibility property and it must be shown against a stage rather than argued.
+  - Confirm a stage declaring a budget self-routes once, and that a second consecutive mechanical failure at that same stage escalates naming both the failure and the exhausted budget.
+  - Confirm the count resets on success, by succeeding at a stage and then failing mechanically again later in the same run.
+  - Confirm retry_count, max_retries, attempts/attempt-N/, retry-history.json and the rendered attempt-N filenames are all untouched by a self-route — the two-budget separation is the thing a future reader will most want proven rather than asserted.
+  - Confirm the re-run prompt carries the coordinator's own statement of what was missing or stale, and that the crashed-process case says the previous invocation exited without completing rather than naming an output.
+  - Confirm no self-route evidence reaches the prompt of a stage that did not self-route, including a later stage in a run where an earlier one did.
+  - Confirm the stage baseline is reused rather than re-captured, by showing the revert check still decides against the tree the stage first found.
+  - Confirm the implementation matches the three passages quoted in this story's description, and report any place it departs from them.
+  - Confirm the pre-flight refusal for a malformed budget leaves no run directory, no state.json, no log, no new branch and invokes no agent.
+  - Confirm the new tests fail against the pre-story code for the reason each states, and that the repointed story-022 assertions still hold the escalation for a stage with no budget.
+
+constraints:
+  - A self-route spends neither retry_count nor max_retries, and reads neither.
+  - A self-route archives nothing under attempts/attempt-N/ and appends nothing to retry-history.json.
+  - A self-route never re-captures the stage baseline: the baseline is captured once per stage per attempt and reused, which is the same capture-once rule resume relies on.
+  - Boundary violations and schema violations still escalate, and no escalation point other than the three named here changes behaviour.
+  - No stage name, prefix, artifact name or budget value is written into orchestration code: the budget comes off the loaded stage dict, exactly as may_not_create and clean_clone do.
+  - The evidence is an artifact on disk, not only a prompt string, so a run directory can say why a stage ran twice.
+  - Existing state.json files still load: the new field is defaulted, and a missing value means no self-route has occurred.
+  - Existing tests are repointed at the behaviour that replaced what they asserted rather than deleted, and every property they held is still held by something.
+  - The implementer does not create new files under tests/; the tester writes the new test module, as the standing convention has it.
+  - Optional fields on the new artifact are expressed by absence rather than by null, as clean-clone-result and execution-history already do.
