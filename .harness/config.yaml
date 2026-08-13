@@ -22,7 +22,12 @@ test_command: .venv/bin/python -m pytest tests/ -q
 # the check falls back to test_command's own interpreter.
 clean_clone_python: .venv310/bin/python
 # Bash commands stage agents may run without prompting. Everything else
-# is denied in headless mode, so grant exactly what the stages need.
+# is denied in headless mode. Read-only search and inspection is granted
+# broadly: a denial costs a turn and buys nothing, because the harness's
+# own rules are enforced by the coordinator after a stage has run, not by
+# this list. Mutation is denied by hooks/bash_guard.py, which ships with
+# the harness and is passed to every stage invocation, rather than by
+# these entries happening to omit it.
 allowed_tools:
   - "Bash(.venv/bin/python:*)"
   - "Bash(python3:*)"
@@ -32,3 +37,15 @@ allowed_tools:
   - "Bash(git status:*)"
   - "Bash(git diff:*)"
   - "Bash(git log:*)"
+  - "Bash(grep:*)"
+  - "Bash(rg:*)"
+  - "Bash(find:*)"
+  - "Bash(head:*)"
+  - "Bash(tail:*)"
+  - "Bash(wc:*)"
+  - "Bash(sort:*)"
+  - "Bash(uniq:*)"
+  - "Bash(diff:*)"
+  - "Bash(git show:*)"
+  - "Bash(git branch:*)"
+  - "Bash(git ls-files:*)"

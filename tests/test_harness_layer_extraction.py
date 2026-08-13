@@ -67,7 +67,13 @@ def test_shared_partial_file_holds_the_block_once(harness_root):
     """AC1: prompts/harness-layer.md exists and holds the shared block including
     the {{blocked_paths}} placeholder line."""
     partial = (harness_root / "prompts" / "harness-layer.md").read_text()
-    assert partial == SHARED_BLOCK
+    # The block opens the file and is held to its text exactly. It was the
+    # whole file until story-035 appended the granted-list placeholder and the
+    # single-command sentence to it; equality is repointed to a prefix rather
+    # than relaxed, and the block still has to appear once and only once.
+    assert partial.startswith(SHARED_BLOCK)
+    assert partial.count("[Harness Layer]") == 1
+    assert partial.count("Blocked paths for every stage:") == 1
     assert "{{blocked_paths}}" in partial
 
 

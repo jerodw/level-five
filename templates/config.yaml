@@ -11,10 +11,27 @@ architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {test_command}
 # Bash commands stage agents may run without prompting. Headless agents
-# cannot answer permission prompts, so grant exactly what the stages need.
+# cannot answer permission prompts. Read-only search and inspection is
+# granted broadly: a denial costs a turn and buys nothing, because the
+# harness's own rules are enforced by the coordinator after a stage has
+# run, not by this list. Mutation is denied by hooks/bash_guard.py, which
+# ships with the harness and is passed to every stage invocation, rather
+# than by these entries happening to omit it.
 allowed_tools:
   - "Bash(git status:*)"
   - "Bash(git diff:*)"
   - "Bash(git log:*)"
   - "Bash(ls:*)"
   - "Bash(cat:*)"
+  - "Bash(grep:*)"
+  - "Bash(rg:*)"
+  - "Bash(find:*)"
+  - "Bash(head:*)"
+  - "Bash(tail:*)"
+  - "Bash(wc:*)"
+  - "Bash(sort:*)"
+  - "Bash(uniq:*)"
+  - "Bash(diff:*)"
+  - "Bash(git show:*)"
+  - "Bash(git branch:*)"
+  - "Bash(git ls-files:*)"

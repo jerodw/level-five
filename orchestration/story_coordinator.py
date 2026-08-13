@@ -2471,6 +2471,7 @@ def run_story(
             retry_count=state.retry_count,
             retry_category=routed_category,
             retry_stage=routed_stage,
+            allowed_tools=config.get("allowed_tools"),
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
