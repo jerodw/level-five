@@ -12,11 +12,43 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+# The hooks ship with the harness code, like the schemas, so they are resolved
+# relative to this module rather than to a caller-supplied root.
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+
+SETTINGS_NAME = "settings.json"
+GUARD_NAME = "bash_guard.py"
+GUARD_PLACEHOLDER = "{guard_path}"
+
 
 @dataclass
 class AgentResult:
     ok: bool
     result_text: str
+
+
+def hooks_dir(harness_root: Path | None = None) -> Path:
+    return (harness_root or HARNESS_ROOT) / "hooks"
+
+
+def guard_settings(harness_root: Path | None = None) -> str | None:
+    """The shipped hook declaration, with the guard's own path resolved.
+
+    The declaration's shape lives in hooks/settings.json, a data file, because
+    the harness root varies by installation and only the absolute path can be
+    computed here. An absent or unreadable declaration returns None and the
+    stage runs without the hook: the guard is the net behind the allowlist,
+    which is the gate, so failing to register it must not stop a run.
+    """
+    directory = hooks_dir(harness_root)
+    guard = directory / GUARD_NAME
+    try:
+        declaration = (directory / SETTINGS_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not guard.is_file():
+        return None
+    return declaration.replace(GUARD_PLACEHOLDER, str(guard))
 
 
 def run_agent(
@@ -48,6 +80,13 @@ def run_agent(
         cmd += ["--model", model]
     if allowed_tools:
         cmd += ["--allowedTools", *allowed_tools]
+    # Every stage invocation carries the deny-only Bash guard. It is resolved
+    # here rather than passed in, so run_agent's signature is unchanged and no
+    # caller — including the fake runners the suite injects — has to know the
+    # hook exists.
+    settings = guard_settings()
+    if settings:
+        cmd += ["--settings", settings]
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     result_text = ""

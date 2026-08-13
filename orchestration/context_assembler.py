@@ -112,6 +112,17 @@ def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
     }
 
 
+def config_context(config: dict) -> dict[str, str | None]:
+    """Map the target config's grants to their injectable placeholder name.
+
+    The granted Bash commands are rendered from the target's own configuration
+    rather than restated in prose, so what a stage is told it may run cannot
+    drift from what is actually permitted. A config declaring no allowed_tools
+    renders as None, the optional-placeholder convention.
+    """
+    return {"allowed_tools": _dashed_lines(config.get("allowed_tools"))}
+
+
 def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
@@ -170,6 +181,7 @@ def build_context(
     retry_count: int,
     retry_category: str | None = None,
     retry_stage: str | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -229,6 +241,12 @@ def build_context(
     # in any template. blocked_paths is rendered identically by both, through
     # the same helper, so the merge changes nothing about it.
     context.update(workflow_context(workflow, rules))
+    # The target config's grants, injected the same way. This argument is
+    # optional where `workflow` is required, and the asymmetry is deliberate:
+    # a stage rendered with no categories in it would be a defect, while a
+    # stage rendered with no granted list is exactly what every call site
+    # rendered before this existed, so omitting it must change nothing.
+    context.update(config_context({"allowed_tools": allowed_tools}))
 
     # Two-pass render: resolve the shared harness-layer partial (including its
     # own {{blocked_paths}} placeholder) against the assembled context before
