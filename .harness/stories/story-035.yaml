@@ -1,0 +1,183 @@
+story:
+  id: story-035
+  title: Grant stages the read-only tools they need, and deny mutation at the door
+  description: |
+    `allowed_tools` in `.harness/config.yaml` grants eight Bash prefixes and omits
+    every read-only search and inspection command a stage actually reaches for.
+    story-028's implementer was denied six calls, and the log shows the work being
+    re-attempted through narrower calls: the same files read one at a time after a
+    loop was refused. Every denial costs at least one turn and buys nothing, and a
+    stage's exposure to a mid-response transport failure grows with its length.
+
+    Two failure modes are visible in that record and they have different fixes.
+    Mode 1 is an ungranted command — `grep`, `head`, `wc`. Mode 2 is a granted
+    command in an ungranted shape: `.venv/bin/python -m pytest ... | grep -E ... >
+    file; head -10 file` runs a granted binary, but the permission check matches
+    the whole call string against a prefix pattern and cannot see that the leading
+    command is permitted, so the entire call is denied. The heredoc form is the
+    same shape.
+
+    This story fixes mode 1 by widening the list, and states plainly that it does
+    not fix mode 2. Nothing here makes a composed call succeed. What it adds
+    against mode 2 is a sentence in the shared harness layer telling agents each
+    Bash call must be one command, and beside it the granted list itself, rendered
+    from the target's own configuration so it cannot drift from what is actually
+    permitted. That text is a token-cost measure, not a boundary: agents routinely
+    ignore instructions of this kind, and the story assumes only that some will
+    follow it. A denial that never happens costs nothing to recover from, and a
+    partial hit rate on a cheap sentence is worth having.
+
+    Widening read-only breadth weakens no boundary, and this is the argument the
+    story turns on rather than an assumption it makes. The harness does not rely on
+    the permission list to enforce its rules. Blocked paths, stage output
+    ownership, the `may_not_create` prefixes and the revert check are all decided
+    by the coordinator after the stage has run, from the tree and from the stage's
+    own declarations. `rules/execution-rules.json` lists `blocked_paths` for the
+    coordinator to enforce, not for the CLI to. Granting `grep` grants the ability
+    to read faster, and nothing else.
+
+    Write access is a different question and is not this story's. Anything that
+    mutates the working tree, the index or the repository stays denied, and stages
+    have `Edit` and `Write` under `acceptEdits` and need no shell to change files.
+    Because the widened list admits commands with mutating forms — `find -delete`
+    is the clearest — the story adds a deny-only PreToolUse Bash guard that ships
+    with the harness and is passed to every stage invocation. The guard never
+    allows anything: it decomposes a command and returns a deny decision when it
+    finds a mutator, a `find` that executes or deletes, or a redirect that writes a
+    file. Its bias is fail-open by design. A command it cannot parse yields no
+    decision at all and falls through to `allowed_tools`, because the allowlist is
+    the gate and the guard is the net behind it; a fail-closed parser mistake would
+    stop runs that should have proceeded, which is the more expensive error.
+
+    `.harness/config.yaml` is target-repository configuration, so what is decided
+    here is this repository's answer rather than a harness default. The `l5-init`
+    template carries its own shorter list, and this story widens it to the same
+    read-only set so the two agree deliberately rather than drift apart unnoticed.
+
+tasks:
+  - Widen the allowed_tools list in .harness/config.yaml with the read-only search and inspection set, leaving permission_mode and every existing entry as they are.
+  - Add hooks/bash_guard.py, a standard-library-only deny-only PreToolUse Bash guard that reads the hook payload from stdin and writes a deny decision with a reason when the command mutates the tree, the index or the repository.
+  - Add hooks/settings.json, the shipped declaration that registers the guard as a PreToolUse hook matching Bash, with the guard's own path resolved at invocation time rather than baked in.
+  - Have orchestration/agent_runner.py resolve the hooks directory relative to its own module, as schema_validator resolves schemas, and pass the resulting settings to every stage invocation through the CLI's settings argument, without changing run_agent's signature.
+  - Add config_context to orchestration/context_assembler.py beside schema_context and workflow_context, mapping the target config's allowed_tools to the allowed_tools placeholder through the shared _dashed_lines helper, and merge it in build_context from a new optional keyword-only argument.
+  - Add to prompts/harness-layer.md the granted-list placeholder and one sentence saying each Bash call must be a single command, marked as guidance rather than as the enforcement.
+  - Widen the allowed_tools list in templates/config.yaml to the same read-only set, so an initialized repository starts where this one now is.
+  - Write the regression suite as tests/test_story_035_validation.py, covering the guard as a command-line program fed real hook payloads, the settings the runner passes, and the rendered harness layer.
+  - Update .harness/docs/ARCHITECTURE.md so the Tool allowlist section describes the widened list, the guard, where enforcement actually lives, and the mode 2 limitation.
+
+acceptance_criteria:
+  - .harness/config.yaml grants, in addition to the eight entries it has today, prefixes for grep, rg, find, head, tail, wc, sort, uniq, diff, git show, git branch and git ls-files, and grants no command that writes to the working tree, the index or the repository.
+  - permission_mode in .harness/config.yaml is still acceptEdits and no existing allowed_tools entry has been removed or altered.
+  - hooks/bash_guard.py, run as a program with a PreToolUse Bash payload on stdin, returns a deny decision for each of rm, mv, cp, dd, tee, truncate, ln, sed -i and perl -i, and for the mutating git subcommands add, commit, checkout, reset, rebase, merge, push, stash, clean, rm, mv, apply, restore and switch.
+  - The guard returns a deny decision when a mutator appears anywhere in a composed command, including after a pipe, a semicolon, a double ampersand or a double pipe, on a continuation line, and inside command substitution written as $(...) or as backticks.
+  - The guard returns a deny decision for find invoked with -exec, -execdir, -delete or -ok, and no deny decision for find without them.
+  - The guard returns a deny decision for a redirect that writes a file, written as > or as >>, and no deny decision for a file descriptor duplication such as 2>&1 or for a redirect to /dev/null.
+  - The guard returns no deny decision for chmod, which is granted deliberately today, and none for any of grep, rg, head, tail, wc, sort, uniq, diff, cat, ls or the git subcommands status, diff, log, show, branch and ls-files.
+  - The guard never returns an allow decision on any input, so a command the allowlist would refuse is not admitted by the guard.
+  - A command the guard cannot parse produces no decision rather than a deny, and the guard writes nothing to the payload it was given.
+  - orchestration/agent_runner.py passes settings registering the guard on every stage invocation, and the path those settings name resolves to a file that exists on disk.
+  - run_agent's signature is unchanged, so every existing fake runner in the suite still satisfies it.
+  - context_assembler.config_context maps a config's allowed_tools to the allowed_tools placeholder as dash-prefixed lines through _dashed_lines, and returns None for that placeholder when the config declares no allowed_tools.
+  - build_context accepts the new argument as optional and keyword-only, and a call that omits it renders exactly what it renders today, so no existing call site in the suite is changed by this story.
+  - prompts/harness-layer.md carries the allowed_tools placeholder and a sentence stating that each Bash call must be one command and that a composed call is denied even when every command inside it is granted, and the rendered harness layer shows the configured grants when a config supplies them.
+  - templates/config.yaml grants the same read-only set as .harness/config.yaml, allowing for the entries that are specific to this repository.
+  - The full suite passes under .venv/bin/python -m pytest tests/ -q.
+
+technical_plan:
+  implementation_steps:
+    - Widen .harness/config.yaml's allowed_tools with the twelve read-only prefixes, keeping the existing entries and their order and extending the comment above the list to say that mutation is denied by the shipped guard rather than by omission from this list.
+    - Write hooks/bash_guard.py as a standard-library-only program. Read the JSON payload from stdin, take the command from tool_input, and decompose it into components across pipes, semicolons, logical operators and newlines, additionally scanning the interiors of $(...) and backtick substitutions. Test each component's leading word against a mutator list, check find's arguments for -exec, -execdir, -delete and -ok, and scan for a redirect that names a file rather than duplicating a descriptor or targeting /dev/null.
+    - Emit a deny decision with a reason naming the offending component when one is found, and emit nothing otherwise. The guard has no allow path at all. Any malformed payload, unreadable stdin or unparseable command exits without a decision, which returns the call to the allowlist, and the reason for that direction is recorded at the code that takes it.
+    - Add hooks/settings.json declaring the PreToolUse hook matching Bash. Since the harness root varies by installation, the declaration holds the guard's path as a substitutable value and the runner resolves it, so the shape stays in a data file and only the absolute path is computed.
+    - In orchestration/agent_runner.py, resolve the hooks directory from the module's own location the way schema_validator resolves schemas, read the declaration, substitute the guard's resolved path, and pass the result to claude through its settings argument beside the existing permission-mode and allowed-tools arguments. Add no parameter to run_agent, so the fake runners the suite injects are untouched.
+    - In orchestration/context_assembler.py, add config_context(config) beside schema_context and workflow_context, returning the allowed_tools placeholder through _dashed_lines so an absent or empty list renders as None exactly as the other placeholders do. Merge it in build_context from a new optional keyword-only argument, at the same point workflow_context is merged and before the two-pass harness-layer render, so the partial can use it.
+    - Pass the loaded target config's allowed_tools from the coordinator's build_context calls, which already hold the config.
+    - Add to prompts/harness-layer.md the granted list and the single-command sentence, worded as guidance and naming no specific command, so the list is the injected value and the prose does not restate it.
+    - Widen templates/config.yaml's allowed_tools to the same read-only set and extend its comment in the same terms.
+    - Write tests/test_story_035_validation.py driving hooks/bash_guard.py as a subprocess with real payloads on stdin over a table of mutating and read-only commands, asserting the decision and its absence; asserting that the argument list agent_runner builds carries settings naming an existing guard file and that run_agent's signature is unchanged; and asserting config_context's rendering, build_context's unchanged behaviour when the argument is omitted, and the harness layer rendered with and without configured grants.
+    - Update .harness/docs/ARCHITECTURE.md's Tool allowlist section to describe the widened list, the guard and its fail-open bias, the settings the runner passes, the placeholder the harness layer injects, that mode 2 is unfixed and the prompt sentence is a cost measure rather than a boundary, and that enforcement of the harness's own rules lives in the coordinator after the stage runs.
+  likely_file_changes:
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: The widened read-only grant set, which is the change the story exists for.
+    - file: hooks/bash_guard.py
+      stage: implementer
+      reason: The deny-only guard that keeps the widened list from admitting a mutating form.
+    - file: hooks/settings.json
+      stage: implementer
+      reason: The declaration that registers the guard, kept in a data file rather than built in code.
+    - file: orchestration/agent_runner.py
+      stage: implementer
+      reason: The only module that invokes the CLI, so the settings are passed from here.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: config_context and the merge that makes the granted list an injectable placeholder.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The build_context calls that pass the loaded config's allowed_tools through.
+    - file: prompts/harness-layer.md
+      stage: implementer
+      reason: The shared block where the granted list and the single-command sentence are stated once for every stage that injects it.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The l5-init list, widened so an initialized repository agrees with this one deliberately.
+    - file: tests/test_story_035_validation.py
+      stage: tester
+      reason: The story's regression suite, and the only place the guard's decisions are actually exercised.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The Tool allowlist section describes a list that is now a list plus a guard plus an injected placeholder.
+
+scope:
+  modify:
+    - .harness/config.yaml
+    - templates/config.yaml
+    - hooks/
+    - orchestration/agent_runner.py
+    - orchestration/context_assembler.py
+    - orchestration/story_coordinator.py
+    - prompts/harness-layer.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/
+    - workflows/
+    - scripts/
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/planner.md
+    - prompts/assist.md
+    - orchestration/plan_validation.py
+    - orchestration/plan_commit.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/harness_config.py
+    - orchestration/run_status.py
+    - .harness/requests/
+
+verification_requirements:
+  - Confirm the widened allowed_tools list grants no command that can write to the working tree, the index or the repository, by reading every added entry rather than by sampling.
+  - Confirm the guard denies each mutator named in the acceptance criteria, in a bare invocation and again when the mutator appears after a pipe, after a semicolon, after a logical operator, on a continuation line, and inside both forms of command substitution.
+  - Confirm the guard denies find with -exec, -execdir, -delete and -ok and does not deny find without them, and that it denies a file-writing redirect while leaving descriptor duplication and /dev/null alone.
+  - Confirm the guard has no code path that returns an allow decision, so it cannot admit a command the allowlist refuses.
+  - Confirm the fail-open bias holds: an unparseable command, a malformed payload and unreadable stdin each produce no decision rather than a deny, and the guard modifies nothing.
+  - Confirm the settings agent_runner passes name a guard file that exists, and that run_agent's signature is unchanged by checking that the suite's existing fake runners still satisfy it.
+  - Confirm build_context called without the new argument renders exactly what it rendered before this story, and that the rendered harness layer carries the configured grants when the argument is supplied and renders None when it is not.
+  - Confirm templates/config.yaml and .harness/config.yaml grant the same read-only set.
+  - Confirm the tests would fail against the pre-story code, so the suite demonstrates the change rather than restating it.
+  - Confirm the documentation states that mode 2 is not fixed and that the prompt text is a cost measure rather than an enforcement mechanism, since a reader who believes otherwise will narrow the guard on a false premise.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q.
+
+constraints:
+  - No command that mutates the working tree, the index or the repository is granted, and none is added to the allowlist by this story.
+  - permission_mode stays acceptEdits and is not touched.
+  - The guard denies only. It has no allow path, so the allowlist remains the thing that permits and the guard remains the thing that refuses.
+  - The guard's fail-open bias is deliberate and must survive: anything it cannot establish yields no decision, matching the one-directional bias the coordinator's own checks already take.
+  - The guard is standard library only, like the rest of the harness.
+  - run_agent's signature is unchanged, so no fake runner in the suite needs editing to accommodate this story.
+  - The new build_context argument is optional, so every existing call site renders unchanged; the asymmetry with the required workflow argument is deliberate and is recorded rather than left to be read as an inconsistency.
+  - The prompt text is guidance, not enforcement, and nothing in the harness depends on an agent obeying it.
+  - The coordinator's boundary enforcement is not touched: blocked paths, stage output ownership and the revert check keep deciding what they decide today, from the tree and the stage's declarations, after the stage has run.
+  - No change to how retries, escalation or resumption work.
