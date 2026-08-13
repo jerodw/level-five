@@ -960,6 +960,28 @@ def _build_clone(
     of git history actually sees. The source is a filesystem path, so no
     network access is possible by construction.
 
+    The clone is built over git's normal transport (`--no-local`): git
+    negotiates a pack over a pipe rather than walking the source's
+    `.git/objects` as a directory tree. It replaces `--no-hardlinks`, which
+    carried exactly one property — the clone's object files are its own copies
+    rather than hardlinks into the source, so nothing the source later does to
+    its objects can reach the clone. The normal transport gives that property
+    inherently: a packed object stream never references the source's object
+    files at all, so there is nothing left to unlink from.
+
+    What `--no-hardlinks` did *not* give is why it is gone. A directory copy
+    enumerates the source's object store and then copies what it enumerated,
+    and any file that disappears in between is a hard failure. Three CI runs
+    failed exactly that way; one of the files git could not copy was
+    `.git/objects/pack/multi-pack-index.lock`, which exists only while
+    something is writing a multi-pack index in the source. The transport was
+    chosen over disabling that writer because it makes the failure impossible
+    rather than unlikely: the copy path is fragile against *any* concurrent
+    writer, not only the one that was observed, and the normal transport never
+    reads the source's object files whatever is writing them. It costs
+    wall-clock on every clean-clone and revert check; the measurement is
+    recorded in `.harness/docs/ARCHITECTURE.md`.
+
     Files .gitignore excludes reach the clone by neither route — the clone
     carries committed files and the two applications below carry tracked edits
     and untracked-but-not-ignored files — so the clone holds the same set of
@@ -981,7 +1003,7 @@ def _build_clone(
     knowable all the same.
     """
     result = subprocess.run(
-        ["git", "clone", "--quiet", "--no-hardlinks", str(target_root), str(clone)],
+        ["git", "clone", "--quiet", "--no-local", str(target_root), str(clone)],
         capture_output=True,
         text=True,
     )
