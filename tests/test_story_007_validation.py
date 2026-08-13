@@ -407,7 +407,7 @@ def test_the_ownership_check_names_no_stage(target_root, harness_root):
     and lives elsewhere, so the check is scoped to what this story added."""
     names = [stage["name"] for stage in workflow_stages(harness_root)]
     for function in (story_coordinator._ownership_violation,
-                     story_coordinator._granted_prefixes,
+                     story_coordinator.granted_paths,
                      story_coordinator.stage_exception_problems):
         body = executable_source(inspect.getsource(function))
         assert "created" in body or "stage" in body      # stripping kept code
@@ -698,11 +698,40 @@ def test_a_stage_touching_a_file_the_plan_did_not_predict_does_not_escalate(
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 0
 
 
+#: Since story-032 the plan attribution has exactly one reader, and it reads
+#: the plan at *plan time* to refuse an artifact rather than at run time to
+#: route a stage. story-007's subject — the attribution is advisory, and no
+#: run compares it against what a stage actually changed — is unchanged by
+#: that and is what the assertions below still hold, now stated as "the
+#: coordinator does not read it" plus "only this one module does".
+PLAN_ATTRIBUTION_READER = "plan_validation.py"
+
+
 def test_nothing_in_orchestration_reads_the_plan_attribution():
+    readers = []
     for module in sorted(ORCHESTRATION.glob("*.py")):
         body = executable_source(module.read_text(encoding="utf-8"))
+        if module.name == PLAN_ATTRIBUTION_READER:
+            readers.append(module.name)
+            continue
         assert "likely_file_changes" not in body, module.name
         assert "technical_plan" not in body, module.name
+    # The exemption is not a hole: the one exempt module must exist and must
+    # actually be a reader, or this test would pass by naming a file that is
+    # gone or that never mentioned the field.
+    assert readers == [PLAN_ATTRIBUTION_READER]
+    exempt = executable_source(
+        (ORCHESTRATION / PLAN_ATTRIBUTION_READER).read_text(encoding="utf-8")
+    )
+    assert "likely_file_changes" in exempt and "technical_plan" in exempt
+    # And the load-bearing half of story-007's subject, stated directly: the
+    # coordinator — every run-time routing decision there is — reads neither
+    # name, so no run compares the attribution to what a stage did.
+    coordinator = executable_source(
+        (ORCHESTRATION / "story_coordinator.py").read_text(encoding="utf-8")
+    )
+    assert "likely_file_changes" not in coordinator
+    assert "technical_plan" not in coordinator
 
 
 # --------------------------------------------------------------------------

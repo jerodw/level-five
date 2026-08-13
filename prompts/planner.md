@@ -116,14 +116,35 @@ enforced rule; it is an unenforced rule the harness cannot see broken, and
 one a legitimate change can make impossible to satisfy. l5-plan checks this
 when the session ends and does not commit an artifact that carries one.
 
+A standing test module is enforcement infrastructure: it outlives the
+stories that touch it and exists to hold later work to a rule. A story
+whose deliverable *is* such a module is therefore not an exception to the
+restriction above — it is ordinary work for the stage that owns validation.
+Assign it to that stage in likely_file_changes and the story needs no grant
+at all, which is the common case and the cheap one. The cost of the
+convention is that the deliverable lands one stage later than the story's
+main change, so the stage that writes the code cannot run the new module
+itself; nothing enforces the convention, and what holds is the refusal
+below.
+
+A likely_file_changes entry naming a file beneath a restricted path,
+assigned to the very stage restricted from creating there, is refused when
+the session ends: the run it describes could only ever end in the harness
+refusing the result. The problem names the file, the stage, the prefix, and
+the two ways out — reassign the file to a stage that may own it, or declare
+a stage_exceptions grant naming it.
+
 A stage_exceptions entry lifts one of those restrictions for one story,
 which is what a story whose own deliverable is a test suite needs.
 
 Do not add one without asking the developer first. The stage must be a
 stage the workflow defines, and the create path must be one that stage
-is actually restricted from creating. If either is wrong, l5-run refuses
-to run the story at all. Use reason to say why this story needs the
-restriction lifted:
+is actually restricted from creating — either the whole restricted path or
+a single file or directory beneath it. A grant naming one path exempts that
+path alone and leaves the rest governed, so prefer the narrowest grant that
+does the job. If the stage or the path is wrong, l5-run refuses to run the
+story at all. Use reason to say why this story needs the restriction
+lifted:
 
 	stage_exceptions:
 	  - stage: <stage the exception applies to>
