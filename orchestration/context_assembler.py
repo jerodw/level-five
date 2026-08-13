@@ -182,6 +182,7 @@ def build_context(
     retry_category: str | None = None,
     retry_stage: str | None = None,
     allowed_tools: list[str] | None = None,
+    self_route_result: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -231,6 +232,13 @@ def build_context(
         # passed — so this is how the retried implementer receives the
         # evidence, rather than the coordinator fabricating retry-guidance.json.
         "clean_clone_result": _read(run_dir / "clean-clone-result.json"),
+        # A self-routed stage has no agent-authored guidance behind it — the
+        # stage failed mechanically and no verifier saw the work — so the
+        # coordinator's own statement of why it is running again is passed in
+        # rather than read here: the artifact's name is keyed by stage, attempt
+        # and try, which is the coordinator's to compose. Defaulted to None so
+        # a call that omits it renders exactly what it rendered before.
+        "self_route_result": self_route_result,
         "retry_state": retry_state,
         "testing_standards": _read(standards_dir / "testing.md"),
     }

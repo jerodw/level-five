@@ -375,7 +375,14 @@ def test_a_valid_story_reports_no_problems_and_still_runs(target_root, harness_r
         return AgentResult(ok=False, result_text="stopped after the first stage")
 
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
-    assert calls == ["implementer"], "pre-flight must not refuse a valid story"
+    # The subject is that a valid story is not refused at pre-flight: the run
+    # started and the first stage was invoked. Since story-036 a stage that
+    # declares a self-route budget re-runs in place when its agent process
+    # fails, so this always-failing runner is called once per try rather than
+    # once — the run still never leaves the first stage, which is what the
+    # second assertion holds.
+    assert calls, "pre-flight must not refuse a valid story"
+    assert set(calls) == {"implementer"}, "the run must not advance past the first stage"
     assert code == 2
 
 

@@ -45,6 +45,11 @@ Implementation summary:
 Verification result:
 {{verification_result}}
 
+Self-route result — present only when this stage is running again in place
+after failing mechanically. The coordinator wrote it, not an agent: no
+verifier has judged this work, and it says what was missing or stale:
+{{self_route_result}}
+
 Retry lessons (retry history for this run):
 {{retry_state}}
 

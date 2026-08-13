@@ -384,13 +384,22 @@ def test_the_same_run_that_writes_the_output_completes(fresh_retry):
 def test_the_run_does_not_advance_past_the_stale_stage(stale_retry, fresh_retry):
     """Compared against the control's call sequence rather than against a list
     written here: the two runs agree up to the stale stage, and only the
-    control carries on past it."""
+    control carries on past it.
+
+    Since story-036 the stale stage declares a self-route budget, so the
+    skipping run re-runs it in place before escalating — the two sequences
+    therefore agree only up to the point the skipping run first reaches that
+    stage a second time, and everything after it in the skipping run is that
+    stage again. That is the same claim this always made: the run never leaves
+    the stage that failed mechanically."""
     _, stale, _ = stale_retry
     _, fresh, _ = fresh_retry
-    assert stale.calls == fresh.calls[:len(stale.calls)]
+    shared = stale.calls.index(RETRY_STAGE, 1)
+    assert stale.calls[:shared] == fresh.calls[:shared]
+    assert set(stale.calls[shared:]) == {RETRY_STAGE}
     assert stale.calls[-1] == RETRY_STAGE
     assert len(fresh.calls) > len(stale.calls)
-    assert fresh.calls[len(stale.calls)] != RETRY_STAGE
+    assert fresh.calls[shared + 1] != RETRY_STAGE
 
 
 def test_the_artifact_left_behind_is_the_superseded_attempts(stale_retry):
@@ -496,14 +505,27 @@ def test_the_escalation_leaves_no_evidence_naming_an_attempt_that_never_ran(
     stale_retry,
 ):
     """The reading of the same fact a developer takes from the directory: two
-    attempts were prompted, one was archived, and nothing is numbered 3."""
+    attempts were prompted, one was archived, and nothing is numbered 3.
+
+    Since story-036 the stale stage self-routes before it escalates, so a
+    third prompt exists — and the whole point of its filename is that it does
+    not claim a third attempt. It carries attempt 2's number with a try
+    suffix, and the archive and the attempt numbering are untouched, which is
+    what the two-budget separation means on disk."""
     _, _, target_root = stale_retry
     run_dir = run_dir_of(target_root)
+    budget = next(s for s in WORKFLOW["stages"]
+                  if s["name"] == RETRY_STAGE).get("max_self_routes", 0)
     assert sorted(p.name for p in (run_dir / "attempts").glob("*")) == ["attempt-1"]
-    assert sorted(p.name for p in run_dir.glob(f"prompt-{RETRY_STAGE}-*.md")) == [
-        f"prompt-{RETRY_STAGE}-attempt-1.md",
-        f"prompt-{RETRY_STAGE}-attempt-2.md",
-    ]
+    assert sorted(p.name for p in run_dir.glob(f"prompt-{RETRY_STAGE}-*.md")) == sorted(
+        [
+            f"prompt-{RETRY_STAGE}-attempt-1.md",
+            f"prompt-{RETRY_STAGE}-attempt-2.md",
+            *(f"prompt-{RETRY_STAGE}-attempt-2-try-{try_number}.md"
+              for try_number in range(1, budget + 1)),
+        ]
+    )
+    assert not list(run_dir.glob("prompt-*-attempt-3*.md"))
 
 
 # --------------------------------------------------------------------------
@@ -605,6 +627,17 @@ RERUN_CASES = [
 def test_each_stage_is_held_to_its_own_declared_outputs(
     make_target, harness_root, stage, artifact,
 ):
+    """Every stage's stale required output ends the run at that stage, with a
+    reason naming it.
+
+    Since story-036 how it ends there depends on what that stage declares, and
+    both halves are asserted here off the declaration rather than assumed. A
+    stage declaring no max_self_routes escalates on the first stale output
+    exactly as it did before that story, with no self-route artifact and no
+    try-suffixed prompt anywhere in the run — that is the compatibility
+    property, and this parametrization is where it is held against real
+    stages that declare none. A stage declaring a budget spends it first and
+    escalates once it is exhausted, naming the budget alongside the failure."""
     target_root = make_target(f"skip-{stage}-{artifact}")
     code, _ = drive(target_root, harness_root, {stage: [{}, {artifact: SKIP}]})
     assert code == 2
@@ -612,6 +645,21 @@ def test_each_stage_is_held_to_its_own_declared_outputs(
     assert reason.startswith(f"{stage} left required artifacts unwritten")
     assert artifact in reason
     assert state_of(target_root)["current_stage"] == stage
+
+    run_dir = run_dir_of(target_root)
+    budget = next(s for s in WORKFLOW["stages"]
+                  if s["name"] == stage).get("max_self_routes", 0)
+    evidence = sorted(p.name for p in run_dir.glob(f"self-route-{stage}-*.json"))
+    tries = sorted(p.name for p in run_dir.glob(f"prompt-{stage}-*-try-*.md"))
+    assert len(evidence) == budget
+    assert len(tries) == budget
+    assert ("self-routed" in event_kinds(target_root)) == bool(budget)
+    if budget:
+        assert f"self-route budget of {budget}" in reason
+    else:
+        assert "self-route" not in reason
+        assert not list(run_dir.glob("self-route-*.json"))
+        assert not list(run_dir.glob("prompt-*-try-*.md"))
 
 
 @pytest.mark.parametrize("stage,artifact", RERUN_CASES)

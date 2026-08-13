@@ -115,6 +115,12 @@ def state_contract_problems(state: dict) -> list[str]:
         "story_digest": str,
         "escalation_commit": str,
         "harness_revision": str,
+        # story-036's self-route budget counter. Defaulted like the fields
+        # above, so a state file written before this story loads with a zero
+        # count, which is what "no self-route has occurred" means. It is the
+        # live count for the current stage only; how many self-routes a run
+        # took is read from the history.
+        "self_route_count": int,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []

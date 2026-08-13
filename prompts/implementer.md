@@ -81,5 +81,10 @@ Clean-clone result — the suite run in a fresh clone with the story
 committed into it. When it failed, this is what the retry must resolve:
 {{clean_clone_result}}
 
+Self-route result — present only when this stage is running again in place
+after failing mechanically. The coordinator wrote it, not an agent: no
+verifier has judged this work, and it says what was missing or stale:
+{{self_route_result}}
+
 Retry state:
 {{retry_state}}

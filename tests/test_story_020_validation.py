@@ -1655,6 +1655,12 @@ def test_the_whole_run_including_the_escalation_and_the_resume_reconstructs(
 #: dataclass in the test below rather than written here.
 NEW_FIELDS = {"story_digest", "escalation_commit", "harness_revision"}
 
+#: Fields `RunState` gained after this story, which this assertion is not
+#: about. Named rather than tolerated silently: a later story adding a field
+#: records it here deliberately, so a field that appears without anyone
+#: noticing still turns the assertion below red.
+FIELDS_ADDED_SINCE = {"self_route_count"}
+
 
 def pre_story_state_fields() -> list[str]:
     """The fields `RunState` declared before this story, read as text.
@@ -1676,16 +1682,18 @@ def test_a_state_file_written_before_this_story_still_loads(target):
 
     The shape is named rather than produced by a recovered module: the field
     set is read out of the pre-story `RunState` declaration as text, held to
-    being today's set minus exactly the three fields this story added, and a
-    file carrying precisely those fields is what is written and loaded.
+    being today's set minus exactly the three fields this story added and the
+    fields later stories added, and a file carrying precisely those fields is
+    what is written and loaded.
 
     The control is a field neither shape declares, which still fails to load —
     so the tolerance is the defaults rather than a loader that has stopped
     checking anything.
     """
     fields = pre_story_state_fields()
-    assert set(fields) == {field.name for field in
-                           dataclasses.fields(story_coordinator.RunState)} - NEW_FIELDS
+    declared_today = {field.name for field in
+                      dataclasses.fields(story_coordinator.RunState)}
+    assert set(fields) == declared_today - NEW_FIELDS - FIELDS_ADDED_SINCE
     assert set(fields) & NEW_FIELDS == set()
 
     run_dir = run_dir_of(target)
