@@ -362,6 +362,23 @@ def _revision(root: Path, revision: str = "HEAD") -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def same_repository(target_root: Path, harness_root: Path) -> bool:
+    """Whether both roots are one git repository.
+
+    Decided from `git rev-parse --show-toplevel` in each root: shared only when
+    both invocations succeed and report the same path. A failing invocation on
+    either side is the not-established answer and returns False, which is the
+    same one-directional bias `_revision`, `dirty_paths`, `completion_commits`
+    and `base_problems` already take — a root that is not a git repository
+    reports not-shared rather than a false shared.
+    """
+    target = _git(target_root, "rev-parse", "--show-toplevel")
+    harness = _git(harness_root, "rev-parse", "--show-toplevel")
+    if target.returncode != 0 or harness.returncode != 0:
+        return False
+    return target.stdout.strip() == harness.stdout.strip()
+
+
 def dirty_paths(target_root: Path) -> list[str]:
     """The paths `git status --porcelain` reports as uncommitted, sorted.
 
@@ -1874,6 +1891,24 @@ def unchanged_since_escalation(
     not-the-same, so an absent digest, an escalation that committed nothing, a
     target whose HEAD cannot be read, or a harness root that is not a git
     repository produces no refusal rather than a false one.
+
+    The third comparison has two forms, decided by whether the harness and the
+    target are one checkout. When they are separate — the deployment the guard
+    was written for — it is the recorded-revision comparison, unchanged. When
+    they are one tree, deferring to the branch comparison is what is sound:
+    leg two has already established that the branch is exactly the escalation
+    commit with nothing uncommitted, and under one tree that covers every
+    change to the harness source, so the recorded revision would answer a
+    question already answered. It could not answer it anyway — the revision is
+    recorded as the first act of `_escalate`, before the two escalation commits
+    move HEAD, so a shared-root comparison of it always differs and the guard
+    can never refuse.
+
+    A tree hash over the harness's own source directories was considered and
+    not taken. It is a second definition of "has the harness changed" living
+    beside the branch comparison that already answers it, and it would have to
+    choose which directories count — a choice nothing else in the harness
+    makes.
     """
     if not state.story_digest or state.story_digest != story_digest(story_text):
         return []
@@ -1897,6 +1932,21 @@ def unchanged_since_escalation(
         f"branch {state.branch} is exactly the escalation commit "
         f"{state.escalation_commit[:12]}, with nothing uncommitted"
     )
+
+    # Under one checkout the branch comparison above is the harness comparison:
+    # it established that the branch is exactly the escalation commit with
+    # nothing uncommitted, which covers every change to the harness source. The
+    # recorded revision cannot serve here — it is recorded before the escalation
+    # commits move HEAD, so it always differs — and a tree hash over the
+    # harness's source directories was rejected rather than reached for: it is a
+    # second definition of "has the harness changed" beside the one already
+    # answering it, and it would have to choose which directories count.
+    if same_repository(target_root, harness_root):
+        evidence.append(
+            "the harness is the same checkout as the target, so it is covered "
+            "by the branch comparison above"
+        )
+        return evidence
 
     if not state.harness_revision or _revision(harness_root) != state.harness_revision:
         return []
