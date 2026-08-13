@@ -921,9 +921,459 @@ def test_the_reader_scan_leaves_these_alone(benign):
     assert git_text_reads(benign, "probe.py") == []
 
 
-def test_the_two_new_rules_are_stated_separately_and_neither_derives_the_other():
-    """Two rules, two purposes, two exemption lists. Neither is described as
-    getting its enforcement from the other, and neither scan calls the other.
+# --------------------------------------------------------------------------
+# A fourth rule: a mutation control mutates the working tree, never a pinned
+# revision
+#
+# Its own rule, a fourth time, and it draws nothing from the three above. The
+# first is about a *comparison that cannot fail*. The second is about an
+# instrument built out of history. The third is about where a file's historical
+# text is read. This one is about what a control is allowed to *mutate*.
+#
+# A control that mutates code to demonstrate an assertion can fail must mutate
+# the code as it stands. The property being demonstrated — this assertion goes
+# red when what it names is violated — is a property of the assertion and of the
+# code it is about, and both are present in the working tree. Pinning the
+# subject at a revision adds a second variable, and that variable can only ever
+# make the control fail for reasons unrelated to what it shows.
+#
+# Observed, not predicted. story-029's own validation file pinned the
+# coordinator at that story's endpoint, wrote it into a copy of the repository
+# and ran a test against it under pytest. One story later two workflow keys were
+# reshaped, the pinned coordinator could no longer run against the workflow
+# definition it was paired with, and every case failed its control rather than
+# its subject. It survived both of story-029's scans legitimately: it writes a
+# file into a copy and shells out, which is a shape neither of them recognises.
+#
+# It is narrower than "never pin a revision", and it says so. Reading a pinned
+# revision to establish what a story changed is correct, and is what
+# `story_diff`, `repository_file_at` and `function_source_at` exist for. This
+# rule is about mutation controls, which is why the pairing rather than either
+# half is what it reports.
+#
+# **This rule names no exempt module, and the absence is deliberate.** The two
+# rules above exempt `tests/conftest.py` because it is the one place the thing
+# they forbid is the correct answer — the shared baseline resolution has to
+# compare against HEAD, and the shared reader has to ask git for a file's text.
+# A mutation of pinned source has no such place. The shared mutation loader
+# takes a working-tree path and the substitutions to make in it, precisely so
+# that pinned text is not a value it accepts, so there is nowhere under tests/
+# where this rule would be wrong.
+#
+# It borrows rule two's construct list for what counts as *running* source
+# rather than writing a second copy of it, which would be one fact in two
+# places. Borrowing a word list is not drawing enforcement from another rule:
+# neither scan calls the other, each reports its own subject, and each states
+# its own limits.
+#
+# What it does not cover, stated here because this is where a reader meets it:
+#
+#   * **a read and an execution split across functions.** The pairing is
+#     followed inside one function. A pinned read in one function whose value is
+#     written or run in another — passed through a fixture, stashed on a class,
+#     or laundered through a helper that returns it — is not seen. The execution
+#     half alone is followed one step into a helper defined at this module's top
+#     level, because that is stated in the source; nothing else is chased.
+#   * **source text obtained without asking git for it.** A caller that reads a
+#     path historical text was already written into, or a worktree or clone
+#     built elsewhere and read with `read_text`, is pinning by a route this scan
+#     cannot see: it reads what the source states and does not evaluate it or
+#     track values.
+#   * **deliberate obfuscation.** A revision spec assembled at runtime, a read
+#     reached through a rebound local name, or a write performed by a subprocess
+#     rather than in this process, is not seen.
+#
+# And the same standing limit as everything mechanical here: it is not
+# tamper-proof. An edit deleting this check alongside a genuinely forced repair
+# is not caught, at any granularity, because deleting the check that fails you
+# satisfies the revert rule's own definition of a forced edit.
+# --------------------------------------------------------------------------
+
+
+#: Keyword arguments that bound a read at a revision. `revision=` names one
+#: directly; `bound=` names one end of a story's own commit range. Both are
+#: stated in the call, which is what this scan reads. A `revision=None` bounds
+#: nothing and is not one — the shared reader takes it as "I named a bound
+#: instead".
+REVISION_KEYWORDS = ("revision", "bound")
+
+#: Writing text to a path. Matched on the method alone, whatever the path
+#: expression is, for the same reason `_is_subprocess_call` matches a spawn on
+#: its attribute: how the path was spelled is not what the rule is about.
+PATH_WRITES = ("write_text", "write_bytes")
+
+#: The shared mutation loader's *interface*, not its name. It takes the
+#: substitutions to make in a working-tree path and is called with both of
+#: these keywords; matching the interface rather than the name is what keeps a
+#: rename from changing anything, which is the property the superseded
+#: name-matching scan lacked.
+LOADER_INTERFACE = ("name", "tmp_path")
+
+
+def _executes_source(node: ast.Call, imported: frozenset[str]) -> bool:
+    """Whether one call runs source in this process or in another.
+
+    Three shapes, and they are the three a mutation control has available: a
+    process spawn, a call carrying the shared mutation loader's interface, and
+    a construct that builds or runs a module — the last read off rule two's
+    vocabulary rather than a second copy of it.
+    """
+    if _is_subprocess_call(node, imported):
+        return True
+    if set(LOADER_INTERFACE) <= {keyword.arg for keyword in node.keywords}:
+        return True
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr in MODULE_CONSTRUCTORS
+    return isinstance(func, ast.Name) and func.id in (
+        MODULE_CONSTRUCTORS + SOURCE_EXECUTORS)
+
+
+def _executing_functions(tree: ast.Module,
+                         imported: frozenset[str]) -> frozenset[str]:
+    """The top-level functions that execute source, directly or one step on.
+
+    A control almost never spawns inline: story-029's wrote a one-line
+    `run_one_test` helper beside itself. Following a call to a function defined
+    at this module's top level is reading what the source states, the same
+    thing `_imported_spawners` does with an import; nothing beyond this module
+    is chased, and the limit is stated above.
+
+    A revision-bounded read is never itself the execution, and excluding it is
+    what keeps the pairing a pairing. The git form of such a read *is* a
+    process spawn, so counting it would make every bounded read its own second
+    half: a `git show` written to a path and never run would be reported, and
+    the same control written through the shared reader would not. Some call
+    other than the read has to run the text.
+    """
+    defined = {node.name: node for node in tree.body
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    direct, calls = set(), {}
+    for name, node in defined.items():
+        inner_calls = [inner for inner in ast.walk(node)
+                       if isinstance(inner, ast.Call)]
+        if any(_executes_source(inner, imported) for inner in inner_calls
+               if not _is_revision_bounded_read(inner, imported)):
+            direct.add(name)
+        calls[name] = {inner.func.id for inner in inner_calls
+                       if isinstance(inner.func, ast.Name)} & set(defined)
+    executing = set(direct)
+    growing = True
+    while growing:
+        growing = False
+        for name in defined:
+            if name not in executing and calls[name] & executing:
+                executing.add(name)
+                growing = True
+    return frozenset(executing)
+
+
+def _is_revision_bounded_read(node: ast.AST, imported: frozenset[str]) -> bool:
+    """Whether one call resolves something at a revision.
+
+    Two forms, so that reaching the history without the shared reader is still
+    seen: a call stating a revision or a story bound in a keyword, and a git
+    invocation asking for a file's text at a revision — the second read by the
+    same shape the reader rule above reads, rather than by a second copy of it.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    for keyword in node.keywords:
+        if keyword.arg not in REVISION_KEYWORDS:
+            continue
+        if isinstance(keyword.value, ast.Constant) and keyword.value.value is None:
+            continue
+        return True
+    elements = _git_words(node)
+    if elements is None:
+        return False
+    if bool(node.args) and isinstance(node.args[0], ast.List) \
+            and not _is_subprocess_call(node, imported):
+        return False
+    return _asks_for_a_files_text(elements)
+
+
+def _carries_a_revision_bounded_read(value: ast.AST,
+                                     imported: frozenset[str]) -> bool:
+    """Whether an expression has such a read anywhere inside it.
+
+    The read is rarely the whole expression: a spawned `git show` is written
+    `subprocess.run(...).stdout`, and a shared-reader call is as often
+    `...strip()` as bare. Reading the expression whole is what keeps the shape
+    from turning on a trailing attribute.
+    """
+    return any(_is_revision_bounded_read(inner, imported)
+               for inner in ast.walk(value))
+
+
+def _pinned_names(function: ast.AST, imported: frozenset[str]) -> set[str]:
+    """The local names this function binds to a revision-bounded read."""
+    names = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Assign) and _carries_a_revision_bounded_read(
+                node.value, imported):
+            names.update(target.id for target in node.targets
+                         if isinstance(target, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and node.value is not None \
+                and isinstance(node.target, ast.Name) \
+                and _carries_a_revision_bounded_read(node.value, imported):
+            names.add(node.target.id)
+    return names
+
+
+def _flows_from_a_pinned_read(value: ast.AST, pinned: set[str],
+                              imported: frozenset[str]) -> bool:
+    """Whether a written value came from a revision-bounded read.
+
+    Directly, as the read itself or as a name bound to one, and through a
+    `.replace(...)` of such a value — which is how a control makes the one
+    change it means to demonstrate, and is therefore the one transformation
+    worth following.
+    """
+    if isinstance(value, ast.Name):
+        return value.id in pinned
+    if _carries_a_revision_bounded_read(value, imported):
+        return True
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) \
+            and value.func.attr == "replace":
+        return _flows_from_a_pinned_read(value.func.value, pinned, imported)
+    return False
+
+
+def mutation_controls(source: str, module: str) -> list[Flag]:
+    """Every mutation control in one module that mutates a pinned revision.
+
+    A per-function pairing: a value from a revision-bounded read that flows
+    into a write to a path, inside a function that also executes source. All
+    three are required, because the point is the pairing — a bounded read that
+    is only compared is the correct way to establish what a story changed, and
+    a mutation of working-tree source is the correct way to show an assertion
+    can fail.
+
+    No exemption is applied, here or by any caller: this rule names no exempt
+    module, for the reason stated above.
+    """
+    flags = []
+    tree = ast.parse(source)
+    imported = _imported_spawners(tree)
+    executing = _executing_functions(tree, imported)
+    for function in tree.body:
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if function.name not in executing:
+            continue
+        pinned = _pinned_names(function, imported)
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            if not isinstance(node.func, ast.Attribute) \
+                    or node.func.attr not in PATH_WRITES:
+                continue
+            if not _flows_from_a_pinned_read(node.args[0], pinned, imported):
+                continue
+            flags.append(Flag(
+                module=module, line=node.lineno,
+                reason=(f"{function.name} writes source resolved at a revision "
+                        f"to a path and runs it; a mutation control mutates the "
+                        f"working tree, never a pinned revision"),
+            ))
+    return flags
+
+
+def test_no_module_under_tests_mutates_a_pinned_revision():
+    """The rule, run rather than inspected, over every module including the one
+    the other three exempt."""
+    flags = [
+        flag
+        for path in all_modules()
+        for flag in mutation_controls(path.read_text(encoding="utf-8"), path.name)
+    ]
+    assert flags == [], "\n".join(str(flag) for flag in flags)
+
+
+def test_this_rule_names_no_exempt_module_and_says_why():
+    """The absence is the claim, so it is asserted rather than left implied.
+
+    No `*_EXEMPT_MODULES` constant belongs to this rule, the scan is run over
+    every module the glob finds, and the prose beside the rule says why there
+    is nowhere a mutation of pinned source would be correct.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    exemptions = {node.targets[0].id
+                  for node in ast.parse(source).body
+                  if isinstance(node, ast.Assign) and len(node.targets) == 1
+                  and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id.endswith("EXEMPT_MODULES")}
+    assert exemptions == {"EXEMPT_MODULES", "CONSTRUCTION_EXEMPT_MODULES",
+                          "READER_EXEMPT_MODULES"}
+
+    runner = source[source.index(
+        "def test_no_module_under_tests_mutates_a_pinned_revision"):]
+    assert "all_modules()" in runner.split("def test_", 2)[1]
+
+    stated = source[:source.index("def _executes_source(")]
+    assert "This rule names no exempt module" in stated
+    assert "takes a working-tree path" in stated
+
+    # The whole suite, conftest.py included, is what the rule is run over.
+    assert {path.name for path in all_modules()} \
+        == {path.name for path in TESTS_DIR.glob("*.py")}
+
+
+@pytest.mark.parametrize("planted", [
+    pytest.param(
+        "import subprocess, sys\n"
+        "def probe(repo, tmp_path):\n"
+        "    pristine = repository_file_at(REL, validation_file=THIS_FILE,\n"
+        "                                  bound=ENDPOINT)\n"
+        "    (repo / REL).write_text(pristine.replace(OLD, NEW, 1))\n"
+        "    return subprocess.run([sys.executable, '-m', 'pytest'], cwd=repo)\n",
+        id="pinned-read-run-under-pytest-in-a-subprocess"),
+    pytest.param(
+        "def probe(tmp_path):\n"
+        "    text = repository_file_at(REL, revision=BASELINE_OF_A_STORY)\n"
+        "    target = tmp_path / 'subject.py'\n"
+        "    target.write_text(text)\n"
+        "    return load_mutant(target, [(OLD, NEW)], name='subject',\n"
+        "                       tmp_path=tmp_path)\n",
+        id="pinned-read-loaded-through-the-shared-mutation-loader"),
+    pytest.param(
+        "import subprocess\n"
+        "def probe(repo, revision, rel):\n"
+        "    recovered = subprocess.run(\n"
+        "        ['git', '-C', str(REPO_ROOT), 'show', f'{revision}:{rel}'],\n"
+        "        capture_output=True, text=True).stdout\n"
+        "    (repo / rel).write_text(recovered)\n"
+        "    subprocess.run(['python', '-m', 'pytest'], cwd=repo)\n",
+        id="pinned-git-show-written-and-executed"),
+])
+def test_the_mutation_scan_reports_a_planted_control(planted):
+    """Its reach demonstrated rather than asserted, on the same terms as the
+    two scans above: a scan with no planted violation is indistinguishable from
+    one that has stopped looking."""
+    flags = mutation_controls(planted, "probe.py")
+    assert len(flags) == 1, flags
+
+
+def test_the_mutation_scan_follows_the_execution_through_a_helper_beside_it():
+    """The shape the one known instance actually wrote: the spawn is one line
+    of a helper defined beside the control rather than inline in it."""
+    planted = (
+        "import subprocess, sys\n"
+        "def run_one_test(repo, rel, test):\n"
+        "    return subprocess.run([sys.executable, '-m', 'pytest', rel],\n"
+        "                          cwd=repo, capture_output=True)\n"
+        "def probe(repo):\n"
+        "    pristine = repository_file_at(REL, validation_file=THIS_FILE,\n"
+        "                                  bound=ENDPOINT)\n"
+        "    (repo / REL).write_text(pristine)\n"
+        "    return run_one_test(repo, REL, 'test_it')\n"
+    )
+    assert len(mutation_controls(planted, "probe.py")) == 1
+
+
+@pytest.mark.parametrize("benign", [
+    pytest.param(
+        "def probe(tmp_path):\n"
+        "    return load_mutant(REPO_ROOT / REL, [(OLD, NEW)], name='m',\n"
+        "                       tmp_path=tmp_path)\n",
+        id="the-shared-loader-against-a-working-tree-path"),
+    pytest.param(
+        "import subprocess, sys\n"
+        "def probe(repo):\n"
+        "    before = repository_file_at(REL, validation_file=THIS_FILE,\n"
+        "                                bound=BASELINE)\n"
+        "    subprocess.run([sys.executable, '-m', 'pytest'], cwd=repo)\n"
+        "    assert before != (REPO_ROOT / REL).read_text()\n",
+        id="a-bounded-read-that-is-only-compared"),
+    pytest.param(
+        "def probe(tmp_path):\n"
+        "    before = repository_file_at(REL, validation_file=THIS_FILE,\n"
+        "                                bound=BASELINE)\n"
+        "    (tmp_path / 'evidence.py').write_text(before)\n",
+        id="a-bounded-read-written-but-never-executed"),
+    pytest.param(
+        "import subprocess\n"
+        "def probe(repo, revision, rel):\n"
+        "    recovered = subprocess.run(\n"
+        "        ['git', '-C', str(REPO_ROOT), 'show', f'{revision}:{rel}'],\n"
+        "        capture_output=True, text=True).stdout\n"
+        "    (repo / rel).write_text(recovered)\n",
+        id="a-bounded-git-show-written-but-never-executed"),
+    pytest.param(
+        "import subprocess, sys\n"
+        "def probe(repo):\n"
+        "    pristine = (REPO_ROOT / REL).read_text(encoding='utf-8')\n"
+        "    (repo / REL).write_text(pristine.replace(OLD, NEW, 1))\n"
+        "    return subprocess.run([sys.executable, '-m', 'pytest'], cwd=repo)\n",
+        id="the-repaired-working-tree-shape"),
+])
+def test_the_mutation_scan_leaves_these_alone(benign):
+    """What it must not report. The pairing is the subject, so each half on its
+    own is unreported — and the last case is the shape the repair merged, which
+    has to stay unreported or the rule would forbid the fix it argues for."""
+    assert mutation_controls(benign, "probe.py") == []
+
+
+# --------------------------------------------------------------------------
+# The fourth rule's regression set: the one known true positive, recovered at
+# the bound of the story that repaired it
+# --------------------------------------------------------------------------
+
+
+#: The file that carried the one known instance, and the validation file of the
+#: story whose run commit repaired it. The pre-repair text is that story's
+#: baseline — the parent of its run commit — resolved through the shared reader
+#: rather than written here as a sha, so a rebase does not move it.
+THE_REPAIRED_MUTATION_CONTROL = "tests/test_story_029_validation.py"
+THE_STORY_THAT_REPAIRED_IT = "tests/test_story_028_validation.py"
+
+
+def before_the_repair() -> str:
+    """The one known true positive, as it stood before it was repaired."""
+    return repository_file_at(
+        THE_REPAIRED_MUTATION_CONTROL,
+        validation_file=REPO_ROOT / THE_STORY_THAT_REPAIRED_IT,
+        bound=BASELINE, repo=REPO_ROOT)
+
+
+def test_the_recovered_text_really_is_the_pre_repair_text():
+    """The regression case leans on this recovery, so it is asserted rather
+    than assumed: recovered, different from today's, and carrying the pinned
+    read the repair removed."""
+    before = before_the_repair()
+    assert "def test_" in before
+    assert before != (REPO_ROOT / THE_REPAIRED_MUTATION_CONTROL).read_text(
+        encoding="utf-8")
+    assert "bound=ENDPOINT" in before
+
+
+def test_the_mutation_scan_reports_the_one_known_instance():
+    """The only direct evidence this rule would have caught what it is for.
+
+    Everything else a new scan can say about itself — planted controls, benign
+    probes, a clean suite — is about its reach in the abstract.
+    """
+    flags = mutation_controls(before_the_repair(),
+                              Path(THE_REPAIRED_MUTATION_CONTROL).name)
+    assert flags, "the pre-repair mutation control was expected to be reported"
+
+
+def test_the_same_file_in_the_working_tree_is_reported_by_nothing():
+    """The other half of the same evidence: flagged before, clean after, and
+    clean under all four rules rather than only this one."""
+    after = (REPO_ROOT / THE_REPAIRED_MUTATION_CONTROL).read_text(
+        encoding="utf-8")
+    name = Path(THE_REPAIRED_MUTATION_CONTROL).name
+    assert mutation_controls(after, name) == []
+    assert flagged_calls(after, name) == []
+    assert module_construction(after, name) == []
+    assert git_text_reads(after, name) == []
+
+
+def test_the_three_rules_are_stated_separately_and_none_derives_another():
+    """Three rules, three purposes. None is described as getting its
+    enforcement from another, and no scan calls another.
 
     Read off the source rather than asserted about it, because "these are
     separate" is exactly the kind of claim that stays written down after it
@@ -932,22 +1382,31 @@ def test_the_two_new_rules_are_stated_separately_and_neither_derives_the_other()
     source = Path(__file__).read_text(encoding="utf-8")
     functions = {node.name: node for node in ast.parse(source).body
                  if isinstance(node, ast.FunctionDef)}
-    for name, other in (("module_construction", "git_text_reads"),
-                        ("git_text_reads", "module_construction")):
+    scans = ("module_construction", "git_text_reads", "mutation_controls")
+    for name in scans:
         called = {inner.func.id for inner in ast.walk(functions[name])
                   if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)}
-        assert other not in called, name
+        assert called.isdisjoint(set(scans) - {name}), name
 
-    # Two vocabularies, disjoint: neither rule's subject is expressible in the
-    # other's terms, which is what "separate rules" means here.
-    assert set(MODULE_CONSTRUCTORS + SOURCE_EXECUTORS).isdisjoint(
-        CONTENT_SUBCOMMANDS)
+    # Three vocabularies, pairwise disjoint: no rule's subject is expressible
+    # in another's terms, which is what "separate rules" means here.
+    vocabularies = (
+        set(MODULE_CONSTRUCTORS + SOURCE_EXECUTORS),
+        set(CONTENT_SUBCOMMANDS),
+        set(REVISION_KEYWORDS + PATH_WRITES + LOADER_INTERFACE),
+    )
+    for index, vocabulary in enumerate(vocabularies):
+        for other in vocabularies[index + 1:]:
+            assert vocabulary.isdisjoint(other), vocabulary & other
+
     for rule in ("no module under tests/ builds a module at runtime",
-                 "only the shared reader asks git for a repository file's text"):
+                 "only the shared reader asks git for a repository file's text",
+                 "a mutation control mutates the working tree, never a pinned"):
         assert rule in source, rule
 
 
-@pytest.mark.parametrize("scan", ["module_construction", "git_text_reads"])
+@pytest.mark.parametrize("scan", ["module_construction", "git_text_reads",
+                                  "mutation_controls"])
 def test_each_new_rule_states_what_it_does_not_cover(scan):
     """The narrowness this module already states about itself, required of
     each new rule as well — and the three limits named by this story's
