@@ -442,7 +442,7 @@ def baseline_of(target_root: Path, scratch: Path, prefix: str = PREFIX) -> Path:
     Taken before the edit under test, which is where the coordinator takes it.
     """
     return story_coordinator.capture_stage_baseline(
-        scratch, target_root, BASELINE, "stage", [prefix])
+        scratch, target_root, BASELINE, "stage", [prefix], accounted_for=set())
 
 
 def suite_in(directory: Path) -> int:

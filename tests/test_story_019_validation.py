@@ -432,7 +432,7 @@ def capture(target_root: Path, scratch: Path, prefix: str = PREFIX,
             stage: str = "stage") -> Path:
     """Capture a baseline the way the coordinator captures one, into scratch."""
     return story_coordinator.capture_stage_baseline(
-        scratch, target_root, BASELINE, stage, [prefix])
+        scratch, target_root, BASELINE, stage, [prefix], accounted_for=set())
 
 
 def suite_in(directory: Path) -> int:

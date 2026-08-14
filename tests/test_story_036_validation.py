@@ -1384,7 +1384,7 @@ def test_a_fresh_capture_from_the_same_tree_does_hold_that_file(
     # this capture from colliding with the run's own.
     fresh = story_coordinator.capture_stage_baseline(
         scratch, target_root, declaration["revert_check"]["baseline"],
-        BUDGETED, declaration["may_not_create"])
+        BUDGETED, declaration["may_not_create"], accounted_for=set())
     names = {p.name for p in fresh.rglob("*") if p.is_file()}
     assert LEFTOVER in names
 
@@ -1696,3 +1696,630 @@ def test_a_self_route_has_no_destination_other_than_itself(
     assert entry["stage"] == entry["retry_stage"] == BUDGETED
     assert "retry_category" not in entry
     assert "retry_decision" not in entry
+
+
+# --------------------------------------------------------------------------
+# The amendment of 2026-08-14: what a re-capture of the baseline may admit
+#
+# story-037 made a stage's second capture a per-path merge — a path the
+# baseline already holds keeps its first-captured content, and a path new since
+# the last capture is added at its current content. That is necessary for a
+# backward retry, where the tester created a governed file between two
+# invocations of the implementer and deleting it would make the revert check
+# pass vacuously. It is wrong for a self-route, where no other stage has run,
+# so the only path it can admit is the crashed invocation's own leftover.
+#
+# This story narrows what the merge admits rather than making it conditional on
+# the route: a governed path is merged in only when another stage's
+# changed-files record accounts for it. So the two cases are one rule, and both
+# halves are held here — a change that satisfied one by breaking the other
+# would pass a test written for either alone.
+#
+# Every absence below is paired with the same call reporting the violation:
+# the unaccounted path's exclusion sits beside an accounted path admitted by
+# the same capture, and both run-level halves sit beside a mutant of today's
+# coordinator whose admission rule is removed or emptied, which gets the other
+# answer through the same run.
+# --------------------------------------------------------------------------
+
+
+#: Every stage that declares a changed-files record — the stages whose word is
+#: what `recorded_by_other_stages` reads. Off the workflow, never written here.
+RECORDING = [s["name"] for s in STAGES if s.get("changed_files")]
+
+#: The other recorder: the stage that runs between two invocations of the
+#: budgeted stage and records what it created. story-037's case, in the shipped
+#: workflow's own terms.
+OTHER_RECORDER = next((n for n in RECORDING if n != BUDGETED), None)
+
+GOVERNED_PREFIX = declaration_of(BUDGETED)["may_not_create"][0]
+NEW_TEST_PATH = f"{GOVERNED_PREFIX}test_new.py"
+
+# The file the other recorder creates mid-run, broken and repaired. story-037's,
+# imported rather than copied so a regression in either reddens both files.
+from test_story_037_validation import (  # noqa: E402
+    TEST_NEW_BROKEN,
+    TEST_NEW_REPAIRED,
+)
+
+
+def test_the_shape_this_section_drives_is_the_shape_the_workflow_declares():
+    """The derivations above, stated so a workflow change reddens here first.
+
+    Without a second recording stage between the budgeted stage and the
+    verifier there is no backward-retry half to preserve, and the tests below
+    would quietly become a statement about one case rather than two.
+    """
+    assert BUDGETED in RECORDING
+    assert OTHER_RECORDER, "no other stage records what it changed"
+    assert STAGE_NAMES.index(BUDGETED) < STAGE_NAMES.index(OTHER_RECORDER)
+    assert STAGE_NAMES.index(OTHER_RECORDER) < STAGE_NAMES.index(VERIFIER_NAME)
+    assert RETRY_ROUTE == BUDGETED, (
+        "the retry has to come back to the budgeted stage for a path created "
+        "in between to be a path it meets on re-entry")
+    assert GOVERNED_PREFIX
+
+
+# --------------------------------------------------------------------------
+# The account itself
+# --------------------------------------------------------------------------
+
+
+def test_the_account_is_every_other_recorders_word_and_never_the_stages_own(
+    tmp_path,
+):
+    """`recorded_by_other_stages` is the union of every *other* stage's record,
+    across all three groups, and never the queried stage's own.
+
+    Each stage's own path being absent is the assertion; the same call
+    returning every other stage's paths is its control, so an answer that had
+    stopped reading records entirely fails here rather than passing twice over.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    named: dict[str, set[str]] = {}
+    for stage in STAGES:
+        record = stage.get("changed_files")
+        if not record:
+            continue
+        name = stage["name"]
+        paths = {group: f"{GOVERNED_PREFIX}{group}_by_{name}.py"
+                 for group in ("modified", "created", "deleted")}
+        named[name] = set(paths.values())
+        write_json(run_dir / record,
+                   {group: [path] for group, path in paths.items()})
+
+    assert len(named) >= 2, "one recorder cannot show whose word is read"
+    for name, own in named.items():
+        seen = story_coordinator.recorded_by_other_stages(run_dir, STAGES, name)
+        assert not (own & seen), (name, own & seen)
+        others = set().union(*(paths for other, paths in named.items()
+                               if other != name))
+        assert others <= seen, (name, others - seen)
+
+
+def test_a_record_that_is_not_there_accounts_for_nothing(tmp_path):
+    """An absent record and an unreadable one contribute nothing rather than
+    raising: what is asked is what another stage is *known* to have touched.
+
+    The control is the same call over the same run directory once the record is
+    readable, which does return the path — so the two empty answers above are
+    about the record rather than about a reader that returns nothing.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    record = declaration_of(OTHER_RECORDER)["changed_files"]
+
+    assert story_coordinator.recorded_by_other_stages(
+        run_dir, STAGES, BUDGETED) == set()
+
+    write(run_dir / record, "{not json at all")
+    assert story_coordinator.recorded_by_other_stages(
+        run_dir, STAGES, BUDGETED) == set()
+
+    write_json(run_dir / record, {"modified": [], "deleted": [],
+                                  "created": [NEW_TEST_PATH]})
+    assert NEW_TEST_PATH in story_coordinator.recorded_by_other_stages(
+        run_dir, STAGES, BUDGETED)
+
+
+def _capture_into(target_root: Path, scratch: Path, accounted_for: set) -> Path:
+    """A capture taken the way the coordinator takes one, into a scratch run
+    directory so it cannot collide with a run's own."""
+    declaration = declaration_of(BUDGETED)
+    return story_coordinator.capture_stage_baseline(
+        scratch, target_root, declaration["revert_check"]["baseline"],
+        BUDGETED, declaration["may_not_create"], accounted_for=accounted_for)
+
+
+def test_a_re_capture_admits_the_accounted_path_and_not_the_unaccounted_one(
+    suite_target, tmp_path,
+):
+    """The rule, in one call: two governed files appear between the two
+    captures, and the one another stage's record accounts for is merged in
+    while the one nothing accounts for is left out.
+
+    The admitted file is the absence's control — same directory, same prefix,
+    same call — so a capture that had stopped seeing new files at all fails
+    here rather than reporting the exclusion it was asked for.
+    """
+    scratch = tmp_path / "scratch-run"
+    accounted = f"{GOVERNED_PREFIX}test_from_another_stage.py"
+    unaccounted = f"{GOVERNED_PREFIX}test_from_the_crash.py"
+
+    first = _capture_into(suite_target, scratch, set())
+    held = {p.relative_to(first).as_posix()
+            for p in first.rglob("*") if p.is_file()}
+    assert held, "the first capture found nothing, so its contents say nothing"
+    assert accounted not in held and unaccounted not in held
+
+    write(suite_target / accounted, "def test_accounted():\n    assert True\n")
+    write(suite_target / unaccounted, "def test_leftover():\n    assert True\n")
+    again = _capture_into(suite_target, scratch, {accounted})
+
+    assert again == first, "a re-capture reuses the stage's one directory"
+    assert (again / accounted).is_file()
+    assert not (again / unaccounted).exists()
+
+
+def test_first_seen_still_wins_for_a_path_the_baseline_already_holds(
+    suite_target, tmp_path,
+):
+    """The narrowing did not disturb story-037's other half: a path the
+    baseline already holds keeps its first-captured content even when the
+    account names it, and even when the tree has since moved on.
+
+    The control is a capture into a run directory holding no baseline for this
+    stage, which does see the edit.
+    """
+    scratch = tmp_path / "scratch-run"
+    governed = f"{GOVERNED_PREFIX}test_app.py"
+    first = _capture_into(suite_target, scratch, set())
+    at_first = (first / governed).read_text(encoding="utf-8")
+
+    write(suite_target / governed, TEST_APP_AT_HEAD + ADDED_COVERAGE)
+    again = _capture_into(suite_target, scratch, {governed})
+    assert (again / governed).read_text(encoding="utf-8") == at_first
+
+    fresh = _capture_into(suite_target, tmp_path / "fresh-run", set())
+    assert (fresh / governed).read_text(encoding="utf-8") != at_first
+
+
+# --------------------------------------------------------------------------
+# The two halves, driven through whole runs
+# --------------------------------------------------------------------------
+
+
+def adds_the_module_function(root: Path) -> dict:
+    """The budgeted stage's first invocation: nothing under the governed
+    prefix, so the path the other recorder creates next is genuinely new."""
+    write(root / "src" / "app.py", APP_ADDITIVE)
+    return {"modified": ["src/app.py"], "created": [], "deleted": []}
+
+
+def creates_the_broken_new_test(root: Path) -> dict:
+    """The other recorder writes a governed file this run, and gets it wrong."""
+    write(root / NEW_TEST_PATH, TEST_NEW_BROKEN)
+    return {"modified": [], "created": [NEW_TEST_PATH], "deleted": []}
+
+
+def repairs_the_new_test(root: Path) -> dict:
+    """The re-entered budgeted stage repairs the file the other stage wrote."""
+    write(root / NEW_TEST_PATH, TEST_NEW_REPAIRED)
+    return {"modified": [NEW_TEST_PATH], "created": [], "deleted": []}
+
+
+#: The backward-retry shape story-037 was built for, in the shipped workflow's
+#: own stages: the budgeted stage touches no governed path, the other recorder
+#: creates one, the verdict sends the work back, and the retry repairs it.
+BETWEEN_INVOCATIONS = {
+    BUDGETED: [adds_the_module_function, repairs_the_new_test],
+    OTHER_RECORDER: [creates_the_broken_new_test],
+}
+
+
+def drive_with(coordinator, target_root: Path, harness: Path,
+               plan: dict | None = None, verdicts: list | None = None,
+               tree: dict | None = None,
+               start_stage: str | None = None) -> tuple[int, Runner]:
+    """`drive`, through a named coordinator — the real one or a mutant."""
+    runner = Runner(target_root, plan, verdicts, None, None, tree)
+    code = coordinator.run_story(
+        STORY_ID, harness, target_root, runner, start_stage)
+    return code, runner
+
+
+def revert_result_of(target_root: Path) -> dict:
+    artifact = declaration_of(BUDGETED)["revert_check"]["result"]
+    return json.loads(
+        (run_dir_of(target_root) / artifact).read_text(encoding="utf-8"))
+
+
+def baseline_of(target_root: Path) -> Path:
+    return story_coordinator.stage_baseline_dir(
+        run_dir_of(target_root), declaration_of(BUDGETED)["revert_check"]["baseline"],
+        BUDGETED)
+
+
+def test_a_path_another_stage_created_between_invocations_is_still_merged(
+    suite_target, harness_root,
+):
+    """story-037's case, preserved by the narrowed rule: the file the other
+    recorder created after the budgeted stage's first invocation is in that
+    stage's one baseline, at the content that stage left, so the retry's repair
+    of it is restored rather than deleted and the check permits it.
+
+    Both facts are asserted, because the merge is only worth anything if the
+    check then decides against it: the baseline holds the broken content, and
+    the run completes with the repair permitted.
+    """
+    code, runner = drive_with(story_coordinator, suite_target, harness_root,
+                              verdicts=[failing(1), PASS],
+                              tree=BETWEEN_INVOCATIONS)
+
+    assert code == 0
+    assert runner.calls.count(BUDGETED) == 2
+    assert (baseline_of(suite_target) / NEW_TEST_PATH).read_text(
+        encoding="utf-8") == TEST_NEW_BROKEN
+
+    record = revert_result_of(suite_target)
+    assert record["ran"] is True
+    assert record["permitted"] is True
+    assert NEW_TEST_PATH in record["paths"]
+    # And no self-route happened here: this half is the backward retry, which
+    # is the case the merge was built for.
+    assert self_route_records(suite_target) == []
+
+
+def test_a_capture_that_admitted_nothing_new_would_have_deleted_that_path(
+    suite_target, harness_root, tmp_path,
+):
+    """The control for the half above, and the reason the account is consulted
+    at all rather than the merge simply being dropped for safety.
+
+    The same run, through a coordinator whose call site accounts for nothing,
+    hands the check a baseline without the created path — so the clone deletes
+    it instead of restoring it, the suite passes without it, and the repair the
+    real coordinator permits is escalated on.
+    """
+    mutant = load_mutant(
+        COORDINATOR_PATH,
+        [("accounted_for=recorded_by_other_stages(run_dir, stages, name),",
+          "accounted_for=set(),")],
+        name="mutant_coordinator_accounting_for_nothing", tmp_path=tmp_path)
+
+    code, _ = drive_with(mutant, suite_target, harness_root,
+                         verdicts=[failing(1), PASS], tree=BETWEEN_INVOCATIONS)
+
+    assert code == 2
+    assert not (baseline_of(suite_target) / NEW_TEST_PATH).exists()
+    assert NEW_TEST_PATH in escalation_reason(suite_target)
+
+
+def test_admitting_every_new_path_would_have_admitted_the_crash_leftover(
+    suite_target, harness_root, tmp_path,
+):
+    """The control for the other half — the leftover's absence from the
+    baseline the self-route was decided against, which
+    `test_the_stage_baseline_is_the_one_the_first_invocation_captured` asserts
+    off exactly this run.
+
+    The same crash and the same re-run, through a coordinator with the
+    admission rule removed, put the file the crashed invocation left in the
+    tree into the stage's baseline. So the real run's baseline lacking it is
+    this rule doing work, rather than a capture that never reaches a re-entry
+    or a reader that has stopped seeing files.
+    """
+    mutant = load_mutant(
+        COORDINATOR_PATH,
+        [("            if recapture and rel not in accounted_for:\n"
+          "                continue\n", "")],
+        name="mutant_coordinator_admitting_everything", tmp_path=tmp_path)
+
+    drive_with(mutant, suite_target, harness_root, {BUDGETED: [CRASH]},
+               tree={BUDGETED: [crash_leaves_a_governed_file,
+                                repairs_the_suite]})
+
+    assert len(self_route_records(suite_target)) == 1, (
+        "the mutant run has to reach a re-entry for its capture to be a "
+        "re-capture at all")
+    assert LEFTOVER in {p.name for p in baseline_of(suite_target).rglob("*")}
+
+
+# --------------------------------------------------------------------------
+# Whose word decides, and whose does not
+# --------------------------------------------------------------------------
+
+
+def _executable_source(*names: str) -> str:
+    """The named functions' code with docstrings and comments removed.
+
+    The prose around this rule necessarily discusses the route it must not
+    consult, so a scan for the route over the source as written would report
+    the explanation rather than the code. Unparsing the AST leaves exactly what
+    runs.
+    """
+    import ast
+
+    from conftest import function_source
+
+    out = []
+    for name in names:
+        tree = ast.parse(function_source(COORDINATOR_SOURCE, name))
+        body = tree.body[0]
+        if isinstance(body.body[0], ast.Expr) and isinstance(
+                body.body[0].value, ast.Constant):
+            body.body.pop(0)
+        out.append(ast.unparse(tree))
+    return "\n".join(out)
+
+
+ADMISSION_FUNCTIONS = ("capture_stage_baseline", "recorded_by_other_stages")
+
+
+def test_the_admission_rule_consults_no_route_and_names_no_stage():
+    """Whoever created the path is what the rule turns on. The route the stage
+    was entered by is a proxy for it and must not be used in its place, because
+    a resume can change several things between two entries.
+
+    Scanned over what runs rather than over what is written, and paired with
+    the planted control below so a scan that had stopped matching anything
+    would fail rather than pass.
+    """
+    code = _executable_source(*ADMISSION_FUNCTIONS)
+    assert "self_route" not in code
+    assert "retry" not in code
+    for name in STAGE_NAMES:
+        assert f'"{name}"' not in code and f"'{name}'" not in code
+    for stage in STAGES:
+        for artifact in story_coordinator.required_artifacts(stage):
+            assert artifact not in code
+
+
+def test_that_scan_reports_a_route_read_that_was_planted():
+    """The control: the same scan over the same code with the route consulted."""
+    planted = _executable_source(*ADMISSION_FUNCTIONS).replace(
+        "recapture = directory.exists()",
+        "recapture = directory.exists() and state.self_route_count == 0", 1)
+    assert planted != _executable_source(*ADMISSION_FUNCTIONS)
+    assert "self_route" in planted
+
+
+def test_the_record_name_comes_off_the_loaded_workflow(tmp_path):
+    """The account reads the record each stage *declares*, so a workflow naming
+    a different record is followed rather than a written-in name.
+
+    The control is the same run directory holding the shipped name, which is
+    then not read — the answer follows the declaration in both directions.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    renamed = json.loads(json.dumps(STAGES))
+    declaration = next(s for s in renamed if s["name"] == OTHER_RECORDER)
+    shipped = declaration["changed_files"]
+    declaration["changed_files"] = "elsewhere-changed-files.json"
+
+    write_json(run_dir / shipped, {"modified": [], "deleted": [],
+                                   "created": [f"{GOVERNED_PREFIX}shipped.py"]})
+    write_json(run_dir / "elsewhere-changed-files.json",
+               {"modified": [], "deleted": [],
+                "created": [f"{GOVERNED_PREFIX}declared.py"]})
+
+    seen = story_coordinator.recorded_by_other_stages(run_dir, renamed, BUDGETED)
+    assert f"{GOVERNED_PREFIX}declared.py" in seen
+    assert f"{GOVERNED_PREFIX}shipped.py" not in seen
+
+    seen = story_coordinator.recorded_by_other_stages(run_dir, STAGES, BUDGETED)
+    assert f"{GOVERNED_PREFIX}shipped.py" in seen
+    assert f"{GOVERNED_PREFIX}declared.py" not in seen
+
+
+# --------------------------------------------------------------------------
+# A self-route's evidence across a resume
+#
+# A resume zeroes the self-route count and carries retry_count forward, so a
+# resumed stage's first mechanical failure is try 1 of the same attempt again
+# and lands on exactly the names the interrupted attempt's own self-routes
+# wrote. The archive is what a resume exists to preserve, so those names have
+# to reach it — and they cannot be derived from the workflow alone, because
+# the count that produced them is live state the resume has already discarded.
+#
+# The survival asserted below is a *presence* at a content, which fails loudly
+# on its own; the mutant beside it is here for the other half — that the names
+# reaching the archive are this reading of the run directory doing work, and
+# that without it the same reader sees the loss.
+# --------------------------------------------------------------------------
+
+
+def archived_attempt_dir(target_root: Path) -> Path:
+    """The one attempt directory a resumed run left, whatever it is numbered.
+
+    Read off the run directory rather than written here, so the attempt number
+    stays the coordinator's answer — a self-route must not move it, which
+    `test_a_self_route_moves_none_of_the_retry_bookkeeping` holds separately.
+    """
+    directories = sorted((run_dir_of(target_root) / "attempts").glob("attempt-*"))
+    assert len(directories) == 1, [p.name for p in directories]
+    return directories[0]
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def interrupted_then_resumed(coordinator, target_root: Path, harness: Path):
+    """Escalate the budgeted stage past its budget, amend the story, resume it,
+    and fail it mechanically once more so it self-routes as try 1 again.
+
+    The two runs fail mechanically in *different* classes deliberately: the
+    interrupted attempt's process dies and the resumed attempt skips a required
+    output. The evidence and the prompt each self-route writes therefore differ
+    in content while colliding exactly in name, which is what makes "the
+    archived one is the interrupted attempt's" a statement a reader can check
+    rather than a comparison between two identical files.
+    """
+    assert drive_with(coordinator, target_root, harness,
+                      {BUDGETED: [CRASH] * (BUDGET + 1)})[0] == 2
+    interrupted = {name: json.dumps(record, sort_keys=True)
+                   for name, record in self_route_records(target_root)}
+    prompts = {name: read(run_dir_of(target_root) / name)
+               for name in try_prompts(target_root)}
+    assert len(interrupted) == len(prompts) == BUDGET, (interrupted, prompts)
+
+    # The resume guard refuses a resume that would reach the same point the
+    # same way, so the story is amended first.
+    append_to_story(target_root, "\n  - and one more constraint\n")
+    code, runner = drive_with(coordinator, target_root, harness,
+                              {BUDGETED: [skip(first_output_of(BUDGETED))]},
+                              start_stage=BUDGETED)
+    assert runner.calls.count(BUDGETED) == 2, (
+        "the resumed stage has to self-route for its record to collide with "
+        "the interrupted attempt's at all")
+    return code, interrupted, prompts
+
+
+def test_the_interrupted_attempts_self_route_evidence_survives_a_resume(
+    make_target, harness_root,
+):
+    """The record and the prompt the interrupted attempt's self-route wrote are
+    still readable under attempts/, at the bytes that invocation was given,
+    while the run directory root holds the resumed run's own.
+
+    Both halves matter. The archived record's failure is still the crash's and
+    the archived prompt still says the previous invocation exited without
+    completing; the live ones name the skipped output instead. So the two are
+    distinguishable, and the archive is not simply a second copy of the file
+    the resume went on to write.
+    """
+    target_root = make_target("resume-archive")
+    code, interrupted, prompts = interrupted_then_resumed(
+        story_coordinator, target_root, harness_root)
+    assert code == 0
+
+    archive = archived_attempt_dir(target_root)
+    for name, original in interrupted.items():
+        archived = json.loads(read(archive / name))
+        assert json.dumps(archived, sort_keys=True) == original
+        assert archived["failure"] == story_coordinator.AGENT_PROCESS_FAILED
+    for name, original in prompts.items():
+        assert read(archive / name) == original
+        assert STATEMENT_PHRASE in read(archive / name)
+
+    # The live names are the same names, now carrying the resumed run's own
+    # self-route — which is why the archive had to be written before it ran.
+    live = dict(self_route_records(target_root))
+    assert set(live) == set(interrupted)
+    assert set(try_prompts(target_root)) == set(prompts)
+    for name, record in live.items():
+        assert record["failure"] == story_coordinator.MISSING_REQUIRED_ARTIFACTS
+        assert json.dumps(record, sort_keys=True) != interrupted[name]
+    for name in prompts:
+        assert first_output_of(BUDGETED) in read(run_dir_of(target_root) / name)
+
+
+def test_an_archive_that_derives_its_names_loses_that_evidence(
+    make_target, harness_root, tmp_path,
+):
+    """The control for the survival above, through the same reader.
+
+    A coordinator whose resume archives only what the workflow declares —
+    `interrupted_attempt_artifacts` called without the run directory — drives
+    the identical scenario. The self-route names reach no archive, and the
+    resumed run's own self-route writes over the record and the prompt the
+    interrupted invocation left. So the survival asserted above is this
+    reading of the run directory doing work rather than an archive that would
+    have held them anyway.
+    """
+    mutant = load_mutant(
+        COORDINATOR_PATH,
+        [("interrupted_attempt_artifacts(stages, attempt, run_dir=run_dir)",
+          "interrupted_attempt_artifacts(stages, attempt)")],
+        name="mutant_coordinator_deriving_archive_names", tmp_path=tmp_path)
+
+    target_root = make_target("resume-archive-control")
+    _, interrupted, prompts = interrupted_then_resumed(
+        mutant, target_root, harness_root)
+
+    archive = archived_attempt_dir(target_root)
+    for name in list(interrupted) + list(prompts):
+        assert not (archive / name).exists(), name
+    # And the loss is a loss: what the interrupted invocation wrote is
+    # nowhere, because the live names now hold the resumed run's.
+    for name, record in self_route_records(target_root):
+        assert json.dumps(record, sort_keys=True) != interrupted[name]
+    for name, original in prompts.items():
+        assert read(run_dir_of(target_root) / name) != original
+
+
+# --------------------------------------------------------------------------
+# What the run directory is asked for, directly
+# --------------------------------------------------------------------------
+
+GHOST = "ghost-stage"  #: a stage no loaded workflow declares
+
+
+def plant_self_route_names(run_dir: Path) -> dict[str, str]:
+    """Self-route names for one stage and attempt, plus three near misses.
+
+    The near misses are the discriminations that make a match a match: another
+    attempt of the same stage, a stage the workflow does not declare, and the
+    first invocation's own un-suffixed prompt, which is derived from the
+    workflow and must not be found twice.
+    """
+    names = {
+        "record": story_coordinator.self_route_result_file(BUDGETED, 1, 1),
+        "prompt": story_coordinator.prompt_file(BUDGETED, 1, 1),
+        "other-attempt": story_coordinator.self_route_result_file(BUDGETED, 2, 1),
+        "other-stage": story_coordinator.self_route_result_file(GHOST, 1, 1),
+        "first-invocation": story_coordinator.prompt_file(BUDGETED, 1),
+    }
+    for name in names.values():
+        write(run_dir / name, f"planted {name}\n")
+    return names
+
+
+def test_the_self_route_names_are_read_off_the_run_directory(tmp_path):
+    """They cannot be derived: the try number that produced them is live state
+    a resume has already zeroed. So the run directory is asked, and what it
+    answers is this attempt's, at this workflow's stages."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    names = plant_self_route_names(run_dir)
+
+    found = story_coordinator.self_route_artifacts(run_dir, STAGES, 1)
+    assert names["record"] in found
+    assert names["prompt"] in found
+    assert names["other-attempt"] not in found
+    assert names["other-stage"] not in found
+    assert names["first-invocation"] not in found
+
+
+def test_the_run_directory_is_what_the_resume_archive_adds(tmp_path):
+    """`interrupted_attempt_artifacts` with the run directory finds the planted
+    names; the same call without it returns exactly what it returned before the
+    keyword existed — the workflow's declared artifacts and this attempt's
+    prompts, and none of the self-route names.
+
+    The pre-fix list is rebuilt here from the same two public readers the
+    docstring names rather than written out, so a workflow that declares a new
+    artifact is covered without a change here.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    names = plant_self_route_names(run_dir)
+
+    with_run_dir = story_coordinator.interrupted_attempt_artifacts(
+        STAGES, 1, run_dir=run_dir)
+    assert names["record"] in with_run_dir
+    assert names["prompt"] in with_run_dir
+
+    without = story_coordinator.interrupted_attempt_artifacts(STAGES, 1)
+    assert without == story_coordinator.archivable_artifacts(STAGES) + [
+        story_coordinator.prompt_file(stage["name"], 1) for stage in STAGES
+    ]
+    assert names["record"] not in without
+    assert names["prompt"] not in without
+    # The un-suffixed prompt is in both: it is derived, and the run directory
+    # reading must not add a second copy of it.
+    assert names["first-invocation"] in without
+    assert with_run_dir.count(names["first-invocation"]) == 1
