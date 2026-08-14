@@ -421,18 +421,18 @@ def run(target_root: Path, harness: Path, edits: dict | None = None,
     return code, runner
 
 
-def baseline_at(target_root: Path, stage: str, attempt: int,
+def baseline_at(target_root: Path, stage: str,
                 story_id: str = "story-001") -> Path:
-    """The baseline the coordinator captured for one stage and attempt."""
+    """The baseline the coordinator captured for one stage."""
     return story_coordinator.stage_baseline_dir(
-        run_dir_of(target_root, story_id), BASELINE, stage, attempt)
+        run_dir_of(target_root, story_id), BASELINE, stage)
 
 
 def capture(target_root: Path, scratch: Path, prefix: str = PREFIX,
-            stage: str = "stage", attempt: int = 1) -> Path:
+            stage: str = "stage") -> Path:
     """Capture a baseline the way the coordinator captures one, into scratch."""
     return story_coordinator.capture_stage_baseline(
-        scratch, target_root, BASELINE, stage, attempt, [prefix])
+        scratch, target_root, BASELINE, stage, [prefix])
 
 
 def suite_in(directory: Path) -> int:
@@ -622,7 +622,7 @@ def test_a_forced_edit_to_a_file_created_earlier_in_the_run_is_permitted(
     assert record["permitted"] is True
     assert record["exit_code"] != 0
     assert record["paths"] == ["tests/test_new.py"]
-    assert record["baseline"].endswith("implementer-attempt-2")
+    assert record["baseline"].endswith("implementer")
 
 
 def test_the_run_records_which_run_created_path_was_reverted_and_why(
@@ -684,7 +684,7 @@ def test_the_baseline_of_the_retry_holds_the_file_the_tester_left(
     is the condition the check had to survive.
     """
     assert run(target, harness_root, RETRY_SHAPE, [FAIL, PASS])[0] == 0
-    captured = baseline_at(target, "implementer", 2) / "tests" / "test_new.py"
+    captured = baseline_at(target, "implementer") / "tests" / "test_new.py"
     assert captured.read_text() == TEST_NEW_BROKEN
 
     tracked = git(target, "ls-tree", "-r", "--name-only", "HEAD^", "--",
@@ -965,26 +965,28 @@ def test_a_clone_that_cannot_be_built_still_escalates_naming_why(
 # --------------------------------------------------------------------------
 
 
-def test_a_second_capture_for_the_same_stage_and_attempt_does_not_overwrite(
+def test_a_second_capture_for_the_same_stage_does_not_overwrite(
     target, tmp_path,
 ):
     scratch = tmp_path / "run"
-    first = capture(target, scratch, stage="implementer", attempt=1)
+    first = capture(target, scratch, stage="implementer")
     assert (first / "tests" / "test_app.py").read_text() == TEST_APP_AT_HEAD
 
     forced_repair(target, run_dir_of(target))
-    again = capture(target, scratch, stage="implementer", attempt=1)
+    again = capture(target, scratch, stage="implementer")
 
     assert again == first
     assert (again / "tests" / "test_app.py").read_text() == TEST_APP_AT_HEAD
-    # The control: a different attempt is a different baseline, and it does
-    # see the edit — so the reuse above is the keying, not a capture that has
-    # stopped reading the tree.
-    later = capture(target, scratch, stage="implementer", attempt=2)
+    # The control: a fresh capture, into a run directory holding no baseline
+    # for this stage, does see the edit — so the reuse above is the first-seen
+    # rule, not a capture that has stopped reading the tree. Since story-037
+    # the directory is keyed by stage alone, so a fresh run directory is what
+    # distinguishes it rather than a different attempt number.
+    later = capture(target, tmp_path / "fresh", stage="implementer")
     assert (later / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
 
 
-def test_the_attempt_directory_exists_even_when_it_captures_nothing(
+def test_the_baseline_directory_exists_even_when_it_captures_nothing(
     target, tmp_path,
 ):
     """Its existence answers "was a baseline taken", so an empty capture and
@@ -1015,10 +1017,10 @@ def test_a_re_entered_stage_is_decided_against_the_baseline_it_first_found(
     assert resumed.calls[0] == "implementer"
     record = record_of(target)
     assert record["permitted"] is True
-    assert record["baseline"].endswith("implementer-attempt-1")
+    assert record["baseline"].endswith("implementer")
     # The baseline it decided against is the one taken before the first
     # invocation, not the state the interrupted stage left behind.
-    captured = baseline_at(target, "implementer", 1) / "tests" / "test_app.py"
+    captured = baseline_at(target, "implementer") / "tests" / "test_app.py"
     assert captured.read_text() == TEST_APP_AT_HEAD
 
 
@@ -1069,7 +1071,7 @@ def test_with_the_declaration_the_same_run_captures_and_escalates(
     assert code == 2
     run_dir = run_dir_of(target)
     assert (run_dir / ARTIFACT).exists()
-    assert (run_dir / BASELINE / "implementer-attempt-1").is_dir()
+    assert (run_dir / BASELINE / "implementer").is_dir()
 
 
 def test_moving_the_declaration_moves_the_capture_and_the_check(
@@ -1091,9 +1093,9 @@ def test_moving_the_declaration_moves_the_capture_and_the_check(
                                       "tester": [module_only]})
     assert code == 2
     run_dir = run_dir_of(target)
-    assert (run_dir / BASELINE / "tester-attempt-1").is_dir()
-    assert not (run_dir / BASELINE / "implementer-attempt-1").exists()
-    assert (run_dir / BASELINE / "tester-attempt-1" / "src" / "app.py").is_file()
+    assert (run_dir / BASELINE / "tester").is_dir()
+    assert not (run_dir / BASELINE / "implementer").exists()
+    assert (run_dir / BASELINE / "tester" / "src" / "app.py").is_file()
     assert record_of(target)["paths"] == ["src/app.py"]
 
 
@@ -1149,7 +1151,7 @@ def test_state_json_gains_no_field_and_never_names_the_baseline(
     # The control: the run this state describes did capture a baseline, so
     # the absence above is about state.json rather than about a run that
     # never took one.
-    assert (run_dir_of(target) / BASELINE / "implementer-attempt-2").is_dir()
+    assert (run_dir_of(target) / BASELINE / "implementer").is_dir()
 
 
 def test_nothing_in_run_story_routes_on_the_baseline():
