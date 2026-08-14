@@ -1344,17 +1344,22 @@ def crashed_then_re_ran(suite_target, harness_root):
 
 
 def baseline_dirs(target_root: Path, stage: str) -> list[Path]:
+    # story-037 keyed the baseline by stage alone: an attempt-keyed directory
+    # made the second attempt of a stage decide against the first attempt's
+    # own edits. The glob was `{stage}-attempt-*` while that was the layout,
+    # and the assertions below are unchanged by the repoint — one baseline for
+    # the stage is what they were always about.
     declaration = declaration_of(stage)["revert_check"]
     root = run_dir_of(target_root) / declaration["baseline"]
-    return sorted(p for p in root.glob(f"{stage}-attempt-*") if p.is_dir())
+    return sorted(p for p in root.glob(stage) if p.is_dir())
 
 
 def test_the_stage_baseline_is_the_one_the_first_invocation_captured(
     crashed_then_re_ran,
 ):
-    """One baseline for the stage and attempt, and it does not hold the file
-    the crashed invocation left in the tree — so the re-run is decided against
-    what the stage originally found, not against its own partial work."""
+    """One baseline for the stage, and it does not hold the file the crashed
+    invocation left in the tree — so the re-run is decided against what the
+    stage originally found, not against its own partial work."""
     target_root, _, _ = crashed_then_re_ran
     directories = baseline_dirs(target_root, BUDGETED)
     assert len(directories) == 1
@@ -1374,9 +1379,12 @@ def test_a_fresh_capture_from_the_same_tree_does_hold_that_file(
     target_root, _, _ = crashed_then_re_ran
     declaration = declaration_of(BUDGETED)
     scratch = tmp_path / "fresh-capture"
+    # No attempt number: story-037 removed it from the signature along with
+    # the attempt-keyed directory. The scratch run directory is what keeps
+    # this capture from colliding with the run's own.
     fresh = story_coordinator.capture_stage_baseline(
         scratch, target_root, declaration["revert_check"]["baseline"],
-        BUDGETED, 99, declaration["may_not_create"])
+        BUDGETED, declaration["may_not_create"])
     names = {p.name for p in fresh.rglob("*") if p.is_file()}
     assert LEFTOVER in names
 

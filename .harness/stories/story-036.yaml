@@ -45,6 +45,23 @@ story:
     output is recorded in the code as provisional, pending exactly this mechanism, because
     at the time there was no route from a stage that skipped its output back to that stage.
 
+    Amended 2026-08-14, after this story escalated and story-037 merged. story-037 keyed
+    the stage baseline by stage alone and made re-entry a per-path merge: a path the
+    baseline already holds keeps its first-captured content, and a path new since the last
+    capture is added at its current content. That merge is necessary for a backward retry,
+    where an earlier stage — the tester — has created a governed file in between, and
+    deleting it would make the revert check pass vacuously. It is wrong for a self-route,
+    where no other stage has run, so the only thing it can admit is the crashed
+    invocation's own leftovers — and deciding a re-run against its own partial work is the
+    failure this story's baseline rule exists to prevent.
+
+    The amendment narrows what the merge admits rather than making it conditional on the
+    route: a governed path is merged in only when another stage's changed-files record
+    accounts for it. Whoever created the path is the fact that matters, the harness already
+    records it, and a route-dependent rule would be a proxy that a resume can defeat. The
+    two cases are then one rule, and both must be shown to hold — the tester's file across
+    a retry is merged, the crash leftover across a self-route is not.
+
 tasks:
   - Add an optional stage-level max_self_routes key to the workflow definition and declare it as 1 on the implementer stage, leaving every other stage undeclared.
   - Add a self_route_count field to RunState, defaulted so an existing state.json still loads, scoped implicitly by current_stage and holding only the live count.
@@ -74,6 +91,8 @@ acceptance_criteria:
   - The re-run prompt is written to prompt-<stage>-attempt-N-try-M.md, and a run with no self-route writes exactly the prompt filenames it writes today.
   - Every self-route appends one execution-history entry whose event is self-routed, naming the stage and the reason, so counting self-routes per stage is a history query.
   - The stage baseline the revert check decides against is the one the stage's first invocation captured, not a fresh capture taken after the failed invocation left partial work in the tree.
+  - A re-capture merges in a governed path only when another stage's changed-files record accounts for it. A path that appeared since the last capture and that no other stage's record names is this stage's own partial work and is left out of the baseline, so a self-route after a crashed invocation is not decided against the file that invocation left behind.
+  - The merge story-037 landed is preserved for the case it was built for: a governed path created by an earlier stage between two invocations of this one — the tester's validation file across a backward retry — is still merged in at its current content, so the revert check restores it rather than deleting it.
   - Schema violations, blocked paths, stage output ownership, the revert check's two escalations and the clean-clone check's two still escalate for a stage that declares a budget.
   - A workflow declaring a max_self_routes that is not a non-negative integer is refused at pre-flight: exit 1, one message per problem, no run directory, no state.json, no branch created and no agent invoked.
   - rules/execution-rules.json still holds exactly one definition of max_retries, and no self-route reads or writes it.
@@ -178,6 +197,8 @@ verification_requirements:
   - Confirm the re-run prompt carries the coordinator's own statement of what was missing or stale, and that the crashed-process case says the previous invocation exited without completing rather than naming an output.
   - Confirm no self-route evidence reaches the prompt of a stage that did not self-route, including a later stage in a run where an earlier one did.
   - Confirm the stage baseline is reused rather than re-captured, by showing the revert check still decides against the tree the stage first found.
+  - Confirm a self-route after a crashed invocation is decided against a baseline that does not hold the file that invocation left behind, and that a fresh capture from the same tree does hold it — so the absence is a statement about when and by whom, not about a reader that stopped seeing files.
+  - Confirm the story-037 case still holds: a governed path created by an earlier stage between two invocations of this one is present in the merged baseline, and the revert check restores it rather than deleting it. Both halves are needed; a change that satisfied one by breaking the other would pass a test written for either alone.
   - Confirm the implementation matches the three passages quoted in this story's description, and report any place it departs from them.
   - Confirm the pre-flight refusal for a malformed budget leaves no run directory, no state.json, no log, no new branch and invokes no agent.
   - Confirm the new tests fail against the pre-story code for the reason each states, and that the repointed story-022 assertions still hold the escalation for a stage with no budget.
@@ -185,7 +206,7 @@ verification_requirements:
 constraints:
   - A self-route spends neither retry_count nor max_retries, and reads neither.
   - A self-route archives nothing under attempts/attempt-N/ and appends nothing to retry-history.json.
-  - A self-route never re-captures the stage baseline: the baseline is captured once per stage per attempt and reused, which is the same capture-once rule resume relies on.
+  - A self-route never re-captures the stage baseline from scratch: the baseline is captured once per stage and reused, which is the same capture-once rule resume relies on. Since story-037 the reuse is a per-path merge rather than a plain one, and this story narrows what that merge admits — a path is merged in only when another stage's changed-files record accounts for it. Whoever creates a governed path decides whether it belongs in the baseline; the route the stage was entered by is a proxy for that and must not be used in its place, because a resume can change several things between two entries.
   - Boundary violations and schema violations still escalate, and no escalation point other than the three named here changes behaviour.
   - No stage name, prefix, artifact name or budget value is written into orchestration code: the budget comes off the loaded stage dict, exactly as may_not_create and clean_clone do.
   - The evidence is an artifact on disk, not only a prompt string, so a run directory can say why a stage ran twice.
