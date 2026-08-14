@@ -74,16 +74,128 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def story_commit_range(validation_file: Path,
-                       repo: Path = HARNESS_ROOT) -> StoryRange:
-    """The commit range of the story that added `validation_file`.
+# --------------------------------------------------------------------------
+# Which story a validation module validates, declared rather than inferred
+#
+# The resolution above identifies a story by the commit that *added* the
+# module validating it, which reads the module's current path. That is
+# exactly right until the module is renamed: a rename commit adds the new
+# path, so every differential assertion in the module would then compare the
+# rename against its parent, find nothing, and pass. Vacuously green is the
+# defect class story-015, story-016, story-026, story-029 and story-031 each
+# removed, and a rename is not worth reintroducing it.
+#
+# So a module may *declare* the historical path whose add-commit identifies
+# its story, and the resolution consults the declaration instead of the
+# module's name. A declaration rather than a derivation, deliberately:
+#
+#   - it survives every future rename, because nothing about it is derived
+#     from the name;
+#   - it survives a module merged from two stories, which no rename
+#     heuristic does — such a module declares both origins and each call
+#     says which one it means;
+#   - and `git log --follow`, the derivation that was weighed against it,
+#     is documented as a heuristic on a single path. It recovers the
+#     add-commit after a pure rename and fails on a content-editing rename
+#     and on a split — silently, into the same green this exists to avoid.
+#
+# A module with no entry resolves its own path, exactly as before, so a
+# module written after this costs nothing to declare.
+# --------------------------------------------------------------------------
 
-    The run commit is the *oldest* commit that added the file, so a later
-    revert-and-restore cannot be mistaken for the story's own run, and a
-    planning or hotfix commit on the same story — which modifies the file
-    rather than adding it — is never returned.
+
+STORY_ORIGINS: dict[str, tuple[str, ...]] = {
+    "test_changed_files_records.py": ("tests/test_story_002_validation.py",),
+    "test_artifact_schemas.py": ("tests/test_story_004_validation.py",),
+    "test_schema_directed_parsing.py": ("tests/test_story_005_validation.py",),
+    "test_single_story_reader.py": ("tests/test_story_006_single_reader.py",),
+    "test_stage_output_ownership.py": ("tests/test_story_007_validation.py",),
+    "test_planner_injection.py": ("tests/test_story_008_validation.py",
+                                  "tests/test_story_009_validation.py"),
+    "test_attempt_archiving.py": ("tests/test_story_010_validation.py",),
+    "test_execution_history.py": ("tests/test_story_011_validation.py",),
+    "test_retry_history.py": ("tests/test_story_012_validation.py",),
+    "test_schema_inventory_location.py": ("tests/test_story_013_validation.py",),
+    "test_clean_clone_check.py": ("tests/test_story_014_validation.py",
+                                  "tests/test_story_033_validation.py"),
+    "test_shared_baseline_resolution.py": ("tests/test_story_015_validation.py",),
+    "test_contract_assertions_bite.py": ("tests/test_story_016_validation.py",),
+    "test_revert_check.py": ("tests/test_story_017_validation.py",),
+    "test_revert_baseline.py": ("tests/test_story_019_validation.py",),
+    "test_escalation_resume.py": ("tests/test_story_020_validation.py",),
+    "test_foreign_work_refusal.py": ("tests/test_story_021_validation.py",),
+    "test_required_output_freshness.py": ("tests/test_story_022_validation.py",),
+    "test_plan_commit.py": ("tests/test_story_023_validation.py",),
+    "test_escalation_summary.py": ("tests/test_story_024_validation.py",),
+    "test_plan_time_validation.py": ("tests/test_story_025_validation.py",),
+    "test_baseline_resolution_is_single.py": ("tests/test_story_026_validation.py",),
+    "test_rerun_refusal.py": ("tests/test_story_027_validation.py",),
+    "test_retry_routing.py": ("tests/test_story_028_validation.py",),
+    "test_git_history_loading_retired.py": ("tests/test_story_029_validation.py",),
+    "test_branch_base.py": ("tests/test_story_030_validation.py",),
+    "test_mutation_controls.py": ("tests/test_story_031_validation.py",),
+    "test_plan_assignment_refusal.py": ("tests/test_story_032_validation.py",),
+    "test_resume_guard.py": ("tests/test_story_034_validation.py",),
+    "test_stage_tool_grants.py": ("tests/test_story_035_validation.py",),
+    "test_self_routing_retry.py": ("tests/test_story_036_validation.py",),
+    "test_stage_baseline.py": ("tests/test_story_037_validation.py",),
+}
+
+
+def declared_origins(validation_file: Path) -> tuple[str, ...]:
+    """The origins `validation_file`'s module declares, if it declares any."""
+    return STORY_ORIGINS.get(Path(validation_file).name, ())
+
+
+def _origin_path(validation_file: Path, repo: Path,
+                 origin: str | None) -> str:
+    """The path whose add-commit identifies the story to resolve.
+
+    Undeclared, that is the module's own path — the behaviour every module
+    had before declarations existed. Declared once, it is the declaration.
+    Declared several times it is the one the caller named, and a caller that
+    named none is refused rather than silently given a lineage: a module
+    merged from two stories has two answers, and picking one is how a
+    comparison ends up bounded at the wrong story's commits.
     """
-    relative = _relative_to(validation_file, repo)
+    declared = declared_origins(validation_file)
+    if not declared:
+        if origin is not None:
+            raise NothingToCompareAgainst(
+                f"{_relative_to(validation_file, repo)} declares no origin in "
+                f"STORY_ORIGINS, so {origin} cannot be the one it meant"
+            )
+        return _relative_to(validation_file, repo)
+    if origin is None:
+        if len(declared) == 1:
+            return declared[0]
+        raise NothingToCompareAgainst(
+            f"{Path(validation_file).name} declares {len(declared)} origins "
+            f"({', '.join(declared)}), so this call must name which one it "
+            f"means rather than being given one of them"
+        )
+    if origin not in declared:
+        raise NothingToCompareAgainst(
+            f"{Path(validation_file).name} declares {', '.join(declared)}, "
+            f"not {origin}"
+        )
+    return origin
+
+
+def story_commit_range(validation_file: Path,
+                       repo: Path = HARNESS_ROOT,
+                       origin: str | None = None) -> StoryRange:
+    """The commit range of the story `validation_file`'s module validates.
+
+    The run commit is the *oldest* commit that added the file identifying
+    that story, so a later revert-and-restore cannot be mistaken for the
+    story's own run, and a planning or hotfix commit on the same story —
+    which modifies the file rather than adding it — is never returned.
+
+    Which file identifies the story is `STORY_ORIGINS`' answer when the
+    module declares one, and the module's own path otherwise.
+    """
+    relative = _origin_path(validation_file, repo, origin)
     log = _git(repo, "log", "--diff-filter=A", "--format=%H", "--", relative)
     if log.returncode != 0:
         raise NothingToCompareAgainst(
@@ -111,14 +223,16 @@ def story_commit_range(validation_file: Path,
 
 def story_diff(paths: list[str], *, validation_file: Path,
                repo: Path = HARNESS_ROOT, diff_filter: str | None = None,
-               options: tuple[str, ...] = ()) -> str:
+               options: tuple[str, ...] = (),
+               origin: str | None = None) -> str:
     """The diff `validation_file`'s own story made to `paths`.
 
     Empty output means the story left those paths alone. Callers assert on
     emptiness; `options` and `diff_filter` only shape what a non-empty
     result looks like and which change kinds it counts.
     """
-    command = story_commit_range(validation_file, repo).diff_command(repo, *options)
+    command = story_commit_range(validation_file, repo,
+                                 origin).diff_command(repo, *options)
     if diff_filter is not None:
         command.append(f"--diff-filter={diff_filter}")
     command += ["--", *paths]
@@ -147,7 +261,8 @@ ENDPOINT = "endpoint"
 
 
 def _resolved_revision(*, revision: str | None, validation_file: Path | None,
-                       bound: str | None, repo: Path) -> str | None:
+                       bound: str | None, repo: Path,
+                       origin: str | None = None) -> str | None:
     """The revision a caller named, directly or as one end of a story's range.
 
     Returns None only for the endpoint of a story still in flight, which has
@@ -161,13 +276,14 @@ def _resolved_revision(*, revision: str | None, validation_file: Path | None,
         raise TypeError("name either a revision or a validation file and bound")
     if bound not in (BASELINE, ENDPOINT):
         raise ValueError(f"bound must be {BASELINE!r} or {ENDPOINT!r}")
-    return getattr(story_commit_range(validation_file, repo), bound)
+    return getattr(story_commit_range(validation_file, repo, origin), bound)
 
 
 def repository_file_at(relative: str, *, revision: str | None = None,
                        validation_file: Path | None = None,
                        bound: str | None = None,
-                       repo: Path = HARNESS_ROOT) -> str:
+                       repo: Path = HARNESS_ROOT,
+                       origin: str | None = None) -> str:
     """One repository file's text, at a revision or at a story's own bound.
 
     `bound=BASELINE` is the parent of the commit that added `validation_file`;
@@ -180,7 +296,7 @@ def repository_file_at(relative: str, *, revision: str | None = None,
     """
     resolved = _resolved_revision(revision=revision,
                                   validation_file=validation_file,
-                                  bound=bound, repo=repo)
+                                  bound=bound, repo=repo, origin=origin)
     if resolved is None:
         return (Path(repo) / relative).read_text(encoding="utf-8")
     result = _git(repo, "show", f"{resolved}:{relative}")
@@ -211,7 +327,8 @@ def function_source(source: str, name: str) -> str:
 def function_source_at(relative: str, name: str, *, revision: str | None = None,
                        validation_file: Path | None = None,
                        bound: str | None = None,
-                       repo: Path = HARNESS_ROOT) -> str:
+                       repo: Path = HARNESS_ROOT,
+                       origin: str | None = None) -> str:
     """A named function's source, read out of a file's text at a bound.
 
     The text half of what a differential test used to get by loading the file
@@ -222,7 +339,7 @@ def function_source_at(relative: str, name: str, *, revision: str | None = None,
     return function_source(
         repository_file_at(relative, revision=revision,
                            validation_file=validation_file, bound=bound,
-                           repo=repo),
+                           repo=repo, origin=origin),
         name)
 
 

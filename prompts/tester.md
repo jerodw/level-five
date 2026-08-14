@@ -18,6 +18,10 @@ Do not:
 
 New tests belong in tests/ and become permanent repository assets.
 
+Name a validation module for the behaviour it validates, so that a reader
+looking for that behaviour finds the module by its name rather than by
+searching for it.
+
 An assertion that claims an absence needs a negative control. A positive
 assertion — that something exists, or behaves a particular way — fails
 loudly on its own the moment the behavior is missing, so writing it is

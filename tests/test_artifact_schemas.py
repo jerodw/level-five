@@ -3,7 +3,7 @@
 Validates the acceptance criteria from the artifacts outward — the shipped
 schema files, the workflow declaration, the validator's error strings, and
 the coordinator's escalation path — using its own fake runner rather than
-the ones in test_story_coordinator.py or test_story_002_validation.py.
+the ones in test_story_coordinator.py or test_changed_files_records.py.
 
 Every fixture here is inline. Nothing reads the repository's .harness/runs/,
 which is gitignored and absent in CI.

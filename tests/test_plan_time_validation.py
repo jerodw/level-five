@@ -9,7 +9,7 @@ and runs no git, so a commit that exists afterwards was made by the script and
 a commit that does not exist was refused by it.
 
 The fixture, the stub and the runner are imported from
-`test_story_023_validation` rather than copied. That file built them for the
+`test_plan_commit` rather than copied. That file built them for the
 script this story changes, and one home for one fact is why the change is
 visible here at all: if the process model regresses, both files go red.
 
@@ -59,7 +59,7 @@ import pytest
 
 from conftest import (BASELINE, NothingToCompareAgainst, load_script,
                       repository_file_at, story_commit_range)
-from test_story_023_validation import (
+from test_plan_commit import (
     ARTIFACT,
     Planning,
     artifact,

@@ -64,8 +64,14 @@ THE_RULES_IT_JOINS = ("flagged_calls", "undeclared_targets",
 #: the story whose run commit repaired it. Named, not pinned: the pre-repair
 #: text is the baseline of *that* story's own commit range, resolved through
 #: the shared reader, so a rebase does not move it and no SHA is written here.
+#:
+#: Two spellings for one file, because story-038 renamed it: inside
+#: story-028's range it is `tests/test_story_029_validation.py`, and in the
+#: working tree it is `tests/test_git_history_loading_retired.py`. Each read
+#: below uses the name the file has at the end of the range it is reading.
 THE_REPAIRED_FILE = "tests/test_story_029_validation.py"
-THE_STORY_THAT_REPAIRED_IT = "tests/test_story_028_validation.py"
+THE_REPAIRED_FILE_TODAY = "tests/test_git_history_loading_retired.py"
+THE_STORY_THAT_REPAIRED_IT = "tests/test_retry_routing.py"
 
 
 def the_rules_module() -> str:
@@ -435,7 +441,7 @@ def test_the_new_rule_declares_no_exemption_and_the_scan_applies_none():
                  if isinstance(inner, ast.Name)}
     assert not any(name.endswith("EXEMPT_MODULES") for name in mentioned)
 
-    for module in ("conftest.py", "test_story_031_validation.py",
+    for module in ("conftest.py", "test_mutation_controls.py",
                    "test_baseline_honesty.py"):
         assert len(flags_for(PINNED_BOUND_AND_REPLACE, module)) == 1, module
 
@@ -508,17 +514,18 @@ def test_the_recovered_text_is_the_pre_repair_text_and_not_todays():
     before = before_the_repair()
     ast.parse(before)
     assert "bound=ENDPOINT" in before
-    assert before != (REPO_ROOT / THE_REPAIRED_FILE).read_text(encoding="utf-8")
+    assert before != (REPO_ROOT / THE_REPAIRED_FILE_TODAY).read_text(
+        encoding="utf-8")
 
 
 def test_the_scan_reports_the_one_known_instance_and_not_its_repair():
     """The only direct evidence the rule would have caught what it exists for,
     stated as the pair it has to be: reported before the repair, reported by
     nothing after it."""
-    name = Path(THE_REPAIRED_FILE).name
-    assert mutation_controls(before_the_repair(), name)
+    assert mutation_controls(before_the_repair(), Path(THE_REPAIRED_FILE).name)
     assert mutation_controls(
-        (REPO_ROOT / THE_REPAIRED_FILE).read_text(encoding="utf-8"), name) == []
+        (REPO_ROOT / THE_REPAIRED_FILE_TODAY).read_text(encoding="utf-8"),
+        Path(THE_REPAIRED_FILE_TODAY).name) == []
 
 
 def hex_revisions(source: str) -> set[str]:

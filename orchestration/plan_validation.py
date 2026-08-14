@@ -9,7 +9,7 @@ the commit it makes after: a failing artifact is left in the working tree,
 uncommitted, with its problems reported, which is the state a developer can
 fix and re-run from.
 
-Four classes of problem are reported and this module invents none of the
+Five classes of problem are reported and this module invents none of the
 first two. Schema conformance is story_coordinator.read_story; agreement of a
 story's stage_exceptions with the loaded workflow is
 story_coordinator.stage_exception_problems. Neither parsing, schema
@@ -18,15 +18,16 @@ check with its own reader is the divergence story-005 existed to remove — and
 the messages are the coordinator's own, so a given defect reads the same at
 plan time as at pre-flight.
 
-The third and fourth classes are this module's own and both run at plan time
-only, for one shared reason: neither is refused by l5-run, because adding
-either to pre-flight would start refusing committed artifacts that have
-already run. They are otherwise unlike each other, and the difference is
-worth stating rather than blending. The third scans English prose and carries
-the hedging that entails. The fourth is structural — two literals compared,
-one in the artifact and one in the workflow definition — and inherits none of
-that hedging: it has no clause split, no vocabulary of scoping words, no
-paraphrase it can be evaded by, and nothing it declines to decide.
+The third, fourth and fifth classes are this module's own and all three run
+at plan time only, for one shared reason: none is refused by l5-run, because
+adding it to pre-flight would, for each of the three, start refusing
+committed artifacts that have already run. They are otherwise unlike each other, and the
+difference is worth stating rather than blending. The third scans English
+prose and carries the hedging that entails. The fourth and fifth are
+structural — a literal in the artifact against a literal in the workflow
+definition, and a literal in the artifact against one pattern — and inherit
+none of that hedging: no clause split, no vocabulary of scoping words, no
+paraphrase they can be evaded by, nothing they decline to decide.
 
 What the third check is
 -----------------------
@@ -97,13 +98,33 @@ field carrying a file and a stage together — scope.modify names paths with no
 stage and cannot state this conflict at all. A story with no technical_plan,
 or an entry missing either field, yields nothing rather than raising.
 
+What the fifth check is
+-----------------------
+A validation module must not be named for the story number that produced it.
+The number is meaningful while the story is in flight and meaningless once it
+merges: the name then says only that somebody once worked on a numbered
+thing, and a reader looking for the revert check, the resume guard or the
+retry routing can find it by grep and by nothing else. story-038 renamed
+thirty-four such modules; this is one of the three mechanisms that hold the
+convention afterwards, and it is the deterministic one — the other two are a
+standing scan in the suite and one sentence in a prompt, and a prompt is the
+layer that has failed at holding a convention here before.
+
+Its subject is technical_plan.likely_file_changes, like the fourth check's,
+because that is where a plan states which files it expects to be written and
+a name is decidable there, before anything exists under it. It matches the
+module's *basename* and names no directory, so this module still contains no
+path prefix. A module wearing a story number is the same planning error
+wherever it is put, and the pattern being independent of location is what
+lets the promise above stay true.
+
 Nothing here repairs an artifact and nothing here deletes one. The problems
 are returned rather than printed, and the caller decides.
 """
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 import story_coordinator
@@ -209,6 +230,55 @@ def assignment_problems(story: dict, stages: list[dict]) -> list[str]:
     return problems
 
 
+#: A validation module named for the story that produced it rather than for
+#: what it checks. The number is meaningful only while the story is in
+#: flight; once it merges, the name says that somebody once worked on a
+#: numbered thing, and a reader looking for the revert check or the resume
+#: guard can only grep.
+#:
+#: Matched on the *basename*, and the directory is deliberately not part of
+#: the pattern — this module names no path prefix, which is the same promise
+#: the two checks above make and which a test holds it to. A module wearing
+#: this name is the same planning error wherever it is put.
+STORY_NUMBERED_MODULE = re.compile(r"^test_story_\d+")
+
+
+def naming_problems(story: dict) -> list[str]:
+    """Report plan entries naming a test module for a story number.
+
+    The fifth class, plan-time only for the reason the third and fourth are:
+    committed artifacts that have already run carry these names, and refusing
+    them at pre-flight would make those stories unrunnable.
+
+    The subject is technical_plan.likely_file_changes, for the same reason
+    assignment_problems takes it — it is where a plan says which files it
+    expects to be written, and a name is decidable there, before anything is
+    written under it. Structural, like its neighbour: one literal in the
+    artifact against one pattern, with no prose to read and nothing it
+    declines to decide.
+
+    A story carrying no technical_plan, and an entry with no file, yield no
+    problem rather than an error.
+    """
+    plan = story.get("technical_plan")
+    entries = plan.get("likely_file_changes", []) if isinstance(plan, dict) else []
+    problems: list[str] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("file")
+        if not path or not STORY_NUMBERED_MODULE.match(PurePosixPath(path).name):
+            continue
+        problems.append(
+            f"$.technical_plan.likely_file_changes[{index}]: names "
+            f"'{path}'. Name a validation module for the behaviour it "
+            f"validates, not for the story number that produced it — the "
+            f"number stops meaning anything the moment the story merges, "
+            f"and a reader looking for that behaviour can then only grep."
+        )
+    return problems
+
+
 def artifact_problems(
     artifacts: Iterable[Path], stages: list[dict]
 ) -> dict[Path, list[str]]:
@@ -240,6 +310,7 @@ def artifact_problems(
             found += story_coordinator.stage_exception_problems(reading.parsed, stages)
             found += strictness_problems(reading.parsed, stages)
             found += assignment_problems(reading.parsed, stages)
+            found += naming_problems(reading.parsed)
         if found:
             problems[Path(artifact)] = found
     return problems

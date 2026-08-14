@@ -31,10 +31,15 @@ import pytest
 
 import conftest
 import test_baseline_honesty as check
-import test_story_007_validation as story007
-import test_story_008_validation as story008
-import test_story_009_validation as story009
-import test_story_010_validation as story010
+import test_stage_output_ownership as story007
+import test_planner_injection as story008
+import test_attempt_archiving as story010
+
+#: story-038 merged story-008's and story-009's validation into one module
+#: named for the subject they share, so the two origins now resolve to the
+#: same module. The alias is kept so every assertion below still names the
+#: story it is about.
+story009 = story008
 from conftest import (BASELINE, NothingToCompareAgainst, repository_file_at,
                       story_commit_range, story_diff)
 
@@ -46,12 +51,58 @@ import story_parser
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
 
+#: Keyed by the path each repaired file had *at story-015's baseline*, which
+#: is where `pre_repair_source` reads it from and the only name it has there.
+#: story-038 renamed all four; `CURRENT` says where each lives now, so a read
+#: of the working tree and a read of history each use the name the file has
+#: at that end of the range.
 REPAIRED = {
     "tests/test_story_007_validation.py": story007,
     "tests/test_story_008_validation.py": story008,
     "tests/test_story_009_validation.py": story009,
     "tests/test_story_010_validation.py": story010,
 }
+
+CURRENT = {
+    "tests/test_story_007_validation.py": "tests/test_stage_output_ownership.py",
+    "tests/test_story_008_validation.py": "tests/test_planner_injection.py",
+    "tests/test_story_009_validation.py": "tests/test_planner_injection.py",
+    "tests/test_story_010_validation.py": "tests/test_attempt_archiving.py",
+}
+
+#: The two test names story-038's merge had to change, because story-008 and
+#: story-009 each shipped a test of that name and the merged module can hold
+#: only one of each. Both survive, under story-009's renamed spelling, and
+#: the name-set comparisons below map through this rather than dropping
+#: either side of the collision.
+MERGE_RENAMES = {
+    "tests/test_story_009_validation.py": {
+        "test_the_rendered_prompt_has_no_leftover_placeholder":
+            "test_the_rendered_prompt_with_workflow_facts_has_no_leftover_placeholder",
+        "test_the_coverage_comes_from_the_injection_and_not_from_leftover_prose":
+            "test_the_workflow_fact_coverage_comes_from_the_injection_not_leftover_prose",
+    },
+}
+
+
+def origins_of(current_rel: str) -> list[str]:
+    """Every baseline-era file the module at `current_rel` was built from."""
+    return [rel for rel, current in CURRENT.items() if current == current_rel]
+
+
+def expected_test_names(current_rel: str) -> set[str]:
+    """The test names a repaired module must still carry.
+
+    The union across its origins, each mapped through the merge renames, so
+    a merged module is held to *both* origins' full sets rather than to
+    either one — which a subset comparison would let through.
+    """
+    names: set[str] = set()
+    for rel in origins_of(current_rel):
+        renames = MERGE_RENAMES.get(rel, {})
+        names |= {renames.get(name, name)
+                  for name in _test_names(pre_repair_source(rel))}
+    return names
 
 ARCHIVED_INSTANCE = (REPO_ROOT / ".harness" / "runs-archive"
                      / "story-013-vacuous-tests"
@@ -156,7 +207,13 @@ def redirect(monkeypatch, module, root: Path, validation_rel: str) -> None:
     """
     real = conftest.story_diff
 
-    def patched(paths, *, validation_file=None, repo=None, **kwargs):
+    def patched(paths, *, validation_file=None, repo=None, origin=None,
+                **kwargs):
+        # `origin` is dropped deliberately. In this repository it names which
+        # of a merged module's two stories a range belongs to; the synthetic
+        # repository holds exactly one story, so the file's own path is the
+        # only lineage there and naming an origin it never declared would
+        # raise instead of resolving.
         return real(paths, validation_file=root / validation_rel, repo=root,
                     **kwargs)
 
@@ -200,7 +257,7 @@ def test_no_repaired_file_carries_its_own_copy_of_the_resolution():
         return found
 
     for rel in REPAIRED:
-        current = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        current = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
         assert resolving_calls(current) == [], rel
         assert "from conftest import" in current, rel
         assert resolving_calls(pre_repair_source(rel)), (
@@ -349,7 +406,7 @@ def test_every_repaired_subject_is_covered_here():
     below are the subjects the repaired modules actually assert, read out of
     their source rather than trusted."""
     for rel, module in REPAIRED.items():
-        source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        source = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
         literals = {node.value for node in ast.walk(ast.parse(source))
                     if isinstance(node, ast.Constant)
                     and isinstance(node.value, str)}
@@ -365,7 +422,7 @@ def test_a_repaired_assertion_passes_when_its_story_respects_its_subject(
 ):
     root = committed_story(tmp_path, rel, subject)
     redirect(monkeypatch, REPAIRED[rel], root, rel)
-    assert _assert_unchanged(REPAIRED[rel], subject) is None
+    assert _assert_unchanged(rel, subject) is None
 
 
 @pytest.mark.parametrize("rel,subject", SUBJECTS)
@@ -381,19 +438,32 @@ def test_a_repaired_assertion_fails_when_its_story_violates_its_subject(
     root = committed_story(tmp_path, rel, subject, violate="modify")
     redirect(monkeypatch, REPAIRED[rel], root, rel)
     with pytest.raises(AssertionError):
-        _assert_unchanged(REPAIRED[rel], subject)
+        _assert_unchanged(rel, subject)
 
 
-def _assert_unchanged(module, subject) -> None:
+#: The helper each repaired module names its own "did my story leave this
+#: alone" assertion. Keyed by origin rather than by module object, because
+#: story-038's merge gave story-008 and story-009 one module with one helper
+#: apiece, and `module is story008` can no longer tell them apart.
+UNCHANGED_HELPER = {
+    "tests/test_story_008_validation.py": "_unchanged_by_story_008",
+    "tests/test_story_009_validation.py": "_unchanged_by_story_009",
+    "tests/test_story_010_validation.py": "_unchanged_by_this_story",
+}
+
+
+def _assert_unchanged(rel: str, subject) -> None:
     """Run the module's own assertion for `subject`, raising AssertionError
     when it reports a change."""
-    if module is story007:
+    module = REPAIRED[rel]
+    if rel == "tests/test_story_007_validation.py":
         module.test_no_committed_story_artifact_was_edited()
         return None
-    if module is story008 and subject == ".harness/stories":
-        assert module._unchanged_by_this_story(subject, diff_filter="MD")
+    helper = getattr(module, UNCHANGED_HELPER[rel])
+    if rel == "tests/test_story_008_validation.py" and subject == ".harness/stories":
+        assert helper(subject, diff_filter="MD")
         return None
-    assert module._unchanged_by_this_story(subject)
+    assert helper(subject)
     return None
 
 
@@ -418,14 +488,16 @@ def test_the_narrowed_assertions_still_catch_a_rewritten_execution_record(
     story artifact rewritten or removed inside the story's own run commit is
     still caught, by both narrowed assertions."""
     for rel, module, subject in (
-        ("tests/test_story_007_validation.py", story007, ".harness/stories/"),
-        ("tests/test_story_008_validation.py", story008, ".harness/stories"),
+        ("tests/test_story_007_validation.py", REPAIRED[
+            "tests/test_story_007_validation.py"], ".harness/stories/"),
+        ("tests/test_story_008_validation.py", REPAIRED[
+            "tests/test_story_008_validation.py"], ".harness/stories"),
     ):
         root = committed_story(tmp_path, rel, subject, violate=violation,
                                name=f"{Path(rel).stem}-{violation}")
         redirect(monkeypatch, module, root, rel)
         with pytest.raises(AssertionError):
-            _assert_unchanged(module, subject)
+            _assert_unchanged(rel, subject)
 
 
 def test_the_narrowing_permits_exactly_the_storys_own_new_artifact(
@@ -435,8 +507,10 @@ def test_the_narrowing_permits_exactly_the_storys_own_new_artifact(
     commit, which was never an edit. The control is the test above — the same
     assertion still fires on a modification or a deletion."""
     for rel, module, subject in (
-        ("tests/test_story_007_validation.py", story007, ".harness/stories/"),
-        ("tests/test_story_008_validation.py", story008, ".harness/stories"),
+        ("tests/test_story_007_validation.py", REPAIRED[
+            "tests/test_story_007_validation.py"], ".harness/stories/"),
+        ("tests/test_story_008_validation.py", REPAIRED[
+            "tests/test_story_008_validation.py"], ".harness/stories"),
     ):
         root = committed_story(tmp_path, rel, subject, violate="add",
                                name=f"{Path(rel).stem}-added")
@@ -444,25 +518,31 @@ def test_the_narrowing_permits_exactly_the_storys_own_new_artifact(
                            diff_filter="A", options=("--name-only",))
         assert added.strip(), "the synthetic story was supposed to add a record"
         redirect(monkeypatch, module, root, rel)
-        assert _assert_unchanged(module, subject) is None
+        assert _assert_unchanged(rel, subject) is None
 
 
 def test_no_repaired_assertion_changed_its_subject_or_its_strictness():
     """The diff of each repaired file against its pre-repair version, read
     mechanically: the same tests over the same subjects, with the single
     authorized narrowing and nothing else."""
+    #: Keyed by the file the filters are *read out of*, not by the origin.
+    #: story-038 merged story-008's module with story-009's, and story-008's
+    #: authorized narrowing is in the merged text — so asking story-009's
+    #: origin about a file it now shares would report story-008's filter as
+    #: an unauthorized one.
     narrowed = {
-        "tests/test_story_007_validation.py",
-        "tests/test_story_008_validation.py",
+        "tests/test_stage_output_ownership.py",
+        "tests/test_planner_injection.py",
     }
     for rel in REPAIRED:
         before = pre_repair_source(rel)
-        after = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert _test_names(before) == _test_names(after), rel
+        after = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
+        assert expected_test_names(CURRENT[rel]) == _test_names(after), rel
         assert _guarded_paths(before) <= _guarded_paths(after), rel
 
         filters = _diff_filters(after)
-        assert filters == ({"MD"} if rel in narrowed else set()), (rel, filters)
+        assert filters == ({"MD"} if CURRENT[rel] in narrowed else set()), (
+            rel, filters)
 
 
 def _diff_filters(source: str) -> set[str]:
@@ -507,11 +587,11 @@ def _guarded_paths(source: str) -> set[str]:
 def test_the_repaired_assertions_pass_on_this_repository():
     """Run for real, unpatched, against the repository under test."""
     story007.test_no_committed_story_artifact_was_edited()
-    assert story008._unchanged_by_this_story("scripts/l5-assist")
-    assert story008._unchanged_by_this_story("schemas/story.schema.json")
-    assert story008._unchanged_by_this_story(".harness/stories", diff_filter="MD")
+    assert story008._unchanged_by_story_008("scripts/l5-assist")
+    assert story008._unchanged_by_story_008("schemas/story.schema.json")
+    assert story008._unchanged_by_story_008(".harness/stories", diff_filter="MD")
     for rel in ("workflows/", "rules/", "schemas/"):
-        assert story009._unchanged_by_this_story(rel)
+        assert story009._unchanged_by_story_009(rel)
     for rel in ("orchestration/context_assembler.py", "workflows/", "schemas/",
                 "rules/", "prompts/"):
         assert story010._unchanged_by_this_story(rel)
@@ -537,7 +617,7 @@ def test_the_recovered_pre_repair_sources_are_the_pre_repair_sources():
     """The regression set is only evidence if it is what it claims to be."""
     for rel in REPAIRED:
         before = pre_repair_source(rel)
-        assert before != (REPO_ROOT / rel).read_text(encoding="utf-8"), rel
+        assert before != (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8"), rel
         assert "def test_" in before, rel
 
 
@@ -564,7 +644,8 @@ def test_all_five_known_instances_are_caught_and_the_repairs_are_clean():
         ARCHIVED_INSTANCE.read_text(encoding="utf-8"), ARCHIVED_INSTANCE.name)
     for rel in REPAIRED:
         assert check.flagged_calls(
-            (REPO_ROOT / rel).read_text(encoding="utf-8"), rel) == [], rel
+            (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8"),
+            CURRENT[rel]) == [], rel
 
 
 def test_the_live_suite_carries_no_dishonest_baseline():
@@ -627,11 +708,11 @@ def test_a_throwaway_repository_is_not_the_checks_business():
 
 @pytest.mark.parametrize("name", [
     "conftest.py",
-    "test_story_005_validation.py",
-    "test_story_006_single_reader.py",
-    "test_story_007_validation.py",
+    "test_schema_directed_parsing.py",
+    "test_single_story_reader.py",
+    "test_stage_output_ownership.py",
     "test_story_coordinator.py",
-    "test_story_011_validation.py",
+    "test_execution_history.py",
 ])
 def test_the_throwaway_repository_tests_are_unflagged_by_the_scanner(name):
     """These modules build their own repository under tmp_path, so their git
@@ -649,10 +730,18 @@ def test_the_throwaway_repository_tests_are_unflagged_by_the_scanner(name):
 
 
 def test_story_011s_validation_file_is_unflagged_and_unchanged_by_this_story():
-    rel = "tests/test_story_011_validation.py"
-    assert check.flagged_calls((REPO_ROOT / rel).read_text(encoding="utf-8"),
-                               rel) == []
-    assert story_diff([rel], validation_file=Path(__file__)).strip() == ""
+    """Two names for one module, and each is the name it has where it is read.
+
+    The scan reads the working tree, where story-038 renamed the file to
+    `test_execution_history.py`; the diff asks what story-015's own run
+    commit did to it, and inside that range it is `test_story_011_validation
+    .py`. Asking for either at the other's name reads nothing.
+    """
+    current = "tests/test_execution_history.py"
+    at_story_015 = "tests/test_story_011_validation.py"
+    assert check.flagged_calls((REPO_ROOT / current).read_text(encoding="utf-8"),
+                               current) == []
+    assert story_diff([at_story_015], validation_file=Path(__file__)).strip() == ""
 
 
 def test_exactly_one_module_is_exempt_and_the_exemption_is_stated():
@@ -669,10 +758,19 @@ def test_exactly_one_module_is_exempt_and_the_exemption_is_stated():
 
 def test_no_per_story_validation_file_is_exempt():
     """The check must not ship with exemptions for the cases that motivated
-    it."""
+    it.
+
+    The set used to be found by globbing `test_story_*.py`. story-038 renamed
+    every per-story module for its subject, so that glob now finds the parser
+    and coordinator modules and none of the validation files it was written
+    about. The set comes off `conftest.STORY_ORIGINS` instead, which is the
+    declaration of which modules validate a story and cannot be emptied by a
+    later rename.
+    """
     scanned = {path.name for path in check.scanned_modules()}
-    validation_files = {path.name for path in TESTS_DIR.glob("test_story_*.py")}
+    validation_files = set(conftest.STORY_ORIGINS)
     assert validation_files
+    assert validation_files <= {path.name for path in TESTS_DIR.glob("*.py")}
     assert validation_files <= scanned
 
 
@@ -832,7 +930,7 @@ def test_the_archived_story_013_copy_was_not_restored_or_edited():
 def test_the_suite_still_has_the_tests_the_repaired_files_shipped_with():
     """No test was weakened, skipped or deleted to make the repairs pass."""
     for rel in REPAIRED:
-        after = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert _test_names(pre_repair_source(rel)) == _test_names(after), rel
+        after = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
+        assert expected_test_names(CURRENT[rel]) == _test_names(after), rel
         assert "@pytest.mark.skip" not in after, rel
         assert "pytest.skip(" not in after, rel

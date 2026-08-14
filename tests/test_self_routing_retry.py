@@ -72,7 +72,7 @@ from conftest import BASELINE, load_mutant, repository_file_at
 # The suite target — a real module under a real pytest suite — and the helpers
 # that drive edits into it are story-017's. Reused rather than copied so a
 # regression in either reddens both files.
-from test_story_017_validation import (  # noqa: F401 - fixtures used by name
+from test_revert_check import (  # noqa: F401 - fixtures used by name
     APP_ADDITIVE,
     TEST_APP_AT_HEAD,
     ADDED_COVERAGE,
@@ -80,7 +80,7 @@ from test_story_017_validation import (  # noqa: F401 - fixtures used by name
     configure,
     harness_root,
 )
-from test_story_017_validation import target as suite_target  # noqa: F401
+from test_revert_check import target as suite_target  # noqa: F401
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
@@ -1744,7 +1744,7 @@ NEW_TEST_PATH = f"{GOVERNED_PREFIX}test_new.py"
 
 # The file the other recorder creates mid-run, broken and repaired. story-037's,
 # imported rather than copied so a regression in either reddens both files.
-from test_story_037_validation import (  # noqa: E402
+from test_stage_baseline import (  # noqa: E402
     TEST_NEW_BROKEN,
     TEST_NEW_REPAIRED,
 )

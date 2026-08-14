@@ -10,7 +10,7 @@ The fake runner records every stage it is asked for, so "no agent was invoked"
 is an observable emptiness rather than an argument.
 
 The fixture, the fake runner and the readers are imported from
-`test_story_021_validation` and `test_story_023_validation` rather than copied.
+`test_foreign_work_refusal` and `test_plan_commit` rather than copied.
 Those files built them for the coordinator pre-flight and the plan script this
 story extends, and one home for one fact is why a regression in either shows
 up here.
@@ -60,7 +60,7 @@ import pytest
 
 from conftest import BASELINE, ENDPOINT, function_source_at
 
-from test_story_021_validation import (
+from test_foreign_work_refusal import (
     CONFIG,
     DEFAULT_BRANCH,
     FAIL_AT_ONCE,
@@ -78,7 +78,7 @@ from test_story_021_validation import (
     state_of,
     write,
 )
-from test_story_023_validation import (
+from test_plan_commit import (
     Planning,
     artifact,
     bare_remote,

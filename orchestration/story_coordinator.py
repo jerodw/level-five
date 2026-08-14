@@ -1270,7 +1270,7 @@ def _clean_clone_failed(
 ) -> None:
     """The reroute event, at module level rather than inline.
 
-    Not only for reading length. tests/test_story_011_validation.py proves its
+    Not only for reading length. tests/test_execution_history.py proves its
     own non-vacuity by deleting the first `retry_decision="retry",` line at the
     verification-failed branch's indentation; an inline clean-clone branch
     nests deeper, its own line contains that same indented text, and it sits

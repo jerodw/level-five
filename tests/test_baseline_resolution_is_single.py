@@ -41,8 +41,8 @@ import pytest
 
 import conftest
 import test_baseline_honesty as honesty
-import test_story_011_validation as story011
-import test_story_016_validation as story016
+import test_execution_history as story011
+import test_contract_assertions_bite as story016
 from conftest import (BASELINE, ENDPOINT, repository_file_at,
                       story_commit_range, story_diff)
 
@@ -756,13 +756,27 @@ def test_the_scope_assertion_above_can_fail(tmp_path, rel):
 
 
 def test_the_shared_resolution_kept_its_signature():
-    """The constraint stated outright: this story does not touch the
-    resolution itself."""
+    """The constraint stated outright: story-026 does not touch the
+    resolution itself.
+
+    Held as a prefix rather than as the whole list since story-038, which
+    added an optional trailing `origin` to both — the parameter a module
+    merged from two stories names to say which of them a range belongs to.
+    The subject is that story-026 changed nothing about how the resolution
+    is called, so what it asserts is that the parameters it knew are still
+    there, in order, and that anything added since is optional: a later
+    story that made `validation_file` or `repo` mean something else, or that
+    added a *required* parameter, still fails here.
+    """
     import inspect
-    assert list(inspect.signature(conftest.story_commit_range).parameters) == [
-        "validation_file", "repo"]
-    assert list(inspect.signature(conftest.story_diff).parameters) == [
+    range_parameters = inspect.signature(conftest.story_commit_range).parameters
+    assert list(range_parameters)[:2] == ["validation_file", "repo"]
+    diff_parameters = inspect.signature(conftest.story_diff).parameters
+    assert list(diff_parameters)[:5] == [
         "paths", "validation_file", "repo", "diff_filter", "options"]
+    for parameters, known in ((range_parameters, 2), (diff_parameters, 5)):
+        for name in list(parameters)[known:]:
+            assert parameters[name].default is not inspect.Parameter.empty, name
     assert issubclass(conftest.NothingToCompareAgainst, RuntimeError)
     assert [field for field in conftest.StoryRange.__dataclass_fields__] == [
         "baseline", "endpoint"]

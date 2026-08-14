@@ -67,6 +67,27 @@ CARRIED_THE_PRACTICE = (
     "tests/test_story_027_validation.py",
 )
 
+#: Where each file named at a past revision in this module lives *now*.
+#: story-038 renamed every per-story validation module for the behaviour it
+#: validates. A path is asked for at a revision under the name it has there,
+#: so every constant naming a revision-era path keeps its historical spelling
+#: and every read of the working tree — or node id run against it — goes
+#: through this.
+TODAY = {
+    "tests/test_story_011_validation.py": "tests/test_execution_history.py",
+    "tests/test_story_012_validation.py": "tests/test_retry_history.py",
+    "tests/test_story_014_validation.py": "tests/test_clean_clone_check.py",
+    "tests/test_story_016_validation.py":
+        "tests/test_contract_assertions_bite.py",
+    "tests/test_story_020_validation.py": "tests/test_escalation_resume.py",
+    "tests/test_story_021_validation.py": "tests/test_foreign_work_refusal.py",
+    "tests/test_story_024_validation.py": "tests/test_escalation_summary.py",
+    "tests/test_story_025_validation.py": "tests/test_plan_time_validation.py",
+    "tests/test_story_026_validation.py":
+        "tests/test_baseline_resolution_is_single.py",
+    "tests/test_story_027_validation.py": "tests/test_rerun_refusal.py",
+}
+
 #: The names the story says are deleted.
 RETIRED_NAMES = (
     "runnable_against_current_modules",
@@ -467,7 +488,7 @@ def test_both_shipped_scans_report_each_module_at_this_storys_baseline(rel):
     before = baseline_text(rel)
     assert module_construction(before, Path(rel).name), rel
     assert git_text_reads(before, Path(rel).name), rel
-    assert before != (REPO_ROOT / rel).read_text(encoding="utf-8"), rel
+    assert before != (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8"), rel
 
 
 @pytest.mark.parametrize("scan", ["module_construction", "git_text_reads"])
@@ -536,7 +557,7 @@ def test_the_superseded_name_matching_scan_is_gone():
     never there."""
     rel = "tests/test_story_016_validation.py"
     before = baseline_text(rel)
-    after = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    after = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
     for name in ("def test_no_module_under_tests_loads_a_coordinator_out_of_git_history",
                  "HISTORY_SOURCE_READERS", "MODULE_LOADERS"):
         assert name in before, name
@@ -652,13 +673,14 @@ def test_where_the_retired_names_still_occur_and_that_it_is_only_as_text():
     assert occurrences["runnable_against_current_modules"] == {THIS_FILE.name}
     for name in ("coordinator_source_at", "pre_story_revision",
                  "pre_story_coordinator_source"):
-        assert occurrences[name] == {THIS_FILE.name,
-                                     "test_story_016_validation.py",
-                                     "test_story_026_validation.py"}, name
+        assert occurrences[name] == {
+            THIS_FILE.name,
+            Path(TODAY["tests/test_story_016_validation.py"]).name,
+            Path(TODAY["tests/test_story_026_validation.py"]).name}, name
 
     for rel in ("tests/test_story_016_validation.py",
                 "tests/test_story_026_validation.py"):
-        source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        source = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
         assert live_references(source, RETIRED_NAMES) == set(), rel
 
 
@@ -880,7 +902,7 @@ def test_each_restated_assertion_exists_and_names_its_subject(rel, test, old, ne
     list, the section body, the message, the state field set — and as the test
     referring to no module recovered out of history.
     """
-    source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    source = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
     body = function_source(source, test)
 
     assert builds_a_module(body) == [], test
@@ -925,14 +947,14 @@ def test_each_restated_assertion_fails_when_its_subject_is_violated(
     pristine = (REPO_ROOT / COORDINATOR_REL).read_text(encoding="utf-8")
     coordinator.write_text(pristine, encoding="utf-8")
 
-    before = run_one_test(repo_copy, rel, test)
+    before = run_one_test(repo_copy, TODAY[rel], test)
     assert before.returncode == 0, before.stdout[-3000:] + before.stderr[-2000:]
     assert "1 passed" in before.stdout, before.stdout[-2000:]
 
     assert old in pristine, (test, old)
     coordinator.write_text(pristine.replace(old, new, 1), encoding="utf-8")
     try:
-        after = run_one_test(repo_copy, rel, test)
+        after = run_one_test(repo_copy, TODAY[rel], test)
     finally:
         coordinator.write_text(pristine, encoding="utf-8")
 
@@ -1033,7 +1055,8 @@ def test_each_text_only_assertion_kept_its_subject_strictness_and_control(
     equality here is a comparison that can differ.
     """
     before = function_source(baseline_text(rel), test)
-    after = function_source((REPO_ROOT / rel).read_text(encoding="utf-8"), test)
+    after = function_source(
+        (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8"), test)
 
     assert subjects_of(after) == subjects, test
     assert subjects_of(after) == subjects_of(before), test
@@ -1048,7 +1071,8 @@ def test_each_text_only_assertion_constructs_no_module(rel, test, subjects):
     """The retarget itself: text is read, nothing is loaded. Stated per
     assertion because the module-wide scan would also be satisfied by an
     assertion that had simply been deleted."""
-    after = function_source((REPO_ROOT / rel).read_text(encoding="utf-8"), test)
+    after = function_source(
+        (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8"), test)
     assert builds_a_module(after) == [], test
     before = function_source(baseline_text(rel), test)
     assert "coordinator" in before.lower(), test
@@ -1065,7 +1089,7 @@ def test_the_control_that_accompanied_only_a_comparison_is_gone():
     rel = "tests/test_story_021_validation.py"
     name = "test_the_module_that_comparison_used_really_is_the_one_without_the_check"
     assert f"def {name}" in baseline_text(rel)
-    assert name not in (REPO_ROOT / rel).read_text(encoding="utf-8")
+    assert name not in (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -1109,7 +1133,7 @@ def test_each_deleted_reproduction_left_a_record_a_reader_can_find(
     deleted = evidence["reproduction"]["test"]
     assert f"def {deleted}" in baseline_text(rel), deleted
     if deleted != reader:
-        assert deleted not in (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert deleted not in (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
 
     prose = (record / "README.md").read_text(encoding="utf-8")
     assert "story-029" in prose and evidence["story"] in prose
@@ -1120,8 +1144,8 @@ def test_an_assertion_reads_that_evidence(directory, rel, reader):
     """The record is only evidence if the suite reads it: the surviving
     assertion names the file and asserts on what it says, rather than
     describing it in prose."""
-    body = function_source((REPO_ROOT / rel).read_text(encoding="utf-8"), reader)
-    source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    source = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
+    body = function_source(source, reader)
 
     assert directory in source, directory
     assert "evidence" in body, reader
@@ -1194,7 +1218,7 @@ def test_the_split_fixture_builds_one_escalation_from_todays_coordinator_only():
     """
     rel = "tests/test_story_024_validation.py"
     name = "test_reason_is_still_the_section_immediately_after_status"
-    source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    source = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
 
     definition = next(node for node in ast.parse(source).body
                       if isinstance(node, ast.FunctionDef) and node.name == name)
@@ -1257,7 +1281,7 @@ def test_the_restated_story_026_comparison_names_the_same_commit_pair():
     # And the restatement in story-026 is the one making that statement, with
     # no recovered code executed to make it.
     restated = function_source(
-        (REPO_ROOT / "tests" / "test_story_026_validation.py")
+        (REPO_ROOT / TODAY["tests/test_story_026_validation.py"])
         .read_text(encoding="utf-8"),
         "test_the_shared_resolution_names_the_pair_the_deleted_mechanism_named")
     assert builds_a_module(restated) == []
@@ -1317,7 +1341,7 @@ def test_each_test_failing_at_the_baseline_now_exists_and_is_not_skipped(rel, te
     Each also appears in the mutation table above, where it is run against a
     coordinator that violates the subject it names and required to go red.
     """
-    source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    source = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
     body = function_source(source, test)
     assert "assert" in body, test
     assert "skip" not in body, test
@@ -1340,7 +1364,7 @@ def test_each_deleted_baseline_failure_has_its_subject_accounted_for(
     checked to have left a record an assertion reads.
     """
     before = baseline_text(rel)
-    after = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    after = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
     assert f"def {test}" in before, test
     assert test not in after, test
 
@@ -1364,7 +1388,7 @@ def test_the_module_that_could_not_collect_at_the_baseline_collects_now():
     shared built a recovered coordinator. The fixture was split; the module is
     required to collect and to still hold those tests."""
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", BASELINE_COLLECTION_ERRORS,
+        [sys.executable, "-m", "pytest", TODAY[BASELINE_COLLECTION_ERRORS],
          "--collect-only", "-q", "-p", "no:cacheprovider"],
         cwd=REPO_ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout[-3000:]
@@ -1387,7 +1411,14 @@ def test_the_suite_passes_without_any_recovered_module_being_made_runnable():
 
     shared = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
     assert "runnable_against_current_modules" not in shared
-    assert "clean_clone" not in shared
+    # The workflow key, in the form a frozen copy of the workflow would carry
+    # it. Written bare until story-038, which named a renamed validation
+    # module `test_clean_clone_check.py` and put that name in the shared
+    # module's origin map — a module *name* containing the key's spelling,
+    # which is not a frozen declaration of it. Quoting narrows the match to
+    # what the assertion is about; a conftest that did freeze the key still
+    # fails here.
+    assert '"clean_clone"' not in shared
 
     for name, source in module_sources().items():
         if name == THIS_FILE.name:

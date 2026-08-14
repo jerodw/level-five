@@ -35,6 +35,7 @@ repository under test cannot be in while these tests decide whether it
 commits — and the shared resolution must report the violation.
 """
 import ast
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +74,24 @@ ARCHIVED_INSTANCE = (
     ".harness/runs-archive/story-013-vacuous-tests/"
     "pre-reset-test_story_013_validation.py"
 )
+
+#: Where each of the files named at a past revision above lives *now*.
+#: story-038 renamed every per-story validation module for the behaviour it
+#: validates, and merged two pairs of them. A path is asked for at a revision
+#: under the name it has there, so the constants above keep their historical
+#: spelling and every read of the working tree goes through this.
+TODAY = {
+    "tests/test_story_007_validation.py": "tests/test_stage_output_ownership.py",
+    "tests/test_story_008_validation.py": "tests/test_planner_injection.py",
+    "tests/test_story_009_validation.py": "tests/test_planner_injection.py",
+    "tests/test_story_010_validation.py": "tests/test_attempt_archiving.py",
+    "tests/test_story_020_validation.py": "tests/test_escalation_resume.py",
+    "tests/test_story_021_validation.py": "tests/test_foreign_work_refusal.py",
+    "tests/test_story_024_validation.py": "tests/test_escalation_summary.py",
+    "tests/test_story_027_validation.py": "tests/test_rerun_refusal.py",
+    "tests/test_story_029_validation.py":
+        "tests/test_git_history_loading_retired.py",
+}
 
 
 # --------------------------------------------------------------------------
@@ -310,7 +329,7 @@ def test_the_scan_discovers_modules_and_finds_some():
     assert len(modules) >= 15
     assert all(path.name.endswith(".py") for path in modules)
     assert {path.name for path in modules} >= {
-        Path(rel).name for rel in REPAIRED_FILES}
+        Path(TODAY[rel]).name for rel in REPAIRED_FILES}
 
 
 def test_exactly_one_module_is_exempt_and_it_holds_the_shared_resolution():
@@ -422,11 +441,11 @@ def test_an_undeclared_target_carrying_head_is_caught_by_both_rules():
 
 
 @pytest.mark.parametrize("name", [
-    "test_story_005_validation.py",
-    "test_story_006_single_reader.py",
-    "test_story_007_validation.py",
+    "test_schema_directed_parsing.py",
+    "test_single_story_reader.py",
+    "test_stage_output_ownership.py",
     "test_story_coordinator.py",
-    "test_story_011_validation.py",
+    "test_execution_history.py",
 ])
 def test_a_module_that_builds_its_own_repository_is_unflagged(name):
     """Throwaway repositories under tmp_path are not this check's business,
@@ -1326,7 +1345,7 @@ def test_the_mutation_scan_leaves_these_alone(benign):
 #: baseline — the parent of its run commit — resolved through the shared reader
 #: rather than written here as a sha, so a rebase does not move it.
 THE_REPAIRED_MUTATION_CONTROL = "tests/test_story_029_validation.py"
-THE_STORY_THAT_REPAIRED_IT = "tests/test_story_028_validation.py"
+THE_STORY_THAT_REPAIRED_IT = "tests/test_retry_routing.py"
 
 
 def before_the_repair() -> str:
@@ -1343,7 +1362,7 @@ def test_the_recovered_text_really_is_the_pre_repair_text():
     read the repair removed."""
     before = before_the_repair()
     assert "def test_" in before
-    assert before != (REPO_ROOT / THE_REPAIRED_MUTATION_CONTROL).read_text(
+    assert before != (REPO_ROOT / TODAY[THE_REPAIRED_MUTATION_CONTROL]).read_text(
         encoding="utf-8")
     assert "bound=ENDPOINT" in before
 
@@ -1362,9 +1381,9 @@ def test_the_mutation_scan_reports_the_one_known_instance():
 def test_the_same_file_in_the_working_tree_is_reported_by_nothing():
     """The other half of the same evidence: flagged before, clean after, and
     clean under all four rules rather than only this one."""
-    after = (REPO_ROOT / THE_REPAIRED_MUTATION_CONTROL).read_text(
+    after = (REPO_ROOT / TODAY[THE_REPAIRED_MUTATION_CONTROL]).read_text(
         encoding="utf-8")
-    name = Path(THE_REPAIRED_MUTATION_CONTROL).name
+    name = Path(TODAY[THE_REPAIRED_MUTATION_CONTROL]).name
     assert mutation_controls(after, name) == []
     assert flagged_calls(after, name) == []
     assert module_construction(after, name) == []
@@ -1436,7 +1455,7 @@ def test_each_new_rule_states_what_it_does_not_cover(scan):
 #: the story as in flight and the baseline as HEAD — which is this story's
 #: baseline — and reports the run commit and its parent once the story
 #: commits. Named rather than pinned, so a rebase does not move it.
-THIS_STORYS_VALIDATION_FILE = "tests/test_story_029_validation.py"
+THIS_STORYS_VALIDATION_FILE = "tests/test_git_history_loading_retired.py"
 
 #: The four modules that carried the retired practice at this story's
 #: baseline. Every one of them postdates the name-matching scan that was
@@ -1464,7 +1483,7 @@ def test_the_recovered_baseline_sources_are_the_baseline_sources():
     the practice's own shape."""
     for rel in CARRIED_THE_PRACTICE:
         before = at_this_storys_baseline(rel)
-        assert before != (REPO_ROOT / rel).read_text(encoding="utf-8"), rel
+        assert before != (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8"), rel
         assert "def test_" in before, rel
 
 
@@ -1490,9 +1509,9 @@ def test_all_four_are_caught_by_both_rules_and_none_survives_in_the_suite():
         assert caught == set(recovered), scan.__name__
 
     for rel in CARRIED_THE_PRACTICE:
-        after = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert module_construction(after, Path(rel).name) == [], rel
-        assert git_text_reads(after, Path(rel).name) == [], rel
+        after = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
+        assert module_construction(after, Path(TODAY[rel]).name) == [], rel
+        assert git_text_reads(after, Path(TODAY[rel]).name) == [], rel
 
 
 # --------------------------------------------------------------------------
@@ -1553,8 +1572,8 @@ def test_all_five_known_instances_are_caught():
 def test_the_repaired_files_no_longer_carry_what_they_carried_before():
     """The other half of the same evidence: flagged before, clean after."""
     for rel in REPAIRED_FILES:
-        after = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert flagged_calls(after, Path(rel).name) == [], rel
+        after = (REPO_ROOT / TODAY[rel]).read_text(encoding="utf-8")
+        assert flagged_calls(after, Path(TODAY[rel]).name) == [], rel
 
 
 # --------------------------------------------------------------------------
@@ -1680,7 +1699,11 @@ def test_the_narrowing_is_exactly_the_storys_own_new_artifact():
     """What the narrowing lets through and nothing more: on this repository,
     story-007's own commit added `.harness/stories/story-007.yaml` and edited
     no other record."""
-    validation_file = REPO_ROOT / "tests" / "test_story_007_validation.py"
+    # Named at the path it has now. story-038 renamed it, and the range it
+    # resolves to is unchanged: the module declares its origin in
+    # `conftest.STORY_ORIGINS`, so the resolution still reaches story-007's
+    # own run commit rather than the rename's.
+    validation_file = REPO_ROOT / "tests" / "test_stage_output_ownership.py"
     added = story_diff([".harness/stories/"], validation_file=validation_file,
                        diff_filter="A", options=("--name-only",)).split()
     assert added == [".harness/stories/story-007.yaml"]
@@ -1766,3 +1789,116 @@ def test_the_resolution_raises_when_the_run_commit_has_no_parent(tmp_path):
     with pytest.raises(NothingToCompareAgainst) as raised:
         story_commit_range(validation_file, root)
     assert "nothing to compare against" in str(raised.value)
+
+
+# --------------------------------------------------------------------------
+# A fifth rule: a module under tests/ is named for what it checks
+#
+# Its own rule again, and it shares nothing with the four above but the file it
+# lives in. Those are about what an assertion may do; this one is about what a
+# module may be called. It is here because this is where the standing rules
+# over the suite live, and because the stage that owns validation is the stage
+# that names validation modules.
+#
+# The defect it prevents is not a vacuous assertion but an unfindable one. A
+# module named `test_story_017_validation.py` says that somebody once worked on
+# a numbered thing. The number is meaningful while the story is in flight and
+# meaningless the moment it merges, and a reader looking for the revert check
+# can then find it only by grep. story-038 renamed thirty-four such modules;
+# the convention that keeps them renamed is held by three mechanisms — a
+# plan-time refusal in `orchestration/plan_validation.py`, this scan, and one
+# sentence in `prompts/tester.md`. The prompt is the layer that failed at this
+# twice before and is not the one relied on.
+#
+# It matches on the *digits*, which is the whole of what makes such a name a
+# story number: `test_story_parser.py` and `test_story_coordinator.py` are
+# named for their subjects — the story parser and the story coordinator — and
+# a rule keyed on the `test_story_` prefix alone would report both. The control
+# for that is written below rather than argued for here.
+#
+# What it does not cover, stated because this is where a reader meets it:
+#
+#   * **any other uninformative name.** `test_misc.py`, `test_stuff.py` and
+#     `test_the_thing.py` are as unfindable as a story number and are not
+#     reported. This rule knows one pattern, which is the one a stage
+#     mechanically produced thirty-four times; the general question of whether
+#     a name describes its subject is not decidable by a regular expression and
+#     is not claimed here.
+#   * **a story number written anywhere but the module's own name.** A module
+#     named for its behaviour whose tests, constants and prose are all keyed to
+#     a story number is unreported, and legitimately so — a module states which
+#     story it validates in `conftest.STORY_ORIGINS`, and the historical path
+#     it declares there *is* a story-numbered name.
+#   * **a directory.** The scan reads the modules directly under tests/, which
+#     is where every module in this suite lives, and a subdirectory this suite
+#     does not have is not searched.
+#
+# And the same standing limit as everything mechanical here: it is not
+# tamper-proof. An edit deleting this check alongside a genuinely forced repair
+# is not caught, at any granularity, because deleting the check that fails you
+# satisfies the revert rule's own definition of a forced edit.
+# --------------------------------------------------------------------------
+
+
+#: A module named for the story number that produced it. Anchored at the start
+#: and requiring at least one digit after the prefix: the digits are what make
+#: the name a story number rather than a subject, and without them
+#: `test_story_parser.py` and `test_story_coordinator.py` — named for the story
+#: parser and the story coordinator, which are subjects — would be reported.
+STORY_NUMBERED_MODULE = re.compile(r"^test_story_\d+")
+
+#: The two modules whose names begin with the prefix and are not story numbers.
+#: Named here so the over-match control below is about *these* files rather
+#: than about strings resembling them.
+NAMED_FOR_A_STORY_SUBJECT = ("test_story_parser.py", "test_story_coordinator.py")
+
+
+def story_numbered_modules(directory: Path) -> list[str]:
+    """Every module under `directory` named for a story number.
+
+    A search over the directory rather than a comparison against a listing: a
+    listing is a second copy of the answer, and it goes stale silently the
+    moment a module lands that nobody remembered to add to it. The directory
+    is a parameter so the same search the live suite is held to can be run
+    over a directory with a violation planted in it.
+    """
+    return [path.name for path in sorted(Path(directory).glob("*.py"))
+            if STORY_NUMBERED_MODULE.match(path.name)]
+
+
+def test_no_module_under_tests_is_named_for_a_story_number():
+    """The rule, run rather than inspected."""
+    found = story_numbered_modules(TESTS_DIR)
+    assert found == [], (
+        "name a validation module for the behaviour it validates: "
+        + ", ".join(found))
+    # The companion assertion the search needs: a search over zero files
+    # reports nothing for the wrong reason.
+    assert len(all_modules()) >= 15
+
+
+def test_the_naming_scan_reports_a_planted_violation(tmp_path):
+    """Its reach demonstrated rather than asserted, on the same terms as the
+    three scans above: a scan with no planted violation is indistinguishable
+    from one that has stopped looking at the directory it was pointed at."""
+    for name in ("test_revert_check.py", "test_story_017_validation.py",
+                 "test_story_006_single_reader.py", "conftest.py"):
+        (tmp_path / name).write_text("def test_it():\n    pass\n",
+                                     encoding="utf-8")
+
+    assert story_numbered_modules(tmp_path) == [
+        "test_story_006_single_reader.py", "test_story_017_validation.py"]
+
+
+def test_the_scan_leaves_the_two_modules_named_for_a_story_subject_alone():
+    """The over-match control, over the real files rather than over strings
+    resembling them: both exist under those names now, and neither is
+    reported."""
+    for name in NAMED_FOR_A_STORY_SUBJECT:
+        assert (TESTS_DIR / name).is_file(), name
+        assert STORY_NUMBERED_MODULE.match(name) is None, name
+    assert set(NAMED_FOR_A_STORY_SUBJECT) <= {p.name for p in all_modules()}
+
+    # And the control for that control: the same prefix followed by digits is
+    # reported, so "not reported" above is a property of these names.
+    assert STORY_NUMBERED_MODULE.match("test_story_038_validation.py")
