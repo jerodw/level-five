@@ -1,0 +1,327 @@
+story:
+  id: story-038
+  title: A test module is named for what it checks
+  description: |
+    Thirty-four modules under tests/ are named test_story_<digits>. The number
+    is meaningful only while the story is in flight; once it merges the name
+    says that somebody once worked on a numbered thing, and a reader looking
+    for the revert check, the resume guard or the retry routing can only grep.
+
+    The rename is the easy half. tests/conftest.py identifies a story by the
+    commit that added its validation file, so a bare git mv repoints every
+    renamed module's baseline at the rename commit: each differential
+    assertion would then compare the rename against its parent, find nothing,
+    and pass. Vacuously green is the precise defect class story-015,
+    story-016, story-026, story-029 and story-031 removed.
+
+    So this story settles the resolution first, then renames. A module may
+    declare the historical path whose add-commit identifies the story it
+    validates, and conftest reads that declaration instead of inferring the
+    story from the module's current name. A declaration rather than a
+    derivation: it survives every future rename, and it survives a module
+    merged from two stories, which no rename heuristic does. git log --follow
+    was weighed and rejected — it recovers story-017's add-commit after a pure
+    rename, but it is documented as a heuristic on a single path and it fails
+    on a content-editing rename and on a split, which is the same silent
+    green this story exists to avoid.
+
+    The convention is then held by three mechanisms rather than by prose: a
+    plan-time refusal, a standing scan in the suite, and one positive sentence
+    in the tester's prompt. The prompt is the layer that failed twice before
+    and it is not the one relied on.
+
+tasks:
+  - Add STORY_ORIGINS to tests/conftest.py — a mapping from a module's basename to the historical path or paths whose add-commit identifies the story it validates — and teach story_commit_range to consult it.
+  - Give story_commit_range an optional origin parameter. With no entry in the mapping it resolves the module's own path, exactly as today. With one declared origin it resolves that path. With several it refuses unless the caller names one of them, rather than silently picking a lineage.
+  - Rename the thirty-four modules named test_story_<digits> to thirty-two modules named for their subjects, per the map in technical_plan.implementation_steps, and record each one's origin in STORY_ORIGINS.
+  - Merge tests/test_story_008_validation.py with tests/test_story_009_validation.py into tests/test_planner_injection.py, and tests/test_story_014_validation.py with tests/test_story_033_validation.py into tests/test_clean_clone_check.py, qualifying each story-range call in the merged modules with the origin it belongs to.
+  - Update every reference to a renamed module that names the file as it exists now — in tests/, orchestration/, scripts/, prompts/ and .harness/docs/ARCHITECTURE.md.
+  - Leave every reference that names a path at a historical revision spelled as it was at that revision, because that is the name the object has there.
+  - Add a check to orchestration/plan_validation.py, beside assignment_problems, that reports a technical_plan.likely_file_changes entry whose file under tests/ is named test_story_<digits>, and call it from artifact_problems.
+  - Add a standing scan to tests/test_baseline_honesty.py reporting any module under tests/ whose name matches test_story_<digits>, matching on the digits so that test_story_parser.py and test_story_coordinator.py are not caught.
+  - Add one sentence to prompts/tester.md saying to name a validation module for the behaviour it validates rather than for the story number that produced it.
+  - Update the paths .harness/docs/ARCHITECTURE.md names so that every tests/ path it mentions exists.
+
+acceptance_criteria:
+  - No module under tests/ has a name matching test_story_ followed by digits, established by a search over the directory rather than by a listing.
+  - tests/test_story_parser.py and tests/test_story_coordinator.py still exist under those names, and the scan that reports story-numbered modules leaves both alone.
+  - A renamed module's story range still resolves to its own story's commits. For the six modules whose ranges were resolved while this story was planned, story_commit_range returns exactly these pairs after the rename - tests/test_single_story_reader.py resolves baseline 707685f7c7a2 endpoint e0a2b1b9b209; tests/test_execution_history.py resolves baseline 2239a23b3059 endpoint 973fdb549bda; tests/test_revert_check.py resolves baseline 95afa16c8840 endpoint fe565a379369; tests/test_required_output_freshness.py resolves baseline d3e0be29477d endpoint 033a39d17f01; tests/test_git_history_loading_retired.py resolves baseline 2c63960796fe endpoint edad04e97e4a; tests/test_stage_baseline.py resolves baseline fdb7cfd25216 endpoint 8c5ac264e07a.
+  - story_commit_range called on a module with no entry in STORY_ORIGINS resolves that module's own path, so a module written after this story needs no declaration.
+  - story_commit_range called without an origin on a module declaring several raises rather than returning one of them, and the message names the module and the origins it could have meant.
+  - tests/test_planner_injection.py and tests/test_clean_clone_check.py each declare two origins, and every story-range call in them names which one it means.
+  - orchestration/plan_validation.artifact_problems reports a story whose technical_plan.likely_file_changes names a tests/ file called test_story_<digits>, and the message says to name the module for the behaviour it validates.
+  - A planning session that writes such an artifact leaves it uncommitted in the working tree with the problem printed.
+  - prompts/tester.md states the naming convention positively, in its own words, without restating a rule the workflow enforces.
+  - Every tests/ path named in .harness/docs/ARCHITECTURE.md exists in the repository, established by a search rather than by reading the document.
+  - The full suite passes with the same number of tests as before the rename - 2002 - so that a module lost to a collection error is not read as a smaller suite.
+  - No committed story artifact under .harness/stories/ and no file under .harness/runs-archive/ is rewritten; both describe what was true when they were written.
+
+technical_plan:
+  implementation_steps:
+    - Add STORY_ORIGINS to tests/conftest.py, beside the resolution it feeds, and document why the identity is declared rather than inferred - a rename heuristic cannot survive a split or a merge, and this repository's rule is that a baseline resolution must be shown to resolve what it claims.
+    - Change story_commit_range to look the validation file's basename up in STORY_ORIGINS before falling back to the file's own path, and add the optional origin parameter for a module with several declared origins. Raise the module's existing refusal type rather than degrading to a baseline that would report green.
+    - Perform the renames as git operations so the history of each module is preserved - test_story_002_validation.py to test_changed_files_records.py; test_story_004_validation.py to test_artifact_schemas.py; test_story_005_validation.py to test_schema_directed_parsing.py; test_story_006_single_reader.py to test_single_story_reader.py; test_story_007_validation.py to test_stage_output_ownership.py; test_story_008_validation.py and test_story_009_validation.py to test_planner_injection.py; test_story_010_validation.py to test_attempt_archiving.py; test_story_011_validation.py to test_execution_history.py; test_story_012_validation.py to test_retry_history.py; test_story_013_validation.py to test_schema_inventory_location.py; test_story_014_validation.py and test_story_033_validation.py to test_clean_clone_check.py; test_story_015_validation.py to test_shared_baseline_resolution.py; test_story_016_validation.py to test_contract_assertions_bite.py; test_story_017_validation.py to test_revert_check.py; test_story_019_validation.py to test_revert_baseline.py; test_story_020_validation.py to test_escalation_resume.py; test_story_021_validation.py to test_foreign_work_refusal.py; test_story_022_validation.py to test_required_output_freshness.py; test_story_023_validation.py to test_plan_commit.py; test_story_024_validation.py to test_escalation_summary.py; test_story_025_validation.py to test_plan_time_validation.py; test_story_026_validation.py to test_baseline_resolution_is_single.py; test_story_027_validation.py to test_rerun_refusal.py; test_story_028_validation.py to test_retry_routing.py; test_story_029_validation.py to test_git_history_loading_retired.py; test_story_030_validation.py to test_branch_base.py; test_story_031_validation.py to test_mutation_controls.py; test_story_032_validation.py to test_plan_assignment_refusal.py; test_story_034_validation.py to test_resume_guard.py; test_story_035_validation.py to test_stage_tool_grants.py; test_story_036_validation.py to test_self_routing_retry.py; test_story_037_validation.py to test_stage_baseline.py.
+    - Record every one of those old paths in STORY_ORIGINS under the new basename, with the two merged modules declaring both of theirs.
+    - Qualify the story-range calls in the two merged modules with the origin each belongs to. Six calls carry a range across the four source modules, so this is a small and checkable edit.
+    - Sweep the repository for references to the old names outside .harness/stories/ and .harness/runs-archive/, and rewrite only those that name the file as it exists now. A reference that reads a path's text at a pinned historical revision keeps the historical spelling - that is the name the object has at that revision, and rewriting it breaks the read.
+    - Add the plan-time check to orchestration/plan_validation.py beside assignment_problems, matching on the digits, and call it from artifact_problems in the same position the other content checks occupy.
+    - Add one sentence to prompts/tester.md stating the convention positively. Renaming everything removes the example the pattern was learned from, and the sentence replaces it.
+    - The standing scan belongs to the stage that owns validation and lands in tests/test_baseline_honesty.py beside the other standing rules, with a planted violation demonstrating it reports one and the two subject-named story modules demonstrating it does not over-match.
+    - Update the tests/ paths .harness/docs/ARCHITECTURE.md names so each names a file that exists.
+  likely_file_changes:
+    - file: tests/conftest.py
+      stage: implementer
+      reason: holds STORY_ORIGINS and the resolution that reads it
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: the plan-time refusal of a story-numbered test module name
+    - file: prompts/tester.md
+      stage: implementer
+      reason: states the naming convention positively
+    - file: tests/test_changed_files_records.py
+      stage: implementer
+      reason: story-002's validation, renamed for its subject
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: story-004's validation, renamed for its subject
+    - file: tests/test_schema_directed_parsing.py
+      stage: implementer
+      reason: story-005's validation, renamed for its subject
+    - file: tests/test_single_story_reader.py
+      stage: implementer
+      reason: story-006's validation, renamed for its subject
+    - file: tests/test_stage_output_ownership.py
+      stage: implementer
+      reason: story-007's validation, renamed for its subject
+    - file: tests/test_planner_injection.py
+      stage: implementer
+      reason: story-008's and story-009's validation, merged and renamed for the subject they share
+    - file: tests/test_attempt_archiving.py
+      stage: implementer
+      reason: story-010's validation, renamed for its subject
+    - file: tests/test_execution_history.py
+      stage: implementer
+      reason: story-011's validation, renamed for its subject
+    - file: tests/test_retry_history.py
+      stage: implementer
+      reason: story-012's validation, renamed for its subject
+    - file: tests/test_schema_inventory_location.py
+      stage: implementer
+      reason: story-013's validation, renamed for its subject
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: story-014's and story-033's validation, merged and renamed for the subject they share
+    - file: tests/test_shared_baseline_resolution.py
+      stage: implementer
+      reason: story-015's validation, renamed for its subject
+    - file: tests/test_contract_assertions_bite.py
+      stage: implementer
+      reason: story-016's validation, renamed for its subject
+    - file: tests/test_revert_check.py
+      stage: implementer
+      reason: story-017's validation, renamed for its subject
+    - file: tests/test_revert_baseline.py
+      stage: implementer
+      reason: story-019's validation, renamed for its subject
+    - file: tests/test_escalation_resume.py
+      stage: implementer
+      reason: story-020's validation, renamed for its subject
+    - file: tests/test_foreign_work_refusal.py
+      stage: implementer
+      reason: story-021's validation, renamed for its subject
+    - file: tests/test_required_output_freshness.py
+      stage: implementer
+      reason: story-022's validation, renamed for its subject
+    - file: tests/test_plan_commit.py
+      stage: implementer
+      reason: story-023's validation, renamed for its subject
+    - file: tests/test_escalation_summary.py
+      stage: implementer
+      reason: story-024's validation, renamed for its subject
+    - file: tests/test_plan_time_validation.py
+      stage: implementer
+      reason: story-025's validation, renamed for its subject
+    - file: tests/test_baseline_resolution_is_single.py
+      stage: implementer
+      reason: story-026's validation, renamed for its subject
+    - file: tests/test_rerun_refusal.py
+      stage: implementer
+      reason: story-027's validation, renamed for its subject
+    - file: tests/test_retry_routing.py
+      stage: implementer
+      reason: story-028's validation, renamed for its subject
+    - file: tests/test_git_history_loading_retired.py
+      stage: implementer
+      reason: story-029's validation, renamed for its subject
+    - file: tests/test_branch_base.py
+      stage: implementer
+      reason: story-030's validation, renamed for its subject
+    - file: tests/test_mutation_controls.py
+      stage: implementer
+      reason: story-031's validation, renamed for its subject
+    - file: tests/test_plan_assignment_refusal.py
+      stage: implementer
+      reason: story-032's validation, renamed for its subject
+    - file: tests/test_resume_guard.py
+      stage: implementer
+      reason: story-034's validation, renamed for its subject
+    - file: tests/test_stage_tool_grants.py
+      stage: implementer
+      reason: story-035's validation, renamed for its subject
+    - file: tests/test_self_routing_retry.py
+      stage: implementer
+      reason: story-036's validation, renamed for its subject
+    - file: tests/test_stage_baseline.py
+      stage: implementer
+      reason: story-037's validation, renamed for its subject
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: gains the standing scan reporting a module named for a story number
+    - file: tests/test_validation_module_naming.py
+      stage: tester
+      reason: this story's own validation
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: names tests/ paths that this story renames, and records the declared resolution
+
+scope:
+  modify:
+    - tests/conftest.py
+    - tests/ modules currently named for a story number
+    - tests/test_baseline_honesty.py
+    - orchestration/plan_validation.py
+    - prompts/tester.md
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/stories/
+    - .harness/runs-archive/
+    - tests/test_story_parser.py
+    - tests/test_story_coordinator.py
+    - tests/test_context_assembler.py
+    - tests/test_coordinator_contract.py
+    - tests/test_harness_config.py
+    - tests/test_harness_layer_extraction.py
+    - tests/test_l5_status_cli.py
+    - tests/test_run_status.py
+    - tests/test_schema_validator.py
+    - workflows/
+    - orchestration/story_coordinator.py
+
+verification_requirements:
+  - Confirm that after the rename each of the six modules named in the acceptance criteria resolves the baseline and endpoint recorded there. Those values were resolved before the rename and are written into this story so they are compared against rather than trusted afterwards.
+  - Confirm no assertion went vacuous. The suite passing is not sufficient evidence, because vacuity is what keeps a suite green. For a sample of renamed modules, demonstrate that a differential assertion still goes red when its subject is violated, mutating a working tree rather than a pinned revision.
+  - Confirm the resolution refuses rather than guesses - a module declaring several origins, asked for a range without one, raises; and a module with no declaration resolves its own path.
+  - Confirm by search over tests/ that no module is named test_story_ followed by digits, that the scan performing the search reports a planted violation, and that it leaves test_story_parser.py and test_story_coordinator.py alone.
+  - Confirm the plan-time check fires on a plan naming a tests/ file called test_story_<digits>, that its message says what to name the module instead, and that the artifact is left uncommitted for the developer to repair.
+  - Confirm by search that every tests/ path named in .harness/docs/ARCHITECTURE.md exists.
+  - Confirm the full suite passes and reports 2002 tests, the count recorded before the rename.
+  - Confirm nothing under .harness/stories/ or .harness/runs-archive/ was rewritten.
+
+constraints:
+  - No assertion in any renamed module is weakened, skipped or deleted. This story is a rename and a resolution change; an assertion that was wrong before stays wrong and belongs to another story.
+  - A reference naming a path at a pinned historical revision keeps its historical spelling, because that is the name the object has at that revision.
+  - The declared origin is a declaration, not a heuristic. No rename-following inference is introduced alongside it, so there is one resolution rather than two.
+  - A module with no declared origin resolves exactly as it does today, so this change costs a future module nothing.
+  - Committed story artifacts and the runs archive record what was true when they were written and are left alone; history describing the past accurately is not drift.
+  - The scan and the renames land together. A scan added ahead of the renames fails against the files it exists to prevent, and a half-renamed suite carries two conventions with no way for a reader to tell which modules were converted.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/conftest.py
+    reason: the resolution the whole story turns on lives in this existing module, and the plan assigns it to the stage writing the resolution
+  - stage: implementer
+    create: tests/test_changed_files_records.py
+    reason: the story's deliverable is this rename of story-002's validation module
+  - stage: implementer
+    create: tests/test_artifact_schemas.py
+    reason: the story's deliverable is this rename of story-004's validation module
+  - stage: implementer
+    create: tests/test_schema_directed_parsing.py
+    reason: the story's deliverable is this rename of story-005's validation module
+  - stage: implementer
+    create: tests/test_single_story_reader.py
+    reason: the story's deliverable is this rename of story-006's validation module
+  - stage: implementer
+    create: tests/test_stage_output_ownership.py
+    reason: the story's deliverable is this rename of story-007's validation module
+  - stage: implementer
+    create: tests/test_planner_injection.py
+    reason: the story's deliverable is this merge of story-008's and story-009's validation modules
+  - stage: implementer
+    create: tests/test_attempt_archiving.py
+    reason: the story's deliverable is this rename of story-010's validation module
+  - stage: implementer
+    create: tests/test_execution_history.py
+    reason: the story's deliverable is this rename of story-011's validation module
+  - stage: implementer
+    create: tests/test_retry_history.py
+    reason: the story's deliverable is this rename of story-012's validation module
+  - stage: implementer
+    create: tests/test_schema_inventory_location.py
+    reason: the story's deliverable is this rename of story-013's validation module
+  - stage: implementer
+    create: tests/test_clean_clone_check.py
+    reason: the story's deliverable is this merge of story-014's and story-033's validation modules
+  - stage: implementer
+    create: tests/test_shared_baseline_resolution.py
+    reason: the story's deliverable is this rename of story-015's validation module
+  - stage: implementer
+    create: tests/test_contract_assertions_bite.py
+    reason: the story's deliverable is this rename of story-016's validation module
+  - stage: implementer
+    create: tests/test_revert_check.py
+    reason: the story's deliverable is this rename of story-017's validation module
+  - stage: implementer
+    create: tests/test_revert_baseline.py
+    reason: the story's deliverable is this rename of story-019's validation module
+  - stage: implementer
+    create: tests/test_escalation_resume.py
+    reason: the story's deliverable is this rename of story-020's validation module
+  - stage: implementer
+    create: tests/test_foreign_work_refusal.py
+    reason: the story's deliverable is this rename of story-021's validation module
+  - stage: implementer
+    create: tests/test_required_output_freshness.py
+    reason: the story's deliverable is this rename of story-022's validation module
+  - stage: implementer
+    create: tests/test_plan_commit.py
+    reason: the story's deliverable is this rename of story-023's validation module
+  - stage: implementer
+    create: tests/test_escalation_summary.py
+    reason: the story's deliverable is this rename of story-024's validation module
+  - stage: implementer
+    create: tests/test_plan_time_validation.py
+    reason: the story's deliverable is this rename of story-025's validation module
+  - stage: implementer
+    create: tests/test_baseline_resolution_is_single.py
+    reason: the story's deliverable is this rename of story-026's validation module
+  - stage: implementer
+    create: tests/test_rerun_refusal.py
+    reason: the story's deliverable is this rename of story-027's validation module
+  - stage: implementer
+    create: tests/test_retry_routing.py
+    reason: the story's deliverable is this rename of story-028's validation module
+  - stage: implementer
+    create: tests/test_git_history_loading_retired.py
+    reason: the story's deliverable is this rename of story-029's validation module
+  - stage: implementer
+    create: tests/test_branch_base.py
+    reason: the story's deliverable is this rename of story-030's validation module
+  - stage: implementer
+    create: tests/test_mutation_controls.py
+    reason: the story's deliverable is this rename of story-031's validation module
+  - stage: implementer
+    create: tests/test_plan_assignment_refusal.py
+    reason: the story's deliverable is this rename of story-032's validation module
+  - stage: implementer
+    create: tests/test_resume_guard.py
+    reason: the story's deliverable is this rename of story-034's validation module
+  - stage: implementer
+    create: tests/test_stage_tool_grants.py
+    reason: the story's deliverable is this rename of story-035's validation module
+  - stage: implementer
+    create: tests/test_self_routing_retry.py
+    reason: the story's deliverable is this rename of story-036's validation module
+  - stage: implementer
+    create: tests/test_stage_baseline.py
+    reason: the story's deliverable is this rename of story-037's validation module
