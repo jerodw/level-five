@@ -1547,16 +1547,19 @@ def test_removing_the_summary_costs_the_refusal_a_sentence_and_no_decision(
 
 
 def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
-    target, harness_root,
+    target, harness_root, tmp_path,
 ):
     """story-019's capture-once-reuse rule, inherited rather than
     re-implemented. A run escalated *inside* the implementer is resumed there
     with that stage's edits already in the tree; the baseline it decides
     against is the one taken before the stage first ran.
 
-    The control is the same baseline recaptured after the edit, which holds
-    the edited content — so the reuse above is the keying rather than a
-    capture that has stopped reading the tree.
+    The control is a fresh capture taken after the edit into a scratch run
+    directory, which holds the edited content — so the reuse above is the
+    keying rather than a capture that has stopped reading the tree. It takes
+    the fresh capture into a scratch directory because since story-037 the
+    baseline is keyed by stage alone, and an attempt number distinguishes
+    nothing.
     """
     class Incomplete(Runner):
         """An implementer that edits the tree and writes no artifacts, so the
@@ -1572,7 +1575,7 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
         STORY_ID, harness_root, target, Incomplete(target)) == 2
     run_dir = run_dir_of(target)
     captured = story_coordinator.stage_baseline_dir(
-        run_dir, BASELINE, IMPLEMENTER_STAGE["name"], 1)
+        run_dir, BASELINE, IMPLEMENTER_STAGE["name"])
     assert (captured / "tests" / "test_existing.py").read_text() == TEST_AT_HEAD
 
     change_the_code(target)
@@ -1583,7 +1586,7 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
 
     assert (captured / "tests" / "test_existing.py").read_text() == TEST_AT_HEAD
     recaptured = story_coordinator.capture_stage_baseline(
-        run_dir, target, BASELINE, IMPLEMENTER_STAGE["name"], 99,
+        tmp_path / "scratch-run", target, BASELINE, IMPLEMENTER_STAGE["name"],
         IMPLEMENTER_STAGE["may_not_create"])
     assert (recaptured / "tests" / "test_existing.py").read_text() != TEST_AT_HEAD
 

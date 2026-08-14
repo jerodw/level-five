@@ -1290,16 +1290,16 @@ def _clean_clone_failures(output: str) -> str:
 # --------------------------------------------------------------------------
 
 
-def stage_baseline_dir(
-    run_dir: Path, baseline: str, stage_name: str, attempt: int
-) -> Path:
-    """Where one stage's pre-stage content for one attempt is kept.
+def stage_baseline_dir(run_dir: Path, baseline: str, stage_name: str) -> Path:
+    """Where one stage's pre-stage content is kept.
 
     The directory name comes off the loaded workflow declaration; only the
-    keying by stage and attempt is written here, and it is the same attempt
-    number the rendered prompt filename and `attempts/attempt-N/` use.
+    keying is written here, and it is by stage alone because the baseline is
+    what that stage first found. An attempt-keyed directory made the second
+    attempt of a stage decide against the first attempt's own edits, which is
+    not the question the revert check asks.
     """
-    return run_dir / baseline / f"{stage_name}-attempt-{attempt}"
+    return run_dir / baseline / stage_name
 
 
 def capture_stage_baseline(
@@ -1307,7 +1307,6 @@ def capture_stage_baseline(
     target_root: Path,
     baseline: str,
     stage_name: str,
-    attempt: int,
     prefixes: list[str],
 ) -> Path:
     """Record what the tree held under a stage's governed prefixes before it ran.
@@ -1318,9 +1317,19 @@ def capture_stage_baseline(
     committed is captured. Tracked files alone would miss exactly that file,
     which is the whole reason this exists.
 
-    Capture once, reuse afterwards: a directory already recorded for this stage
-    and attempt is returned untouched, so a re-entered stage is decided against
-    the state it originally found rather than against its own completed edits.
+    First seen wins, per path rather than per directory: a path the baseline
+    already holds keeps the content it was first captured with, and a path new
+    since the last capture is added at its current content. So a re-entered
+    stage is decided against what it originally found rather than against its
+    own completed edits.
+
+    The merge is per path because reusing the earlier capture's directory whole
+    would get the second half wrong. A governed path that first appears between
+    two invocations of this stage — a test file another stage created in the
+    meantime — would be absent from the baseline, and a path absent from the
+    baseline is deleted in the clone rather than restored, because absent means
+    it did not exist when the stage started.
+
     The directory is created even when it captures nothing, so its existence
     answers "was a baseline taken" and its absence is a distinct, reportable
     condition rather than an empty capture.
@@ -1328,10 +1337,8 @@ def capture_stage_baseline(
     It names no stage and no prefix: both come from the loaded workflow. The
     result is evidence — nothing routes on it, and it is not in state.json.
     """
-    directory = stage_baseline_dir(run_dir, baseline, stage_name, attempt)
-    if directory.exists():
-        return directory
-    directory.mkdir(parents=True)
+    directory = stage_baseline_dir(run_dir, baseline, stage_name)
+    directory.mkdir(parents=True, exist_ok=True)
     for prefix in prefixes:
         listed = _git(
             target_root,
@@ -1348,6 +1355,8 @@ def capture_stage_baseline(
             if not source.is_file():
                 continue
             destination = directory / rel
+            if destination.exists():
+                continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
     return directory
@@ -2505,7 +2514,6 @@ def run_story(
                 target_root,
                 declaration["baseline"],
                 name,
-                attempt,
                 stage.get("may_not_create", []),
             )
             if declaration
