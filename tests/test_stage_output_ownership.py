@@ -739,7 +739,8 @@ def test_nothing_in_orchestration_reads_the_plan_attribution():
 # --------------------------------------------------------------------------
 
 
-ERA_DEFINITIONS = ("tests/test_story_parser.py", "tests/test_story_005_validation.py")
+ERA_DEFINITIONS = ("tests/test_story_parser.py",
+                   "tests/test_schema_directed_parsing.py")
 
 
 def era_constant(relative: str) -> str:

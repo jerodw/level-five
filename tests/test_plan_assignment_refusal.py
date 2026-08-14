@@ -62,7 +62,7 @@ import pytest
 
 from conftest import load_mutant
 
-from test_story_017_validation import (  # noqa: F401 - fixtures used by name
+from test_revert_check import (  # noqa: F401 - fixtures used by name
     APP_ADDITIVE,
     TEST_APP_AT_HEAD,
     ADDED_COVERAGE,
@@ -76,7 +76,7 @@ from test_story_017_validation import (  # noqa: F401 - fixtures used by name
     target,
     write,
 )
-from test_story_023_validation import (  # noqa: F401
+from test_plan_commit import (  # noqa: F401
     ARTIFACT,
     Planning,
     artifact,
@@ -86,7 +86,7 @@ from test_story_023_validation import (  # noqa: F401
     run_plan,
     writes,
 )
-from test_story_025_validation import L5_RUN, install, run_script
+from test_plan_time_validation import L5_RUN, install, run_script
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))

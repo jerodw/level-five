@@ -49,7 +49,7 @@ from pathlib import Path
 import pytest
 
 import story_coordinator
-import test_story_012_validation as story012
+import test_retry_history as story012
 from conftest import first_retry_route
 from agent_runner import AgentResult
 

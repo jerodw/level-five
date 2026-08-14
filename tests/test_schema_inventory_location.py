@@ -43,7 +43,7 @@ import context_assembler
 import schema_validator
 from conftest import (ENDPOINT, NothingToCompareAgainst, repository_file_at,
                       story_commit_range, story_diff)
-from test_story_015_validation import committed_story
+from test_shared_baseline_resolution import committed_story
 
 REPO_ROOT = Path(schema_validator.__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -57,7 +57,7 @@ SHIPPED = schema_validator.shipped_schemas()
 #: than read.
 INVENTORY_NODES = (
     "tests/test_schema_validator.py::test_shipped_schemas_are_exactly_the_named_ones",
-    "tests/test_story_004_validation.py::test_schemas_directory_holds_exactly_the_named_schemas",
+    "tests/test_artifact_schemas.py::test_schemas_directory_holds_exactly_the_named_schemas",
 )
 
 #: The per-schema checks parametrized over the manifest. A manifest entry with
@@ -69,8 +69,8 @@ PARAMETRIZED_NODES = (
 )
 
 WALK_NODES = (
-    "tests/test_story_004_validation.py::test_every_required_field_is_also_a_declared_property",
-    "tests/test_story_004_validation.py::test_no_schema_constrains_a_field_the_validator_cannot_check",
+    "tests/test_artifact_schemas.py::test_every_required_field_is_also_a_declared_property",
+    "tests/test_artifact_schemas.py::test_no_schema_constrains_a_field_the_validator_cannot_check",
 )
 
 ALL_NODES = INVENTORY_NODES + PARAMETRIZED_NODES + WALK_NODES
@@ -78,7 +78,7 @@ ALL_NODES = INVENTORY_NODES + PARAMETRIZED_NODES + WALK_NODES
 #: The test files copied into the throwaway harness. Copying only these keeps
 #: collection there to the inventory checks and their dependencies.
 COPIED_TESTS = ("conftest.py", "test_schema_validator.py",
-                "test_story_004_validation.py")
+                "test_artifact_schemas.py")
 
 #: The files the implementer touched under `tests/`, and the one function in
 #: each whose body the story is allowed to have changed.
@@ -355,7 +355,7 @@ def test_the_search_finds_the_inventory_it_is_looking_for(tmp_path):
 
     before_004 = _blob(_baseline(), "tests/test_story_004_validation.py")
     assert literal_inventories(before_004, "test_story_004_validation.py")
-    after_004 = (TESTS_DIR / "test_story_004_validation.py").read_text(encoding="utf-8")
+    after_004 = (TESTS_DIR / "test_artifact_schemas.py").read_text(encoding="utf-8")
     assert literal_inventories(after_004, "test_story_004_validation.py") == set()
 
 
@@ -488,7 +488,7 @@ def test_both_inventory_tests_compare_by_equality_and_neither_was_relaxed():
     either function, and each ends in an `==`."""
     for rel, function in (("tests/test_schema_validator.py",
                            "test_shipped_schemas_are_exactly_the_named_ones"),
-                          ("tests/test_story_004_validation.py",
+                          ("tests/test_artifact_schemas.py",
                            "test_schemas_directory_holds_exactly_the_named_schemas")):
         source = (REPO_ROOT / rel).read_text(encoding="utf-8")
         node = next(n for n in ast.parse(source).body
@@ -725,8 +725,17 @@ def _python_names(names: set[str]) -> set[str]:
 
 @pytest.mark.parametrize("rel", sorted(IMPLEMENTER_TEST_EDITS))
 def test_the_implementer_added_no_test_function(rel):
+    """The "after" side is this story's own endpoint, for the reason its
+    sibling below already gives: read against today's working tree it counts
+    every test any *later* story added to these files, which is not what its
+    name asks. story-038 is the story that made it concrete — it merged
+    story-033's validation into `tests/test_story_014_validation.py`'s
+    successor, so today's file carries tests story-013 has nothing to say
+    about. Subject, strictness and the paths compared are unchanged; only the
+    upper bound moved, onto the same `_endpoint_text` the sibling uses.
+    """
     before = _blob(_baseline(), rel)
-    after = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    after = _endpoint_text(rel)
     assert _test_names(before) == _test_names(after), rel
     assert "@pytest.mark.skip" not in after, rel
     assert "pytest.skip(" not in after, rel

@@ -15,7 +15,8 @@ runs there. Nothing under `orchestration/` in this repository is written.
 
 The rest is static: that the six comparisons and the machinery that served
 only them are gone, and that every surviving assertion in
-`tests/test_story_011_validation.py` is the one that was there before.
+story-011's validation module — `tests/test_execution_history.py` since
+story-038 renamed it — is the one that was there before.
 
 The name-matching scan this file used to carry — "no module under `tests/`
 loads a coordinator out of git history", matched on the names of two helpers
@@ -40,7 +41,14 @@ import story_coordinator
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
 CONTRACT_FILE = TESTS_DIR / "test_coordinator_contract.py"
-STORY_011_FILE = TESTS_DIR / "test_story_011_validation.py"
+#: Two names for one module. story-038 renamed story-011's validation for its
+#: subject, so the working tree carries `test_execution_history.py` while
+#: every revision this file reads out of history carries the old name — which
+#: is the name the object has *there*. The synthetic histories below build
+#: their own repository and use the historical spelling throughout, so what
+#: they exercise is the resolution rather than a filename.
+STORY_011_FILE = TESTS_DIR / "test_execution_history.py"
+STORY_011_IN_HISTORY = "tests/test_story_011_validation.py"
 
 # --------------------------------------------------------------------------
 # Running the contract file against a mutated coordinator
@@ -360,7 +368,7 @@ def story_011_file_at(revision: str) -> str:
     eleven private copies of this call into one shared reader. Subject and
     strictness unchanged; only where the text comes from moved.
     """
-    return repository_file_at(f"tests/{STORY_011_FILE.name}", revision=revision,
+    return repository_file_at(STORY_011_IN_HISTORY, revision=revision,
                               repo=REPO_ROOT)
 
 
@@ -383,7 +391,7 @@ def story_011_before_this_story() -> str:
     """
     revisions = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "log", "--format=%H", "--",
-         f"tests/{STORY_011_FILE.name}"],
+         STORY_011_IN_HISTORY],
         capture_output=True, text=True, check=True,
     ).stdout.split()
     for revision in revisions:
@@ -391,7 +399,7 @@ def story_011_before_this_story() -> str:
         if all(name in source for name in REMOVED_TESTS):
             return source
     raise AssertionError(
-        "no committed revision of tests/test_story_011_validation.py still "
+        f"no committed revision of {STORY_011_IN_HISTORY} still "
         "carries the comparison tests this story removed; the diff assertions "
         "have nothing to compare against"
     )
@@ -405,7 +413,7 @@ def synthetic_history(root: Path, revisions: list[str]) -> Path:
     """
     root.mkdir(parents=True, exist_ok=True)
     (root / "tests").mkdir()
-    path = root / "tests" / STORY_011_FILE.name
+    path = root / STORY_011_IN_HISTORY
     run = functools.partial(subprocess.run, cwd=root, check=True,
                             capture_output=True, text=True)
     run(["git", "init", "-q"])
@@ -430,7 +438,7 @@ def resolution_against(monkeypatch):
     def resolve(root: Path) -> str:
         monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", root)
         monkeypatch.setattr(sys.modules[__name__], "STORY_011_FILE",
-                            root / "tests" / STORY_011_FILE.name)
+                            root / STORY_011_IN_HISTORY)
         story_011_before_this_story.cache_clear()
         try:
             return story_011_before_this_story()
@@ -453,7 +461,7 @@ def test_the_baseline_walks_past_this_storys_own_commit(tmp_path,
     root = synthetic_history(tmp_path / "history",
                              [WITH_COMPARISONS, WITHOUT_COMPARISONS])
     resolved = resolution_against(root)
-    head = (root / "tests" / STORY_011_FILE.name).read_text(encoding="utf-8")
+    head = (root / STORY_011_IN_HISTORY).read_text(encoding="utf-8")
     assert resolved != head, "the baseline resolved to this story's own file"
     assert resolved == WITH_COMPARISONS
     for name in REMOVED_TESTS:
@@ -482,7 +490,7 @@ def test_a_head_baseline_would_make_the_diff_assertions_vacuous(tmp_path,
     assertion that computes an empty difference asserts nothing."""
     root = synthetic_history(tmp_path / "history",
                              [WITH_COMPARISONS, WITHOUT_COMPARISONS])
-    after = functions_of((root / "tests" / STORY_011_FILE.name)
+    after = functions_of((root / STORY_011_IN_HISTORY)
                          .read_text(encoding="utf-8"))
 
     head_baseline = story_011_file_at_in(root, "HEAD")
@@ -494,7 +502,7 @@ def test_a_head_baseline_would_make_the_diff_assertions_vacuous(tmp_path,
 
 def story_011_file_at_in(root: Path, revision: str) -> str:
     """`story_011_file_at`, against a repository other than this one."""
-    return repository_file_at(f"tests/{STORY_011_FILE.name}", revision=revision,
+    return repository_file_at(STORY_011_IN_HISTORY, revision=revision,
                               repo=root)
 
 
