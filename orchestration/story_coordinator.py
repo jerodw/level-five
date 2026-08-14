@@ -1352,12 +1352,47 @@ def stage_baseline_dir(run_dir: Path, baseline: str, stage_name: str) -> Path:
     return run_dir / baseline / stage_name
 
 
+def recorded_by_other_stages(
+    run_dir: Path, stages: list[dict], stage_name: str
+) -> set[str]:
+    """Every repository path some *other* stage's changed-files record names.
+
+    Whoever created a governed path is the fact the baseline merge turns on,
+    and this is where the harness already records it: every writing stage
+    declares the name of its own record in the workflow, so the records of
+    every stage but this one are the account of what this stage did not write.
+
+    The route a stage was entered by is not consulted and must not be: a resume
+    can change several things between two entries, so it is a proxy for
+    authorship rather than the fact itself.
+
+    A record that is absent or unreadable contributes nothing rather than
+    raising — the question is what another stage is *known* to have touched,
+    and an answer that cannot be established is not one. It names no stage and
+    no artifact; both come off the loaded workflow.
+    """
+    paths: set[str] = set()
+    for stage in stages:
+        record = stage.get("changed_files")
+        if not record or stage["name"] == stage_name:
+            continue
+        try:
+            changed = json.loads((run_dir / record).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for group in ("modified", "created", "deleted"):
+            paths.update(changed.get(group, []))
+    return paths
+
+
 def capture_stage_baseline(
     run_dir: Path,
     target_root: Path,
     baseline: str,
     stage_name: str,
     prefixes: list[str],
+    *,
+    accounted_for: set[str],
 ) -> Path:
     """Record what the tree held under a stage's governed prefixes before it ran.
 
@@ -1380,6 +1415,21 @@ def capture_stage_baseline(
     baseline is deleted in the clone rather than restored, because absent means
     it did not exist when the stage started.
 
+    What a re-capture may add is narrowed by `accounted_for`, the paths another
+    stage's changed-files record names. A path that appeared since the last
+    capture and that no other stage's record accounts for is this stage's own
+    partial work — what a crashed invocation left in the tree — and admitting
+    it would decide the stage's next invocation against itself, which is the
+    failure the first-seen rule exists to prevent. The two cases are one rule:
+    the tester's file across a backward retry is accounted for and is merged in
+    at its current content; the crash leftover across a self-route is not, and
+    is left out. It is narrowed by who created the path rather than by the
+    route the stage was entered on, because the harness records the first and a
+    resume can defeat the second.
+
+    A first capture admits everything, having nothing of this stage's to
+    mistake for the tree's: the capture is taken before the stage is invoked.
+
     The directory is created even when it captures nothing, so its existence
     answers "was a baseline taken" and its absence is a distinct, reportable
     condition rather than an empty capture.
@@ -1388,6 +1438,7 @@ def capture_stage_baseline(
     result is evidence — nothing routes on it, and it is not in state.json.
     """
     directory = stage_baseline_dir(run_dir, baseline, stage_name)
+    recapture = directory.exists()
     directory.mkdir(parents=True, exist_ok=True)
     for prefix in prefixes:
         listed = _git(
@@ -1406,6 +1457,8 @@ def capture_stage_baseline(
                 continue
             destination = directory / rel
             if destination.exists():
+                continue
+            if recapture and rel not in accounted_for:
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
@@ -2822,7 +2875,10 @@ def run_story(
         # key disables the capture and the check together. Captured over the
         # declared prefixes rather than the grant-subtracted list: the
         # enforced list is computed after the stage, and capturing a superset
-        # costs a few file copies while the restore set stays narrowed.
+        # costs a few file copies while the restore set stays narrowed. What a
+        # re-entry may add to it is narrowed the other way, to the paths
+        # another stage's own record accounts for, so a re-run is never decided
+        # against the partial work a crashed invocation left behind.
         declaration = stage.get("revert_check") or {}
         baseline_dir = (
             capture_stage_baseline(
@@ -2831,6 +2887,7 @@ def run_story(
                 declaration["baseline"],
                 name,
                 stage.get("may_not_create", []),
+                accounted_for=recorded_by_other_stages(run_dir, stages, name),
             )
             if declaration
             else None

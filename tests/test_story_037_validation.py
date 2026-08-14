@@ -401,10 +401,17 @@ def baseline_at(target_root: Path, stage: str = "implementer") -> Path:
 
 
 def capture(target_root: Path, scratch: Path, prefix: str = PREFIX,
-            stage: str = "implementer") -> Path:
-    """Capture a baseline the way the coordinator captures one, into scratch."""
+            stage: str = "implementer", accounted_for: set | None = None) -> Path:
+    """Capture a baseline the way the coordinator captures one, into scratch.
+
+    `accounted_for` is what another stage's changed-files record names, which
+    story-036 made the merge's admission rule: a re-capture adds a path only
+    when another stage accounts for it. A caller passing nothing states that no
+    other stage recorded anything, which is a first capture's situation.
+    """
     return story_coordinator.capture_stage_baseline(
-        scratch, target_root, BASELINE, stage, [prefix])
+        scratch, target_root, BASELINE, stage, [prefix],
+        accounted_for=accounted_for or set())
 
 
 def contents_of(directory: Path) -> dict:
@@ -473,6 +480,8 @@ NEW_CAPTURE_SIGNATURE = """def capture_stage_baseline(
     baseline: str,
     stage_name: str,
     prefixes: list[str],
+    *,
+    accounted_for: set[str],
 ) -> Path:"""
 OLD_CAPTURE_SIGNATURE = """def capture_stage_baseline(
     run_dir: Path,
@@ -484,6 +493,7 @@ OLD_CAPTURE_SIGNATURE = """def capture_stage_baseline(
 ) -> Path:"""
 
 NEW_CAPTURE_HEAD = """    directory = stage_baseline_dir(run_dir, baseline, stage_name)
+    recapture = directory.exists()
     directory.mkdir(parents=True, exist_ok=True)
 """
 OLD_CAPTURE_HEAD = """    directory = stage_baseline_dir(run_dir, baseline, stage_name, attempt)
@@ -495,6 +505,8 @@ OLD_CAPTURE_HEAD = """    directory = stage_baseline_dir(run_dir, baseline, stag
 NEW_FIRST_SEEN = """            destination = directory / rel
             if destination.exists():
                 continue
+            if recapture and rel not in accounted_for:
+                continue
 """
 OLD_FIRST_SEEN = """            destination = directory / rel
 """
@@ -502,6 +514,7 @@ OLD_FIRST_SEEN = """            destination = directory / rel
 NEW_CALL_SITE = """                declaration["baseline"],
                 name,
                 stage.get("may_not_create", []),
+                accounted_for=recorded_by_other_stages(run_dir, stages, name),
 """
 OLD_CALL_SITE = """                declaration["baseline"],
                 name,
@@ -744,8 +757,9 @@ def test_reusing_the_earlier_capture_whole_would_have_deleted_that_path(
     """
     module_only(target, run_dir_of(target))
     stale = capture(target, tmp_path / "before-the-tester")
-    creates_the_broken_new_test(target, run_dir_of(target))
-    merged = capture(target, tmp_path / "after-the-tester")
+    created = creates_the_broken_new_test(target, run_dir_of(target))["created"]
+    merged = capture(target, tmp_path / "after-the-tester",
+                     accounted_for=set(created))
     repairs_the_new_test(target, run_dir_of(target))
 
     assert not (stale / "tests" / "test_new.py").exists()
@@ -785,8 +799,8 @@ def test_a_second_capture_keeps_what_the_first_recorded_and_adds_what_is_new(
     assert not (first / "tests" / "test_new.py").exists()
 
     forced_repair(target, run_dir_of(target))
-    creates_the_broken_new_test(target, run_dir_of(target))
-    again = capture(target, scratch)
+    created = creates_the_broken_new_test(target, run_dir_of(target))["created"]
+    again = capture(target, scratch, accounted_for=set(created))
 
     assert again == first
     assert (again / "tests" / "test_app.py").read_text() == TEST_APP_AT_HEAD
@@ -936,7 +950,7 @@ def test_neither_function_takes_an_attempt_argument():
                 .parameters) == ["run_dir", "baseline", "stage_name"]
     assert list(inspect.signature(story_coordinator.capture_stage_baseline)
                 .parameters) == ["run_dir", "target_root", "baseline",
-                                 "stage_name", "prefixes"]
+                                 "stage_name", "prefixes", "accounted_for"]
 
 
 def test_the_baseline_path_is_the_declared_name_and_the_stage_and_nothing_else(

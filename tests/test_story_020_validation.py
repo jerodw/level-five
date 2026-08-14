@@ -1587,7 +1587,7 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
     assert (captured / "tests" / "test_existing.py").read_text() == TEST_AT_HEAD
     recaptured = story_coordinator.capture_stage_baseline(
         tmp_path / "scratch-run", target, BASELINE, IMPLEMENTER_STAGE["name"],
-        IMPLEMENTER_STAGE["may_not_create"])
+        IMPLEMENTER_STAGE["may_not_create"], accounted_for=set())
     assert (recaptured / "tests" / "test_existing.py").read_text() != TEST_AT_HEAD
 
 
