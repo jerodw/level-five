@@ -1,0 +1,131 @@
+story:
+  id: story-037
+  title: A stage's baseline is what that stage first found
+  description: |
+    The revert check decides an edit under a governed prefix by restoring that path to the
+    state the stage found it in and asking whether the suite then fails. The baseline it
+    restores from is captured per stage and per attempt, which makes the second attempt of
+    a stage decide against the first attempt's own edits rather than against what the stage
+    originally found.
+
+    story-036 is the observed case and the evidence is in its run directory. Its implementer
+    retried; the attempt-2 capture already held attempt 1's edits — 999 lines of
+    tests/test_story_022_validation.py against attempt 1's 951, 806 of
+    tests/test_coordinator_contract.py against 800 — so reverting attempt 2's four test
+    edits rolled the tree back only as far as attempt 1's, the suite passed at 1958, and
+    the run escalated on "the suite still passes with those edits reverted". The check
+    reported unforced coverage it had never actually tested. Any retry that edits a file it
+    also edited on the previous attempt meets this, so it blocks retries generally rather
+    than story-036's alone.
+
+    The fix is one directory per stage, merged first-seen-wins per path. A path the stage
+    edited on an earlier attempt keeps the content it had before that attempt. A path that
+    first appears between two invocations of the stage — a test file another stage created
+    in the meantime, which is story-019's motivating case — is captured at the content this
+    stage first met it with, so the restore puts it back rather than deleting it. Reusing
+    the earlier attempt's directory wholesale would do the second thing wrong: a governed
+    path the baseline does not hold is deleted in the clone, because a path absent from the
+    baseline did not exist when the stage started.
+
+    With the directory keyed by stage alone the attempt number decides nothing, so it leaves
+    both function signatures rather than staying as an argument that reads as if it does.
+
+tasks:
+  - Key the stage baseline directory by stage alone, dropping the attempt component from stage_baseline_dir and from the path it returns.
+  - Make capture_stage_baseline merge into that directory first-seen-wins - copy a governed path only when the baseline does not already hold it, never overwrite one it does - instead of returning an existing directory untouched.
+  - Drop the attempt argument at the single call site in run_story, leaving the rest of that block as it is.
+  - Repoint the baseline callers in tests/test_story_017_validation.py, tests/test_story_019_validation.py and tests/test_story_020_validation.py at the new signature, including story-020's fresh-capture control, which distinguished itself by attempt number and now needs another mechanism.
+  - Write the regression module for this story's properties, driving the two-attempt case and the between-attempts-created-file case through runs rather than asserting them.
+  - Update ARCHITECTURE.md for the new keying, the merge rule and the reason for both.
+
+acceptance_criteria:
+  - A stage re-entered on a retry is decided against the content each governed path held when that stage first ran in the run, not against its own earlier attempt's edits, shown by a run whose first attempt edits a governed file and whose second attempt edits it further.
+  - In that run the revert check permits the edits, because restoring the path to what the stage first found makes the suite fail - the pre-story code escalates on the same run for the reason story-036 escalated.
+  - A governed path that first appears between two invocations of the same stage is captured at the content that stage first met it with, is present in the baseline, and is therefore restored by the revert check rather than deleted in the clone.
+  - A capture never overwrites a path the baseline already holds, shown by editing a captured path in the tree and capturing again.
+  - The baseline path carries no attempt component - it is the declared directory name and the stage name and nothing else - and no attempt number is derived for it anywhere.
+  - stage_baseline_dir and capture_stage_baseline take no attempt argument.
+  - A resumed run reuses the stage's stored baseline rather than capturing the tree the escalated stage left behind.
+  - revert-check-result.json's baseline field names the stage-keyed directory, and the escalation for a stage that declares the check with no baseline captured is unchanged and still reachable.
+  - The captured file set is unchanged - the tracked-plus-untracked set under each declared prefix - so a file an earlier stage of the run created and never committed is still captured.
+  - The baseline remains evidence rather than state - it appears in no field of state.json and no routing decision reads it.
+  - No stage name, no declared prefix and neither declared name appears in the executable source of story_coordinator.py or of capture_stage_baseline, as story-019 asserted and this story preserves.
+  - The revert check's decision rule is unchanged - an edit is permitted exactly when reverting it makes the suite fail - and only the state it reverts to changes.
+  - Each repointed assertion in the three existing test modules still holds what it held, and each keeps a control that can fail.
+  - The new tests fail against the pre-story code, each for the reason it states.
+
+technical_plan:
+  implementation_steps:
+    - Change stage_baseline_dir to take run_dir, the declared baseline name and the stage name, returning run_dir/<baseline>/<stage>, and update its docstring to say the keying is by stage because the baseline is what that stage first found.
+    - Change capture_stage_baseline to drop its attempt parameter and to merge - mkdir with parents and exist_ok, then for each listed file copy it only when the destination does not already exist - so a path already recorded keeps the content it was first captured with and a path new since the last capture is added at its current content.
+    - Record in that docstring why the merge is per path rather than per directory - an earlier attempt's directory reused whole would leave a path created between the two invocations absent from the baseline, and an absent path is deleted in the clone rather than restored.
+    - Drop the attempt argument at the call site in run_story and leave the surrounding comment accurate - the capture is still taken before the stage agent is invoked and still over the stage's declared prefixes rather than the grant-subtracted list.
+    - Repoint tests/test_story_017_validation.py's baseline_of helper and tests/test_story_019_validation.py's baseline_at and capture helpers at the new signature.
+    - Repoint tests/test_story_020_validation.py's capture-once assertion, whose control took a fresh capture by passing a different attempt number - take that control's fresh capture into a scratch run directory instead, so it still shows the tree has changed while the run's own baseline has not.
+    - Write tests/test_story_037_validation.py driving the two-attempt case, the file-created-between-attempts case, the no-overwrite property, the resume case, and the naming and evidence-not-state properties, each with a control.
+    - Update .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The keying, the merge and the call site.
+    - file: tests/test_story_037_validation.py
+      stage: tester
+      reason: The regression suite for this story's properties.
+    - file: tests/test_story_017_validation.py
+      stage: tester
+      reason: Its baseline helper calls capture_stage_baseline and is repointed at the new signature rather than deleted.
+    - file: tests/test_story_019_validation.py
+      stage: tester
+      reason: Its baseline_at and capture helpers call both changed functions and are repointed at the new signature rather than deleted.
+    - file: tests/test_story_020_validation.py
+      stage: tester
+      reason: Its capture-once assertion and that assertion's control both distinguish captures by attempt number, which no longer distinguishes anything.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The new keying, the merge rule and the reason for both.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - the revert check's decision rule, which stays permitted exactly when reverting makes the suite fail
+    - the clean-clone check and its result artifact
+    - _build_clone's restore semantics, including the deletion of a governed path the baseline does not hold
+    - orchestration/context_assembler.py
+    - orchestration/agent_runner.py
+    - orchestration/plan_validation.py
+    - orchestration/plan_commit.py
+    - orchestration/run_status.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/harness_config.py
+    - schemas/
+    - workflows/
+    - prompts/
+    - scripts/
+    - templates/
+    - rules/
+    - .harness/stories/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm the two-attempt property by a run rather than by argument - the same shape story-036 escalated on must now reach the check with the stage's original content restored, and the check must permit the edits.
+  - Confirm the same run escalates against the pre-story code for the reason story-036 escalated, so the fix is shown to be the thing that changed the outcome.
+  - Confirm the between-attempts case - a governed file created by another stage after this stage's first invocation and edited by this stage on a later attempt is restored rather than deleted, and report what the check decided about it.
+  - Confirm no capture overwrites content the baseline already holds.
+  - Confirm the resumed-run case captures nothing new for the resumed stage and decides against the stored baseline.
+  - Confirm the captured file set is still tracked plus untracked under each declared prefix, so a file created earlier in the run and never committed is still captured.
+  - Confirm the naming properties story-019 established still hold over the changed source.
+  - Confirm the repointed assertions in the three existing modules still hold what they held, and that each control can still fail.
+  - Confirm the new tests fail against the pre-story code for the reason each states.
+
+constraints:
+  - The baseline stays evidence rather than state - nothing about it enters state.json and no routing decision reads it.
+  - Both names, the baseline directory and the governed prefixes, keep coming off the loaded workflow declaration, and no stage name or prefix is written into orchestration code.
+  - One declaration still switches the capture and the check on together - a stage that declares no revert_check captures nothing.
+  - The revert check's decision rule does not change - only the state it restores to.
+  - The capture still creates its directory even when it records nothing, so the directory's existence answers whether a baseline was taken and its absence stays a distinct, reportable condition.
+  - Existing tests are repointed at the behaviour that replaced what they asserted rather than deleted, and every property they held is still held by something.
+  - The implementer does not create new files under tests/; the tester writes the new module, as the standing convention has it.
