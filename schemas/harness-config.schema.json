@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "harness-config",
+  "description": "The set of keys the harness reads out of a target repository's .harness/config.yaml. The declared properties are the whole of that set: a key a target's config file carries and no harness code reads is out of the set by construction, which is why 'project' is absent. This file is a declaration rather than a run-time check — nothing validates a target's config file against it during a run and no unknown key is refused, so a target carrying an extra key runs exactly as it would without this schema. It is a contract rather than an artifact shape, so no stage is asked to produce or satisfy it; what holds it is coverage, asserted as set equality against declared_config_keys() in both directions. Every declared key carries a proof that varies it to a value the harness would never pick and observes the harness obey it. Types are the types harness_config.load_config produces: every scalar is a string, because the config parser never coerces, and a list-valued key is an array of strings.",
+  "type": "object",
+  "required": [],
+  "properties": {
+    "allowed_tools": {
+      "type": "array",
+      "description": "Bash command patterns stage agents may run without prompting. Passed to every agent invocation as --allowedTools, and injected into the shared harness-layer prompt partial as {{allowed_tools}}.",
+      "items": { "type": "string" }
+    },
+    "architecture_docs": {
+      "type": "array",
+      "description": "Repository-relative paths of the architecture documents assembled into every stage's context.",
+      "items": { "type": "string" }
+    },
+    "base_branch": {
+      "type": "string",
+      "description": "The branch a story branch is cut from and the branch l5-plan expects to commit a plan artifact onto. Unset, the base is resolved from refs/remotes/origin/HEAD and then from the literal main."
+    },
+    "branch_prefix": {
+      "type": "string",
+      "description": "Prepended to a story id to form the story branch name. Defaults to story/."
+    },
+    "clean_clone_python": {
+      "type": "string",
+      "description": "The interpreter the clean-clone and revert checks run the configured test command under. Unset, the check falls back to test_command's own leading word."
+    },
+    "logs_dir": {
+      "type": "string",
+      "description": "Directory, relative to the target root, holding raw agent output logs. Defaults to .harness/logs."
+    },
+    "model": {
+      "type": "string",
+      "description": "The Claude model each stage invocation is run with. Unset, the agent runner passes no model and the developer's default is used."
+    },
+    "permission_mode": {
+      "type": "string",
+      "description": "The permission mode each stage invocation is run under. Defaults to acceptEdits."
+    },
+    "runs_dir": {
+      "type": "string",
+      "description": "Directory, relative to the target root, holding per-run state, events and artifacts. Defaults to .harness/runs. Also what l5-status lists."
+    },
+    "standards_dir": {
+      "type": "string",
+      "description": "Directory, relative to the target root, holding the repository standards injected into every stage's context. Defaults to .harness/standards."
+    },
+    "stories_dir": {
+      "type": "string",
+      "description": "Directory, relative to the target root, holding approved story artifacts. Defaults to .harness/stories. Also the directory l5-plan snapshots to decide what a planning session produced."
+    },
+    "test_command": {
+      "type": "string",
+      "description": "The command the clean-clone and revert checks run inside a scratch clone. Read without a fallback: a target that omits it cannot run either check."
+    },
+    "workflow": {
+      "type": "string",
+      "description": "The name of the workflow definition under workflows/ that a run executes. Defaults to story-workflow."
+    }
+  }
+}
