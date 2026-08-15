@@ -1,5 +1,4 @@
 # Target-repository harness configuration (created by l5-init)
-project: {project}
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits

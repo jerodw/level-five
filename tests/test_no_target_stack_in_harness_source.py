@@ -142,9 +142,6 @@ PERMANENT_MENTIONS: dict[tuple[str, str], str] = {
     ('orchestration/story_parser.py',
      '- No type coercion. Every scalar parses to a Python ``str``; ``42`` and'):
         "a fact about what this parser returns to its own callers, not about any target",
-    ('orchestration/harness_config.py',
-     '    "clean_clone_python": "verification_runner",'):
-        "names a retired key in order to refuse it, which is the harness rejecting the tie rather than carrying one",
 }
 
 

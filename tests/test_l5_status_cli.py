@@ -15,7 +15,6 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_STATUS = HARNESS_ROOT / "scripts" / "l5-status"
 
 CONFIG = """\
-project: cli-target
 runs_dir: .harness/runs
 """
 

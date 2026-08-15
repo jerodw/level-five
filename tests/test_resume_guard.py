@@ -115,7 +115,6 @@ constraints:
 """
 
 CONFIG = """\
-project: shared-root-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits

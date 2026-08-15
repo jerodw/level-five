@@ -303,8 +303,7 @@ PASS_VERDICT = {"status": "passed", "blocking_issues": [], "unverified": [],
 
 
 def _yaml_lines(values: dict[str, object]) -> str:
-    lines = ["# fixture configuration for story-039's proofs",
-             "project: xyzzy-target"]
+    lines = ["# fixture configuration for story-039's proofs"]
     for key in sorted(values):
         value = values[key]
         if isinstance(value, list):
@@ -561,11 +560,10 @@ def test_the_schema_is_in_the_inventory_and_declares_no_key_the_harness_ignores(
     schema = schema_validator.load_schema("harness-config")
     assert "additionalProperties" not in json.dumps(schema)
     assert schema_validator.unsupported_keywords(schema) == []
-    # `project` is the live instance of a key a target's config file carries
-    # and no harness code reads. Its absence is the schema's top-level claim
-    # made concrete: the declared set is what the harness *reads*.
-    assert "project" in THIS_REPO_CONFIG
-    assert "project" not in DECLARED
+    # The schema's top-level claim made concrete, now that an undeclared key
+    # refuses the run: this repository's own config carries nothing outside
+    # the declared set, and the declared set is what the harness *reads*.
+    assert [key for key in THIS_REPO_CONFIG if key not in DECLARED] == []
 
 
 #: The three shapes `declared_config_keys` must raise on rather than degrade
@@ -1183,17 +1181,16 @@ def test_the_unchanged_comparison_can_tell_a_changed_path_apart(tmp_path):
     assert unchanged == ""
 
 
-def test_no_key_gained_a_run_time_check_and_no_unknown_key_is_refused(tmp_path):
-    """The declaration is a declaration. A target carrying an extra key runs.
+def test_a_key_the_schema_does_not_declare_refuses_the_run(tmp_path):
+    """The declaration is also the run-time check, since story-043.
 
-    Constructed rather than argued: a fixture target is given a key the schema
-    does not declare, and the run completes exactly as it does without it.
+    Constructed rather than argued: the same fixture target that completes
+    without it is given a key the schema does not declare, and the run is
+    refused instead. The control is `complete_run` everywhere else in this
+    module — the fixture is otherwise identical.
     """
-    run = complete_run(tmp_path, xyzzy_undeclared_key="something-nobody-reads")
-    assert run.config["xyzzy_undeclared_key"] == "something-nobody-reads"
+    run = start_run(tmp_path, xyzzy_undeclared_key="something-nobody-reads")
     assert "xyzzy_undeclared_key" not in DECLARED
-    assert run.state["status"] == "completed"
-    # And nothing in the coordinator's path calls the reader of the schema.
-    assert "declared_config_keys" not in (
-        REPO_ROOT / "orchestration" / "story_coordinator.py"
-    ).read_text(encoding="utf-8")
+    assert run.code == 1
+    assert run.stages == []
+    assert not run.run_dir.exists()

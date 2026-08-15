@@ -2329,8 +2329,8 @@ def _refuse_bad_self_routes(workflow: dict, problems: list[str]) -> int:
     )
 
 
-def _refuse_retired_config_keys(target_root: Path, problems: list[str]) -> int:
-    """Refuse a run whose configuration still carries a retired key.
+def _refuse_undeclared_config_keys(target_root: Path, problems: list[str]) -> int:
+    """Refuse a run whose configuration carries a key the harness does not read.
 
     Thin, like every other caller of `refuse`. The configuration is wrong, not
     the story and not the tree, so the guidance names the file to edit and the
@@ -2338,9 +2338,9 @@ def _refuse_retired_config_keys(target_root: Path, problems: list[str]) -> int:
     """
     return refuse(
         f"{target_root / '.harness' / 'config.yaml'} carries configuration keys "
-        f"the harness no longer reads:",
+        f"the harness does not read:",
         problems,
-        "Rename each key to its replacement before running a story.",
+        "Remove or correct each key before running a story.",
     )
 
 
@@ -2532,15 +2532,16 @@ def run_story(
     """
     config = harness_config.load_config(target_root)
 
-    # Pre-flight: a retired configuration key is refused rather than ignored.
-    # Ignoring one lets the run fall back to the replacement's default and
-    # quietly exercise something other than what the config asked for. Above
-    # every other pre-flight, because it is decidable the moment the config
-    # loads: a refusal here leaves no run directory, no state.json, no log, no
-    # new branch, and invokes no agent.
-    retired = harness_config.retired_config_problems(config)
-    if retired:
-        return _refuse_retired_config_keys(target_root, retired)
+    # Pre-flight: a key the schema does not declare is refused rather than
+    # ignored. Ignoring one lets the run fall back to a default and quietly
+    # exercise something other than what the config asked for — a retired name
+    # left after a rename, or a mistyping of a declared key. Above every other
+    # pre-flight, because it is decidable the moment the config loads: a
+    # refusal here leaves no run directory, no state.json, no log, no new
+    # branch, and invokes no agent.
+    undeclared = harness_config.undeclared_config_problems(config, harness_root)
+    if undeclared:
+        return _refuse_undeclared_config_keys(target_root, undeclared)
 
     workflow = harness_config.load_workflow(harness_root, config.get("workflow", "story-workflow"))
     rules = harness_config.load_rules(harness_root)

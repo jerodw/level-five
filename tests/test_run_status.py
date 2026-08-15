@@ -8,7 +8,6 @@ import run_status
 from story_coordinator import RunState
 
 CONFIG = """\
-project: sample-target
 runs_dir: .harness/runs
 """
 

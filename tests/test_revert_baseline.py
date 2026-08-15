@@ -92,7 +92,6 @@ TEST_COMMAND = shlex.join([sys.executable, "-m", "pytest", "tests", "-q",
                            "-p", "no:cacheprovider"])
 
 CONFIG = f"""\
-project: suite-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits

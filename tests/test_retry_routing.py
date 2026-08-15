@@ -160,7 +160,6 @@ constraints:
 """
 
 CONFIG = """\
-project: routing-target
 workflow: {workflow}
 branch_prefix: story/
 permission_mode: acceptEdits

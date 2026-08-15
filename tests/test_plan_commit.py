@@ -76,7 +76,6 @@ STORY_SOURCE = {
 }
 
 CONFIG = """\
-project: plan-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits

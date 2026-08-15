@@ -123,7 +123,6 @@ constraints:
 """
 
 CONFIG = """\
-project: finished-branch-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits
