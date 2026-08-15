@@ -889,3 +889,101 @@ def test_the_same_comparison_reports_a_record_the_story_did_rewrite(
     assert story_diff([str(Path(guarded).parent) + "/"],
                       validation_file=validation_file, repo=root,
                       diff_filter="MD", options=("--name-only",)).strip() != ""
+
+
+# --------------------------------------------------------------------------
+# 10. What the rename commit does to a walk over a historical path
+# --------------------------------------------------------------------------
+#
+# A module that walks its own history newest-first over the path it used to
+# have now meets the rename at the head of that log: `git log -- <path>`
+# reports the commit that *removed* a path as well as the ones that wrote it,
+# and at the rename the historical path carries no blob. The walk is a
+# resolution like any other, so it is held to the same rule as the rest of
+# this file — it must resolve what it claims, and it must still refuse when
+# there is genuinely nothing there.
+
+
+#: The one module in the suite that resolves its baseline this way. Imported
+#: rather than re-implemented, so what is exercised is the resolution the
+#: suite actually runs.
+from test_contract_assertions_bite import (  # noqa: E402
+    REMOVED_TESTS,
+    STORY_011_IN_HISTORY,
+    WITHOUT_COMPARISONS,
+    resolution_against,  # noqa: F401 - fixture used by name
+    story_011_before_this_story,
+    synthetic_history,
+)
+
+
+def revisions_touching(path: str) -> list[str]:
+    """Every commit `git log` reports for `path`, newest first."""
+    return git(REPO_ROOT, "log", "--format=%H", "--", path).split()
+
+
+@pytest.mark.parametrize("origin", sorted(
+    {origin for origins in conftest.STORY_ORIGINS.values()
+     for origin in origins}))
+def test_every_declared_origin_has_a_revision_carrying_no_blob(origin: str):
+    """The trap, established over all thirty-four historical paths rather than
+    over the one module that fell into it.
+
+    Once the rename is committed, the newest commit `git log` reports for a
+    declared origin is the one that removed it, and the path cannot be read
+    there. Any newest-first walk over one of these paths that reads before it
+    checks raises before its assertions run. This is a positive assertion
+    about the repository's history — it fails loudly if the rename was not
+    committed as a rename — and it is what makes the guard below necessary
+    rather than decorative.
+    """
+    newest = revisions_touching(origin)
+    assert newest, origin
+    with pytest.raises(NothingToCompareAgainst):
+        conftest.repository_file_at(origin, revision=newest[0],
+                                    repo=REPO_ROOT)
+
+
+def test_the_story_011_baseline_resolves_past_the_rename_commit():
+    """The live resolution, run against this repository as the suite runs it.
+
+    It must return the pre-story file rather than raising, and the file it
+    returns must be the one it claims: every test story-016 removed is in it.
+    """
+    resolved = story_011_before_this_story()
+    for name in REMOVED_TESTS:
+        assert f"def {name}" in resolved, name
+
+
+def test_the_same_walk_without_the_guard_raises_on_this_history():
+    """The negative control the assertion above needs.
+
+    Green from the live resolution says nothing on its own — it would look
+    identical if the rename commit had never entered that log. So the same
+    walk is run here with the guard removed and nothing else changed, over
+    the same repository and the same path, and it must raise. That failure is
+    the four the verifier found, reproduced.
+    """
+    with pytest.raises(NothingToCompareAgainst):
+        for revision in revisions_touching(STORY_011_IN_HISTORY):
+            source = conftest.repository_file_at(
+                STORY_011_IN_HISTORY, revision=revision, repo=REPO_ROOT)
+            if all(name in source for name in REMOVED_TESTS):
+                break
+
+
+def test_the_guard_did_not_turn_the_refusal_into_a_pass(tmp_path,
+                                                        resolution_against):
+    """Skipping an unreadable revision must not mean skipping the refusal.
+
+    A guard written as "swallow the error and carry on" would also swallow a
+    history that carries no candidate at all, and return whatever it reached
+    last. Against a synthetic history where no revision holds the removed
+    tests, the resolution still has to say there is nothing to compare
+    against.
+    """
+    root = synthetic_history(
+        tmp_path / "no-candidate",
+        [WITHOUT_COMPARISONS, WITHOUT_COMPARISONS + "# a later edit\n"])
+    with pytest.raises(AssertionError, match="nothing to compare against"):
+        resolution_against(root)

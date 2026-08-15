@@ -34,7 +34,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import repository_file_at, story_commit_range
+from conftest import (NothingToCompareAgainst, repository_file_at,
+                      story_commit_range)
 
 import story_coordinator
 
@@ -388,6 +389,14 @@ def story_011_before_this_story() -> str:
     whose blob still carries the comparison tests this story removed, which
     is the newest revision predating this story's edit — a search that
     survives a rebase or a squash merge, which a pinned SHA would not.
+
+    A revision in which the historical path carries no blob is skipped rather
+    than read. `git log -- <path>` reports the commit that *removed* a path as
+    well as the ones that wrote it, and since story-038 renamed this module the
+    newest such commit is the rename — which carries none of the removed tests
+    and has nothing there to read. Skipping it is the same test the loop
+    already applies, asked of a revision where the file does not exist at all;
+    reading it raises before any assertion runs.
     """
     revisions = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "log", "--format=%H", "--",
@@ -395,7 +404,10 @@ def story_011_before_this_story() -> str:
         capture_output=True, text=True, check=True,
     ).stdout.split()
     for revision in revisions:
-        source = story_011_file_at(revision)
+        try:
+            source = story_011_file_at(revision)
+        except NothingToCompareAgainst:
+            continue
         if all(name in source for name in REMOVED_TESTS):
             return source
     raise AssertionError(
