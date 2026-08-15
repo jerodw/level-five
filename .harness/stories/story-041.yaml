@@ -1,0 +1,191 @@
+story:
+  id: story-041
+  title: The verification runner is not assumed to be Python
+  description: |
+    The coordinator executes a Python snippet to record which interpreter ran
+    the verification suite, and reads a configuration key whose name is a
+    language. Neither belongs in orchestration. A target repository whose suite
+    is not Python gets an empty version field and is told nothing about why,
+    and nine coordinator sites read a key called clean_clone_python, which means
+    orchestration knows what the target is written in.
+
+    The version field goes rather than being made portable. Nothing routes on
+    it; it is written into clean-clone-result.json and revert-check-result.json
+    and read only by a person looking at a finished run. The interpreter path is
+    already recorded and already answers "which one ran". What the version bought
+    over the path is that a path is a name and a version is a fact - a venv
+    rebuilt on a newer release would still be called .venv310 - and that is not
+    worth executing a language's source from orchestration, nor worth a
+    configured probe key and the obedience proof that key would owe.
+
+    The concept the key carries is kept and renamed for its role. The clean-clone
+    check deliberately runs the suite under a different environment than the one
+    the developer works in, so an incompatibility is found before CI rather than
+    by it, and that reasoning is not tied to any language. What the key actually
+    names is the executable that runs the suite - the first word of the
+    configured test command, whichever it is - so it becomes verification_runner
+    and the record field becomes runner. A target built from a compiled language
+    either leaves the key unset, in which case the configured command runs as
+    written, or names a different toolchain binary, which the same first-word
+    substitution handles. The substitution is kept, and the limit it carries is
+    written down rather than left implicit: it is a first-word swap, and a target
+    whose environment difference cannot be expressed that way expresses it in
+    test_command instead.
+
+    An old key is refused rather than ignored. A config still carrying
+    clean_clone_python would, after the rename, fall back to the test command's
+    own first word and quietly change what the check exercises. The run is
+    refused at pre-flight naming the replacement, before any run directory,
+    branch or agent exists. This repository's own config carries the key today
+    and is updated by this story.
+
+    story-040 grandfathered these ties on TEMPORARY_TIES and asserts that list
+    exact in both directions, so this story removes exactly its own entries. What
+    is left on the list afterwards is the-test-location-comes-from-configuration
+    share alone.
+
+tasks:
+  - Delete the version probe from orchestration/story_coordinator.py - the probe snippet, the version pattern and the function that runs them - and drop the version field from CleanCloneResult and from the record it writes.
+  - Rename CleanCloneResult's interpreter field and the key it writes into the record from python to runner, and update both artifact schemas' required lists, property names and descriptions to match, with no language named in any description.
+  - Rename the configuration key clean_clone_python to verification_runner at every coordinator site that reads it, in run_clean_clone's parameter list, and in schemas/harness-config.schema.json, describing it as the executable that runs the configured test command and saying what happens when it is unset.
+  - Update .harness/config.yaml to carry verification_runner, keeping the value and the comment explaining why the check runs an older environment than the developer's, with the explanation restated so it does not name a language.
+  - Restate run_clean_clone's docstring so it says the substitution replaces the configured command's first word with the configured runner, and says outright that this is a first-word swap and that a difference not expressible that way belongs in test_command.
+  - Add a retired-key declaration to orchestration/harness_config.py mapping clean_clone_python to verification_runner, with a function returning one problem per retired key a loaded config carries, naming the key and its replacement.
+  - Call that function from run_story immediately after the configuration loads and refuse through the existing refusal path, above the routing pre-flight, so a refused run creates no run directory, no state, no branch and invokes no agent.
+  - Update the existing test modules that name the old key or the removed version field so the suite the implementer hands over is green - the clean-clone, revert-check, self-routing-retry and config-obedience modules.
+  - Add a proof that a target whose configured runner is not a Python interpreter produces a correct record - the configured runner recorded as the runner, the check recorded as having run, and the exit code tracking the suite's - rather than a proof that nothing raised.
+  - Add proofs that a config carrying clean_clone_python is refused at pre-flight naming verification_runner, that the refusal happens before any run state exists, and that a config carrying the new key runs normally.
+  - Rebuild the config-obedience coverage for the renamed key - its varying value, its fallback, its proof node and its mutation entry - so the renamed key is proven to govern exactly as the old one was.
+  - Remove from TEMPORARY_TIES in tests/test_no_target_stack_in_harness_source.py exactly the entries this story repairs - every orchestration/story_coordinator.py entry and every entry in the three artifact and configuration schemas - and take the coordinator off that module's untouched list and the retired key off its audited-ties list.
+  - Remove from PERMANENT_MENTIONS the coordinator docstring line saying a test command need not be a Python interpreter, since the function carrying it is deleted, and update any assertion that names it.
+  - Record in .harness/docs/ARCHITECTURE.md that the version field is gone and why, what verification_runner names and what it does not cover, that a retired key is refused rather than ignored, and what remains on TEMPORARY_TIES.
+
+acceptance_criteria:
+  - orchestration/story_coordinator.py contains no executable snippet of any language and no function that probes an interpreter for a version. The clean-clone and revert-check records carry no version field, and neither artifact schema declares one.
+  - The clean-clone and revert-check records carry the executable under the key runner rather than python, both schemas require runner, and no description in either schema names a language or a language's tooling.
+  - No coordinator site reads clean_clone_python. The configuration key is verification_runner, declared in schemas/harness-config.schema.json with a description saying it is the executable that runs the configured test command and that the command's own first word is used when it is unset.
+  - run_clean_clone substitutes the configured runner for the configured command's first word exactly as it substitutes today, and its docstring states that this is a first-word swap and that a difference not expressible as one belongs in test_command.
+  - A target whose configured runner is a non-Python executable produces a record naming that runner, reporting the check as having run, and carrying the suite's own exit code. A run that succeeds while recording a runner the configuration did not name fails this assertion.
+  - A configuration carrying clean_clone_python is refused before the run starts, with a message naming both the retired key and verification_runner, and the refusal leaves no run directory, no state file, no new branch and no agent invocation.
+  - A configuration carrying verification_runner runs to completion and the check resolves that value, proven by varying it to a value the harness would never pick.
+  - declared_config_keys still returns exactly the set of keys the harness reads, verification_runner among them and clean_clone_python absent, and the renamed key carries its own obedience proof and its own mutation entry so the proof is not vacuous.
+  - .harness/config.yaml carries verification_runner with the value the repository uses today, and the comment beside it explains why the check runs a different environment than the developer's without naming a language.
+  - Every TEMPORARY_TIES entry in orchestration/story_coordinator.py, schemas/clean-clone-result.schema.json, schemas/revert-check-result.schema.json and schemas/harness-config.schema.json is gone, the scan reports nothing in those files, and the list remains exactly equal to what the scan reports in both directions.
+  - What remains on TEMPORARY_TIES is the two prompts/tester.md lines and the workflows/story-workflow.json restriction, and nothing else.
+  - PERMANENT_MENTIONS no longer carries the deleted coordinator docstring line, still carries a reason for every entry it does carry, and still equals what the scan reports together with the temporary list.
+  - The shipped configuration behaves as it does today. This repository's own clean-clone check resolves the same executable it resolves now and runs the same command, the only difference in the record being the renamed key and the absent version.
+  - The full suite passes with every pre-existing assertion intact, and no assertion is weakened, skipped or deleted to accommodate the rename.
+  - .harness/docs/ARCHITECTURE.md records that the version field was removed and why, what verification_runner names and the first-word limit it carries, that a retired key is refused at pre-flight rather than ignored, and what is left on TEMPORARY_TIES.
+
+technical_plan:
+  implementation_steps:
+    - Delete _VERSION_PROBE, the version regular expression and _interpreter_version from orchestration/story_coordinator.py, and remove python_version from CleanCloneResult and from as_record's optional mapping. Keep _resolve_interpreter - it is what makes a configured runner that does not exist refuse rather than fall back.
+    - Rename CleanCloneResult.python to runner and the record key it writes, then follow the two construction sites in run_clean_clone and the three in revert_check.
+    - Rename run_clean_clone's clean_clone_python parameter to verification_runner and the two config.get reads that feed it, and rewrite the refusal message so it names the new key.
+    - Rewrite the run_clean_clone docstring around the role rather than the language - the configured command is the target's own, only its first word is replaced, and only when the configuration names a runner - and add the sentence stating the first-word limit.
+    - Update schemas/clean-clone-result.schema.json and schemas/revert-check-result.schema.json - required lists, the runner property and its description, the removal of the version property, and the ran description that currently lists the version among what is absent.
+    - Replace the clean_clone_python property in schemas/harness-config.schema.json with verification_runner, described as the executable the clean-clone and revert checks run the configured test command under, falling back to that command's own first word.
+    - Add RETIRED_CONFIG_KEYS to orchestration/harness_config.py as a mapping from retired name to replacement, and a function taking a loaded config and returning one problem string per retired key present, naming the key and its replacement. Declaring it beside declared_config_keys keeps the config vocabulary in one module.
+    - Call that function in run_story straight after harness_config.load_config and return the shared refuse() with a header naming the config file and guidance saying to rename the key, placing it above the routing pre-flight so nothing is created before it decides.
+    - Update .harness/config.yaml, restating the comment in terms of the environment the check exercises rather than in terms of a version of a language.
+    - Sync the existing test modules that name the old key or the removed field so the tree is green - tests/test_clean_clone_check.py including its mutation anchors, tests/test_revert_check.py, tests/test_self_routing_retry.py, and the varying value, fallback, proof-node name and mutation anchor in tests/test_config_keys_are_obeyed.py.
+    - Remove the repaired entries from TEMPORARY_TIES, drop orchestration/story_coordinator.py from that module's untouched tuple, drop the retired key from AUDITED_TIES, and remove the schema-list constant and the assertion that reads it, so the module asserts what is true after the repair.
+    - Write the non-Python correctness proof on the fake-executable helper tests/test_clean_clone_check.py already has - a runner that is a shell script, a suite that exits with a known status - and assert the recorded runner and exit code rather than only that the run completed.
+    - Write tests/test_retired_config_keys.py for the refusal - a fixture target whose config carries the retired key, asserting the exit status, that both names appear in the message, that no run directory or branch was created and that no agent was invoked, plus a control showing the same fixture with the new key runs.
+    - Rebuild the obedience coverage for verification_runner in tests/test_config_keys_are_obeyed.py, including the mutation that replaces its read with the fallback, so the renamed key's proof is as non-vacuous as the old key's was.
+    - Update the schemas, config and scan sections of .harness/docs/ARCHITECTURE.md, including the line that currently explains why a fallback interpreter reporting no version is not an error, which describes a field that no longer exists.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the probe and the version field are deleted, the record field and the config key are renamed, and the retired-key refusal is called from the pre-flight
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: declares the retired key, its replacement, and the function that reports one problem per retired key a config carries
+    - file: schemas/clean-clone-result.schema.json
+      stage: implementer
+      reason: drops the version property and renames the executable field, with descriptions that name no language
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: the same shape as the clean-clone record, kept identical to it
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: declares verification_runner in place of the retired key
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: this repository's own config carries the retired key and would refuse its own runs
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: names the old key and the removed field in assertions and mutation anchors, so the rename must reach it for the tree to be green
+    - file: tests/test_revert_check.py
+      stage: implementer
+      reason: configures the old key in a fixture
+    - file: tests/test_self_routing_retry.py
+      stage: implementer
+      reason: configures the old key in a fixture
+    - file: tests/test_no_target_stack_in_harness_source.py
+      stage: implementer
+      reason: the grandfathered entries this story repairs must come off the lists or the equality assertion goes red
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: the renamed key's varying value, fallback, proof node and mutation entry
+    - file: tests/test_retired_config_keys.py
+      stage: tester
+      reason: the refusal proofs and the control that the replacement key runs
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the removed field, what the renamed key names and does not cover, the retired-key refusal, and what remains on the tie list
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/harness_config.py
+    - schemas/clean-clone-result.schema.json
+    - schemas/revert-check-result.schema.json
+    - schemas/harness-config.schema.json
+    - .harness/config.yaml
+    - tests/test_clean_clone_check.py
+    - tests/test_revert_check.py
+    - tests/test_self_routing_retry.py
+    - tests/test_no_target_stack_in_harness_source.py
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_retired_config_keys.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/harness_source.py
+    - orchestration/story_parser.py
+    - orchestration/context_assembler.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - orchestration/schema_validator.py
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - prompts/
+    - workflows/
+    - templates/
+    - scripts/
+    - hooks/
+    - schemas/manifest.json
+    - .harness/standards/
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm by search that orchestration/ names no language and no language's tooling in any identifier, string or docstring, and that no interpreter probe survives anywhere in it.
+  - Confirm a non-Python runner produces a correct record by running the check against one - the recorded runner is the configured executable and the recorded exit code is the suite's - rather than by confirming the run did not raise. A record that is merely non-empty is what passes today and is not evidence.
+  - Confirm the shipped configuration is unchanged in behaviour - this repository's own check resolves the same executable and builds the same command as it does today, differing only in the renamed key and the absent version.
+  - Confirm a config carrying clean_clone_python is refused, that the message names both the retired key and verification_runner, and that the refusal leaves no run directory, no state file, no new branch and no agent invocation. Read the refused target's tree rather than the exit status alone.
+  - Confirm the renamed key is proven to govern - its obedience proof passes against a varying value and goes red against the harness that stopped reading it - so the rename did not carry the coverage over in name only.
+  - Confirm the scan reports nothing in orchestration/story_coordinator.py or in the three schemas, that TEMPORARY_TIES and PERMANENT_MENTIONS still equal what the scan reports in both directions, and that what remains temporary is the two prompt lines and the workflow restriction and nothing else.
+  - Confirm no entry was removed from either tie list for a mention that is still present in source, by running the scan rather than by reading the diff.
+  - Confirm the full suite passes with every pre-existing assertion intact, and that no assertion anywhere was weakened, skipped or deleted to accommodate the rename.
+
+constraints:
+  - The clean-clone check's purpose, its scratch clone, when it runs and what decides its result are unchanged. This story changes what is recorded and what the key is called, not what the check does.
+  - _link_interpreter_roots is left alone. Its directory names already come from configured paths, which is the model this story is following rather than a problem it is fixing.
+  - test_command stays as it is - configurable, language-neutral, and the source of every argument the check runs.
+  - The first-word substitution is kept, not silently widened into a second command key. Its limit is stated where a reader meets it.
+  - A retired key is never silently accepted as the new one and never silently ignored. It refuses, and the refusal names the replacement.
+  - No language name enters orchestration/ or schemas/ by this story, including in the new refusal message and in every rewritten description.
+  - Only the entries this story actually repairs come off TEMPORARY_TIES. The prompt lines and the workflow restriction stay, because the-test-location-comes-from-configuration removes them.
+  - No assertion in the suite is weakened, skipped or deleted to accommodate the rename, and the mutation controls that make the existing clean-clone proofs non-vacuous keep working against the renamed code.
