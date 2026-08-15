@@ -3,6 +3,7 @@
     "changed-files",
     "clean-clone-result",
     "execution-history",
+    "harness-config",
     "retry-guidance",
     "retry-history",
     "revert-check-result",
