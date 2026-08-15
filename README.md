@@ -77,12 +77,15 @@ Example:
     rules/           execution rules enforced by the coordinator
     scripts/         thin l5- entry points
     templates/       starter files l5-init copies into a new target repository
-    .harness/        target-repository state: config, standards, docs, stories; plus
-                     runs and logs, which are gitignored execution state
+    .harness/        target-repository state: config, standards, stories, and
+                     docs/ARCHITECTURE.md; plus runs and logs, which are
+                     gitignored execution state
 
 The harness pieces (`workflows/`, `schemas/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`, `templates/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
 
 This repository is both the harness repository and its own first target repository. Every demo story is a real harness feature, so the harness participates in building itself from the start.
+
+**Looking for the architecture document?** It is [`.harness/docs/ARCHITECTURE.md`](.harness/docs/ARCHITECTURE.md), not a top-level `docs/`. Its location is a configuration value rather than a fixed part of the layout: `architecture_docs` in `.harness/config.yaml` names it, and the coordinator injects whatever that key names into the implementer's context on every run. It sits beside `.harness/standards/` because both are agent context, and a target repository is free to keep them elsewhere.
 
 ## How a story runs
 
