@@ -253,7 +253,6 @@ constraints:
 """
 
 CONFIG = """\
-project: self-route-target
 workflow: {workflow}
 branch_prefix: story/
 permission_mode: acceptEdits

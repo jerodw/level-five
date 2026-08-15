@@ -6,7 +6,6 @@ import harness_config
 def test_quoted_values_are_unquoted(tmp_path: Path):
     (tmp_path / ".harness").mkdir()
     (tmp_path / ".harness" / "config.yaml").write_text(
-        'project: sample\n'
         'test_command: "echo ok"\n'
         'allowed_tools:\n'
         '  - "Bash(.venv/bin/python:*)"\n'

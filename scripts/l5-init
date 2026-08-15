@@ -34,7 +34,7 @@ def main() -> int:
         (harness_dir / sub).mkdir(parents=True, exist_ok=True)
 
     config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")
-    config = config.replace("{project}", target.name).replace("{test_command}", test_command)
+    config = config.replace("{test_command}", test_command)
     (harness_dir / "config.yaml").write_text(config, encoding="utf-8")
 
     for template in sorted((TEMPLATES / "standards").glob("*.md")):

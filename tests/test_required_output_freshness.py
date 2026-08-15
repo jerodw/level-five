@@ -133,7 +133,6 @@ constraints:
 """
 
 CONFIG = """\
-project: freshness-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits

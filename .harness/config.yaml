@@ -1,5 +1,4 @@
 # Target-repository harness configuration
-project: level-five
 workflow: story-workflow
 branch_prefix: story/
 # The branch a story's branch is cut from, and the branch l5-plan expects to

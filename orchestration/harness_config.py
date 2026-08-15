@@ -13,34 +13,34 @@ from pathlib import Path
 import schema_validator
 
 # The declaration of which keys the harness reads, beside the artifact
-# schemas. It is a declaration and not a run-time check: nothing here
-# validates a target's config file against it, and no unknown key is
-# refused.
+# schemas. It is also what a target's config file is checked against at
+# pre-flight: a key the schema does not declare refuses the run.
 CONFIG_SCHEMA_NAME = "harness-config"
 
-#: Keys the harness once read, mapped to the key that replaced each. A
-#: retired key is refused rather than ignored: a config still carrying one
-#: would fall through to the replacement's fallback and quietly change what
-#: the harness does, which is the drift the declaration exists to stop. It
-#: lives beside `declared_config_keys` so the config vocabulary — what is
-#: read, and what used to be — has one home.
-RETIRED_CONFIG_KEYS: dict[str, str] = {
-    "clean_clone_python": "verification_runner",
-}
 
+def undeclared_config_problems(
+    config: dict, harness_root: Path | None = None
+) -> list[str]:
+    """One problem per key a loaded config carries that the schema does not declare.
 
-def retired_config_problems(config: dict) -> list[str]:
-    """One problem per retired key a loaded config still carries.
+    The declared set is the set of keys the harness reads, so a key outside
+    it is a key nothing will ever act on — a retired name left behind after
+    a rename, or a mistyping of a declared one. Either is refused rather
+    than ignored, because ignoring it lets the run fall through to a
+    default and quietly do something other than what the config asked for.
 
-    Each names the retired key and the key that replaced it, so the refusal
-    is actionable without opening the schema. An empty list is the whole of
+    Each problem names the offending key and lists the declared set, the
+    shape the routing refusal takes: a bare "unknown key" would leave the
+    developer to find the vocabulary themselves. Problems come back in the
+    order the config carries the keys, and an empty list is the whole of
     "this config carries none".
     """
+    declared = declared_config_keys(harness_root)
+    listed = ", ".join(declared)
     return [
-        f"'{key}' is no longer read by the harness; it was replaced by "
-        f"'{replacement}'"
-        for key, replacement in RETIRED_CONFIG_KEYS.items()
-        if key in config
+        f"'{key}' is not a key the harness reads; it reads: {listed}"
+        for key in config
+        if key not in declared
     ]
 
 
@@ -90,10 +90,10 @@ def declared_config_keys(harness_root: Path | None = None) -> tuple[str, ...]:
     this module's package exactly as the artifact schemas are, and read
     through schema_validator.load_schema so schemas/ keeps one reader.
 
-    The declaration is not a run-time check. Nothing calls this while a run
-    is executing, no target's config file is validated against it, and no
-    unknown key is refused; what reads it is the coverage that asserts set
-    equality against the keys the harness actually reads.
+    Two things read it. The coverage asserts set equality against the keys
+    the harness actually reads, and `undeclared_config_problems` checks a
+    loaded config against it at pre-flight, so a key the schema does not
+    declare refuses the run rather than being silently ignored.
 
     A missing, unparseable or wrong-shaped schema raises ValueError naming
     the path, rather than degrading to an empty or partial tuple, which

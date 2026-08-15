@@ -125,7 +125,7 @@ def test_enforcement_follows_declaration_not_stage_name(target_root, harness_roo
     """Removing the tester's changed_files declaration disables its check,
     proving enforcement is driven by the workflow definition."""
     harness_copy = tmp_path / "harness-copy"
-    for sub in ("prompts", "workflows", "rules"):
+    for sub in ("prompts", "workflows", "rules", "schemas"):
         shutil.copytree(harness_root / sub, harness_copy / sub)
     workflow_path = harness_copy / "workflows" / "story-workflow.json"
     workflow = json.loads(workflow_path.read_text())

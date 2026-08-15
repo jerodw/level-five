@@ -140,7 +140,6 @@ constraints:
 """
 
 CONFIG = """\
-project: resume-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits

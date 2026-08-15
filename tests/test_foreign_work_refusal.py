@@ -133,7 +133,6 @@ constraints:
 """
 
 CONFIG = """\
-project: clean-tree-target
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits
@@ -1141,18 +1140,39 @@ def test_attempting_the_bypass_does_not_bypass_it(
     """The search above says there is no key to find; this says that setting
     them anyway changes nothing.
 
-    The control is the same target, with every one of those variables and keys
-    still set, run once the tree is clean — which proceeds. So the refusal is
-    the dirty tree rather than the extra configuration having broken the run.
+    Since an undeclared configuration key refuses the run at pre-flight, a
+    bypass written as a key cannot even be honoured: each attempted name is
+    reported as a key the harness does not read, and the run is refused before
+    the tree is looked at. The environment attempts are then carried into the
+    dirty-tree refusal itself, which still speaks.
+
+    The control is the same target, with every one of those variables still
+    set, run once the tree is clean — which proceeds. So the refusal is the
+    dirty tree rather than the extra configuration having broken the run.
     """
     target = make_target("bypass-target")
     for name in ENV_ATTEMPTS:
         monkeypatch.setenv(name, "1")
     config = target / ".harness" / "config.yaml"
-    write(config, config.read_text(encoding="utf-8")
-          + "".join(f"{key}\n" for key in CONFIG_ATTEMPTS))
+    declared = config.read_text(encoding="utf-8")
+    write(config, declared + "".join(f"{key}\n" for key in CONFIG_ATTEMPTS))
     commit(target, "every escape hatch a developer would try")
 
+    # A clean tree, so nothing else could be refusing: each attempted key is
+    # reported as one the harness does not read, rather than being honoured.
+    capsys.readouterr()
+    code, runner = run(target, harness_root)
+    assert code == 1
+    assert runner.calls == []
+    refusal = capsys.readouterr().err
+    for attempt in CONFIG_ATTEMPTS:
+        assert f"'{attempt.split(':')[0]}' is not a key the harness reads" in refusal
+
+    # The attempted keys taken back out, and the tree dirtied: the refusal a
+    # developer meets is the tree, and the environment variables set above do
+    # not change it.
+    write(config, declared)
+    commit(target, "the attempted keys come back out")
     write(target / STRAY, "no stage wrote this\n")
     capsys.readouterr()
     code, runner = run(target, harness_root)
