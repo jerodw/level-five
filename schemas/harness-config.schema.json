@@ -23,10 +23,6 @@
       "type": "string",
       "description": "Prepended to a story id to form the story branch name. Defaults to story/."
     },
-    "clean_clone_python": {
-      "type": "string",
-      "description": "The interpreter the clean-clone and revert checks run the configured test command under. Unset, the check falls back to test_command's own leading word."
-    },
     "logs_dir": {
       "type": "string",
       "description": "Directory, relative to the target root, holding raw agent output logs. Defaults to .harness/logs."
@@ -54,6 +50,10 @@
     "test_command": {
       "type": "string",
       "description": "The command the clean-clone and revert checks run inside a scratch clone. Read without a fallback: a target that omits it cannot run either check."
+    },
+    "verification_runner": {
+      "type": "string",
+      "description": "The executable the clean-clone and revert checks run the configured test command under: it replaces the first word of test_command, and every remaining argument is the configured command's own. Unset, the checks use test_command's own first word, so the command runs exactly as written. An environment difference that cannot be expressed as a first-word swap belongs in test_command instead."
     },
     "workflow": {
       "type": "string",

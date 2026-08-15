@@ -1496,7 +1496,7 @@ def test_a_clean_clone_that_cannot_run_still_escalates_at_a_budgeted_stage(
     harness, workflow = budgeted_clean_clone
     target_root = build_target(tmp_path / "clean-clone-unrunnable",
                                workflow=workflow["name"])
-    configure(target_root, clean_clone_python="nowhere/python")
+    configure(target_root, verification_runner="nowhere/python")
 
     code, runner = drive(target_root, harness, workflow=workflow)
 
