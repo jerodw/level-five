@@ -274,7 +274,7 @@ def test_schema_conformance_is_reported_by_calling_read_story(monkeypatch,
     path = tmp_path / "story-900.yaml"
     path.write_text(DEFECTS["schema"], encoding="utf-8")
 
-    problems = plan_validation.artifact_problems([path], STAGES)
+    problems = plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT)
 
     assert calls == [DEFECTS["schema"]]
     assert problems[path] == real(DEFECTS["schema"]).problems
@@ -292,13 +292,13 @@ def test_an_artifact_read_story_rejects_is_not_carried_into_the_later_checks(
     path = tmp_path / "story-900.yaml"
     path.write_text(DEFECTS["unparseable"], encoding="utf-8")
 
-    assert plan_validation.artifact_problems([path], STAGES)[path]
+    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT)[path]
     assert seen == []
 
     # Control: a well-formed artifact does reach both, so the emptiness above
     # is the guard rather than the recorder never being wired up.
     path.write_text(artifact(), encoding="utf-8")
-    assert plan_validation.artifact_problems([path], STAGES) == {}
+    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT) == {}
     assert seen == ["exceptions", "strictness"]
 
 
@@ -307,10 +307,10 @@ def test_artifact_problems_holds_only_the_artifacts_with_problems(tmp_path: Path
     good.write_text(artifact("story-900"), encoding="utf-8")
     bad.write_text(DEFECTS["schema"], encoding="utf-8")
 
-    problems = plan_validation.artifact_problems([good, bad], STAGES)
+    problems = plan_validation.artifact_problems([good, bad], STAGES, HARNESS_ROOT)
 
     assert list(problems) == [bad]
-    assert plan_validation.artifact_problems([good], STAGES) == {}
+    assert plan_validation.artifact_problems([good], STAGES, HARNESS_ROOT) == {}
 
 
 #: A second reader: any route to a parse or a schema validation that does not

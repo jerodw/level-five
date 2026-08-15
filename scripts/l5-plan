@@ -109,7 +109,11 @@ def report(target_root: Path, stories_dir: Path, before, stages, config=None, ba
     # and re-runs from. When one of several artifacts fails, none is
     # committed; the commit is one commit for the session's artifacts, and a
     # partial one would invent a split the session did not have.
-    problems = plan_validation.artifact_problems(artifacts, stages)
+    # The target root goes with the artifacts: the assignment check asks the
+    # repository the story will run in whether a file it names is already
+    # there, and that repository is the one find_target_root resolved, never
+    # the harness root and never wherever this process was started from.
+    problems = plan_validation.artifact_problems(artifacts, stages, target_root)
     if problems:
         for path, found in problems.items():
             # The coordinator's own refusal helper, so the text a developer
