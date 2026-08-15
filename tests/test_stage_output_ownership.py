@@ -392,11 +392,26 @@ def test_no_path_prefix_is_named_in_orchestration_code():
     """tests/ is a fact about this workflow, not about the harness. The
     mechanism key may appear where the declaration is enforced
     (story_coordinator, this story) and where it is rendered for the planner
-    (context_assembler, story-009); no module may name the prefix itself."""
+    (context_assembler, story-009); no module may name the prefix itself.
+
+    story-040 adds the one module whose deliverable *is* to name it:
+    harness_source.py declares the target-layout shapes its scan looks for,
+    and cannot declare them without spelling them. It is exempt by name,
+    and the exemption is held shut from both sides — that module must exist
+    and must actually name the prefix, or the exemption is stale, and every
+    other module is held to the assertion unchanged. It gains no latitude
+    on the mechanism key, which it still may not name."""
     allowed_to_read_the_key = ("story_coordinator.py", "context_assembler.py")
+    declares_the_prefix = "harness_source.py"
+
+    declaring = ORCHESTRATION / declares_the_prefix
+    assert declaring.is_file(), declares_the_prefix
+    assert "tests/" in executable_source(declaring.read_text(encoding="utf-8"))
+
     for module in sorted(ORCHESTRATION.glob("*.py")):
         body = executable_source(module.read_text(encoding="utf-8"))
-        assert "tests/" not in body, module.name
+        if module.name != declares_the_prefix:
+            assert "tests/" not in body, module.name
         assert ("may_not_create" not in body
                 or module.name in allowed_to_read_the_key), module.name
 

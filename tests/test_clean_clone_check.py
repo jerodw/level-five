@@ -397,7 +397,24 @@ def test_a_gitignored_interpreter_directory_is_available_in_the_clone(
 
 
 def test_no_test_command_string_appears_in_orchestration_code():
+    """story-040 adds the one module whose deliverable *is* to name a
+    toolchain: harness_source.py declares the stack tokens its scan looks
+    for, `pytest` among them, and cannot declare them without spelling
+    them. It is exempt by name, and the exemption is held shut from both
+    sides — that module must actually name `pytest`, or the exemption is
+    stale, and it is still held to the other two fragments — so no other
+    module gains any latitude."""
+    declares_the_tokens = "harness_source.py"
+    declaring = REPO_ROOT / "orchestration" / declares_the_tokens
+    assert declaring.is_file(), declares_the_tokens
+    declared = declaring.read_text(encoding="utf-8")
+    assert "pytest" in declared
+    for fragment in ("-m pytest", "unittest"):
+        assert fragment not in declared, f"{declares_the_tokens} names {fragment}"
+
     for source in (REPO_ROOT / "orchestration").glob("*.py"):
+        if source.name == declares_the_tokens:
+            continue
         text = source.read_text(encoding="utf-8")
         for fragment in ("pytest", "-m pytest", "unittest"):
             assert fragment not in text, f"{source.name} names {fragment}"
