@@ -29,6 +29,7 @@
     {
       "name": "verifier",
       "prompt": "verifier.md",
+      "max_self_routes": 1,
       "outputs": ["verification-result.json"],
       "schemas": {
         "verification-result.json": "verification-result",

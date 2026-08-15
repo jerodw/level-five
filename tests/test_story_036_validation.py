@@ -172,7 +172,14 @@ def test_the_workflow_this_file_reads_still_has_something_to_say():
     not" is worth nothing if the declaration moves or disappears, and the
     parametrizations below would quietly shrink to nothing rather than fail.
     """
-    assert len(BUDGETED_DECLARATIONS) == 1, BUDGETED_DECLARATIONS
+    # At least one, not exactly one: how many stages the shipped workflow
+    # budgets is a deployment fact, and this file's subject is how a budgeted
+    # stage and a budget-less one behave. The assertions below pin what this
+    # module actually needs — that both kinds exist, that the one it drives is
+    # reachable by the verifier's retry route, and that it declares an output
+    # to skip. Pinning the count made granting a second stage a budget redden
+    # a file that has nothing to say about whether that grant is correct.
+    assert BUDGETED_DECLARATIONS, "no stage declares a budget, so this file has no subject"
     assert isinstance(BUDGET, int) and not isinstance(BUDGET, bool)
     assert BUDGET >= 1
     assert BUDGETLESS, "no stage declares nothing, so compatibility is untestable"
