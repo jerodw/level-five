@@ -589,7 +589,7 @@ def test_both_artifacts_this_file_uses_are_what_they_claim_to_be():
         reading = story_coordinator.read_story(text)
         assert reading.problems == [], (name, reading.problems)
         assert plan_validation.strictness_problems(reading.parsed, STAGES) == [], name
-        assert plan_validation.assignment_problems(reading.parsed, STAGES) == [], name
+        assert plan_validation.assignment_problems(reading.parsed, STAGES, REPO_ROOT) == [], name
 
 
 def test_the_check_reports_the_offending_entry_and_only_it():
@@ -633,7 +633,7 @@ def test_the_control_for_every_incomplete_story_above_is_the_complete_one():
 def test_artifact_problems_reports_the_new_class(tmp_path: Path):
     path = tmp_path / "story-900.yaml"
     path.write_text(OFFENDING_ARTIFACT, encoding="utf-8")
-    found = plan_validation.artifact_problems([path], STAGES)
+    found = plan_validation.artifact_problems([path], STAGES, REPO_ROOT)
     assert list(found) == [path]
     assert any(OFFENDING in problem for problem in found[path])
 
@@ -641,7 +641,7 @@ def test_artifact_problems_reports_the_new_class(tmp_path: Path):
 def test_artifact_problems_holds_the_well_named_artifact_back(tmp_path: Path):
     path = tmp_path / "story-901.yaml"
     path.write_text(WELL_NAMED_ARTIFACT, encoding="utf-8")
-    assert plan_validation.artifact_problems([path], STAGES) == {}
+    assert plan_validation.artifact_problems([path], STAGES, REPO_ROOT) == {}
 
 
 def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
@@ -653,7 +653,7 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
     """
     unparseable = tmp_path / "story-902.yaml"
     unparseable.write_text("this: is: not: a story\n\t- ?\n", encoding="utf-8")
-    found = plan_validation.artifact_problems([unparseable], STAGES)
+    found = plan_validation.artifact_problems([unparseable], STAGES, REPO_ROOT)
     assert found[unparseable]
     assert not any(OFFENDING in problem for problem in found[unparseable])
 
@@ -661,7 +661,7 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
     reached.write_text(OFFENDING_ARTIFACT, encoding="utf-8")
     assert any(OFFENDING in problem
                for problem in plan_validation.artifact_problems(
-                   [reached], STAGES)[reached])
+                   [reached], STAGES, REPO_ROOT)[reached])
 
 
 def corpus() -> dict[str, dict]:

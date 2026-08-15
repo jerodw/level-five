@@ -129,10 +129,14 @@ below.
 
 A likely_file_changes entry naming a file beneath a restricted path,
 assigned to the very stage restricted from creating there, is refused when
-the session ends: the run it describes could only ever end in the harness
-refusing the result. The problem names the file, the stage, the prefix, and
-the two ways out — reassign the file to a stage that may own it, or declare
-a stage_exceptions grant naming it.
+the session ends — but only when no such file exists in the target
+repository, because then the entry describes a creation and the run it
+describes could only ever end in the harness refusing the result. An entry
+naming a file that is already there predicts a modification, not a creation,
+and is not refused: predict those edits rather than leaving them out. The
+problem names the file, the stage, the prefix, and the two ways out —
+reassign the file to a stage that may own it, or declare a stage_exceptions
+grant naming it.
 
 A stage_exceptions entry lifts one of those restrictions for one story,
 which is what a story whose own deliverable is a test suite needs.

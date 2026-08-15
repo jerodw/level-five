@@ -80,23 +80,49 @@ rephrasing at plan time, which is where a human is present to do it.
 
 What the fourth check is
 ------------------------
-A plan must not assign work to a stage that cannot own it. A
+Two rules govern a stage's relationship with a governed prefix and this check
+used to conflate them. The workflow's restriction is about *creating* files
+there, and it is the one this check enforces. *Modifying* a file that already
+exists is legal and is governed by the revert check instead, which restores
+the stage's edits under the governed prefixes and re-runs the suite,
+escalating when they were not forced and recording them as permitted when
+they were. That is a question about what a run did, so it is a run's to
+answer; nothing here duplicates it or anticipates it.
+
+So a plan must not assign work to a stage that cannot own it, and what it
+cannot own is a file it would have to *create*. A
 technical_plan.likely_file_changes entry naming a file beneath a prefix its
 own stage is restricted from creating under, with no grant covering that
-file, describes a run that can only end one way: the stage does exactly what
-the plan named, and the coordinator refuses the result. Both halves of the
-conflict are literals — one in the artifact, one in the workflow definition —
-so it is fully decidable before the run starts, and the decision belongs
-where a developer is present to repair it in one exchange.
+file, and with no such file beneath the root, describes a run that can only
+end one way: the stage does exactly what the plan named, and the coordinator
+refuses the result. All of that is decidable before the run starts — two
+literals, one in the artifact and one in the workflow definition, and one
+question put to the filesystem — and the decision belongs where a developer
+is present to repair it in one exchange.
+
+Existence is resolved against the **target root**, the repository the story
+will run in, which artifact_problems requires of its caller and passes down.
+It is neither the harness root nor the process working directory: the three
+coincide when the harness is its own target and will not in general, and no
+default hides which one was consulted. The fact is derived from the
+repository rather than declared by a likely_file_changes field, because a
+field would be the planner's claim about something the filesystem already
+knows and the check would have to verify it against the repository anyway.
 
 That is why it is structural rather than a scan of English. It compares an
-entry's declared file against an entry's declared stage; it does not read
-prose, does not guess at intent, and does not err in either direction.
-Nothing about it is hedged, and the limits recorded above for the third check
-are not its limits. likely_file_changes is its subject because it is the only
-field carrying a file and a stage together — scope.modify names paths with no
-stage and cannot state this conflict at all. A story with no technical_plan,
-or an entry missing either field, yields nothing rather than raising.
+entry's declared file against an entry's declared stage and asks the
+repository whether the file is there; it does not read prose, does not guess
+at intent, and does not err in either direction. Nothing about it is hedged,
+and the limits recorded above for the third check are not its limits.
+likely_file_changes is its subject because it is the only field carrying a
+file and a stage together — scope.modify names paths with no stage and cannot
+state this conflict at all. A story with no technical_plan, or an entry
+missing either field, yields nothing rather than raising.
+
+What it stays is a **prediction**. A file present when the plan is written
+may be gone by the time the story runs, and this check makes no promise
+about that: the run-time ownership check and the revert check remain the
+authority on what a stage was actually allowed to do.
 
 What the fifth check is
 -----------------------
@@ -185,7 +211,7 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
     return problems
 
 
-def assignment_problems(story: dict, stages: list[dict]) -> list[str]:
+def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str]:
     """Report plan entries assigning a file to a stage that cannot own it.
 
     The subject is technical_plan.likely_file_changes and it is the only place
@@ -195,11 +221,24 @@ def assignment_problems(story: dict, stages: list[dict]) -> list[str]:
     restriction.
 
     An entry offends when its file falls under a prefix the entry's own stage
-    is restricted from creating under and no grant on that stage covers the
-    file. Both halves come off story_coordinator.stage_restrictions and the
-    grant is decided by story_coordinator.grant_covers, so no stage name and
-    no prefix is written here — the same promise the check beside this one
-    makes.
+    is restricted from creating under, no grant on that stage covers the file,
+    and no such file exists beneath `root`. The last is what keeps the check to
+    the rule it enforces: the workflow restricts *creating* files under a
+    prefix, and a file that is already there is not one the stage can create.
+    An entry naming an existing file predicts a modification, which the revert
+    check owns at run time and this check says nothing about.
+
+    `root` is the repository existence is resolved against — the target root,
+    not the harness root and not the process working directory. It is required
+    and carries no default, so no caller can silently be given whatever
+    directory the process happens to be standing in. Existence is decided with
+    exists() on the root joined with the entry's path, so a path present as a
+    directory counts exactly as a regular file does.
+
+    Both halves of the restriction come off story_coordinator.stage_restrictions
+    and the grant is decided by story_coordinator.grant_covers, so no stage name
+    and no prefix is written here — the same promise the check beside this one
+    makes; the path comes off the entry.
 
     A story carrying no technical_plan, and an entry missing either field,
     yield no problem rather than an error: this reports a conflict it can see
@@ -219,7 +258,11 @@ def assignment_problems(story: dict, stages: list[dict]) -> list[str]:
         if story_coordinator.grant_covers(granted, path):
             continue
         for stage, prefix in restrictions:
-            if stage == name and path.startswith(prefix):
+            if (
+                stage == name
+                and path.startswith(prefix)
+                and not (Path(root) / path).exists()
+            ):
                 problems.append(
                     f"$.technical_plan.likely_file_changes[{index}]: assigns "
                     f"'{path}' to stage '{name}', which the workflow declares: "
@@ -280,7 +323,7 @@ def naming_problems(story: dict) -> list[str]:
 
 
 def artifact_problems(
-    artifacts: Iterable[Path], stages: list[dict]
+    artifacts: Iterable[Path], stages: list[dict], root: Path
 ) -> dict[Path, list[str]]:
     """Validate each artifact a planning session added; report what is wrong.
 
@@ -299,6 +342,13 @@ def artifact_problems(
     omits one: the story schema ships with the harness code and
     schema_validator resolves it relative to its own module, so plan time and
     pre-flight load the one file.
+
+    `root` is the target repository the stories will run in, required for the
+    same reason assignment_problems requires it: it is the only check here that
+    asks the filesystem anything, and a defaulted root would let a caller
+    resolve existence against the process working directory without saying so.
+    The two checks that read no filesystem — strictness_problems and
+    naming_problems — keep their signatures.
     """
     problems: dict[Path, list[str]] = {}
     for artifact in artifacts:
@@ -309,7 +359,7 @@ def artifact_problems(
         if not found:
             found += story_coordinator.stage_exception_problems(reading.parsed, stages)
             found += strictness_problems(reading.parsed, stages)
-            found += assignment_problems(reading.parsed, stages)
+            found += assignment_problems(reading.parsed, stages, root)
             found += naming_problems(reading.parsed)
         if found:
             problems[Path(artifact)] = found

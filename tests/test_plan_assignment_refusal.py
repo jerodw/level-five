@@ -51,16 +51,41 @@ story.
 
 Nothing here invokes a model: every coordinator run goes through a fake agent
 runner, and every planning run goes through the stub session.
+
+Since story-042 the same check is narrowed: an entry is reported only when the
+file it names does *not* exist beneath the target root, because a file that is
+already there is one the stage would modify rather than create, and modifying
+is the revert check's question at run time. The last section validates that
+narrowing, and every assertion in it is a matched pair or carries its own
+control:
+
+  * "the present file is not reported" sits beside the very same story and the
+    very same entry checked against a root that does not hold the file, which
+    is reported;
+  * "the root decides" is not reasoned about: the process working directory is
+    moved to a root that disagrees with the one passed in, in both directions,
+    and the answer follows the argument;
+  * "a grant still short-circuits" sits beside the same story with the grant
+    removed, and beside the same story with `grant_covers` replaced, so the
+    grant is shown to be what decided it;
+  * "story-041's committed artifact is reported by nothing" is read off the
+    file on disk through the reader a run uses, beside the same artifact
+    checked against a root holding none of its files, which is reported, and
+    beside story-029, which this repository still reports;
+  * "no run reads the check" is driven rather than inspected: both functions
+    are spied on across a real coordinator run of a story carrying the
+    conflict, and the spies are shown to fire when the check is called.
 """
 import inspect
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from conftest import load_mutant
+from conftest import load_mutant, load_script
 
 from test_revert_check import (  # noqa: F401 - fixtures used by name
     APP_ADDITIVE,
@@ -92,6 +117,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
 import harness_config  # noqa: E402
+import plan_commit  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
 
@@ -131,6 +157,16 @@ STORY_031_STAGE = RESTRICTED_STAGE
 #: second governed path is needed.
 OUTSIDE_EVERY_PREFIX = "orchestration/story_coordinator.py"
 
+#: The root the check resolves existence against, for the assertions here whose
+#: subject is the assignment itself. Since story-042 an entry is reported only
+#: when the file it names does not exist beneath the given root — a file that
+#: is already there is one the stage would modify, not create — and every path
+#: this section names is absent beneath this one, so each assertion below still
+#: turns on the assignment rather than on what this repository happens to hold.
+#: The corpus assertions pass HARNESS_ROOT instead, because the corpus is read
+#: from this repository and is about it.
+ABSENT_ROOT = HARNESS_ROOT / "a-directory-this-repository-does-not-have"
+
 
 def test_the_workflow_this_file_reads_still_has_something_to_say():
     """Every derivation above is load-bearing; an empty one would go green."""
@@ -138,6 +174,7 @@ def test_the_workflow_this_file_reads_still_has_something_to_say():
     assert UNRESTRICTED_STAGE in STAGE_NAMES
     assert UNDEFINED_STAGE not in STAGE_NAMES
     assert STORY_031_FILE.startswith(RESTRICTED_PREFIX)
+    assert not ABSENT_ROOT.exists()
     assert not OUTSIDE_EVERY_PREFIX.startswith(RESTRICTED_PREFIX)
     for _, prefix in RESTRICTIONS:
         assert not OUTSIDE_EVERY_PREFIX.startswith(prefix)
@@ -181,7 +218,7 @@ CONFLICT = plan(entry(STORY_031_FILE, STORY_031_STAGE))
 
 
 def test_the_conflict_story_031_carried_is_reported():
-    problems = plan_validation.assignment_problems(CONFLICT, STAGES)
+    problems = plan_validation.assignment_problems(CONFLICT, STAGES, ABSENT_ROOT)
     assert len(problems) == 1, problems
 
 
@@ -192,7 +229,7 @@ def test_the_reported_problem_names_the_file_the_stage_the_prefix_and_both_ways_
     without going to the workflow definition, which is the point of stating
     the restriction in the workflow's own words.
     """
-    (problem,) = plan_validation.assignment_problems(CONFLICT, STAGES)
+    (problem,) = plan_validation.assignment_problems(CONFLICT, STAGES, ABSENT_ROOT)
 
     assert STORY_031_FILE in problem
     assert STORY_031_STAGE in problem
@@ -209,35 +246,35 @@ def test_the_reported_problem_names_the_file_the_stage_the_prefix_and_both_ways_
 def test_the_same_plan_naming_a_stage_that_may_own_the_file_yields_nothing():
     """The first clean resolution."""
     resolved = plan(entry(STORY_031_FILE, UNRESTRICTED_STAGE))
-    assert plan_validation.assignment_problems(resolved, STAGES) == []
+    assert plan_validation.assignment_problems(resolved, STAGES, ABSENT_ROOT) == []
 
 
 def test_the_same_plan_with_a_grant_naming_that_exact_file_yields_nothing():
     """The second clean resolution, at the granularity of one file."""
     resolved = with_grant(CONFLICT, STORY_031_FILE)
-    assert plan_validation.assignment_problems(resolved, STAGES) == []
+    assert plan_validation.assignment_problems(resolved, STAGES, ABSENT_ROOT) == []
 
 
 def test_a_grant_naming_the_whole_prefix_also_yields_nothing():
     resolved = with_grant(CONFLICT, RESTRICTED_PREFIX)
-    assert plan_validation.assignment_problems(resolved, STAGES) == []
+    assert plan_validation.assignment_problems(resolved, STAGES, ABSENT_ROOT) == []
 
 
 def test_a_grant_naming_a_different_file_beneath_the_prefix_does_not_suppress_it():
     """The grant is not a prefix match here either."""
     other = with_grant(CONFLICT, f"{RESTRICTED_PREFIX}test_something_else.py")
-    assert len(plan_validation.assignment_problems(other, STAGES)) == 1
+    assert len(plan_validation.assignment_problems(other, STAGES, ABSENT_ROOT)) == 1
 
 
 def test_a_grant_on_another_stage_does_not_suppress_it():
     other = with_grant(CONFLICT, STORY_031_FILE, stage=UNRESTRICTED_STAGE)
-    assert len(plan_validation.assignment_problems(other, STAGES)) == 1
+    assert len(plan_validation.assignment_problems(other, STAGES, ABSENT_ROOT)) == 1
 
 
 @pytest.mark.parametrize("stage", STAGE_NAMES)
 def test_a_file_outside_every_declared_prefix_yields_nothing_whatever_the_stage(stage):
     outside = plan(entry(OUTSIDE_EVERY_PREFIX, stage))
-    assert plan_validation.assignment_problems(outside, STAGES) == []
+    assert plan_validation.assignment_problems(outside, STAGES, ABSENT_ROOT) == []
 
 
 @pytest.mark.parametrize(
@@ -246,7 +283,7 @@ def test_a_file_outside_every_declared_prefix_yields_nothing_whatever_the_stage(
 def test_a_file_beneath_a_prefix_assigned_to_an_unrestricted_stage_yields_nothing(
         stage):
     allowed = plan(entry(STORY_031_FILE, stage))
-    assert plan_validation.assignment_problems(allowed, STAGES) == []
+    assert plan_validation.assignment_problems(allowed, STAGES, ABSENT_ROOT) == []
 
 
 # --------------------------------------------------------------------------
@@ -270,11 +307,11 @@ def test_a_half_it_cannot_see_yields_no_problem_and_raises_nothing(story):
     Non-vacuous because the same call over the complete entry — the control
     directly below — does report it.
     """
-    assert plan_validation.assignment_problems(story, STAGES) == []
+    assert plan_validation.assignment_problems(story, STAGES, ABSENT_ROOT) == []
 
 
 def test_the_control_for_every_incomplete_entry_above_is_the_complete_one():
-    assert plan_validation.assignment_problems(CONFLICT, STAGES) != []
+    assert plan_validation.assignment_problems(CONFLICT, STAGES, ABSENT_ROOT) != []
 
 
 # --------------------------------------------------------------------------
@@ -297,7 +334,7 @@ def test_both_halves_of_the_match_come_off_the_loaded_workflow():
         entry(STORY_031_FILE, STORY_031_STAGE),
     )
 
-    problems = plan_validation.assignment_problems(story, synthetic_stages())
+    problems = plan_validation.assignment_problems(story, synthetic_stages(), ABSENT_ROOT)
 
     assert len(problems) == 1, problems
     assert "cartography/atlas.py" in problems[0]
@@ -305,15 +342,15 @@ def test_both_halves_of_the_match_come_off_the_loaded_workflow():
     # The real pair is silent here, and the synthetic pair is silent against
     # the real workflow: neither is written into the module.
     assert STORY_031_FILE not in problems[0]
-    assert plan_validation.assignment_problems(story, STAGES) != []
+    assert plan_validation.assignment_problems(story, STAGES, ABSENT_ROOT) != []
     assert "cartography" not in " ".join(
-        plan_validation.assignment_problems(story, STAGES))
+        plan_validation.assignment_problems(story, STAGES, ABSENT_ROOT))
 
 
 def test_a_workflow_that_restricts_nothing_reports_nothing():
     unrestricted = [{"name": name} for name in STAGE_NAMES]
     assert story_coordinator.stage_restrictions(unrestricted) == []
-    assert plan_validation.assignment_problems(CONFLICT, unrestricted) == []
+    assert plan_validation.assignment_problems(CONFLICT, unrestricted, ABSENT_ROOT) == []
 
 
 def literals_named(text: str) -> list[str]:
@@ -391,15 +428,15 @@ def test_every_artifact_this_file_uses_is_what_it_claims_to_be():
             reading.parsed, STAGES) == [], name
         assert plan_validation.strictness_problems(reading.parsed, STAGES) == [], name
     assert plan_validation.assignment_problems(
-        story_coordinator.read_story(CONFLICTING_ARTIFACT).parsed, STAGES) != []
+        story_coordinator.read_story(CONFLICTING_ARTIFACT).parsed, STAGES, ABSENT_ROOT) != []
     for clean in (REASSIGNED_ARTIFACT, GRANTED_ARTIFACT):
         assert plan_validation.assignment_problems(
-            story_coordinator.read_story(clean).parsed, STAGES) == []
+            story_coordinator.read_story(clean).parsed, STAGES, ABSENT_ROOT) == []
 
 
 def test_artifact_problems_reports_the_new_class(tmp_path: Path):
     path = write_artifact(tmp_path, CONFLICTING_ARTIFACT)
-    found = plan_validation.artifact_problems([path], STAGES)
+    found = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT)
     assert list(found) == [path]
     assert any(STORY_031_FILE in problem for problem in found[path])
 
@@ -407,7 +444,7 @@ def test_artifact_problems_reports_the_new_class(tmp_path: Path):
 def test_artifact_problems_holds_the_clean_resolutions_back(tmp_path: Path):
     for index, text in enumerate((REASSIGNED_ARTIFACT, GRANTED_ARTIFACT)):
         path = write_artifact(tmp_path, text, f"story-90{index}.yaml")
-        assert plan_validation.artifact_problems([path], STAGES) == {}
+        assert plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT) == {}
 
 
 def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: Path):
@@ -417,7 +454,7 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: P
     check — the second half below.
     """
     unparseable = write_artifact(tmp_path, "this: is: not: a story\n\t- ?\n")
-    found = plan_validation.artifact_problems([unparseable], STAGES)
+    found = plan_validation.artifact_problems([unparseable], STAGES, ABSENT_ROOT)
     assert found[unparseable]
     assert not any(STORY_031_FILE in problem for problem in found[unparseable])
 
@@ -426,14 +463,14 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: P
         tmp_path,
         CONFLICTING_ARTIFACT.replace("tasks:\n  - do the sample work\n", ""),
         "story-901.yaml")
-    found = plan_validation.artifact_problems([invalid], STAGES)
+    found = plan_validation.artifact_problems([invalid], STAGES, ABSENT_ROOT)
     assert found[invalid]
     assert not any(STORY_031_FILE in problem for problem in found[invalid])
 
     reached = write_artifact(tmp_path, CONFLICTING_ARTIFACT, "story-902.yaml")
     assert any(STORY_031_FILE in problem
                for problem in plan_validation.artifact_problems(
-                   [reached], STAGES)[reached])
+                   [reached], STAGES, ABSENT_ROOT)[reached])
 
 
 def test_the_strictness_check_still_reports_beside_the_new_one(tmp_path: Path):
@@ -445,7 +482,7 @@ def test_the_strictness_check_still_reports_beside_the_new_one(tmp_path: Path):
               f"entirely\n"
             + plan_block((STORY_031_FILE, STORY_031_STAGE)))
     path = write_artifact(tmp_path, both)
-    problems = plan_validation.artifact_problems([path], STAGES)[path]
+    problems = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT)[path]
     assert any("states a restriction the workflow does not" in p for p in problems)
     assert any("a stage that may own it" in p for p in problems)
 
@@ -473,7 +510,8 @@ def test_the_committed_artifact_story_029_shipped_is_reported_by_the_new_check()
     stories = corpus()
     assert stories, "no committed story artifact parsed"
     reported = {name for name, story in stories.items()
-                if plan_validation.assignment_problems(story, STAGES)}
+                if plan_validation.assignment_problems(story, STAGES,
+                                       HARNESS_ROOT)}
 
     assert "story-029" in reported
     # Not everything is reported, so "reported" is a property of the artifact
@@ -490,7 +528,8 @@ def test_no_committed_artifact_becomes_unrunnable(tmp_path: Path):
     """
     stories = corpus()
     reported = [story for name, story in stories.items()
-                if plan_validation.assignment_problems(story, STAGES)]
+                if plan_validation.assignment_problems(story, STAGES,
+                                       HARNESS_ROOT)]
     assert reported
     for story in reported:
         assert story_coordinator.stage_exception_problems(story, STAGES) == []
@@ -695,7 +734,7 @@ def test_the_three_readers_all_go_through_the_one_matcher(monkeypatch,
     granted_story = with_grant(plan(entry(FILE_GRANT, RESTRICTED_STAGE)), FILE_GRANT)
 
     # With the real matcher, all three say "covered".
-    assert plan_validation.assignment_problems(granted_story, STAGES) == []
+    assert plan_validation.assignment_problems(granted_story, STAGES, ABSENT_ROOT) == []
     assert story_coordinator._ownership_violation(
         run_dir, "changed-files.json", prefixes, granted) is None
     assert story_coordinator.governed_edits(
@@ -704,7 +743,7 @@ def test_the_three_readers_all_go_through_the_one_matcher(monkeypatch,
     monkeypatch.setattr(story_coordinator, "grant_covers",
                         lambda granted, path: False)
 
-    assert plan_validation.assignment_problems(granted_story, STAGES) != []
+    assert plan_validation.assignment_problems(granted_story, STAGES, ABSENT_ROOT) != []
     assert story_coordinator._ownership_violation(
         run_dir, "changed-files.json", prefixes, granted) is not None
     assert story_coordinator.governed_edits(
@@ -1100,3 +1139,525 @@ def test_the_clause_level_scan_is_untouched_by_this_story(tmp_path: Path):
         [("creat(?:e|es|ed|ing|ion)", "nothing(?:-at-all)")],
         name="plan_validation_without_the_creation_word", tmp_path=tmp_path)
     assert mutant.strictness_problems(scoped, STAGES) != []
+
+
+# ==========================================================================
+# story-042: an entry naming a file that already exists is a modification
+#
+# The check enforces the workflow's *creation* restriction. A file already
+# beneath the target root is not one the stage can create, so an entry naming
+# it predicts a modification — which the revert check owns at run time — and
+# is not reported. Every assertion below is one half of a matched pair: the
+# same story, the same entry, two roots that differ only in whether the named
+# file is there.
+# ==========================================================================
+
+
+#: The two paths this section names, both beneath the restricted prefix and
+#: both assigned to the restricted stage, so the only thing that can differ
+#: between an accepted and a refused answer is whether the file exists.
+PRESENT_FILE = f"{RESTRICTED_PREFIX}test_already_on_disk.py"
+ABSENT_FILE = f"{RESTRICTED_PREFIX}test_not_written_yet.py"
+PRESENT_DIRECTORY = f"{RESTRICTED_PREFIX}a_directory_that_is_there"
+
+PRESENT = plan(entry(PRESENT_FILE, RESTRICTED_STAGE))
+ABSENT = plan(entry(ABSENT_FILE, RESTRICTED_STAGE))
+
+
+def roots(tmp_path: Path) -> tuple[Path, Path]:
+    """A root holding this section's paths, and one holding none of them.
+
+    Both are real directories, so "absent" is a root that exists and does not
+    hold the file rather than a root that is not there at all — the weaker of
+    the two conditions, and the one a plan is actually written against.
+    """
+    holding, empty = tmp_path / "holding", tmp_path / "empty"
+    (holding / PRESENT_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (holding / PRESENT_FILE).write_text("# already here\n", encoding="utf-8")
+    (holding / PRESENT_DIRECTORY).mkdir(parents=True, exist_ok=True)
+    (empty / RESTRICTED_PREFIX).mkdir(parents=True, exist_ok=True)
+    return holding, empty
+
+
+def test_the_two_roots_this_section_uses_are_what_it_assumes(tmp_path: Path):
+    holding, empty = roots(tmp_path)
+    for root in (holding, empty):
+        assert root.is_dir()
+    assert (holding / PRESENT_FILE).is_file()
+    assert (holding / PRESENT_DIRECTORY).is_dir()
+    for path in (PRESENT_FILE, ABSENT_FILE, PRESENT_DIRECTORY):
+        assert path.startswith(RESTRICTED_PREFIX)
+        assert not (empty / path).exists()
+    assert not (holding / ABSENT_FILE).exists()
+
+
+def test_an_entry_naming_a_file_that_exists_beneath_the_root_is_not_reported(
+        tmp_path: Path):
+    """The accepting half. Its control is the refusing half directly below.
+
+    Same story, same entry, same workflow: the roots are the only difference,
+    so the two answers together are what show the existence question is asked
+    at all.
+    """
+    holding, empty = roots(tmp_path)
+
+    assert plan_validation.assignment_problems(PRESENT, STAGES, holding) == []
+    assert len(plan_validation.assignment_problems(PRESENT, STAGES, empty)) == 1
+
+
+def test_an_entry_naming_a_file_that_does_not_exist_is_still_reported(
+        tmp_path: Path):
+    """The refusing half: that entry does describe a creation.
+
+    A narrowing that had disabled the check outright would pass the test above
+    and fail this one.
+    """
+    holding, _ = roots(tmp_path)
+
+    (problem,) = plan_validation.assignment_problems(ABSENT, STAGES, holding)
+    assert ABSENT_FILE in problem
+
+
+def test_the_message_for_the_reported_case_is_word_for_word_todays(
+        tmp_path: Path):
+    """Read off the produced text, not off the source that builds it.
+
+    The whole message, not four substrings of it: the case that survives the
+    narrowing is the case the message was written for, so any rewording of it
+    is a change this story was not allowed to make.
+    """
+    _, empty = roots(tmp_path)
+
+    (problem,) = plan_validation.assignment_problems(PRESENT, STAGES, empty)
+
+    assert problem == (
+        f"$.technical_plan.likely_file_changes[0]: assigns "
+        f"'{PRESENT_FILE}' to stage '{RESTRICTED_STAGE}', which the workflow "
+        f"declares: {RESTRICTED_STAGE} may not create files under "
+        f"{RESTRICTED_PREFIX}. Either assign '{PRESENT_FILE}' to a stage that "
+        f"may own it, or declare a stage_exceptions grant naming "
+        f"'{PRESENT_FILE}' for {RESTRICTED_STAGE}."
+    )
+
+
+def test_a_path_present_as_a_directory_counts_as_existing(tmp_path: Path):
+    """exists(), not is_file(): a directory is there and cannot be created.
+
+    Beside the same entry against the root that does not hold it, which is
+    reported, so this is not a directory the check simply never looked at.
+    """
+    holding, empty = roots(tmp_path)
+    directory = plan(entry(PRESENT_DIRECTORY, RESTRICTED_STAGE))
+
+    assert plan_validation.assignment_problems(directory, STAGES, holding) == []
+    assert len(plan_validation.assignment_problems(directory, STAGES, empty)) == 1
+    # And it is the same answer a regular file gets, rather than a second rule.
+    assert plan_validation.assignment_problems(PRESENT, STAGES, holding) == []
+
+
+def test_the_root_argument_decides_and_not_the_process_working_directory(
+        tmp_path: Path, monkeypatch):
+    """Driven from a working directory that disagrees with the root, both ways.
+
+    The two coincide when the harness is its own target, so a check run from
+    the repository root would prove nothing here. Standing in the root that
+    holds the file while passing the one that does not must still report, and
+    standing in the root that does not while passing the one that does must
+    still stay silent; a check reading `Path.cwd()` fails both.
+    """
+    holding, empty = roots(tmp_path)
+
+    monkeypatch.chdir(holding)
+    assert len(plan_validation.assignment_problems(PRESENT, STAGES, empty)) == 1
+
+    monkeypatch.chdir(empty)
+    assert plan_validation.assignment_problems(PRESENT, STAGES, holding) == []
+
+
+def test_a_relative_root_is_still_the_root_it_was_given(tmp_path: Path,
+                                                        monkeypatch):
+    """The control above, with the root written relative to somewhere else.
+
+    A relative root is resolved by the process working directory, so this is
+    the one case where the two are allowed to interact — and the interaction
+    is the caller's, not the check's.
+    """
+    holding, empty = roots(tmp_path)
+
+    monkeypatch.chdir(tmp_path)
+    assert plan_validation.assignment_problems(PRESENT, STAGES,
+                                               Path("holding")) == []
+    assert len(plan_validation.assignment_problems(PRESENT, STAGES,
+                                                   Path("empty"))) == 1
+
+
+def test_neither_function_hides_the_root_behind_a_default():
+    """A two-argument call raises rather than falling back to the cwd."""
+    for function in (plan_validation.assignment_problems,
+                     plan_validation.artifact_problems):
+        parameters = list(inspect.signature(function).parameters.values())
+        assert len(parameters) == 3, function.__name__
+        assert parameters[-1].default is inspect.Parameter.empty, function.__name__
+
+    with pytest.raises(TypeError):
+        plan_validation.assignment_problems(PRESENT, STAGES)
+    with pytest.raises(TypeError):
+        plan_validation.artifact_problems([], STAGES)
+    # Control: the three-argument calls those two are missing an argument for
+    # do not raise.
+    assert plan_validation.assignment_problems(PRESENT, STAGES, ABSENT_ROOT) != []
+    assert plan_validation.artifact_problems([], STAGES, ABSENT_ROOT) == {}
+
+
+def test_the_two_checks_that_read_no_filesystem_keep_their_signatures():
+    """strictness_problems and naming_problems were left alone."""
+    assert list(inspect.signature(
+        plan_validation.strictness_problems).parameters) == ["story", "stages"]
+    assert list(inspect.signature(
+        plan_validation.naming_problems).parameters) == ["story"]
+
+
+def test_a_grant_still_short_circuits_before_existence_is_asked(tmp_path: Path):
+    """grant_covers keeps deciding grants; the new condition decides none of it.
+
+    Two controls: the same story with the grant removed is reported, so the
+    grant is what silenced it; and the same story with `grant_covers` replaced
+    by a matcher that covers nothing is reported too, so the grant reached the
+    answer through that function rather than through the file being anywhere.
+    """
+    _, empty = roots(tmp_path)
+    granted = with_grant(PRESENT, PRESENT_FILE)
+
+    assert plan_validation.assignment_problems(granted, STAGES, empty) == []
+    assert len(plan_validation.assignment_problems(PRESENT, STAGES, empty)) == 1
+
+
+def test_the_grant_is_what_silences_it_and_not_the_existence_question(
+        tmp_path: Path, monkeypatch):
+    _, empty = roots(tmp_path)
+    granted = with_grant(PRESENT, PRESENT_FILE)
+
+    monkeypatch.setattr(story_coordinator, "grant_covers",
+                        lambda granted, path: False)
+
+    assert len(plan_validation.assignment_problems(granted, STAGES, empty)) == 1
+
+
+def test_artifact_problems_resolves_existence_against_the_root_it_is_given(
+        tmp_path: Path):
+    """The same pair one level up, through the function l5-plan calls."""
+    holding, empty = roots(tmp_path)
+    text = artifact("story-900") + plan_block((PRESENT_FILE, RESTRICTED_STAGE))
+    path = write_artifact(tmp_path, text, "story-903.yaml")
+
+    assert plan_validation.artifact_problems([path], STAGES, holding) == {}
+    assert any(PRESENT_FILE in problem
+               for problem in plan_validation.artifact_problems(
+                   [path], STAGES, empty)[path])
+
+
+# --------------------------------------------------------------------------
+# The committed corpus after the narrowing
+# --------------------------------------------------------------------------
+
+
+def story_on_disk(story_id: str) -> tuple[Path, dict]:
+    """One committed artifact and its parse, through the reader a run uses."""
+    path = STORIES_DIR / f"{story_id}.yaml"
+    reading = story_coordinator.read_story(path.read_text(encoding="utf-8"))
+    assert reading.problems == [], (story_id, reading.problems)
+    return path, reading.parsed
+
+
+def test_story_041s_committed_artifact_is_reported_by_nothing(tmp_path: Path):
+    """The observed case that motivated this story, read from disk.
+
+    Its four entries assign existing files to the restricted stage, and every
+    one of them was refused before the narrowing. Two controls, so this is not
+    an artifact the check merely never looked at: the same artifact checked
+    against a root holding none of its files is reported, and the entries are
+    required to be the conflicting kind — beneath the restricted prefix, on
+    the restricted stage — rather than merely uninteresting.
+    """
+    path, story = story_on_disk("story-041")
+
+    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT) == {}
+
+    conflicting = [e for e in story["technical_plan"]["likely_file_changes"]
+                   if e["stage"] == RESTRICTED_STAGE
+                   and e["file"].startswith(RESTRICTED_PREFIX)]
+    assert conflicting, "story-041 no longer carries the entries this is about"
+    for named in conflicting:
+        assert (HARNESS_ROOT / named["file"]).exists(), named["file"]
+    empty = tmp_path / "holds-none-of-them"
+    empty.mkdir()
+    assert len(plan_validation.assignment_problems(story, STAGES, empty)) == \
+        len(conflicting)
+
+
+def test_the_corpus_still_holds_a_true_positive_after_the_narrowing():
+    """story-029 is still reported, and reported for files that are not there.
+
+    story-038 renamed away every module it named for the implementer, so none
+    of them can exist and none of them could have been created — which is what
+    keeps the corpus evidence for the refusing half from being silently empty.
+    """
+    path, story = story_on_disk("story-029")
+
+    reported = plan_validation.assignment_problems(story, STAGES, HARNESS_ROOT)
+    assert reported
+    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT)[path]
+    for named in story["technical_plan"]["likely_file_changes"]:
+        if any(named["file"] in problem for problem in reported):
+            assert not (HARNESS_ROOT / named["file"]).exists(), named["file"]
+
+
+def test_the_corpus_after_the_narrowing_is_neither_all_reported_nor_none():
+    """Both halves are exercised by artifacts this repository actually holds."""
+    stories = corpus()
+    reported = {name for name, story in stories.items()
+                if plan_validation.assignment_problems(story, STAGES,
+                                                       HARNESS_ROOT)}
+    assert reported
+    assert reported != set(stories)
+    assert "story-041" not in reported
+    assert "story-029" in reported
+
+
+# --------------------------------------------------------------------------
+# The module still names neither half of the restriction, docstring included
+# --------------------------------------------------------------------------
+
+
+def test_the_module_names_no_stage_and_no_prefix_in_its_prose_either():
+    """The raw text, not the stripped text: the docstring was rewritten here.
+
+    `literals_named` strips docstrings and comments, which is right for the
+    promise about *code* and would miss a stage name written into the
+    rewritten prose. Beside the same scan over the same text with each literal
+    planted in it.
+    """
+    module = (HARNESS_ROOT / "orchestration" / "plan_validation.py").read_text(
+        encoding="utf-8")
+
+    for name in STAGE_NAMES:
+        assert not re.search(rf"\b{re.escape(name)}\b", module), name
+    for _, prefix in RESTRICTIONS:
+        assert prefix not in module, prefix
+
+    for planted in (RESTRICTED_STAGE, UNRESTRICTED_STAGE):
+        assert re.search(rf"\b{re.escape(planted)}\b", module + f"\n{planted}\n")
+    assert RESTRICTED_PREFIX in module + f"\n{RESTRICTED_PREFIX}\n"
+
+
+def test_the_docstring_states_the_two_rules_and_what_existence_is_relative_to():
+    doc = flowed(plan_validation.__doc__)
+    assert re.search(r"(?i)revert check", doc)
+    assert re.search(r"(?i)creat", doc)
+    assert re.search(r"(?i)target root", doc)
+    assert re.search(r"(?i)neither the harness root nor the process working "
+                     r"directory|not the harness root and not the process "
+                     r"working directory", doc)
+    assert re.search(r"(?i)prediction", doc)
+
+
+# --------------------------------------------------------------------------
+# scripts/l5-plan: the root it passes, and the refusing path unchanged
+# --------------------------------------------------------------------------
+
+
+L5_PLAN_SCRIPT = load_script("l5-plan", name="l5_plan_for_story_042")
+
+
+def test_report_passes_the_target_root_it_was_given_to_the_check(
+        tmp_path: Path, monkeypatch):
+    """Not read off the source: the check records the root it was called with."""
+    stories_dir = tmp_path / "stories"
+    stories_dir.mkdir()
+    before = plan_commit.snapshot(stories_dir)
+    (stories_dir / "story-900.yaml").write_text(
+        artifact("story-900") + plan_block((PRESENT_FILE, RESTRICTED_STAGE)),
+        encoding="utf-8")
+    _, empty = roots(tmp_path)
+    seen: list[Path] = []
+
+    original = plan_validation.artifact_problems
+
+    def spy(artifacts, stages, root):
+        seen.append(root)
+        return original(artifacts, stages, root)
+
+    monkeypatch.setattr(plan_validation, "artifact_problems", spy)
+
+    L5_PLAN_SCRIPT.report(empty, stories_dir, before, STAGES)
+
+    assert seen == [empty]
+
+
+def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
+        tmp_path: Path, capsys):
+    """Byte for byte: the header, the problem, the guidance, the summary line.
+
+    The status too, which is what `main` exits with when the session itself
+    succeeded. Every assertion here is a positive one over produced text, so
+    each fails on its own the moment a character of the refusing path moves;
+    that the accepting root gets past validation instead is the pair above,
+    driven through `artifact_problems` and end to end through `l5-plan`.
+    """
+    stories_dir = tmp_path / "stories"
+    stories_dir.mkdir()
+    before = plan_commit.snapshot(stories_dir)
+    path = stories_dir / "story-900.yaml"
+    path.write_text(artifact("story-900") + plan_block(
+        (PRESENT_FILE, RESTRICTED_STAGE)), encoding="utf-8")
+    _, empty = roots(tmp_path)
+
+    status = L5_PLAN_SCRIPT.report(empty, stories_dir, before, STAGES)
+    printed = capsys.readouterr()
+
+    (problem,) = plan_validation.assignment_problems(PRESENT, STAGES, empty)
+    assert status == 1
+    assert printed.err == (
+        f"{path} is not a valid story artifact:\n"
+        f"  - {problem}\n"
+        "Fix the artifact or re-run planning before executing the story.\n"
+    )
+    assert printed.out == (
+        f"l5-plan: committed nothing; {path} remain in the working tree.\n"
+    )
+
+
+@pytest.fixture
+def planning_holding(tmp_path: Path) -> Planning:
+    """The `planning` fixture's repository, already holding the planned file.
+
+    The file is committed *before* the bare origin is made, so the two are
+    level and the base check has nothing to say — the difference between this
+    fixture and `planning` is the file and nothing else.
+    """
+    made = make_planning(tmp_path)
+    path = made.root / PRESENT_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# already here\n", encoding="utf-8")
+    made.git("add", "-A")
+    made.git("commit", "-q", "-m", "the file the plan names")
+    made.remote = bare_remote(tmp_path, made, upstream=True)
+    return made
+
+
+PRESENT_ARTIFACT = artifact("story-900") + plan_block(
+    (PRESENT_FILE, RESTRICTED_STAGE))
+
+
+def test_l5_plan_commits_a_plan_naming_a_file_the_target_already_holds(
+        planning_holding: Planning):
+    """End to end, and the pair is the same artifact against two repositories.
+
+    The next test is the control: this very artifact, this very stub, in a
+    target that does not hold the file — refused and uncommitted.
+    """
+    before = planning_holding.head()
+    refs_before = remote_refs(planning_holding.remote)
+
+    result = run_plan(planning_holding, L5_STUB_WRITE=writes(
+        (ARTIFACT_PATH, PRESENT_ARTIFACT)))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert planning_holding.head() != before
+    assert remote_refs(planning_holding.remote) != refs_before
+    assert planning_holding.status() == ""
+
+
+def test_l5_plan_refuses_the_same_plan_where_the_target_lacks_the_file(
+        planning: Planning):
+    """The control for the acceptance above: only the repository differs."""
+    before = planning.head()
+
+    result = run_plan(planning, L5_STUB_WRITE=writes(
+        (ARTIFACT_PATH, PRESENT_ARTIFACT)))
+
+    assert result.returncode != 0
+    assert planning.head() == before
+    assert PRESENT_FILE in result.stdout + result.stderr
+    assert ARTIFACT_PATH in planning.status()
+
+
+def test_l5_plan_resolves_existence_against_the_target_root_not_its_cwd(
+        planning_holding: Planning):
+    """Run from a subdirectory, where the two answers differ.
+
+    From `work/`, the plan's path resolved against the working directory is
+    not there and resolved against the target root is; the run is accepted, so
+    the root `find_target_root` walked up to is the one that decided. The
+    control is the second run in the same repository with that file removed,
+    which is refused — so acceptance is a property of the file being there.
+    """
+    work = planning_holding.root / "work"
+    work.mkdir()
+    assert not (work / PRESENT_FILE).exists()
+
+    accepted = subprocess.run(
+        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"), "add a thing"],
+        cwd=work,
+        env=planning_holding.env(L5_STUB_WRITE=writes(
+            (f"../{ARTIFACT_PATH}", PRESENT_ARTIFACT))),
+        capture_output=True, text=True,
+    )
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+    (planning_holding.root / PRESENT_FILE).unlink()
+    refused = subprocess.run(
+        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"), "add a thing"],
+        cwd=work,
+        env=planning_holding.env(L5_STUB_WRITE=writes(
+            (f"../{ARTIFACT_PATH.replace('900', '901')}",
+             PRESENT_ARTIFACT.replace("story-900", "story-901")))),
+        capture_output=True, text=True,
+    )
+
+    assert refused.returncode != 0
+    assert PRESENT_FILE in refused.stdout + refused.stderr
+
+
+# --------------------------------------------------------------------------
+# No run reads this check
+# --------------------------------------------------------------------------
+
+
+def test_no_run_calls_either_plan_time_function(target: Path, harness_root: Path,
+                                                monkeypatch):
+    """Driven, not inspected: both functions are spied on across a real run.
+
+    The story the run executes carries exactly the entry the check reports —
+    an absent file beneath the restricted prefix on the restricted stage — so
+    a coordinator that consulted the check at pre-flight or anywhere else
+    would both fire a spy and refuse the run. It does neither, and the run
+    completes through all four stages as it does today.
+    """
+    calls: list[str] = []
+    for name in ("assignment_problems", "artifact_problems"):
+        original = getattr(plan_validation, name)
+
+        def spy(*args, _name=name, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(plan_validation, name, spy)
+
+    append_to_story(target, plan_block((ABSENT_FILE, RESTRICTED_STAGE)))
+    story = story_coordinator.read_story(
+        (target / ".harness" / "stories" / "story-001.yaml").read_text(
+            encoding="utf-8"))
+    assert story.problems == []
+
+    code, runner = run(target, harness_root, {})
+
+    assert code == 0
+    assert runner.calls == STAGE_NAMES
+    assert calls == []
+    # Control one: the artifact this run carried is one the check does report,
+    # so the silence above is the coordinator's and not the artifact's.
+    assert plan_validation.assignment_problems(story.parsed, STAGES, target) != []
+    # Control two: that call went through the spy, so the spies were wired.
+    assert calls == ["assignment_problems"]
