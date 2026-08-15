@@ -1,0 +1,139 @@
+story:
+  id: story-039
+  title: Every configurable value is proven configurable
+  description: |
+    Thirteen keys are read out of .harness/config.yaml and nothing establishes
+    that any of them is obeyed. A value moved into configuration and then
+    hardcoded to the same literal behaves identically in this repository, so
+    the suite cannot tell the two apart. Referencing a key in a fixture is not
+    exercising it - a fixture writing branch_prefix story/ proves nothing,
+    because that is the value the harness would use anyway.
+
+    The absence idiom this repository already has - story-028 requires that
+    grepping plan_validation.py for a stage name or a restricted prefix returns
+    nothing - is worth keeping and is not sufficient. It proves a literal is
+    not present; it does not prove the configured value is what governs. A
+    different hardcoded value that happens to match, a helper two modules away,
+    or a default baked into a signature all pass it.
+
+    So this story proves obedience the only way that is deterministic - set a
+    key to a value the harness would never pick, and assert the harness obeys
+    it. That needs a source of truth for what the keys are, and today there is
+    none - base_branch and clean_clone_python exist only in config.get calls.
+    The key set becomes a schema beside the artifact schemas, which is how
+    every other contract in this repository is expressed, and coverage is
+    asserted against it by set equality in both directions so the next key
+    added cannot be quietly ignored.
+
+    The schema is a declaration and not an enforcement point. Nothing validates
+    .harness/config.yaml at run time and no unknown key is refused, so this
+    story changes no harness behaviour - its deliverable is the rule and the
+    coverage.
+
+    The story expects the coverage to find ties, and treats that as the point
+    rather than as a problem. It fixes none of them. A tie not already filed
+    is written up as a request under .harness/requests/ and left for its own
+    story; the interpreter tie and the test-location tie are already filed and
+    are not re-filed.
+
+tasks:
+  - Add schemas/harness-config.schema.json declaring one property per key the harness reads - allowed_tools, architecture_docs, base_branch, branch_prefix, clean_clone_python, logs_dir, model, permission_mode, runs_dir, standards_dir, stories_dir, test_command, workflow - each with the type load_config produces and a description saying what the key governs, and add its name to schemas/manifest.json.
+  - Leave project undeclared and record in the schema's own top-level description that the declared set is the set of keys the harness reads, so a key present in a target's config file and read by nothing is out of the set by construction rather than by oversight.
+  - Add harness_config.declared_config_keys(harness_root=None) returning the schema's property names, resolved relative to the module like the schemas are, raising rather than returning an empty or partial tuple on a missing, unparseable or wrong-shaped schema.
+  - Add tests/test_config_keys_are_obeyed.py holding KEY_PROOFS - a mapping from each declared key to the node id that proves it and to whether that proof is behavioural or argument-list - and assert set equality between KEY_PROOFS and declared_config_keys() in both directions.
+  - Add an AST scan over orchestration/ and scripts/ collecting the keys read as config.get("...") or config["..."], including the scripts that carry no .py suffix, and assert the scanned set equals the declared set in both directions.
+  - Control that scan by feeding it a synthetic module reading a fourteenth key and showing it reports the mismatch, so a scan that finds nothing has been shown to find something.
+  - Write a behavioural proof for each of branch_prefix, base_branch, stories_dir, runs_dir, logs_dir, standards_dir, architecture_docs, workflow, test_command and clean_clone_python, each configuring a fixture target with a value chosen so an accidental match is impossible and observing the harness follow it.
+  - Write an argument-list proof for each of model, permission_mode and allowed_tools, asserting on the invocation the coordinator builds for a fake runner, and cover both of the call sites that pass allowed_tools.
+  - Assert that no value used by a proof equals either the default the harness would fall back to or the value this repository's own .harness/config.yaml carries, so a proof cannot decay into one that would pass against a hardcoded literal.
+  - Add a mutation control parametrized over the declared keys - for each key, copy orchestration/ and the module into a throwaway root, replace that key's read with the default literal it falls back to, run that key's proof there with a real pytest, and require it to go red.
+  - Record in .harness/docs/ARCHITECTURE.md that the config key set is declared in schemas/harness-config.schema.json, that declared_config_keys is its only reader, that the schema is a declaration rather than a run-time check, and that every declared key carries a proof which varies it.
+  - Write one request file under .harness/requests/ for each tie the coverage exposes that is not already filed, naming the key and what failed to follow configuration, and change nothing to make the tie go away.
+
+acceptance_criteria:
+  - schemas/harness-config.schema.json exists, is valid draft 2020-12 within the subset schema_validator supports, forbids no additional properties, and is named in schemas/manifest.json - so the existing inventory equality assertions hold with it present and would fail with the manifest line missing.
+  - harness_config.declared_config_keys() returns exactly these thirteen names - allowed_tools, architecture_docs, base_branch, branch_prefix, clean_clone_python, logs_dir, model, permission_mode, runs_dir, standards_dir, stories_dir, test_command, workflow.
+  - declared_config_keys raises on a missing, unparseable or wrong-shaped schema rather than returning an empty or partial tuple, and a test constructs each of those three cases.
+  - The declared set and the set of keys the harness actually reads are asserted equal in both directions by a search over orchestration/ and scripts/ rather than against a second maintained list, and the search reads the scripts that carry no .py suffix.
+  - That search reports a mismatch when it is given a module reading a key the schema does not declare, demonstrated by constructing one rather than by reasoning about it.
+  - Every declared key appears in KEY_PROOFS, and every key in KEY_PROOFS is declared. A key added to the schema with no proof fails, and a proof naming a key no longer declared fails; both are demonstrated in a fixture rather than asserted in prose.
+  - Each of branch_prefix, base_branch, stories_dir, runs_dir, logs_dir, standards_dir, architecture_docs, workflow, test_command and clean_clone_python is proven behaviourally - the fixture configures a value the harness would never pick and the harness is observed acting on that value.
+  - Each of model, permission_mode and allowed_tools is proven on the invocation built for the agent runner, because those values are handed to the runner and are observable nowhere else, and KEY_PROOFS records that proof as argument-list so a reader knows what proven means for those three.
+  - Both call sites that pass allowed_tools to the runner are covered, so a site left reading a hardcoded list would fail.
+  - No value used by any proof equals the default the harness falls back to for that key, and none equals the value this repository's .harness/config.yaml carries; an assertion in the module checks both, and it fails when a proof value is changed to the default.
+  - For each declared key, the mutation control replaces that key's read with the literal default in a throwaway copy of orchestration/, runs that key's proof there with a real pytest, and observes a failure. A proof that sets a key and asserts nothing about its effect would be caught here.
+  - The harness behaves exactly as it does today. No key gains a run-time check, no unknown key is refused, .harness/config.yaml is unchanged, and orchestration/story_coordinator.py, orchestration/context_assembler.py and orchestration/run_status.py are unchanged.
+  - .harness/docs/ARCHITECTURE.md states where the key set is declared, that declared_config_keys is its only reader, that the declaration is not a run-time validation, and that coverage is set equality against it in both directions.
+  - Every tie the coverage exposes that is not already filed as a request has a request file under .harness/requests/ naming the key and the behaviour that did not follow configuration, and none of them is fixed by this story.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/harness-config.schema.json as an object schema with thirteen properties and an empty required list, since every key either has a fallback in the code or is optional by design. architecture_docs and allowed_tools are arrays of strings; the other eleven are strings. Give each property a description naming what it governs, and give the schema a top-level description saying it declares the keys the harness reads and is not validated against a target's config file at run time.
+    - Add harness-config to schemas/manifest.json in sorted position. The existing inventory assertions are computed from the manifest rather than from a copy of it, so no test needs editing for the new file to be accepted.
+    - Add declared_config_keys to orchestration/harness_config.py, reading the schema through schema_validator.load_schema so there is one reader of schemas/ and not two, and raising ValueError with the path in the message when the file is missing, unparseable, or carries no properties object.
+    - Build the fixture target in tests/test_config_keys_are_obeyed.py as a temp directory with its own .harness/config.yaml, its own harness root holding workflows/ and prompts/, and a fake runner capturing every invocation, following the fixture style already used in tests/test_artifact_schemas.py rather than reading this repository's own .harness/runs/.
+    - Choose the varying values so an accidental match is impossible - a distinctive token in each, for instance .harness/xyzzy-runs, .harness/xyzzy-stories, .harness/xyzzy-logs, .harness/xyzzy-standards, docs/xyzzy-architecture.md, xyzzy-branch/, xyzzy-base, xyzzy-workflow, xyzzy-runner --all, /xyzzy/bin/interpreter, xyzzy-model, xyzzyPrompt and Bash(xyzzy:*) - and assert none of them coincides with a default or with this repository's configured value.
+    - For workflow, write a fixture workflow file named for the varying value into the fixture harness root, so the proof is that the coordinator loaded the named definition rather than the shipped one.
+    - For clean_clone_python and test_command, observe the command the clean-clone path builds rather than executing a non-existent interpreter, so the proof is deterministic and does not depend on the fixture having a second Python.
+    - Write the AST scan as a walk collecting the argument of every config.get call and every subscript of a name called config, over orchestration/*.py and over the files in scripts/, reading the extensionless scripts as text and parsing them with ast.
+    - Write the mutation control as one parametrized test - copy orchestration/, schemas/, tests/conftest.py and this module into a temp root, rewrite that key's read to the default literal, run the single node id KEY_PROOFS records for the key with a real pytest, and require a non-zero exit. Copying only what the module imports keeps collection in the throwaway root small, as story-013's control does.
+    - Run the coverage once it is written and read what it reports. Where a key does not follow configuration, leave the harness alone, write the proof to assert what is true today, and file the finding as a request. Where the finding is the interpreter tie or the test-location tie, file nothing, because both already have requests.
+    - Update the schemas/ and .harness/ sections of .harness/docs/ARCHITECTURE.md, and say in the schemas/ section that this one file declares a contract rather than an artifact shape, which is why it is in the inventory and why no stage is asked to satisfy it.
+  likely_file_changes:
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: declares the key set that the coverage is asserted against
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: the inventory is the declaration and must name the new schema
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: gains declared_config_keys, the only reader of the new schema
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: the varying proofs, the coverage equality, the search and the mutation control
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records where the key set is declared and what proven means per key
+    - file: .harness/requests/
+      stage: documenter
+      reason: one request file per tie the coverage exposes that is not already filed
+
+scope:
+  modify:
+    - schemas/harness-config.schema.json
+    - schemas/manifest.json
+    - orchestration/harness_config.py
+    - tests/test_config_keys_are_obeyed.py
+    - .harness/docs/ARCHITECTURE.md
+    - .harness/requests/
+  do_not_modify:
+    - .harness/config.yaml
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - orchestration/run_status.py
+    - orchestration/schema_validator.py
+    - scripts/
+    - workflows/
+    - prompts/
+    - .harness/stories/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm the declared key set matches what the harness reads, in both directions, by running the search the story adds rather than by reading a maintained list, and confirm the search reports a mismatch on a module reading an undeclared key.
+  - Confirm every declared key has a proof that sets it to a non-default value, and that the proof fails when the key's effect is removed. The second half is the one that matters - a proof that sets a key and asserts nothing about it would satisfy a naive completeness check - so confirm it by running the mutation control and reading its result, for every key rather than for a sample.
+  - Confirm the coverage assertion fails when a key is added with no proof, by adding one in a fixture and observing the failure rather than by reasoning about it.
+  - Confirm that for each key whose proof is an argument-list assertion rather than a behavioural one, KEY_PROOFS records it as such and the story says why.
+  - Confirm no varying value equals a default or this repository's configured value, and that the assertion enforcing this goes red when a varying value is changed to the default.
+  - Confirm the harness is unchanged in behaviour - .harness/config.yaml, orchestration/story_coordinator.py, orchestration/context_assembler.py and orchestration/run_status.py carry no edit, and the full suite passes with every pre-existing assertion intact.
+  - Confirm the schema inventory still agrees in both directions with the new schema present, and that removing its manifest line turns an inventory check red.
+  - Confirm every tie the coverage exposed is reported rather than fixed - each has a request file naming the key, no harness behaviour was changed to make a proof pass, and neither the interpreter tie nor the test-location tie was re-filed.
+
+constraints:
+  - No tie the coverage exposes is fixed by this story. A key that does not govern is written up and left; the fix is its own story.
+  - No configuration key is added or removed. The thirteen the harness reads today are the thirteen the schema declares.
+  - The schema is a declaration, not a run-time check. Nothing validates a target's config file against it during a run and no unknown key is refused, so a target that carries an extra key runs exactly as it does today.
+  - A varying value must be one the harness would never pick. A proof whose value coincides with a default or with this repository's own configuration proves nothing and is the precise defect this story exists to remove.
+  - The coverage rule replaces no existing absence assertion. Story-028's requirement that a literal be absent from plan_validation.py stays exactly as it is; varying a key subsumes the absence scan without retiring it.
+  - No assertion anywhere in the suite is weakened, skipped or deleted to accommodate the new schema or the new module.
+  - Committed story artifacts and the runs archive record what was true when they were written and are left alone.
