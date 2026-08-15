@@ -12,9 +12,12 @@ lists, so what is validated here is the scan's *reach* and the lists'
     is keyed by repository-relative path and the exact text of the matched
     line rather than by a line number, so an unrelated edit above a tie
     does not churn the list and look like the burn-down.
-  * **the five audited ties.** Asserted present by name, by running the
-    scan rather than by reading the list — a scan that cannot see the ties
-    that motivated it has not been shown to work.
+  * **the audited ties that are still grandfathered.** Asserted present by
+    name, by running the scan rather than by reading the list — a scan that
+    cannot see the ties that motivated it has not been shown to work. The
+    audit's other two both sat in `orchestration/story_coordinator.py` and
+    were repaired by the-interpreter-is-not-assumed-to-be-python, which is
+    also why "no tie was fixed" now guards two files rather than three.
   * **the matcher.** The four boundary cases the story names are
     constructed and run through the real `scan`, not reasoned about.
   * **the stated limits.** Read out of `orchestration/harness_source.py`'s
@@ -62,10 +65,11 @@ REPO_ROOT = Path(harness_source.__file__).resolve().parents[1]
 DECLARING_MODULE = "orchestration/harness_source.py"
 VALIDATION_REL = "tests/test_no_target_stack_in_harness_source.py"
 
-#: The three files the story forbids itself to edit. Every tie in them is
-#: grandfathered below and repaired by a later story, not by this one.
+#: The files whose ties are still grandfathered below, and which no story
+#: since has edited. `orchestration/story_coordinator.py` was among them
+#: until the-interpreter-is-not-assumed-to-be-python repaired its ties, which
+#: is what taking it off this tuple records.
 UNTOUCHED = (
-    "orchestration/story_coordinator.py",
     "workflows/story-workflow.json",
     "prompts/tester.md",
 )
@@ -91,94 +95,23 @@ UNTOUCHED = (
 
 
 TEMPORARY_TIES: frozenset[tuple[str, str]] = frozenset({
-    # --- The version probe: a Python snippet the harness executes. ------
-    ('orchestration/story_coordinator.py',
-     '_VERSION_PROBE = "import platform; print(platform.python_version())"'),
-
-    # --- The clean-clone record's own Python-shaped fields. -------------
-    ('orchestration/story_coordinator.py',
-     '    python: str'),
-    ('orchestration/story_coordinator.py',
-     '    python_version: str | None = None'),
-    ('orchestration/story_coordinator.py',
-     '        record: dict = {"ran": self.ran, "command": self.command, "python": self.python}'),
-    ('orchestration/story_coordinator.py',
-     '            "python_version": self.python_version,'),
-
-    # --- The clean_clone_python configuration key, and the prose that
-    #     explains it. Line 1179 is here rather than in the permanent list
-    #     because "the oldest supported Python" is an assumption about the
-    #     target's stack, not a statement about the harness's own.
-    ('orchestration/story_coordinator.py',
-     '    *configured* clean_clone_python that does not exist is a different case,'),
-    ('orchestration/story_coordinator.py',
-     '    clean_clone_python: str | None,'),
-    ('orchestration/story_coordinator.py',
-     '    configuration names a `clean_clone_python`, so the check can exercise the'),
-    ('orchestration/story_coordinator.py',
-     '    oldest supported Python rather than whichever one the developer works in.'),
-    ('orchestration/story_coordinator.py',
-     '    interpreter = clean_clone_python or argv[0]'),
-    ('orchestration/story_coordinator.py',
-     '    if clean_clone_python and resolved is None:'),
-    ('orchestration/story_coordinator.py',
-     '            python=interpreter,'),
-    ('orchestration/story_coordinator.py',
-     '                f"clean_clone_python names {clean_clone_python}, which is not an "'),
-    ('orchestration/story_coordinator.py',
-     '        python=interpreter,'),
-    ('orchestration/story_coordinator.py',
-     '        python_version=_interpreter_version(resolved) if resolved else None,'),
-    ('orchestration/story_coordinator.py',
-     '            config.get("clean_clone_python"),'),
-    ('orchestration/story_coordinator.py',
-     '    python = config.get("clean_clone_python") or shlex.split(command)[0]'),
-    ('orchestration/story_coordinator.py',
-     '            python=python,'),
-    ('orchestration/story_coordinator.py',
-     '                config.get("clean_clone_python"),'),
-    ('orchestration/story_coordinator.py',
-     '                python=python,'),
-
     # --- Two lines of prose in a prompt naming a pytest layout. ---------
     ('prompts/tester.md',
      'New tests belong in tests/ and become permanent repository assets.'),
     ('prompts/tester.md',
      'shared resolution in `tests/conftest.py`.'),
 
-    # --- The artifact schemas that burn down with the interpreter story,
-    #     which names these three files by name.
-    ('schemas/clean-clone-result.schema.json',
-     '  "required": ["ran", "command", "python"],'),
-    ('schemas/clean-clone-result.schema.json',
-     '      "description": "Whether the suite actually ran in the clone. False when the check refused to run, in which case reason says why and exit_code, output_tail and python_version are absent."'),
-    ('schemas/clean-clone-result.schema.json',
-     '    "python": {'),
-    ('schemas/clean-clone-result.schema.json',
-     '      "description": "The interpreter the run used: .harness/config.yaml\'s clean_clone_python when that key is set, and test_command\'s own interpreter otherwise."'),
-    ('schemas/clean-clone-result.schema.json',
-     '    "python_version": {'),
-    ('schemas/clean-clone-result.schema.json',
-     '      "description": "The version that interpreter reported, so a reader can tell which Python the check exercised rather than assuming it matched CI. Absent when the interpreter reported no recognizable version, which is what a test command that is not a Python interpreter does."'),
-    ('schemas/harness-config.schema.json',
-     '    "clean_clone_python": {'),
-    ('schemas/revert-check-result.schema.json',
-     '  "required": ["ran", "paths", "command", "python"],'),
-    ('schemas/revert-check-result.schema.json',
-     '      "description": "Whether the suite actually ran in the clone with the edits reverted. False when the check could not run, in which case reason says why and permitted, exit_code, output_tail and python_version are absent."'),
-    ('schemas/revert-check-result.schema.json',
-     '    "python": {'),
-    ('schemas/revert-check-result.schema.json',
-     '      "description": "The interpreter the run used: .harness/config.yaml\'s clean_clone_python when that key is set, and test_command\'s own interpreter otherwise."'),
-    ('schemas/revert-check-result.schema.json',
-     '    "python_version": {'),
-    ('schemas/revert-check-result.schema.json',
-     '      "description": "The version that interpreter reported, so a reader can tell which Python the check exercised. Absent when the interpreter reported no recognizable version, which is what a test command that is not a Python interpreter does."'),
-
     # --- The workflow restriction naming a directory in the target. -----
     ('workflows/story-workflow.json',
      '      "may_not_create": ["tests/"],'),
 })
+
+#: What the-interpreter-is-not-assumed-to-be-python removed from the list
+#: above: every `orchestration/story_coordinator.py` entry — the version
+#: probe, the record's interpreter-shaped fields, and the retired
+#: configuration key with the prose explaining it — together with every
+#: entry in the three schemas that story names. What is left is the
+#: completion signal for the-test-location-comes-from-configuration alone.
 
 
 #: Each entry carries a one-line reason saying why that mention is not a
@@ -206,23 +139,23 @@ PERMANENT_MENTIONS: dict[tuple[str, str], str] = {
     ('orchestration/story_coordinator.py',
      '    count that cannot be spent, and `True` is not a budget however much Python'):
         "names the language this validation itself is written in, explaining why a bool is refused",
-    ('orchestration/story_coordinator.py',
-     '    None is not a failure: the configured test command need not be a Python'):
-        "says outright that a target's test command need not be Python, which is the opposite of a tie",
     ('orchestration/story_parser.py',
      '- No type coercion. Every scalar parses to a Python ``str``; ``42`` and'):
         "a fact about what this parser returns to its own callers, not about any target",
+    ('orchestration/harness_config.py',
+     '    "clean_clone_python": "verification_runner",'):
+        "names a retired key in order to refuse it, which is the harness rejecting the tie rather than carrying one",
 }
 
 
-#: The five ties the 2026-08-15 audit found, each identified by the file it
-#: sits in and a fragment of the line, so the scan is asked for them by name
-#: rather than being read off the list above.
+#: The ties the 2026-08-15 audit found that are still grandfathered, each
+#: identified by the file it sits in and a fragment of the line, so the scan
+#: is asked for them by name rather than being read off the list above. The
+#: audit's other two — the version probe and the retired configuration key,
+#: both in `orchestration/story_coordinator.py` — are gone from the source,
+#: so asking the scan for them by name would now be asking it for something
+#: that is not there.
 AUDITED_TIES = (
-    ("the version probe",
-     "orchestration/story_coordinator.py", "_VERSION_PROBE", 945),
-    ("the clean_clone_python configuration key",
-     "orchestration/story_coordinator.py", "clean_clone_python", None),
     ("the may_not_create restriction naming a directory",
      "workflows/story-workflow.json", '"may_not_create": ["tests/"]', 9),
     ("prompts/tester.md line 19",
@@ -231,20 +164,12 @@ AUDITED_TIES = (
      "prompts/tester.md", "tests/conftest.py", 47),
 )
 
-#: The artifact schemas the-interpreter-is-not-assumed-to-be-python names,
-#: whose mentions burn down with it and are therefore temporary.
-INTERPRETER_STORY_SCHEMAS = (
-    "schemas/clean-clone-result.schema.json",
-    "schemas/revert-check-result.schema.json",
-    "schemas/harness-config.schema.json",
-)
-
 #: The mentions that are honest sentences rather than ties. A rule that
 #: cannot tell these from a tie gets turned off within two stories.
 LEGITIMATE_MENTIONS = (
     ("orchestration/story_parser.py", "Every scalar parses to a Python"),
     ("orchestration/story_coordinator.py",
-     "the configured test command need not be a Python"),
+     "is not a budget however much Python"),
 )
 
 
@@ -389,24 +314,39 @@ def test_each_audited_tie_is_a_temporary_tie(here, label, path, fragment,
         assert entry not in PERMANENT_MENTIONS, (label, entry)
 
 
-@pytest.mark.parametrize("schema", INTERPRETER_STORY_SCHEMAS)
-def test_the_artifact_schema_mentions_are_temporary_ties(here, schema):
-    """the-interpreter-is-not-assumed-to-be-python names these three files,
-    so their mentions burn down with it and belong on the temporary half."""
-    matches = [f for f in here if f.path == schema]
-    assert matches, schema
-    for finding in matches:
-        assert any(token in finding.line.lower()
-                   for token in ("python", "python_version",
-                                 "clean_clone_python")), finding
-        assert (finding.path, finding.line) in TEMPORARY_TIES, finding
+#: The three schemas the-interpreter-is-not-assumed-to-be-python names.
+#: Every mention in them burned down with it, so the scan now reports
+#: nothing at all in any of the three.
+REPAIRED_SCHEMAS = (
+    "schemas/clean-clone-result.schema.json",
+    "schemas/revert-check-result.schema.json",
+    "schemas/harness-config.schema.json",
+)
+
+
+@pytest.mark.parametrize("schema", REPAIRED_SCHEMAS)
+def test_the_repaired_schemas_carry_no_mention_at_all(here, schema):
+    """Read off the scan rather than off the diff: an entry taken off the
+    temporary list for a mention still in source would be reported here."""
+    assert [f for f in here if f.path == schema] == []
+
+
+def test_the_coordinator_carries_no_temporary_tie(here):
+    """Every grandfathered tie in the coordinator is repaired. What the scan
+    still reports there is the one permanent mention describing this
+    harness's own implementation language, which is the opposite of a tie."""
+    reported = {(f.path, f.line) for f in here
+                if f.path == "orchestration/story_coordinator.py"}
+    assert reported & set(TEMPORARY_TIES) == set()
+    assert reported <= set(PERMANENT_MENTIONS)
 
 
 @pytest.mark.parametrize("path,fragment", LEGITIMATE_MENTIONS)
 def test_a_legitimate_mention_is_permanent_and_never_a_tie(here, path,
                                                            fragment):
     """The docstring saying this parser's scalars are Python strings, and the
-    one saying a target's test command need not be a Python interpreter."""
+    one explaining why a bool is refused as a budget: both describe the
+    language this harness is written in, not any target's."""
     matches = findings_for(here, path, fragment)
     assert matches, (path, fragment)
     for finding in matches:

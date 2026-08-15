@@ -91,7 +91,6 @@ VARYING: dict[str, object] = {
     "architecture_docs": ["docs/xyzzy-architecture.md"],
     "base_branch": "xyzzy-base",
     "branch_prefix": "xyzzy-branch/",
-    "clean_clone_python": "/xyzzy/bin/interpreter",
     "logs_dir": ".harness/xyzzy-logs",
     "model": "xyzzy-model",
     "permission_mode": "xyzzyPrompt",
@@ -99,12 +98,13 @@ VARYING: dict[str, object] = {
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
     "test_command": "xyzzy-runner --all",
+    "verification_runner": "/xyzzy/bin/interpreter",
     "workflow": "xyzzy-workflow",
 }
 
 #: What the harness uses when the key is absent, as written in the code that
 #: reads it. `None` is the answer for the four keys with no fallback at all:
-#: `allowed_tools`, `base_branch`, `clean_clone_python` and `model` are read
+#: `allowed_tools`, `base_branch`, `verification_runner` and `model` are read
 #: with a bare `config.get`, and `test_command` is read with no default and
 #: no fallback, so a target that omits it cannot run the clean-clone check.
 FALLBACKS: dict[str, object] = {
@@ -112,7 +112,6 @@ FALLBACKS: dict[str, object] = {
     "architecture_docs": [],
     "base_branch": None,
     "branch_prefix": "story/",
-    "clean_clone_python": None,
     "logs_dir": ".harness/logs",
     "model": None,
     "permission_mode": "acceptEdits",
@@ -120,6 +119,7 @@ FALLBACKS: dict[str, object] = {
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
     "test_command": None,
+    "verification_runner": None,
     "workflow": "story-workflow",
 }
 
@@ -161,9 +161,6 @@ KEY_PROOFS: dict[str, Proof] = {
     "branch_prefix": Proof(
         "test_branch_prefix_names_the_branch_the_run_creates_and_works_on",
         BEHAVIOURAL),
-    "clean_clone_python": Proof(
-        "test_clean_clone_python_is_the_interpreter_the_check_resolves",
-        BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
         BEHAVIOURAL),
@@ -184,6 +181,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "test_command": Proof(
         "test_test_command_is_the_command_the_clean_clone_path_builds",
+        BEHAVIOURAL),
+    "verification_runner": Proof(
+        "test_verification_runner_is_the_executable_the_check_resolves",
         BEHAVIOURAL),
     "workflow": Proof(
         "test_workflow_names_the_definition_the_run_actually_executes",
@@ -228,11 +228,6 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
          'config.get("branch_prefix", "story/")',
          '"story/"'),
     ),
-    "clean_clone_python": (
-        ("orchestration/story_coordinator.py",
-         'config.get("clean_clone_python")',
-         "None"),
-    ),
     "logs_dir": (
         ("orchestration/story_coordinator.py",
          'config.get("logs_dir", ".harness/logs")',
@@ -273,6 +268,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/context_assembler.py",
          'config.get("test_command")',
          HARDCODED_TEST_COMMAND),
+    ),
+    "verification_runner": (
+        ("orchestration/story_coordinator.py",
+         'config.get("verification_runner")',
+         "None"),
     ),
     "workflow": (
         ("orchestration/story_coordinator.py",
@@ -528,11 +528,11 @@ def complete_run(tmp_path: Path, **overrides: object) -> Run:
 def clean_clone_record(run: Run) -> dict:
     """What the clean-clone path builds for the fixture's configuration.
 
-    The command is *observed*, not executed: `clean_clone_python` names an
-    interpreter that does not exist, so `run_clean_clone` reports a check that
-    did not run, with the command it would have run and the interpreter it
+    The command is *observed*, not executed: `verification_runner` names an
+    executable that does not exist, so `run_clean_clone` reports a check that
+    did not run, with the command it would have run and the runner it
     resolved, before any clone is built. That keeps the proof deterministic
-    and free of any dependency on a second interpreter being installed.
+    and free of any dependency on a second toolchain being installed.
     """
     artifact = "xyzzy-clean-clone-result.json"
     story_coordinator.clean_clone_check(run.run_dir, run.target, run.config,
@@ -546,8 +546,8 @@ def clean_clone_record(run: Run) -> dict:
 
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
-    "clean_clone_python", "logs_dir", "model", "permission_mode", "runs_dir",
-    "standards_dir", "stories_dir", "test_command", "workflow",
+    "logs_dir", "model", "permission_mode", "runs_dir", "standards_dir",
+    "stories_dir", "test_command", "verification_runner", "workflow",
 )
 
 
@@ -945,14 +945,14 @@ def test_test_command_is_the_command_the_clean_clone_path_builds(tmp_path):
     assert "xyzzy-runner --all" in run.prompt_for("implementer")
     record = clean_clone_record(run)
     # The configured command's own arguments, under the configured
-    # interpreter: `--all` is the half that comes from `test_command`.
+    # runner: `--all` is the half that comes from `test_command`.
     assert record["command"] == "/xyzzy/bin/interpreter --all"
 
 
-def test_clean_clone_python_is_the_interpreter_the_check_resolves(tmp_path):
+def test_verification_runner_is_the_executable_the_check_resolves(tmp_path):
     run = complete_run(tmp_path)
     record = clean_clone_record(run)
-    assert record["python"] == "/xyzzy/bin/interpreter"
+    assert record["runner"] == "/xyzzy/bin/interpreter"
     assert record["ran"] is False
     assert "/xyzzy/bin/interpreter" in record["reason"]
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
-import re
 import shlex
 import shutil
 import subprocess
@@ -942,9 +941,6 @@ def append_retry_record(
 #: what failed; not the whole log, which the run directory is not a home for.
 CLEAN_CLONE_OUTPUT_TAIL = 8000
 
-_VERSION_PROBE = "import platform; print(platform.python_version())"
-_VERSION = re.compile(r"\d+\.\d+\.\d+\S*")
-
 
 @dataclass(frozen=True)
 class CleanCloneResult:
@@ -957,17 +953,15 @@ class CleanCloneResult:
 
     ran: bool
     command: str
-    python: str
-    python_version: str | None = None
+    runner: str
     clone_path: str | None = None
     exit_code: int | None = None
     output_tail: str | None = None
     reason: str | None = None
 
     def as_record(self) -> dict:
-        record: dict = {"ran": self.ran, "command": self.command, "python": self.python}
+        record: dict = {"ran": self.ran, "command": self.command, "runner": self.runner}
         optional = {
-            "python_version": self.python_version,
             "clone_path": self.clone_path,
             "exit_code": self.exit_code,
             "output_tail": self.output_tail,
@@ -990,27 +984,6 @@ def _resolve_interpreter(target_root: Path, interpreter: str) -> Path | None:
         return candidate
     found = shutil.which(interpreter)
     return Path(found) if found else None
-
-
-def _interpreter_version(interpreter: Path) -> str | None:
-    """What the interpreter reports its version to be, or None.
-
-    None is not a failure: the configured test command need not be a Python
-    interpreter at all, and a record with no version is honest about that. A
-    *configured* clean_clone_python that does not exist is a different case,
-    handled by the caller, because a check quietly testing the wrong version
-    is worse than one that refuses.
-    """
-    try:
-        result = subprocess.run(
-            [str(interpreter), "-c", _VERSION_PROBE],
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
-    version = result.stdout.strip()
-    return version if result.returncode == 0 and _VERSION.fullmatch(version) else None
 
 
 def _build_clone(
@@ -1166,7 +1139,7 @@ def _link_interpreter_roots(target_root: Path, clone: Path, interpreters: list[s
 def run_clean_clone(
     target_root: Path,
     test_command: str,
-    clean_clone_python: str | None,
+    verification_runner: str | None,
     destination: Path,
     revert: list[str] | tuple[str, ...] = (),
     baseline: Path | None = None,
@@ -1174,10 +1147,16 @@ def run_clean_clone(
     """Run the configured test command in a fresh clone with the story committed.
 
     The command is the target repository's own `test_command`; nothing about
-    it is written here. Only its interpreter is substituted, and only when the
-    configuration names a `clean_clone_python`, so the check can exercise the
-    oldest supported Python rather than whichever one the developer works in.
-    The caller owns `destination` and removes it whatever the result.
+    it is written here. Only its *first word* is substituted, and only when the
+    configuration names a `verification_runner`, so the check can exercise an
+    environment other than the one the developer works in and find an
+    incompatibility before CI rather than by it. The caller owns `destination`
+    and removes it whatever the result.
+
+    That substitution is a first-word swap and nothing more: every remaining
+    argument is the configured command's own. A target whose environment
+    difference cannot be expressed by replacing the first word expresses it in
+    `test_command` instead.
 
     This is the single build-a-clone-and-run-the-suite path. `revert` and the
     `baseline` it is restored from are passed through to the clone builder and
@@ -1186,27 +1165,27 @@ def run_clean_clone(
     restored to the state the stage found them in rather than applied.
     """
     argv = shlex.split(test_command)
-    interpreter = clean_clone_python or argv[0]
-    command = shlex.join([interpreter, *argv[1:]])
+    runner = verification_runner or argv[0]
+    command = shlex.join([runner, *argv[1:]])
 
-    resolved = _resolve_interpreter(target_root, interpreter)
-    if clean_clone_python and resolved is None:
+    resolved = _resolve_interpreter(target_root, runner)
+    if verification_runner and resolved is None:
         return CleanCloneResult(
             ran=False,
             command=command,
-            python=interpreter,
+            runner=runner,
             reason=(
-                f"clean_clone_python names {clean_clone_python}, which is not an "
-                f"interpreter that exists under {target_root}"
+                f"verification_runner names {verification_runner}, which is not "
+                f"an executable that exists under {target_root}"
             ),
         )
 
     clone = destination / "clone"
     _build_clone(target_root, clone, revert=revert, baseline=baseline)
-    _link_interpreter_roots(target_root, clone, [argv[0], interpreter])
+    _link_interpreter_roots(target_root, clone, [argv[0], runner])
 
     result = subprocess.run(
-        [interpreter, *argv[1:]],
+        [runner, *argv[1:]],
         cwd=clone,
         capture_output=True,
         text=True,
@@ -1215,8 +1194,7 @@ def run_clean_clone(
     return CleanCloneResult(
         ran=True,
         command=command,
-        python=interpreter,
-        python_version=_interpreter_version(resolved) if resolved else None,
+        runner=runner,
         clone_path=str(clone),
         exit_code=result.returncode,
         output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
@@ -1238,7 +1216,7 @@ def clean_clone_check(
         result = run_clean_clone(
             target_root,
             config["test_command"],
-            config.get("clean_clone_python"),
+            config.get("verification_runner"),
             scratch,
         )
     finally:
@@ -1556,14 +1534,14 @@ def revert_check(
     cannot be built at all.
     """
     command = config["test_command"]
-    python = config.get("clean_clone_python") or shlex.split(command)[0]
+    runner = config.get("verification_runner") or shlex.split(command)[0]
     resolved = baseline if baseline is not None and baseline.is_dir() else None
 
     if resolved is None:
         result = CleanCloneResult(
             ran=False,
             command=command,
-            python=python,
+            runner=runner,
             reason=(
                 "no baseline was captured for the stage, so there is no state "
                 f"to revert the edits to: {baseline}"
@@ -1575,7 +1553,7 @@ def revert_check(
             result = run_clean_clone(
                 target_root,
                 command,
-                config.get("clean_clone_python"),
+                config.get("verification_runner"),
                 scratch,
                 revert=list(paths),
                 baseline=resolved,
@@ -1584,7 +1562,7 @@ def revert_check(
             result = CleanCloneResult(
                 ran=False,
                 command=command,
-                python=python,
+                runner=runner,
                 reason=f"the clone with the edits reverted could not be built: {error}",
             )
         finally:
@@ -2351,6 +2329,21 @@ def _refuse_bad_self_routes(workflow: dict, problems: list[str]) -> int:
     )
 
 
+def _refuse_retired_config_keys(target_root: Path, problems: list[str]) -> int:
+    """Refuse a run whose configuration still carries a retired key.
+
+    Thin, like every other caller of `refuse`. The configuration is wrong, not
+    the story and not the tree, so the guidance names the file to edit and the
+    edit to make.
+    """
+    return refuse(
+        f"{target_root / '.harness' / 'config.yaml'} carries configuration keys "
+        f"the harness no longer reads:",
+        problems,
+        "Rename each key to its replacement before running a story.",
+    )
+
+
 def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     """Refuse a run whose target tree already holds work no stage produced.
 
@@ -2538,6 +2531,17 @@ def run_story(
     case and means the repository's own default branch; see `resolve_base`.
     """
     config = harness_config.load_config(target_root)
+
+    # Pre-flight: a retired configuration key is refused rather than ignored.
+    # Ignoring one lets the run fall back to the replacement's default and
+    # quietly exercise something other than what the config asked for. Above
+    # every other pre-flight, because it is decidable the moment the config
+    # loads: a refusal here leaves no run directory, no state.json, no log, no
+    # new branch, and invokes no agent.
+    retired = harness_config.retired_config_problems(config)
+    if retired:
+        return _refuse_retired_config_keys(target_root, retired)
+
     workflow = harness_config.load_workflow(harness_root, config.get("workflow", "story-workflow"))
     rules = harness_config.load_rules(harness_root)
     stages = workflow["stages"]

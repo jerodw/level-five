@@ -58,8 +58,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE as PRE_STORY_BOUND, STORY, first_retry_route,
-                      function_source_at, load_mutant, story_diff)
+from conftest import (BASELINE as PRE_STORY_BOUND, ENDPOINT, STORY,
+                      first_retry_route, function_source_at, load_mutant,
+                      story_diff)
 
 import harness_config
 import schema_validator
@@ -1064,21 +1065,26 @@ def test_the_check_and_the_clone_builder_are_byte_for_byte_pre_story():
     """Only the state reverted to changed. The control is the capture, in the
     same file at the same bound, which did change — so a comparison that had
     stopped resolving anything could not pass both halves.
+
+    Both bounds are this story's own commit range. The after side read the
+    *working tree* until the-interpreter-is-not-assumed-to-be-python renamed
+    the record's interpreter field, which this story has nothing to say
+    about — the standing HEAD-baseline trap, repaired the standing way by
+    bounding the comparison at both ends rather than by relaxing it.
     """
-    def before(name: str) -> str:
+    def at(name: str, bound: str) -> str:
         return function_source_at(COORDINATOR_REL, name,
                                   validation_file=Path(__file__),
-                                  bound=PRE_STORY_BOUND, repo=REPO_ROOT)
+                                  bound=bound, repo=REPO_ROOT)
 
     for name in ("revert_check", "_build_clone", "_revert_check_permitted",
                  "run_clean_clone", "governed_edits"):
-        assert before(name) == inspect.getsource(
-            getattr(story_coordinator, name)), name
+        assert at(name, PRE_STORY_BOUND) == at(name, ENDPOINT), name
 
-    assert before("capture_stage_baseline") \
-        != inspect.getsource(story_coordinator.capture_stage_baseline)
-    assert before("stage_baseline_dir") \
-        != inspect.getsource(story_coordinator.stage_baseline_dir)
+    assert at("capture_stage_baseline", PRE_STORY_BOUND) \
+        != at("capture_stage_baseline", ENDPOINT)
+    assert at("stage_baseline_dir", PRE_STORY_BOUND) \
+        != at("stage_baseline_dir", ENDPOINT)
 
 
 def test_a_forced_edit_and_an_unforced_one_on_a_single_attempt_still_decide(

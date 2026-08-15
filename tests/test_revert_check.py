@@ -725,7 +725,7 @@ def test_an_unresolvable_configured_interpreter_escalates_naming_why(
     target, harness_root,
 ):
     """The same treatment the clean-clone check gives it."""
-    configure(target, clean_clone_python="nowhere/python")
+    configure(target, verification_runner="nowhere/python")
     code, _ = run(target, harness_root, {"implementer": forced_repair})
     assert code == 2
     record = record_of(target)
@@ -777,7 +777,7 @@ def test_a_single_file_mixing_a_repair_and_an_addition_is_permitted(
     record = record_of(target)
     assert record["permitted"] is True
     assert record["paths"] == ["tests/test_app.py"]
-    assert set(record) <= {"ran", "paths", "command", "python", "python_version",
+    assert set(record) <= {"ran", "paths", "command", "runner",
                            "clone_path", "exit_code", "output_tail", "permitted",
                            "baseline", "reason"}
 

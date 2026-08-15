@@ -16,11 +16,11 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q
-# The interpreter the clean-clone check runs the suite under. Deliberately
-# the oldest Python CI tests (3.10), not the one the harness runs in (3.14),
-# so a version incompatibility is found before CI rather than by it. Absent,
-# the check falls back to test_command's own interpreter.
-clean_clone_python: .venv310/bin/python
+# The executable the clean-clone check runs the suite under. Deliberately an
+# older environment than the one the developer works in, and the one CI
+# exercises, so an incompatibility is found before CI rather than by it. It
+# replaces the first word of test_command; absent, that first word is used.
+verification_runner: .venv310/bin/python
 # Bash commands stage agents may run without prompting. Everything else
 # is denied in headless mode. Read-only search and inspection is granted
 # broadly: a denial costs a turn and buys nothing, because the harness's

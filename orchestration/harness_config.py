@@ -18,6 +18,31 @@ import schema_validator
 # refused.
 CONFIG_SCHEMA_NAME = "harness-config"
 
+#: Keys the harness once read, mapped to the key that replaced each. A
+#: retired key is refused rather than ignored: a config still carrying one
+#: would fall through to the replacement's fallback and quietly change what
+#: the harness does, which is the drift the declaration exists to stop. It
+#: lives beside `declared_config_keys` so the config vocabulary — what is
+#: read, and what used to be — has one home.
+RETIRED_CONFIG_KEYS: dict[str, str] = {
+    "clean_clone_python": "verification_runner",
+}
+
+
+def retired_config_problems(config: dict) -> list[str]:
+    """One problem per retired key a loaded config still carries.
+
+    Each names the retired key and the key that replaced it, so the refusal
+    is actionable without opening the schema. An empty list is the whole of
+    "this config carries none".
+    """
+    return [
+        f"'{key}' is no longer read by the harness; it was replaced by "
+        f"'{replacement}'"
+        for key, replacement in RETIRED_CONFIG_KEYS.items()
+        if key in config
+    ]
+
 
 def find_target_root(start: Path) -> Path:
     for candidate in [start, *start.parents]:

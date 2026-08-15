@@ -100,13 +100,11 @@ BUGGY_TEST_COMMAND = (
 #: right in both environments.
 CORRECT_TEST_COMMAND = f"sh -c 'grep -q {MARKER} src/app.py'"
 
-#: A stand-in interpreter. Answers the coordinator's version probe with a
-#: version no real interpreter in this environment reports, and exits zero
-#: for anything else, so "which Python did the check use" has one answer.
-FAKE_VERSION = "3.0.1"
-FAKE_INTERPRETER = f"""\
+#: A stand-in executable the configured command can be pointed at. It accepts
+#: whatever arguments it is handed and exits zero, so a test that only needs
+#: "the configured runner is what ran" has one answer and no second variable.
+FAKE_INTERPRETER = """\
 #!/bin/sh
-if [ "$1" = "-c" ]; then echo {FAKE_VERSION}; exit 0; fi
 exit 0
 """
 
@@ -157,6 +155,27 @@ def install_interpreter(target_root: Path, rel: str) -> str:
     path = target_root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(FAKE_INTERPRETER, encoding="utf-8")
+    path.chmod(0o755)
+    return rel
+
+
+def install_runner(target_root: Path, rel: str, *, status: int,
+                   argv_log: Path) -> str:
+    """Drop a verification runner that is an interpreter of nothing at `rel`.
+
+    story-041 removed the assumption that the executable running the suite is
+    a Python interpreter, and this is the executable that holds it removed: it
+    evaluates no source, it records the arguments it was handed into
+    `argv_log`, and it exits with the status baked into it. The status is a
+    parameter rather than a constant so "the record carries the suite's own
+    exit code" is a fact a test chose, not the zero every command returns when
+    nothing went wrong.
+    """
+    path = target_root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {argv_log}\nexit {status}\n",
+        encoding="utf-8")
     path.chmod(0o755)
     return rel
 
@@ -266,9 +285,9 @@ def dirty_target(target_root: Path) -> Path:
 
 
 def clean_clone(target_root: Path, destination: Path, command: str,
-                python: str | None = None):
+                runner: str | None = None):
     return story_coordinator.run_clean_clone(
-        target_root, command, python, destination)
+        target_root, command, runner, destination)
 
 
 # --------------------------------------------------------------------------
@@ -430,11 +449,11 @@ def test_the_configured_command_is_what_runs(story_target, tmp_path):
     assert result.command == f"sh -c 'echo ran > {marker}'"
 
 
-def test_the_configured_clean_clone_python_replaces_the_commands_interpreter(
+def test_the_configured_verification_runner_replaces_the_commands_first_word(
     story_target, tmp_path,
 ):
-    """Pointed at an interpreter that is not the one the harness runs under,
-    the record names that one and reports its version, not the harness's."""
+    """Pointed at an executable that is not the one the harness runs under,
+    the record names that one rather than the command's own first word."""
     install_interpreter(story_target, "fakepy")
     dirty_target(story_target)
 
@@ -444,15 +463,8 @@ def test_the_configured_clean_clone_python_replaces_the_commands_interpreter(
 
     assert result.ran is True
     assert result.exit_code == 0
-    assert result.python == "./fakepy"
+    assert result.runner == "./fakepy"
     assert result.command == "./fakepy -m pytest -q"
-    assert result.python_version == FAKE_VERSION
-    assert result.python_version != platform_version()
-
-
-def platform_version() -> str:
-    import platform
-    return platform.python_version()
 
 
 def test_the_command_keeps_its_arguments_when_the_interpreter_is_replaced(
@@ -465,21 +477,21 @@ def test_the_command_keeps_its_arguments_when_the_interpreter_is_replaced(
     assert result.command == "./fakepy -m pytest tests/ -q"
 
 
-def test_an_absent_clean_clone_python_falls_back_to_the_commands_own(
+def test_an_absent_verification_runner_falls_back_to_the_commands_own(
     story_target, tmp_path,
 ):
     install_interpreter(story_target, "fakepy")
     dirty_target(story_target)
     result = clean_clone(story_target, tmp_path / "scratch", "./fakepy -m pytest", None)
     assert result.ran is True
-    assert result.python == "./fakepy"
-    assert result.python_version == FAKE_VERSION
+    assert result.runner == "./fakepy"
+    assert result.command == "./fakepy -m pytest"
 
 
-def test_a_clean_clone_python_that_does_not_exist_refuses_rather_than_falls_back(
+def test_a_verification_runner_that_does_not_exist_refuses_rather_than_falls_back(
     story_target, tmp_path,
 ):
-    """A check that quietly tests the wrong version is worse than one that
+    """A check that quietly runs the wrong executable is worse than one that
     refuses."""
     dirty_target(story_target)
     result = clean_clone(
@@ -488,21 +500,149 @@ def test_a_clean_clone_python_that_does_not_exist_refuses_rather_than_falls_back
     assert result.ran is False
     assert ".venv999/bin/python" in result.reason
     assert result.exit_code is None
-    assert result.python == ".venv999/bin/python"
+    assert result.runner == ".venv999/bin/python"
     assert not (tmp_path / "scratch" / "clone").exists()
 
 
-def test_a_non_python_command_records_no_version_rather_than_refusing(
+def test_a_command_whose_first_word_is_not_an_interpreter_runs_as_written(
     story_target, tmp_path,
 ):
-    """The configured test command need not be a Python interpreter, so a
-    fallback interpreter reporting no version is honest rather than an
-    error."""
+    """The configured test command is the target's own, whatever it is, and
+    an unset runner leaves it running exactly as written."""
     dirty_target(story_target)
     result = clean_clone(story_target, tmp_path / "scratch", "sh -c 'true'", None)
     assert result.ran is True
-    assert result.python_version is None
-    assert "python_version" not in result.as_record()
+    assert result.runner == "sh"
+    assert result.command == "sh -c true"
+
+
+# --------------------------------------------------------------------------
+# story-041: the runner is not assumed to be an interpreter of any language
+#
+# The three tests above point the check at a stand-in that happens to be a
+# shell script, but they assert about the *command* the check builds. What
+# story-041 claims is stronger and about the *record*: a target whose
+# configured runner is not a Python interpreter gets a correct one — the
+# executable the configuration named recorded as the runner, the check
+# recorded as having run, and the exit code tracking the suite's own.
+#
+# "The run did not raise" is not that claim, and neither is "the record is
+# non-empty": both pass today against a check that recorded whatever it liked.
+# So the runner below reports which arguments reached it, its exit status is a
+# parameter rather than a constant, and the record's key set is asserted whole
+# — a record that carried a version field, or that spelled the executable
+# under any other key, fails here rather than passing unnoticed.
+# --------------------------------------------------------------------------
+
+#: The configured command in these tests names a first word that exists
+#: nowhere, so nothing can run except by the substitution putting the
+#: configured runner in its place.
+FOREIGN_TEST_COMMAND = "xyzzy-suite-driver --profile ci tests/"
+FOREIGN_ARGUMENTS = ["--profile", "ci", "tests/"]
+RUNNER_PATH = "toolchain/run-suite"
+
+
+@pytest.mark.parametrize("status", [0, 7])
+def test_a_runner_that_is_no_interpreter_is_what_runs_and_what_is_recorded(
+    story_target, tmp_path, status,
+):
+    argv_log = tmp_path / "argv.txt"
+    install_runner(story_target, RUNNER_PATH, status=status, argv_log=argv_log)
+    dirty_target(story_target)
+
+    result = clean_clone(story_target, tmp_path / "scratch",
+                         FOREIGN_TEST_COMMAND, f"./{RUNNER_PATH}")
+
+    assert result.ran is True
+    assert result.runner == f"./{RUNNER_PATH}"
+    assert result.command == f"./{RUNNER_PATH} --profile ci tests/"
+    # The suite's own status, not a status the check decided for it.
+    assert result.exit_code == status
+    # And it really was that executable, with the configured command's own
+    # remaining words: the record describes a run that happened rather than
+    # one the check narrated.
+    assert argv_log.read_text(encoding="utf-8").split() == FOREIGN_ARGUMENTS
+
+
+def test_the_record_such_a_run_writes_is_exactly_the_fields_the_schema_declares(
+    story_target, tmp_path,
+):
+    """The key set whole rather than one absence at a time.
+
+    An assertion that the record carries no version field would pass against a
+    record read from the wrong place, or against a field renamed rather than
+    removed. Equality against the declared set cannot: it fails on a field
+    that survived, on one that was added, and on the executable spelled under
+    any key but `runner`.
+    """
+    argv_log = tmp_path / "argv.txt"
+    install_runner(story_target, RUNNER_PATH, status=4, argv_log=argv_log)
+    dirty_target(story_target)
+
+    record = clean_clone(story_target, tmp_path / "scratch",
+                         FOREIGN_TEST_COMMAND, f"./{RUNNER_PATH}").as_record()
+
+    assert set(record) == {"ran", "command", "runner", "clone_path",
+                           "exit_code", "output_tail"}
+    assert set(record) <= set(SCHEMA["properties"])
+    assert schema_validator.validate(record, SCHEMA) == []
+
+
+def test_the_check_writes_that_record_for_a_configuration_that_names_the_runner(
+    story_target, tmp_path,
+):
+    """The same claim through the key the configuration carries.
+
+    The test above hands `run_clean_clone` its runner directly. This one hands
+    the coordinator a configuration and reads the artifact off disk, which is
+    where a reader of a finished run meets it.
+    """
+    argv_log = tmp_path / "argv.txt"
+    install_runner(story_target, RUNNER_PATH, status=3, argv_log=argv_log)
+    dirty_target(story_target)
+    run_dir = run_dir_of(story_target)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    story_coordinator.clean_clone_check(
+        run_dir, story_target,
+        {"test_command": FOREIGN_TEST_COMMAND,
+         "verification_runner": f"./{RUNNER_PATH}"},
+        ARTIFACT)
+
+    record = record_of(run_dir)
+    assert record["runner"] == f"./{RUNNER_PATH}"
+    assert record["ran"] is True
+    assert record["exit_code"] == 3
+    assert record["command"] == f"./{RUNNER_PATH} --profile ci tests/"
+    assert argv_log.read_text(encoding="utf-8").split() == FOREIGN_ARGUMENTS
+    assert schema_validator.validate(record, SCHEMA) == []
+
+
+def test_a_run_recording_a_runner_the_configuration_did_not_name_fails_these(
+    story_target, tmp_path,
+):
+    """The control the three assertions above need, which the story asks for
+    by name: a run that succeeds while recording a runner the configuration
+    did not name must fail them.
+
+    The mutant is the one the module already carries — the configured runner
+    ignored in favour of the command's own first word — and the constructed
+    violation is run through the same helper the proofs use. It completes, it
+    raises nothing, and every assertion above about *which* executable ran is
+    false of it.
+    """
+    module = variant("an interpreter the configuration did not name", tmp_path)
+    argv_log = tmp_path / "argv.txt"
+    install_runner(story_target, RUNNER_PATH, status=7, argv_log=argv_log)
+    dirty_target(story_target)
+
+    result = module.run_clean_clone(
+        story_target, f"./{RUNNER_PATH} --profile ci tests/", "./fakepy",
+        tmp_path / "scratch")
+
+    assert result.ran is True
+    assert result.runner != "./fakepy"
+    assert result.exit_code == 7
 
 
 # --------------------------------------------------------------------------
@@ -559,7 +699,7 @@ def test_the_check_leaves_no_scratch_directory_behind_in_the_temp_root(
 def test_the_schema_uses_only_the_keywords_the_validator_supports():
     assert schema_validator.unsupported_keywords(SCHEMA) == []
     assert schema_validator.validate(
-        {"ran": True, "command": "x", "python": "y"}, SCHEMA) == []
+        {"ran": True, "command": "x", "runner": "y"}, SCHEMA) == []
 
 
 def test_no_union_keyword_appears_anywhere_in_the_schema():
@@ -580,21 +720,20 @@ def test_no_union_keyword_appears_anywhere_in_the_schema():
 
 
 def test_optional_fields_are_expressed_by_absence_from_required():
-    assert set(SCHEMA["required"]) == {"ran", "command", "python"}
+    assert set(SCHEMA["required"]) == {"ran", "command", "runner"}
     optional = set(SCHEMA["properties"]) - set(SCHEMA["required"])
-    assert optional == {"python_version", "clone_path", "exit_code",
-                        "output_tail", "reason"}
+    assert optional == {"clone_path", "exit_code", "output_tail", "reason"}
 
 
 def test_the_schema_catches_a_record_missing_a_required_field():
     """The schema constrains something: it is not vacuously satisfied."""
     errors = schema_validator.validate({"ran": True, "command": "x"}, SCHEMA)
-    assert errors == ["$.python: expected a required property, found it missing"]
+    assert errors == ["$.runner: expected a required property, found it missing"]
 
 
 def test_the_schema_catches_a_wrongly_typed_exit_code():
     errors = schema_validator.validate(
-        {"ran": True, "command": "x", "python": "y", "exit_code": "1"}, SCHEMA)
+        {"ran": True, "command": "x", "runner": "y", "exit_code": "1"}, SCHEMA)
     assert len(errors) == 1
     assert "$.exit_code" in errors[0]
 
@@ -785,7 +924,7 @@ def test_a_refused_check_escalates_naming_the_missing_interpreter(
     story_target, harness_root,
 ):
     configure(story_target, test_command=CORRECT_TEST_COMMAND,
-              clean_clone_python=".venv999/bin/python")
+              verification_runner=".venv999/bin/python")
     runner = Runner(story_target, [PASS])
     assert story_coordinator.run_story(
         "story-001", harness_root, story_target, runner) == 2
@@ -1060,7 +1199,7 @@ def test_the_placeholder_exists_in_the_prompt_and_in_the_context(
 
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
-    write_json(run_dir / ARTIFACT, {"ran": True, "command": "x", "python": "y"})
+    write_json(run_dir / ARTIFACT, {"ran": True, "command": "x", "runner": "y"})
     context = build_context_for(story_target, harness_root, run_dir)
     assert "clean_clone_result" in context
     assert "x" in context["clean_clone_result"]
@@ -1123,10 +1262,10 @@ MUTANTS = {
         '    _git(clone, "add", "-A")\n',
         "",
     ),
-    # The configured interpreter ignored in favor of the command's own.
+    # The configured runner ignored in favor of the command's own first word.
     "an interpreter the configuration did not name": (
-        "    interpreter = clean_clone_python or argv[0]",
-        "    interpreter = argv[0]",
+        "    runner = verification_runner or argv[0]",
+        "    runner = argv[0]",
     ),
     # The scratch directory left behind.
     "a scratch directory that is never removed": (
@@ -1172,14 +1311,14 @@ def test_a_clone_without_the_story_committed_is_caught(
     assert "documenter" in runner.calls
 
 
-def test_an_ignored_clean_clone_python_is_caught(story_target, tmp_path):
+def test_an_ignored_verification_runner_is_caught(story_target, tmp_path):
     module = variant("an interpreter the configuration did not name", tmp_path)
     install_interpreter(story_target, "fakepy")
     dirty_target(story_target)
     result = module.run_clean_clone(
         story_target, "sh -c 'true'", "./fakepy", tmp_path / "scratch")
-    assert result.python != "./fakepy"
-    assert result.python_version != FAKE_VERSION
+    assert result.runner != "./fakepy"
+    assert result.command != "./fakepy -c true"
 
 
 def test_a_scratch_directory_left_behind_is_caught(story_target, tmp_path):

@@ -3,23 +3,19 @@
   "title": "clean-clone-result",
   "description": "The coordinator's record of the clean-clone check: the configured test command run a second time in a fresh clone of the repository with the story committed into it, after the verifier passes and before the documenter runs. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a reader can tell the check ran rather than inferring it from a pass. Optional fields are expressed by absence rather than by null, as execution-history does: a check that refused to run has no exit code to report.",
   "type": "object",
-  "required": ["ran", "command", "python"],
+  "required": ["ran", "command", "runner"],
   "properties": {
     "ran": {
       "type": "boolean",
-      "description": "Whether the suite actually ran in the clone. False when the check refused to run, in which case reason says why and exit_code, output_tail and python_version are absent."
+      "description": "Whether the suite actually ran in the clone. False when the check refused to run, in which case reason says why and exit_code and output_tail are absent."
     },
     "command": {
       "type": "string",
-      "description": "The command executed with the clone as its working directory, taken from the target repository's configured test_command with its interpreter replaced by the one named below."
+      "description": "The command executed with the clone as its working directory, taken from the target repository's configured test_command with its first word replaced by the executable named below."
     },
-    "python": {
+    "runner": {
       "type": "string",
-      "description": "The interpreter the run used: .harness/config.yaml's clean_clone_python when that key is set, and test_command's own interpreter otherwise."
-    },
-    "python_version": {
-      "type": "string",
-      "description": "The version that interpreter reported, so a reader can tell which Python the check exercised rather than assuming it matched CI. Absent when the interpreter reported no recognizable version, which is what a test command that is not a Python interpreter does."
+      "description": "The executable the run used: .harness/config.yaml's verification_runner when that key is set, and test_command's own first word otherwise."
     },
     "clone_path": {
       "type": "string",
