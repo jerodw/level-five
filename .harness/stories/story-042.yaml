@@ -1,0 +1,152 @@
+story:
+  id: story-042
+  title: A plan may assign an existing file to the implementer
+  description: |
+    plan_validation.assignment_problems refuses a likely_file_changes entry
+    whose file falls under a prefix the entry's own stage is restricted from
+    creating under. The workflow's restriction is about creation; the entry
+    says only which stage is expected to write the file, never whether writing
+    it means creating it. So the check guesses creation and refuses both cases,
+    including the one the restriction does not cover.
+
+    Modifying a file that already exists is legal and is governed by a
+    different rule entirely - the revert check, which restores the stage's
+    edits under governed prefixes and re-runs the suite, escalating when the
+    edits were not forced and recording them as permitted when they were. The
+    plan-time check applies the creation rule to a case the revert check owns.
+
+    story-041's planning session was refused for four such entries. All four
+    files exist in this repository; not one of them could have been created,
+    and the story required editing every one of them. The three stories before
+    it had their implementers edit files under the same prefix, all three were
+    permitted by the revert check, and none of the three plans had predicted
+    those edits. So the check refuses a plan that forecasts its forced edits
+    and passes a plan that stays quiet, which is a check that rewards a vaguer
+    plan.
+
+    The fix narrows the condition to the case that would be a creation - the
+    assigned path does not exist. The fact is derived from the repository
+    rather than declared by a new likely_file_changes field, because a field
+    would be the planner's claim about something the filesystem already knows,
+    the check would have to verify it against the repository anyway to be
+    trustworthy, and roughly forty committed artifacts do not carry it.
+
+    Existence is resolved against the target root, not the harness root and
+    not the working directory. The two coincide in this repository and will not
+    in general. Neither assignment_problems nor artifact_problems receives a
+    root today, so both signatures change and scripts/l5-plan passes the root
+    it already resolves; that is the seam this story cuts and it is stated
+    plainly rather than left to look incidental.
+
+    Nothing about a run changes. assignment_problems is called only from
+    artifact_problems, which is called only from scripts/l5-plan; run_story
+    does not call it at pre-flight or anywhere else. A change to a check
+    usually does affect runs, so this story says that it does not.
+
+tasks:
+  - Give plan_validation.assignment_problems a third parameter, the repository root existence is resolved against, with no default value, so no caller can silently receive the working directory instead of the target root.
+  - Narrow the reported condition so an entry is reported only when its file falls under one of its own stage's restricted prefixes, no grant covers it, and the file does not exist beneath that root. Decide existence with exists() on the root joined with the entry's path, so a path present as either a file or a directory counts.
+  - Leave the refusal message exactly as it reads today, still naming the offending path, the stage, the workflow's declaration and both resolutions, since the case that survives the narrowing is the case the message was written for.
+  - Give plan_validation.artifact_problems the same required root parameter and pass it to assignment_problems, leaving strictness_problems and naming_problems at their present signatures because neither reads the filesystem.
+  - Rewrite the "What the fourth check is" section of the plan_validation module docstring to state the two rules the check used to conflate, which of them it now enforces, that existence is relative to the target root rather than to the harness root or the working directory, and that a prediction true at plan time can be false by the time the story runs while the run-time ownership and revert checks remain the authority.
+  - Thread the target root through scripts/l5-plan from harness_config.find_target_root, which main already resolves, into report() and on to artifact_problems, without changing what report() prints or what it returns.
+  - Update every call site in tests/test_plan_assignment_refusal.py to the three-argument form, and drive the new behaviour with a matched pair - an entry naming a file that exists beneath the root, and an entry naming one that does not.
+  - Add a control in tests/test_plan_assignment_refusal.py proving the root argument is consulted rather than the process working directory, by running the check from a working directory that is not the fixture root.
+  - Assert in tests/test_plan_assignment_refusal.py that story-041's committed artifact is reported no longer, read from disk through the same reader a run uses, since it is the observed case that motivated the story.
+  - Update the single call site in tests/test_validation_module_naming.py to the three-argument form without changing what that module asserts.
+  - Record the narrowed condition in .harness/docs/ARCHITECTURE.md where the fourth check is described, including what existence is resolved against and that a run is unaffected.
+  - Narrow the paragraph in prompts/planner.md that states the refusal, so a planner reads the condition the harness now enforces rather than the wider one it used to.
+
+acceptance_criteria:
+  - plan_validation.assignment_problems takes a repository root as a required third parameter, and plan_validation.artifact_problems takes one as a required third parameter and passes it down. Neither has a default, so a two-argument call raises rather than falling back to the working directory.
+  - An entry whose file falls under one of its own stage's restricted prefixes is not reported when that file exists beneath the given root, because a file that already exists is not one the stage can create.
+  - An entry whose file falls under one of its own stage's restricted prefixes is still reported when that file does not exist beneath the given root, since that entry does describe a creation.
+  - The message for the reported case is unchanged, still quoting the path, the stage, the workflow's own declaration, and both resolutions - reassigning the file to a stage that may own it, or declaring a grant naming it.
+  - Existence is decided with exists() on the root joined with the entry's path, so a path present as a directory counts as existing exactly as a regular file does.
+  - The root that decides existence is the one passed in. A check driven from a working directory that is not the fixture root gives the fixture root's answer, and a test constructs that separation rather than reasoning about it.
+  - A grant covering the file still short-circuits before the existence question is asked, so grant_covers keeps deciding grants and the new condition decides nothing about them.
+  - story-041's committed artifact is reported by nothing in artifact_problems, asserted against the file on disk through story_coordinator.read_story rather than against a fixture resembling it.
+  - story-029's committed artifact is still reported, because the modules it named for the implementer were renamed by story-038 and no longer exist, so the corpus still contains a true positive after the narrowing.
+  - scripts/l5-plan passes the target root resolved by harness_config.find_target_root, and what report() prints and returns on the refusing path is byte-for-byte what it prints and returns today.
+  - No run reads the check. run_story calls neither assignment_problems nor artifact_problems, before this story or after it, and a test asserts that rather than leaving it to inspection.
+  - orchestration/plan_validation.py still contains no stage name and no restricted path prefix as a literal, docstring included, exactly as it does today.
+  - .harness/docs/ARCHITECTURE.md states the narrowed condition, what existence is resolved against, and that a run is unaffected.
+  - prompts/planner.md states the refusal at its narrowed condition, and still names both resolutions for the case that is refused.
+  - The full suite passes with every pre-existing assertion intact, and no assertion is weakened, skipped or deleted to accommodate the narrowing.
+
+technical_plan:
+  implementation_steps:
+    - Add the root parameter to assignment_problems and put the existence test inside the loop that already matches an entry against the restrictions, so the message-building branch is reached only for a path that is absent beneath the root. The path comes off the entry, so no prefix literal enters the module.
+    - Add the same parameter to artifact_problems and forward it, leaving the read_story gate and the order of the four checks below it exactly as they are.
+    - Rewrite the fourth check's docstring section and the assignment_problems docstring together, so the module explains the create-versus-modify distinction once and both places agree on it.
+    - Change report() in scripts/l5-plan to take the target root and pass it to artifact_problems. main already has it, so this is one argument through one call and no new resolution.
+    - In tests/test_plan_assignment_refusal.py, build the fixture root the existing conflict cases are checked against, so the same story fixture can be checked once with the named file present and once with it absent and give opposite answers.
+    - Drive the working-directory control by changing the process working directory to somewhere that is not the fixture root and requiring the fixture root's answer, in the throwaway-root style the suite already uses elsewhere.
+    - Read the committed corpus from disk for the story-041 and story-029 assertions, through the reader the run uses, and keep the existing corpus assertions that survive the narrowing rather than rewriting them.
+    - Update the call site in tests/test_validation_module_naming.py to pass a root, changing nothing else in that module.
+    - Update the plan_validation bullet and the "Work a stage cannot own" section of .harness/docs/ARCHITECTURE.md, and the corresponding paragraph of prompts/planner.md, keeping planner.md free of any stage name and any restricted prefix as it is today.
+  likely_file_changes:
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: the narrowed condition, the two changed signatures and the rewritten docstring section
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: passes the target root it already resolves into report() and on to artifact_problems
+    - file: tests/test_plan_assignment_refusal.py
+      stage: tester
+      reason: the matched present/absent pair, the working-directory control, the corpus assertions and every updated call site
+    - file: tests/test_validation_module_naming.py
+      stage: tester
+      reason: one call site moves to the three-argument form
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the narrowed condition, what existence is resolved against and that runs are unaffected
+    - file: prompts/planner.md
+      stage: documenter
+      reason: the paragraph stating the refusal must state the condition the harness now enforces
+
+scope:
+  modify:
+    - orchestration/plan_validation.py
+    - scripts/l5-plan
+    - tests/test_plan_assignment_refusal.py
+    - tests/test_validation_module_naming.py
+    - .harness/docs/ARCHITECTURE.md
+    - prompts/planner.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/harness_config.py
+    - orchestration/story_parser.py
+    - orchestration/schema_validator.py
+    - orchestration/harness_source.py
+    - workflows/
+    - schemas/
+    - hooks/
+    - templates/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm both halves by running them - a plan naming a file that exists beneath the root passes, and a plan naming an absent one is still refused. A narrowing that accidentally disabled the check would satisfy the first half alone, so the second is what shows the check is still alive.
+  - Confirm the surviving refusal still names the path, the stage, the workflow's declaration and both resolutions, by reading the message the check produces rather than the source that builds it.
+  - Confirm story-041's committed artifact now validates cleanly, read from .harness/stories on disk. It is the observed case and the only true positive available for the accepting half.
+  - Confirm the corpus still contains an artifact the check reports, so the corpus evidence is not silently empty after the narrowing.
+  - Confirm the root argument decides the answer rather than the process working directory, by driving the check from a directory that is not the fixture root. The two coincide in this repository, so a check run from the repository root proves nothing here.
+  - Confirm a grant still exempts a file before existence is consulted, and that removing the grant restores the answer the restriction alone would give.
+  - Confirm no run reads this check - that run_story calls neither function - and that the coordinator's behaviour is identical to today's on a story that would have been refused at plan time.
+  - Confirm orchestration/plan_validation.py still names no stage and no restricted prefix, by scanning the module text including its docstring.
+  - Confirm scripts/l5-plan refuses and commits exactly as it does today on an artifact that is still bad, including the text it prints and the status it returns.
+  - Confirm the full suite passes with every pre-existing assertion intact.
+
+constraints:
+  - The creation rule is untouched. A stage restricted from creating files under a prefix is still restricted from it, the workflow definition is not edited, and the run-time ownership check that enforces it is not read or changed by this story.
+  - The revert check is untouched. It remains the authority on whether a stage's edits under a governed prefix were forced, and this story neither weakens it nor duplicates its judgement at plan time.
+  - No field is added to likely_file_changes and the story schema is not edited. The fact is derived from the repository, so no committed artifact needs rewriting to satisfy the new check.
+  - Existence is resolved against the target root passed in. Neither the harness root nor the process working directory is consulted, and no default hides which one was used.
+  - Plan-time validation stays a prediction and does not claim otherwise. A file present at plan time may be gone when the story runs, and the story says so where the check is described rather than implying a guarantee.
+  - No run-time behaviour changes. run_story does not call this check today and must not begin to.
+  - orchestration/plan_validation.py continues to name no stage and no restricted path prefix; both halves keep coming off the loaded workflow through story_coordinator.
+  - story-041's committed artifact is not rewritten. It is correct as written and is this story's evidence.
+  - The other plan-time checks are left alone. strictness_problems, naming_problems, stage_exception_problems and the base check keep their present behaviour and their present signatures.
