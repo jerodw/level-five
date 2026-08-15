@@ -1,0 +1,142 @@
+story:
+  id: story-040
+  title: No target-stack literal in harness source
+  description: |
+    The harness is meant to run against any repository. Its only tie to a
+    target's stack or layout belongs in .harness/, and an audit on 2026-08-15
+    found five ties outside it: a Python source snippet executed as a version
+    probe, a configuration key whose name is a language, a workflow restriction
+    naming a directory, and two lines of prose in prompts/tester.md naming a
+    pytest layout.
+
+    Two of the five are in a prompt, which is why this is a separate story from
+    every-configurable-value-is-proven-configurable.md. That story proves
+    behaviour follows configuration by varying keys in a fixture. No fixture
+    reaches a prompt - prompts/tester.md is prose an agent reads - so a suite
+    that varied every key in existence would still not notice a pytest filename
+    sitting in it. Only a reader or a scan sees that, and readers have missed it
+    since the file was written.
+
+    Prose has already failed twice on exactly this shape. The git diff HEAD rule
+    was documented and injected into every stage prompt and shipped five more
+    times; the git-history-loader rule was documented and shipped three more
+    times. Both stopped when a scan landed. So the deliverable is a scan.
+
+    This story fixes none of the five. It grandfathers them on two lists, each
+    asserted to be exactly what the scan reports. The temporary list holds the
+    ties, so a new tie cannot join it quietly, the two stories queued behind this
+    one have a checklist, and that list reaching empty is a measurable finish for
+    them. The permanent list holds the mentions that are not ties at all - a
+    docstring saying the harness itself is written in Python, or saying that a
+    target's test command need not be a Python interpreter, is the opposite of a
+    tie. Put both in one list and the burn-down signal is gone: the list stops
+    shrinking and nobody can tell whether the work finished or stalled.
+
+    The check states its limits rather than overselling its reach. A token list
+    is a guess about languages nobody has tried and will be incomplete; it is
+    still worth having, because it catches the shape of the mistake, which
+    recurs, rather than every instance of it. And the layout half cannot read
+    orchestration/ at all - the harness's own suite is called tests/, so in
+    Python source the literal cannot be told from an honest reference to this
+    repository. That half reads only the target-facing files, where a path can
+    only mean a target's.
+
+tasks:
+  - Add orchestration/harness_source.py declaring what the scan reads and what it looks for - the harness source directories orchestration, prompts, workflows, schemas, rules, hooks, scripts and templates; the target-stack token set; the target-facing directories prompts and workflows; and the target-layout path set - each with a comment saying what it is for.
+  - Give that module a scan function taking a repository root and returning one finding per matched line, carrying the repository-relative path, the line number, the matched token and which of the two rules matched, so a caller can run it against a throwaway root as well as against this repository.
+  - Match a stack token case-insensitively and only where it is bounded on both sides by something other than a letter or digit, so clean_clone_python and platform.python_version() are seen while pipeline and pipe are not.
+  - Scan for target-layout paths only in the target-facing directories, and say in the module docstring that this is a deliberate limit rather than an oversight - a tests/ literal in orchestration/ cannot be told from an honest reference to this repository's own suite.
+  - Exempt orchestration/harness_source.py itself from the scan by name, since the token list it declares would otherwise report itself, and state that the exemption is by name and covers nothing else.
+  - Record in the module docstring that the token list is a guess about languages nobody has tried, that it will be incomplete, and what the scan therefore does not catch.
+  - Add tests/test_no_target_stack_in_harness_source.py holding two allowlists - TEMPORARY_TIES and PERMANENT_MENTIONS - each entry keyed by repository-relative path and the exact text of the matched line rather than by a line number, so an unrelated edit above a tie does not churn the list and look like the burn-down.
+  - Give every PERMANENT_MENTIONS entry a one-line reason saying why that mention is not a tie, so the permanent half is a judgement on the record rather than a suppression list.
+  - Assert set equality in both directions between what the scan reports against this repository and the union of the two lists, assert the two lists are disjoint, and assert that a mention removed from source must be removed from its list.
+  - Assert that the five audited ties are in TEMPORARY_TIES by name - the version probe and the clean_clone_python key in orchestration/story_coordinator.py, the may_not_create line in workflows/story-workflow.json, and the two lines of prompts/tester.md - so a scan that cannot see the ties that motivated it has not been shown to work.
+  - Control the scan by copying the harness source directories into a throwaway root, planting a tie in a file that is clean today, and requiring the scan to report it and the equality assertion to go red.
+  - Control the other direction by removing a known tie from the throwaway root and requiring the equality assertion to go red for the stale list entry.
+  - Assert the scan leaves .harness/ and tests/ alone by planting ties in copies of both inside the throwaway root and requiring nothing to be reported.
+  - Assert that a legitimate mention stays unreported - the docstring in orchestration/story_parser.py saying every scalar parses to a Python str, and the coordinator docstring saying the configured test command need not be a Python interpreter - so a rule that cannot tell a tie from an honest sentence is caught here rather than turned off within two stories.
+  - Assert that the module states its limits - that the layout half reads only the target-facing directories, and that the token list is incomplete - by reading the module text rather than by eyeballing it.
+  - Record in .harness/docs/ARCHITECTURE.md that the tie rule is a scan rather than a paragraph, where the declaration and the check live, what the scan does not catch, and that TEMPORARY_TIES reaching empty is the completion signal for the-interpreter-is-not-assumed-to-be-python.md and the-test-location-comes-from-configuration.md.
+
+acceptance_criteria:
+  - orchestration/harness_source.py declares the harness source directories, the target-stack tokens, the target-facing directories and the target-layout paths, and exposes a scan function taking a repository root so the same code runs against this repository and against a throwaway one.
+  - A stack token matches case-insensitively and only when bounded on both sides by a character that is not a letter or a digit. clean_clone_python and platform.python_version() are reported; pipeline and pipe are not; a test constructs all four cases rather than reasoning about them.
+  - The target-layout half reads only prompts/ and workflows/. A tests/ literal planted in an orchestration/ file in a throwaway root is not reported by that half, and the module says why.
+  - orchestration/harness_source.py is exempt from its own scan by name, and a test shows the exemption covers that file alone - a second file carrying the same tokens is reported.
+  - The scan reports every one of the five audited ties, each asserted by name - the _VERSION_PROBE assignment and the clean_clone_python key in orchestration/story_coordinator.py, the may_not_create line of workflows/story-workflow.json, and lines 19 and 47 of prompts/tester.md.
+  - TEMPORARY_TIES and PERMANENT_MENTIONS together equal exactly what the scan reports against this repository, asserted in both directions, and the two lists share no entry.
+  - Every entry in PERMANENT_MENTIONS carries a reason saying why that mention is not a tie, and the assertion fails when an entry carries none.
+  - TEMPORARY_TIES contains the artifact-schema mentions of python, python_version and clean_clone_python in schemas/clean-clone-result.schema.json, schemas/revert-check-result.schema.json and schemas/harness-config.schema.json, because the-interpreter-is-not-assumed-to-be-python.md names those schemas and they burn down with it.
+  - PERMANENT_MENTIONS contains the orchestration/story_parser.py docstring saying every scalar parses to a Python str, and the coordinator docstrings saying a target's test command need not be a Python interpreter, and none of them is reported as a tie.
+  - Planting a tie in a harness file that is clean today makes the scan report it and makes the equality assertion fail, demonstrated against a throwaway root rather than by editing this repository.
+  - Removing a tie from the throwaway root while its entry remains in TEMPORARY_TIES makes the equality assertion fail, so a file that stops violating must be taken off the list.
+  - A tie planted under .harness/ or under tests/ in the throwaway root is not reported, because both are allowed to be shaped like a Python project.
+  - The module states what it does not catch - that the token list is a guess at languages nobody has tried and is incomplete, and that the layout half cannot read orchestration/ - and a test reads that text rather than trusting it to be there.
+  - The harness behaves exactly as it does today. No tie is fixed, orchestration/story_coordinator.py, workflows/story-workflow.json and prompts/tester.md carry no edit, and the full suite passes with every pre-existing assertion intact.
+  - .harness/docs/ARCHITECTURE.md records where the declaration and the check live, what the check does not catch, and that TEMPORARY_TIES reaching empty is the completion signal for the two queued stories.
+
+technical_plan:
+  implementation_steps:
+    - Write orchestration/harness_source.py as a declaration plus a scan. HARNESS_SOURCE_DIRS is the eight directories the request names; TARGET_FACING_DIRS is prompts and workflows; STACK_TOKENS is python, python3, pytest, venv, conftest, pip, npm, jest, go.mod, cargo, gradle and tox; TARGET_LAYOUT_PATHS is tests/ and the sibling shapes a target's layout would use.
+    - Build the stack-token pattern as one alternation with lookaround on both sides for a character that is not a letter or a digit, longest token first, compiled case-insensitively. This is the choice that makes clean_clone_python visible and pipeline invisible, and the module says so where the pattern is built.
+    - Give scan a root parameter defaulting to the repository the module sits in, resolved relative to the module the way the schemas are, and have it walk only the declared directories, skipping __pycache__ and anything not a text file, so a throwaway root is scanned by the same code path as this one.
+    - Return findings as a frozen dataclass carrying path, line number, line text, token and rule, so the test can key its lists on path and line text while the failure message can still name a line number.
+    - Say in the module docstring what it is - a declaration the suite asserts against, not something the coordinator runs - and what it does not catch, so a reader meeting the module meets the limits with it.
+    - Write tests/test_no_target_stack_in_harness_source.py with the two lists as literals, resolve the scan once against this repository, and compare as sets of (path, line text) pairs in both directions with a failure message that names the file and line of each unexpected or stale entry.
+    - Classify a mention as temporary when it names or assumes a target's stack or layout, and as permanent when it describes the harness's own implementation language or explicitly says the target need not be Python. Put the rule in the module docstring beside the lists so the next classification is not re-argued.
+    - Build the throwaway root by copying the eight declared directories plus small stand-ins for .harness/ and tests/ into a tmp_path, and drive every control through scan(root) rather than through this repository, following the throwaway-root style tests/test_schema_inventory_location.py already uses.
+    - Plant the controls one per test so a failure names which property broke - a tie in a clean file, a stale list entry, a tests/ literal in orchestration/, a tie under .harness/, a tie under tests/, and a second file carrying the exempt module's tokens.
+    - Assert the stated limits by reading orchestration/harness_source.py's docstring and searching it, in the way tests/test_validation_module_naming.py reads prose rather than eyeballing it.
+    - Update the orchestration/ and tests/ sections of .harness/docs/ARCHITECTURE.md, and state there that prose failed twice on this rule before a scan landed, so the note is understood as a pointer to the mechanism rather than as the mechanism.
+  likely_file_changes:
+    - file: orchestration/harness_source.py
+      stage: implementer
+      reason: declares the scanned directories and the token sets, and holds the scan the suite drives
+    - file: tests/test_no_target_stack_in_harness_source.py
+      stage: tester
+      reason: the two allowlists, the equality assertions and the planted controls
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records where the rule lives, what it does not catch, and what an empty temporary list means
+
+scope:
+  modify:
+    - orchestration/harness_source.py
+    - tests/test_no_target_stack_in_harness_source.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_parser.py
+    - orchestration/harness_config.py
+    - workflows/
+    - prompts/
+    - schemas/
+    - scripts/
+    - hooks/
+    - rules/
+    - templates/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm the scan reports all five audited ties, each by name, by running it rather than by reading the list - a scan that cannot see the ties that motivated it has not been shown to work.
+  - Confirm the two lists together equal exactly what the scan reports, in both directions, and that they are disjoint.
+  - Confirm a planted tie in a clean harness file is reported and turns the equality assertion red, and that a list entry left behind after its tie is removed turns it red too. Run both controls and read the results.
+  - Confirm nothing under .harness/ or tests/ is reported, including planted ties, and that a tests/ literal in an orchestration/ file is not reported by the layout half.
+  - Confirm the legitimate mentions stay unreported - the story_parser.py docstring about the harness's own scalars, and the coordinator docstrings saying a target's test command need not be a Python interpreter. A rule that cannot tell those from a tie will be turned off within two stories.
+  - Confirm the boundary rule behaves as claimed on all four constructed cases, so the matcher is known to see identifier-embedded tokens and known not to see pipeline.
+  - Confirm the module states its limits, by reading the text, and that the stated limits match what the scan actually does rather than overstating it.
+  - Confirm no tie was fixed - orchestration/story_coordinator.py, workflows/story-workflow.json and prompts/tester.md carry no edit on this story's branch - and that the full suite passes with every pre-existing assertion intact.
+
+constraints:
+  - No tie is fixed by this story. The five are grandfathered and left exactly as they are; fixing them is the-interpreter-is-not-assumed-to-be-python.md and the-test-location-comes-from-configuration.md.
+  - The two lists stay separate. A temporary tie and a permanent mention never share a list, because the burn-down signal is the whole reason the split exists.
+  - Both lists are asserted exact in both directions. A new tie may not be added to either list without a story that explains it, and a mention that disappears from source must be taken off its list.
+  - The check states its reach and does not oversell it. The token list is incomplete by construction and the layout half cannot read orchestration/; both are written down where a reader meets the check.
+  - .harness/ and tests/ are outside the scan. A target tie belongs in .harness/, and this repository's own suite is legitimately full of Python.
+  - The scan is not tamper-proof and does not claim to be. Deleting the check alongside a forced repair is not caught here, at any granularity, and no assertion in this module implies otherwise.
+  - No assertion anywhere in the suite is weakened, skipped or deleted to accommodate the new module.
+  - The coordinator runs no part of this. orchestration/harness_source.py is a declaration the suite drives, and no run-time behaviour changes.
