@@ -1,0 +1,145 @@
+story:
+  id: story-043
+  title: An undeclared config key is refused
+  description: |
+    The harness declares the thirteen keys it reads in
+    schemas/harness-config.schema.json, and separately refuses one retired
+    key by name. Refusing by name is why orchestration/harness_config.py
+    still spells `clean_clone_python`, the last language name left in
+    orchestration/ after story-041.
+
+    This story replaces the by-name refusal with a general one: any key a
+    target's .harness/config.yaml carries that the schema does not declare
+    stops the run at pre-flight, naming the offending key and listing the
+    declared set. RETIRED_CONFIG_KEYS and its refusal are deleted rather
+    than joined by a sibling, so the retired key is refused as one more
+    undeclared key and the literal goes with the mechanism.
+
+    Two things fall out of the one change. The last language name leaves
+    orchestration/, and a mistyped key stops being silently ignored: today
+    `branch_prefixx: story/` runs, quietly takes the default, and the
+    developer finds out from the branch name.
+
+    What is lost, and it is the whole cost of the change: a config carrying
+    `clean_clone_python` is told the key is not one the harness reads,
+    rather than being told `verification_runner` replaced it. Someone
+    upgrading finds the replacement in the schema instead. The message keeps
+    its usefulness by naming the offending key and the declared set, the
+    shape story-028's routing refusal takes.
+
+    `project` is the one key a shipped config carries that nothing reads,
+    and it is deliberately undeclared because the declared set is the set of
+    keys the harness reads. Under a strict rule it would refuse this
+    repository's own config, so it is removed from the configs rather than
+    declared: declaring it would break story-039's three coverage checks,
+    which require every declared key to be read by the harness, to carry a
+    proof, and to make that proof go red when its read is replaced by its
+    fallback.
+
+tasks:
+  - Replace the retired-key mechanism in orchestration/harness_config.py with a general check. Delete RETIRED_CONFIG_KEYS and retired_config_problems, and add a function that takes a loaded config and returns one problem per key the schema does not declare, naming the offending key and the declared set.
+  - Correct the docstrings in orchestration/harness_config.py that state the declaration is not a run-time check and that no unknown key is refused, since both become false.
+  - In orchestration/story_coordinator.py, replace _refuse_retired_config_keys with an equivalent that refuses undeclared keys, and swap the pre-flight call in run_story to the new check, keeping its position above every other pre-flight.
+  - Correct the description field of schemas/harness-config.schema.json, which states that nothing validates a target's config file against it during a run and that no unknown key is refused. The thirteen declared properties do not change.
+  - Remove the `project` key from .harness/config.yaml, from templates/config.yaml, and remove the {project} substitution from scripts/l5-init, since nothing reads the key and a strict rule would refuse every config carrying it.
+  - Remove the `project` line from every fixture configuration under tests/, so the suite still runs under the strict rule. tests/conftest.py holds the shared one; test_config_keys_are_obeyed.py plants its own in _yaml_lines; fourteen other modules carry inline copies.
+  - Remove the orchestration/harness_config.py entry from PERMANENT_MENTIONS in tests/test_no_target_stack_in_harness_source.py, whose two-way set equality against the scan would otherwise fail once the literal is gone.
+  - Delete tests/test_retired_config_keys.py, whose subject no longer exists, and write a module covering the new refusal in its place.
+  - Update .harness/docs/ARCHITECTURE.md where it describes the declaration as not a run-time check, gives `project` as the live example of an undeclared key, describes the retired-key refusal, and states the PERMANENT_MENTIONS count.
+
+acceptance_criteria:
+  - RETIRED_CONFIG_KEYS, retired_config_problems and _refuse_retired_config_keys do not appear anywhere in the repository outside .harness/runs/.
+  - A run whose target config carries `clean_clone_python` is refused at pre-flight with exit status 1, and the refusal leaves no run directory, no state.json, no log file, no new branch, and invokes no agent.
+  - A run whose target config carries a key that is a mistyping of a declared key, such as `branch_prefixx`, is refused the same way and with the same guarantees.
+  - The refusal message names each offending key and lists the keys the harness does declare.
+  - A run whose target config is otherwise valid but carries a comment naming a retired or unknown key is not refused, because load_config strips comments before any key is seen.
+  - .harness/config.yaml in this repository and templates/config.yaml both carry no key the schema does not declare, and a run against this repository reaches its first stage rather than being refused at pre-flight.
+  - scripts/l5-init writes a config carrying no undeclared key, so a freshly initialised target can run a story.
+  - harness_source.scan() reports no finding whose path is under orchestration/ other than the two entries already recorded as legitimate mentions of the language the harness itself is written in, in orchestration/story_parser.py and orchestration/story_coordinator.py.
+  - PERMANENT_MENTIONS in tests/test_no_target_stack_in_harness_source.py holds eight entries and none of them names orchestration/harness_config.py, and the module's two-way set equality against the scan passes.
+  - The full test suite passes under the configured test command.
+
+technical_plan:
+  implementation_steps:
+    - Read orchestration/harness_config.py, orchestration/story_coordinator.py around the run_story pre-flight, and schemas/harness-config.schema.json before changing anything.
+    - In harness_config.py, delete RETIRED_CONFIG_KEYS and retired_config_problems. Add a function taking the loaded config and an optional harness root, calling declared_config_keys, and returning one problem string per config key absent from the declared set, in the order the config carries them.
+    - Compose each problem so it names the offending key and the declared set, the shape story-028's routing refusal takes. A bare "unknown key" would be worse than the message it replaces.
+    - In story_coordinator.py, rename and rewrite _refuse_retired_config_keys to refuse undeclared keys through the shared refuse(), naming the config file and telling the developer to remove or correct each key.
+    - In run_story, replace the retired-key call with the new one, keeping the comment's account of why it sits above every other pre-flight and passing harness_root through so the schema resolves.
+    - Remove `project` from .harness/config.yaml, from templates/config.yaml, and remove the {project} substitution in scripts/l5-init so the template no longer needs it.
+    - Sweep tests/ for fixture configurations carrying `project` and remove the line from each. tests/conftest.py CONFIG is the shared one; test_config_keys_are_obeyed.py plants its own in _yaml_lines; the remainder are inline strings in individual modules.
+    - Remove the harness_config.py entry from PERMANENT_MENTIONS, then run harness_source.scan() and confirm orchestration/ reports only the two legitimate mentions.
+    - Run the full suite before handing off, since the fixture sweep and the allowlist edit are both load-bearing for it.
+  likely_file_changes:
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: the retired-key mapping and its function are deleted and replaced by the general undeclared-key check; docstrings stating the declaration is not a run-time check become false.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the pre-flight refusal helper and the run_story call site move from retired keys to undeclared keys.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: its description states that no unknown key is refused, which this story makes false. The declared properties do not change.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: carries `project`, which nothing reads and the schema does not declare, so the strict rule would refuse this repository's own config.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: same, for every target l5-init creates.
+    - file: scripts/l5-init
+      stage: implementer
+      reason: substitutes {project} into the template, which no longer carries the placeholder.
+    - file: tests/conftest.py
+      stage: implementer
+      reason: the shared fixture config carries `project`, so every coordinator test would be refused at pre-flight without this edit.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: implementer
+      reason: _yaml_lines plants `project` into the fixture config every story-039 proof runs against.
+    - file: tests/test_no_target_stack_in_harness_source.py
+      stage: implementer
+      reason: PERMANENT_MENTIONS holds the harness_config.py entry, and its set equality against the scan fails once the literal is gone.
+    - file: tests/test_retired_config_keys.py
+      stage: tester
+      reason: its subject is deleted by this story, so the module is removed.
+    - file: tests/test_undeclared_config_keys.py
+      stage: tester
+      reason: the new refusal needs coverage, including the mistyped-key case that has no test today because it was not possible.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: describes the declaration as not a run-time check, gives `project` as the live undeclared-key example, describes the retired-key refusal, and states the PERMANENT_MENTIONS count.
+
+scope:
+  modify:
+    - orchestration/harness_config.py
+    - orchestration/story_coordinator.py
+    - schemas/harness-config.schema.json
+    - .harness/config.yaml
+    - templates/config.yaml
+    - scripts/l5-init
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - prompts/
+    - schemas/story.schema.json
+    - schemas/manifest.json
+    - orchestration/harness_source.py
+    - .harness/standards/
+
+verification_requirements:
+  - Confirm a config carrying `clean_clone_python` is refused at pre-flight, leaving no run directory, no state.json, no log, no branch and no agent invoked, reached now by the general rule rather than by a name.
+  - Confirm a config carrying a mistyped key is refused with the same guarantees, which is the new capability this story adds.
+  - Confirm the refusal message names each offending key and the declared set.
+  - Confirm this repository's .harness/config.yaml and templates/config.yaml both load without refusal, which is the regression this story is most likely to cause.
+  - Confirm a comment naming a retired or unknown key does not cause a refusal.
+  - Confirm harness_source.scan() reports nothing under orchestration/ beyond the two legitimate mentions of the harness's own implementation language, and that PERMANENT_MENTIONS no longer names orchestration/harness_config.py.
+  - Confirm the full suite passes and that no fixture configuration anywhere under tests/ carries a key the schema does not declare.
+
+constraints:
+  - The refusal replaces the retired-key refusal rather than joining it. If any retirement mapping survives in any form, the literal survives with it and the story has bought nothing.
+  - The refusal stays at the point run_story already refuses retired keys, above every other pre-flight, so a rejection creates no run directory, no state file, no log, no branch and invokes no agent.
+  - The set of declared keys stays exactly the thirteen properties schemas/harness-config.schema.json already carries. This story adds no key, removes none, and declares nothing that the harness does not read.
+  - Only key names are checked. No config value is validated, coerced or constrained by this story.
+  - The three entries in TEMPORARY_TIES are the subject of a separate request and are left alone.
+  - load_config's parsing behaviour is unchanged, including that it strips comments before any key is recorded.
+  - No third-party dependency is introduced; the harness continues to parse its config with its own small YAML subset.
