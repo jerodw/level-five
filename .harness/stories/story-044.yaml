@@ -1,0 +1,162 @@
+story:
+  id: story-044
+  title: The documenter records what it changed
+  description: |
+    A stage that writes to the repository declares an optional changed_files
+    key naming its changed-files record, and that declaration is what turns on
+    the coordinator's blocked-path check for the stage: after any stage
+    carrying it completes, the record is read and checked against
+    blocked_paths, with no stage name written in orchestration code. The
+    implementer and the tester declare one. The documenter does not, and the
+    architecture document records that as deliberate and one line from being
+    enabled.
+
+    This story enables it. The documenter declares
+    documenter-changed-files.json, writes it, and the check the coordinator
+    already performs from the declaration begins covering the documenter's
+    edits. The documenter is the one stage that writes to the repository after
+    the verdict is reached, so until now it has been the only writing stage
+    whose edits nothing checked.
+
+    The change is declarative on purpose. The coordinator reads the record
+    name off the loaded workflow, so enabling the check must cost no
+    orchestration code at all; if it does, the declaration-driven design has
+    not held. The cost lands instead in the test fixtures: the record becomes
+    a required artifact, so every fake runner that drives the shipped workflow
+    through the documenter must write it.
+
+tasks:
+  - Declare documenter-changed-files.json on the documenter stage in workflows/story-workflow.json, mirroring the tester's declaration exactly - listed in outputs, named by changed_files, and mapped to the changed-files schema in schemas.
+  - Add a paragraph to prompts/documenter.md requiring the documenter to write documenter-changed-files.json to the run directory, injecting the schema through {{changed_files_schema}} rather than restating its fields, and distinguishing it in wording from the existing {{changed_files}} placeholder, which carries the implementer's record inward.
+  - Update the fake runners in every tests/ module that drives the shipped workflow through the documenter so their documenter branch writes documenter-changed-files.json; a module that builds its own workflow definition in-test needs the fixture only if that definition carries the declaration.
+  - Extend tests/test_changed_files_records.py to hold the new contract - invert the assertion that the documenter declares no record, assert the documenter prompt names the record and injects the schema placeholder, and drive a run end to end whose documenter record names a blocked path and assert it escalates.
+  - Update the sentence in .harness/docs/ARCHITECTURE.md that says the documenter declares no record and is intentionally unchecked.
+
+acceptance_criteria:
+  - The documenter stage in workflows/story-workflow.json carries changed_files set to documenter-changed-files.json, lists that name in outputs, and maps it to the changed-files schema in its schemas map.
+  - No new schema file is added - the documenter's record is validated against the existing schemas/changed-files.schema.json, the same definition the implementer's and tester's records are validated against.
+  - prompts/documenter.md names documenter-changed-files.json and contains the {{changed_files_schema}} placeholder, and states no field of that schema in prose.
+  - prompts/documenter.md still contains {{changed_files}}, and the text around it makes clear that placeholder is the implementer's record being injected inward, distinct from the record the documenter is being asked to write outward.
+  - A run whose documenter completes without writing documenter-changed-files.json escalates, reported as a missing required artifact by the same path that reports any other missing stage output.
+  - A run whose documenter writes a record naming a path under blocked_paths escalates, with the same message shape the implementer and tester produce when their records name a blocked path.
+  - A run whose documenter writes a well-formed record naming no blocked path completes normally, reaching the same terminal state it reached before this story.
+  - A documenter record that is not valid against the changed-files schema escalates as an invalid artifact, the way the implementer's and tester's records already do.
+  - The diff touches no file under orchestration/ - the enforcement is read entirely off the loaded workflow definition, and adding it required no orchestration change.
+  - tests/test_changed_files_records.py asserts the documenter's declaration and the documenter prompt's requirement, and no longer asserts that the documenter declares no record.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the tester stage's declaration in workflows/story-workflow.json and copy its shape onto the documenter stage - documenter-changed-files.json added to outputs, set as changed_files, and mapped to changed-files under schemas. Do not add may_not_create, revert_check, or a stage baseline to the documenter; this story enables the blocked-path check and nothing else.
+    - Read prompts/tester.md for how it asks for tester-changed-files.json and follow that pattern in prompts/documenter.md - name the artifact beside documentation-report.md in the section that lists what the stage writes to {{run_dir}}, and inject {{changed_files_schema}} rather than listing the modified, created and deleted arrays in prose.
+    - Check the wording around the existing {{changed_files}} placeholder in prompts/documenter.md under the runtime state layer and make the direction of each explicit, so a reader cannot mistake the injected implementer record for the record being requested.
+    - Determine which tests/ modules load the shipped workflow rather than constructing their own stage list, since only those reach the new declaration. In each, add the record write to the documenter branch of the fake runner.
+    - Extend tests/test_changed_files_records.py with the documenter cases, driving its own fake runner the way that module already does for the tester's record - the missing-record escalation, the blocked-path escalation, the schema-invalid escalation, and the clean pass.
+    - Update the paragraph in .harness/docs/ARCHITECTURE.md describing per-stage changed-files records so it says the documenter declares one, and remove the claim that enabling it is a pending one-line change.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The documenter stage gains the changed_files declaration, the outputs entry, and the schemas mapping that turn on the blocked-path check.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: The documenter must be told to write the record, with the schema injected rather than restated.
+    - file: tests/test_changed_files_records.py
+      stage: tester
+      reason: This module owns the per-stage record contract and currently asserts the documenter declares no record; it holds the new contract and the end-to-end escalation cases.
+    - file: tests/test_story_coordinator.py
+      stage: tester
+      reason: Its fake runner drives the shipped workflow through the documenter and must write the now-required record.
+    - file: tests/test_artifact_schemas.py
+      stage: tester
+      reason: Same fixture update - the documenter branch of its fake runner must write the record.
+    - file: tests/test_attempt_archiving.py
+      stage: tester
+      reason: Same fixture update, and the archived artifact set now includes the documenter's record.
+    - file: tests/test_clean_clone_check.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_escalation_resume.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_escalation_summary.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_execution_history.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_foreign_work_refusal.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_rerun_refusal.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_resume_guard.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_retry_history.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_retry_routing.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_revert_baseline.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_revert_check.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_single_story_reader.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_stage_baseline.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_stage_output_ownership.py
+      stage: tester
+      reason: Same fixture update to its documenter branch.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: Its documenter branch may need the record, depending on whether the workflow it drives is the shipped one or the definition it builds in-test.
+    - file: tests/test_undeclared_config_keys.py
+      stage: tester
+      reason: Its documenter branch may need the record, on the same condition.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The paragraph on per-stage changed-files records states that the documenter declares none and is intentionally unchecked; that is no longer true.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - prompts/documenter.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - schemas/
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/harness-layer.md
+    - prompts/planner.md
+    - scripts/
+
+verification_requirements:
+  - Confirm the documenter stage's declaration in workflows/story-workflow.json matches the tester's shape - the record named in outputs, named by changed_files, and mapped to the changed-files schema - and that no other stage's declaration changed.
+  - Confirm no file under orchestration/ appears in the diff, and that the blocked-path check reaching the documenter is therefore the existing declaration-driven code rather than new enforcement.
+  - Confirm no new file was added under schemas/, and that the documenter's record is validated against schemas/changed-files.schema.json.
+  - Confirm the escalation cases are exercised against a real coordinator run rather than asserted from the workflow file alone - a documenter that writes no record, one that writes a record naming a blocked path, and one that writes a record failing the schema each escalate, and a documenter writing a clean record does not.
+  - Confirm the escalation assertions can fail - that each would have passed differently before the declaration was added, rather than passing for a reason unrelated to the documenter.
+  - Confirm prompts/documenter.md contains {{changed_files_schema}} and names documenter-changed-files.json, and that the fields of the changed-files schema do not appear as prose in the template.
+  - Confirm the full test suite passes, and that every tests/ module driving the shipped workflow through the documenter reaches its terminal state for the reason the test intends rather than escalating on the newly required artifact.
+
+constraints:
+  - The implementer's, tester's and verifier's declarations and enforcement are unchanged; this story adds one stage to a mechanism that already exists.
+  - No stage name and no artifact name is added to orchestration/. The record name reaches the coordinator only by being read off the loaded workflow definition.
+  - The changed-files schema is reused verbatim. The documenter's record has the same modified, created and deleted shape as the other two, and there is one definition of that shape in the repository.
+  - The documenter's record is injected into no prompt template. No stage runs after the documenter, so nothing reads it inward.
+  - {{changed_files}} continues to carry the implementer's record into every template that reads it, with unchanged meaning.
+  - The documenter gains no may_not_create declaration, no revert check and no stage baseline. This story turns on the blocked-path check and nothing beyond it.
+  - The documenter's own stage ordering is unchanged - it still runs last, after the verdict, before the coordinator commits.
