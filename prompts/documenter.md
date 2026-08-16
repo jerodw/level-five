@@ -60,6 +60,9 @@ after failing mechanically. The coordinator wrote it, not an agent: no
 verifier has judged this work, and it says what was missing or stale:
 {{self_route_result}}
 
+Retry guidance:
+{{retry_guidance}}
+
 Retry lessons (retry history for this run):
 {{retry_state}}
 

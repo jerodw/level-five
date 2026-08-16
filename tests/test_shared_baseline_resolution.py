@@ -70,17 +70,28 @@ CURRENT = {
     "tests/test_story_010_validation.py": "tests/test_attempt_archiving.py",
 }
 
-#: The two test names story-038's merge had to change, because story-008 and
-#: story-009 each shipped a test of that name and the merged module can hold
-#: only one of each. Both survive, under story-009's renamed spelling, and
-#: the name-set comparisons below map through this rather than dropping
-#: either side of the collision.
+#: The test names a later story had to change, mapped from the spelling the
+#: origin shipped to the one the module carries now. Two are story-038's
+#: merge, because story-008 and story-009 each shipped a test of that name and
+#: the merged module can hold only one of each. Two are story-045's, which
+#: moved the documenter ahead of the verifier: an attempt-1 archive now holds
+#: eight artifacts rather than six, and the documenter's report is no longer
+#: the artifact a failed attempt did not write, so each of those two cases was
+#: renamed for what it now checks rather than left describing what it used to.
+#: Every one of them survives under its new spelling, and the name-set
+#: comparisons below map through this rather than dropping either side.
 MERGE_RENAMES = {
     "tests/test_story_009_validation.py": {
         "test_the_rendered_prompt_has_no_leftover_placeholder":
             "test_the_rendered_prompt_with_workflow_facts_has_no_leftover_placeholder",
         "test_the_coverage_comes_from_the_injection_and_not_from_leftover_prose":
             "test_the_workflow_fact_coverage_comes_from_the_injection_not_leftover_prose",
+    },
+    "tests/test_story_010_validation.py": {
+        "test_attempt_1_archive_holds_the_six_artifacts_under_canonical_names":
+            "test_attempt_1_archive_holds_every_stage_artifact_under_canonical_names",
+        "test_an_artifact_the_attempt_did_not_write_is_skipped":
+            "test_the_documenters_artifacts_are_archived_with_the_attempt",
     },
 }
 

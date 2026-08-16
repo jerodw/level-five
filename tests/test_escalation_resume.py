@@ -77,6 +77,17 @@ IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"]
                          if "revert_check" in s)
 BASELINE = IMPLEMENTER_STAGE["revert_check"]["baseline"]
 
+
+def stages_from(name: str) -> list[str]:
+    """The stages a run entering at `name` invokes, in workflow order.
+
+    Read off the loaded definition rather than written out, so a reorder of
+    the stage list - story-045 moved the documenter ahead of the verifier -
+    changes what a resume is expected to run without these cases stating an
+    order of their own.
+    """
+    return STAGE_NAMES[STAGE_NAMES.index(name):]
+
 STORY_ID = "story-001"
 STORY_TITLE = "Sample story for coordinator tests"
 DEFAULT_BRANCH = "main"
@@ -832,7 +843,7 @@ def test_an_escalated_run_resumes_at_the_recorded_stage(target, harness_root):
     code, resumed = run(target, harness_root, verdicts=[PASS])
 
     assert code == 0
-    assert resumed.calls == [VERIFIER_STAGE["name"], "documenter"]
+    assert resumed.calls == stages_from(VERIFIER_STAGE["name"])
     assert state_of(target)["status"] == "completed"
 
 
@@ -1003,7 +1014,7 @@ def test_a_resumed_run_carries_the_counters_and_preserves_the_attempt(
     # writes over the copy at the run root, which is why the archive exists.
     assert (story_coordinator.attempt_dir(run_dir, 2)
             / "prompt-verifier-attempt-2.md").read_text() == prompt
-    assert resumed.calls == [VERIFIER_STAGE["name"], "documenter"]
+    assert resumed.calls == stages_from(VERIFIER_STAGE["name"])
 
 
 def test_resetting_the_counters_would_have_overwritten_that_evidence(
@@ -1135,8 +1146,7 @@ def test_a_stage_argument_overrides_the_recorded_stage(target, harness_root):
 
     assert code == 0
     assert overridden.calls[0] == RETRY_STAGE
-    assert overridden.calls == [RETRY_STAGE, "tester", VERIFIER_STAGE["name"],
-                                "documenter"]
+    assert overridden.calls == stages_from(RETRY_STAGE)
 
     elsewhere = build_target(target.parent / "no-override")
     escalate(elsewhere, harness_root)
@@ -1180,7 +1190,7 @@ def test_a_fresh_run_started_at_a_later_stage_records_that_stage(
     code, started = run(target, harness_root, verdicts=[PASS],
                         start_stage=VERIFIER_STAGE["name"])
     assert code == 0
-    assert started.calls == [VERIFIER_STAGE["name"], "documenter"]
+    assert started.calls == stages_from(VERIFIER_STAGE["name"])
 
     elsewhere = build_target(target.parent / "fresh-default")
     assert run(elsewhere, harness_root, verdicts=[PASS])[1].calls[0] \
@@ -1487,7 +1497,7 @@ def test_the_resumed_stage_comes_from_state_json(target, harness_root):
     code, resumed = run(target, harness_root)
 
     assert code == 0
-    assert resumed.calls == ["documenter"]
+    assert resumed.calls == stages_from("documenter")
 
 
 def test_nothing_routes_on_the_summary_the_archive_or_the_baseline(
@@ -1510,7 +1520,7 @@ def test_nothing_routes_on_the_summary_the_archive_or_the_baseline(
     code, stripped = run(target, harness_root, verdicts=[PASS])
 
     assert code == 0
-    assert stripped.calls == [VERIFIER_STAGE["name"], "documenter"]
+    assert stripped.calls == stages_from(VERIFIER_STAGE["name"])
 
     intact = build_target(target.parent / "intact")
     escalate(intact, harness_root)

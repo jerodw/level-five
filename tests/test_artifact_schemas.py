@@ -305,7 +305,7 @@ def test_verdict_missing_a_routed_field_escalates_instead_of_routing(
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    assert runner.calls == ["implementer", "tester", "verifier"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
     state = json.loads((runner.run_dir / "state.json").read_text())
     assert state["status"] == "escalated"
@@ -375,7 +375,7 @@ def test_extra_keys_on_every_artifact_do_not_stop_a_run(target_root, harness_roo
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 0
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
     assert not (runner.run_dir / "escalation-summary.md").exists()
 
 

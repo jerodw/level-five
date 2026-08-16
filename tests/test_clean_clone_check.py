@@ -795,19 +795,27 @@ def committed_failure_run(story_target, harness_root):
     return code, runner, run_dir_of(story_target)
 
 
-def test_a_story_that_fails_only_once_committed_never_reaches_the_documenter(
+def test_a_story_that_fails_only_once_committed_never_completes(
     committed_failure_run,
 ):
+    """What the check buys, restated where story-045 moved it.
+
+    It used to be that such a run never reached the documenter, the last
+    stage. The documenter now runs before the verifier, so the guarantee is
+    the one that was always the point: a story whose suite fails where the
+    code ships does not finish - no completion report, and the run ends
+    escalated with its retries spent.
+    """
     code, runner, run_dir = committed_failure_run
     assert code == 2
-    assert "documenter" not in runner.calls
-    assert not (run_dir / "documentation-report.md").exists()
+    assert not (run_dir / "completion-report.md").exists()
+    assert read_state(run_dir)["status"] == "escalated"
 
 
 def test_the_same_story_with_its_baseline_corrected_advances(green_run):
     code, runner, run_dir = green_run
     assert code == 0
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
     assert read_state(run_dir)["status"] == "completed"
 
 
@@ -834,16 +842,22 @@ def test_a_failing_check_records_its_evidence_too(committed_failure_run):
     assert schema_validator.validate(record, SCHEMA) == []
 
 
-def test_the_check_runs_before_the_documenter_stage_starts(green_run):
-    """Ordering asserted on the event stream, not on the call list alone."""
+def test_the_check_runs_after_the_documenter_stage_completes(green_run):
+    """Ordering asserted on the event stream, not on the call list alone.
+
+    story-045 moved the documenter ahead of the verifier, so the check - which
+    runs on the verifier's passing verdict - now clones a tree that already
+    holds the documenter's edits. The ordering is what says so.
+    """
     _, _, run_dir = green_run
     events = [e["event"] for e in history_of(run_dir)]
     stages = [e.get("stage") for e in history_of(run_dir)]
     passed = events.index("clean-clone-passed")
     documenter = next(
         index for index, entry in enumerate(history_of(run_dir))
-        if entry["event"] == "stage-started" and entry["stage"] == "documenter")
-    assert events.index("verification-passed") < passed < documenter
+        if entry["event"] == "stage-completed" and entry["stage"] == "documenter")
+    assert documenter < events.index("verification-passed") < passed
+    assert passed < events.index("story-completed")
     assert stages[passed] == "verifier"
 
 
@@ -870,11 +884,11 @@ def test_a_clean_clone_failure_reroutes_to_the_workflows_declared_retry_stage(
     _, runner, _ = committed_failure_run
     retry_stage = VERIFIER_STAGE["clean_clone"]["retry_stage"]
     assert runner.calls == [
-        "implementer", "tester", "verifier",
-        "implementer", "tester", "verifier",
-        "implementer", "tester", "verifier",
+        "implementer", "tester", "documenter", "verifier",
+        "implementer", "tester", "documenter", "verifier",
+        "implementer", "tester", "documenter", "verifier",
     ]
-    assert runner.calls[3] == retry_stage
+    assert runner.calls[4] == retry_stage
 
 
 def test_each_clean_clone_failure_increments_the_retry_count_exactly_once(
@@ -935,7 +949,7 @@ def test_a_refused_check_escalates_naming_the_missing_interpreter(
     entry = history_of(run_dir)[-1]
     assert entry["event"] == "escalated"
     assert ".venv999/bin/python" in entry["message"]
-    assert "documenter" not in runner.calls
+    assert not (run_dir / "completion-report.md").exists()
     assert record_of(run_dir)["ran"] is False
 
 
@@ -975,8 +989,8 @@ def test_a_failed_verification_still_retries_exactly_as_before(
 
     run_dir = run_dir_of(story_target)
     assert runner.calls == [
-        "implementer", "tester", "verifier",
-        "implementer", "tester", "verifier", "documenter",
+        "implementer", "tester", "documenter",
+        "verifier", "implementer", "tester", "documenter", "verifier",
     ]
     assert read_state(run_dir)["retry_count"] == 1
     entry = next(e for e in history_of(run_dir) if e["event"] == "verification-failed")

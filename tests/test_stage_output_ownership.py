@@ -281,7 +281,7 @@ def test_a_stage_that_declares_nothing_may_create_under_the_prefix(target_root,
     })
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 0
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
 
 # --------------------------------------------------------------------------

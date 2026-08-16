@@ -151,7 +151,7 @@ def complete_run(target_root: Path, harness_root: Path) -> Path:
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, runner
     ) == 0
-    assert runner.stages == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.stages == ["implementer", "tester", "documenter", "verifier"]
     return run_dir
 
 
@@ -450,7 +450,7 @@ def test_the_prompt_carries_the_story_file_byte_for_byte(target_root, harness_ro
     story_path = install(target_root, AWKWARD_STORY)
     run_dir = complete_run(target_root, harness_root)
     on_disk = story_path.read_text(encoding="utf-8")
-    for name in ("implementer", "tester", "verifier", "documenter"):
+    for name in ("implementer", "tester", "documenter", "verifier"):
         prompt = (run_dir / f"prompt-{name}-attempt-1.md").read_text(encoding="utf-8")
         assert on_disk in prompt, name
 

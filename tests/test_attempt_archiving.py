@@ -128,8 +128,14 @@ def read_state(run_dir: Path) -> dict:
     return json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
 
+#: What a superseded attempt leaves behind, sorted as the archive lists it.
+#: The documenter's two artifacts joined it in story-045: the documenter now
+#: runs before the verifier, so an attempt that fails verification has already
+#: produced them.
 ATTEMPT_1_ARTIFACTS = [
     "changed-files.json",
+    "documentation-report.md",
+    "documenter-changed-files.json",
     "implementation-summary.md",
     "retry-guidance.json",
     "test-results.json",
@@ -151,7 +157,7 @@ def retry_then_pass(target_root, harness_root):
     return runner, run_dir_of(target_root)
 
 
-def test_attempt_1_archive_holds_the_six_artifacts_under_canonical_names(
+def test_attempt_1_archive_holds_every_stage_artifact_under_canonical_names(
     retry_then_pass,
 ):
     _, run_dir = retry_then_pass
@@ -201,15 +207,26 @@ def test_the_archive_copies_rather_than_moves(retry_then_pass):
         assert (run_dir / name).is_file(), name
 
 
-def test_an_artifact_the_attempt_did_not_write_is_skipped(retry_then_pass):
-    """The documenter never runs before a retry, so its report is absent from
-    the attempt-1 archive - skipped, not an archive failure."""
+def test_the_documenters_artifacts_are_archived_with_the_attempt(retry_then_pass):
+    """Since story-045 the documenter runs before the verifier, so a failed
+    attempt has already written its report and its record: both are archived
+    rather than skipped, and both are still at the run-directory root.
+
+    What this case used to assert - an archivable artifact the attempt did not
+    write is skipped rather than failing the archive - is held directly on
+    archive_attempt by test_archive_attempt_skips_absent_artifacts_and_reports_
+    what_it_copied below, which is where it can be exercised without depending
+    on which stage happens to run last.
+    """
     _, run_dir = retry_then_pass
-    assert not (run_dir / "attempts" / "attempt-1" / "documentation-report.md").exists()
-    assert "documentation-report.md" in story_coordinator.archivable_artifacts(
+    archive = run_dir / "attempts" / "attempt-1"
+    archived = story_coordinator.archivable_artifacts(
         json.loads((REPO_ROOT / "workflows" / "story-workflow.json").read_text())["stages"]
     )
-    assert (run_dir / "documentation-report.md").is_file()
+    for name in ("documentation-report.md", "documenter-changed-files.json"):
+        assert name in archived, name
+        assert (archive / name).is_file(), name
+        assert (run_dir / name).is_file(), name
 
 
 def test_the_archive_happens_before_the_retry_begins(retry_then_pass):
@@ -276,8 +293,8 @@ def test_routing_is_unchanged_by_the_archive(retry_then_pass):
     assert state["status"] == "completed"
     assert state["retry_count"] == 1
     assert runner.calls == [
-        "implementer", "tester", "verifier",
-        "implementer", "tester", "verifier", "documenter",
+        "implementer", "tester", "documenter",
+        "verifier", "implementer", "tester", "documenter", "verifier",
     ]
     assert "retry 1 of 2" in (run_dir / "events.log").read_text()
 

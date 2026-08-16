@@ -870,13 +870,17 @@ def test_escalation_reason_returns_the_string_it_returned_before(
 #: The files an escalation at the retry ceiling leaves at the run-directory
 #: root. Every one of them predates this story: each section the story added
 #: renders an artifact that already existed, so the story added no file to
-#: this list and none of these names is one it introduced.
+#: this list and none of these names is one it introduced. The documenter's
+#: two artifacts joined the set in story-045, which introduced neither: the
+#: documenter now runs before the verifier, so a run escalating at the retry
+#: ceiling has already written them.
 ESCALATION_RUN_DIRECTORY = {
     "changed-files.json", "escalation-summary.md", "events.log",
     "execution-history.json", "implementation-summary.md",
     "retry-history.json", "state.json", "test-results.json",
     "tester-changed-files.json", "verification-result.json",
     "retry-guidance.json",
+    "documentation-report.md", "documenter-changed-files.json",
 }
 
 #: The rendered prompts, one per stage and attempt. Named by shape rather than

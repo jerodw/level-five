@@ -514,7 +514,7 @@ def run_script(name: str, *args: str, cwd: Path, env: dict | None = None
 def test_the_workflow_defines_the_four_expected_stages():
     """Anchor the data-driven assertions below to the stages the acceptance
     criteria name, so an accidentally emptied workflow cannot vacuously pass."""
-    assert stage_names() == ["implementer", "tester", "verifier", "documenter"]
+    assert stage_names() == ["implementer", "tester", "documenter", "verifier"]
     assert declared_restrictions() == [("implementer", "tests/")]
     assert rules()["blocked_paths"] == [".git/", ".harness/runs/", "rules/"]
 
