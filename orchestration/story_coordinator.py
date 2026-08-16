@@ -934,8 +934,8 @@ def append_retry_record(
 # commits the tree after every check the workflow performs. Everything below
 # runs the same suite once more where the code actually ships — a fresh clone
 # of the repository with the story committed into it — after the verifier
-# passes, which since story-045 is the last stage of the workflow, so the tree
-# it clones already holds the documenter's edits.
+# passes. Since story-045 the verifier is the workflow's last stage, so the
+# tree it clones already holds the documenter's edits.
 # --------------------------------------------------------------------------
 
 #: How much of the run's combined output the record keeps. Enough to identify
