@@ -47,6 +47,10 @@
       "type": "string",
       "description": "Directory, relative to the target root, holding approved story artifacts. Defaults to .harness/stories. Also the directory l5-plan snapshots to decide what a planning session produced."
     },
+    "tests_dir": {
+      "type": "string",
+      "description": "Where a target's tests live, as a repository-relative path prefix ending in a slash. Set, it is the prefix the workflow's {{tests_dir}} token resolves to, so the stage restricted from creating tests is restricted there and the stage that writes them is told to write them there. There is no default: unset, the target declares no test directory at all, the token resolves out of the list it appears in entirely rather than becoming an empty prefix that would match every path, and the restriction does not exist for that target."
+    },
     "test_command": {
       "type": "string",
       "description": "The command the clean-clone and revert checks run inside a scratch clone. Read without a fallback: a target that omits it cannot run either check."

@@ -36,10 +36,10 @@ import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
 from conftest import commit_setup, first_retry_route, load_mutant, story_diff
+import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = json.loads(
-    (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+WORKFLOW = conftest.shipped_workflow()
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 #: Since story-028 a recommended retry must name a category the workflow's
 #: retry_routing table defines, or the coordinator escalates rather than

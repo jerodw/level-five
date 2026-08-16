@@ -2330,6 +2330,24 @@ def _refuse_bad_self_routes(workflow: dict, problems: list[str]) -> int:
     )
 
 
+def _refuse_unresolved_workflow_token(
+    unresolved: harness_config.UnresolvedWorkflowToken,
+) -> int:
+    """Refuse a workflow that references configuration the harness cannot answer.
+
+    Thin, like every other caller of `refuse`. The header names the workflow
+    and each problem names the token, so the pair a developer needs is in the
+    message rather than one of them being left to inference.
+    """
+    return refuse(
+        f"Workflow '{unresolved.workflow}' references configuration the harness "
+        f"cannot resolve:",
+        unresolved.problems,
+        "Fix the workflow definition's configuration references before running "
+        "a story under it.",
+    )
+
+
 def _refuse_undeclared_config_keys(target_root: Path, problems: list[str]) -> int:
     """Refuse a run whose configuration carries a key the harness does not read.
 
@@ -2553,7 +2571,17 @@ def run_story(
     if undeclared:
         return _refuse_undeclared_config_keys(target_root, undeclared)
 
-    workflow = harness_config.load_workflow(harness_root, config.get("workflow", "story-workflow"))
+    # The definition may reference the target's configuration, so it is loaded
+    # against the config that has just been read. A reference the config
+    # cannot answer is a defect in the definition that every run under it
+    # carries, so it is refused here, beside the other pre-flight refusals and
+    # above everything a run creates: no run directory, no state.json, no log,
+    # no branch, and no agent invoked.
+    workflow_name = config.get("workflow", "story-workflow")
+    try:
+        workflow = harness_config.load_workflow(harness_root, workflow_name, config)
+    except harness_config.UnresolvedWorkflowToken as unresolved_token:
+        return _refuse_unresolved_workflow_token(unresolved_token)
     rules = harness_config.load_rules(harness_root)
     stages = workflow["stages"]
     stage_names = [s["name"] for s in stages]

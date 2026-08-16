@@ -41,6 +41,7 @@ from pathlib import Path
 import pytest
 
 from conftest import story_diff
+import conftest
 
 import context_assembler
 import harness_config
@@ -85,7 +86,7 @@ and most do not.
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def planner_template() -> str:
@@ -251,7 +252,10 @@ def captured_plan_argv(tmp_path: Path) -> list[str]:
     refusal path is covered by story-009's half of this module."""
     (tmp_path / ".harness").mkdir()
     (tmp_path / ".harness" / "config.yaml").write_text(
-        "workflow: story-workflow\n", encoding="utf-8"
+        # tests_dir is what the implementer's create restriction
+        # resolves to, so a target that declares none has no
+        # restriction for the planner prompt to carry.
+        "workflow: story-workflow\ntests_dir: tests/\n", encoding="utf-8"
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -431,7 +435,7 @@ NO_CONFIG_MESSAGE = "No .harness/config.yaml found here or above. Run l5-init fi
 
 
 def workflow() -> dict:
-    return harness_config.load_workflow(REPO_ROOT, "story-workflow")
+    return conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def rules() -> dict:
@@ -686,7 +690,10 @@ def test_l5_plan_injects_the_workflow_facts_into_the_session_prompt(
     project = tmp_path / "project"
     (project / ".harness").mkdir(parents=True)
     (project / ".harness" / "config.yaml").write_text(
-        "workflow: story-workflow\n", encoding="utf-8"
+        # tests_dir is what the implementer's create restriction
+        # resolves to, so a target that declares none has no
+        # restriction for the planner prompt to carry.
+        "workflow: story-workflow\ntests_dir: tests/\n", encoding="utf-8"
     )
     nested = project / "src" / "deep"
     nested.mkdir(parents=True)

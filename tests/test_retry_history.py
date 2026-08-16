@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from conftest import first_retry_route, load_mutant, story_diff
+import conftest
 
 import context_assembler
 import run_status
@@ -37,8 +38,7 @@ import story_coordinator
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = json.loads(
-    (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+WORKFLOW = conftest.shipped_workflow()
 
 #: Read off the loaded workflow rather than written here, so this file names
 #: no stage the definition does not.

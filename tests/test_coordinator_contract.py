@@ -32,10 +32,10 @@ import pytest
 import story_coordinator
 from agent_runner import AgentResult
 from conftest import first_retry_route
+import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = json.loads(
-    (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+WORKFLOW = conftest.shipped_workflow()
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 
 #: The retry category a failing verdict names, read off the loaded workflow.

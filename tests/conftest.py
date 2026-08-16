@@ -12,6 +12,73 @@ import pytest
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
+import harness_config  # noqa: E402
+
+
+# --------------------------------------------------------------------------
+# Loading the shipped workflow the way a run loads it.
+#
+# A workflow declaration may reference the target's configuration -- the
+# implementer's create restriction is the token `{{tests_dir}}` -- and the
+# reference is resolved when the definition loads. A module that wants the
+# definition a run of *this* repository executes therefore has to load it
+# against *this* repository's configuration, which is what these two do. A
+# module that learns the restricted prefix must learn it this way rather than
+# by reading `workflows/story-workflow.json` as text, where it would find the
+# token rather than the value.
+# --------------------------------------------------------------------------
+
+
+def repository_config(root: Path = HARNESS_ROOT) -> dict:
+    """This repository's own `.harness/config.yaml`, loaded."""
+    return harness_config.load_config(root)
+
+
+#: `load_workflow` gained a required `config` argument when a workflow
+#: declaration became able to reference configuration. A module that recovers
+#: an entry point out of git to compare its behaviour against today's is
+#: comparing the change that story made, not the arity of a call that story
+#: never touched, so the recovered call site is repointed — minimally, at the
+#: one line, keeping the recovered code otherwise byte for byte what it was.
+#: Without it the recovered script raises TypeError and the comparison stops
+#: being about its own subject.
+HISTORICAL_WORKFLOW_LOADS = (
+    # scripts/l5-plan
+    ('harness_config.load_workflow(\n'
+     '        HARNESS_ROOT, config.get("workflow", "story-workflow")\n'
+     '    )',
+     'harness_config.load_workflow(\n'
+     '        HARNESS_ROOT, config.get("workflow", "story-workflow"), config\n'
+     '    )'),
+    # orchestration/story_coordinator.py
+    ('harness_config.load_workflow(harness_root, '
+     'config.get("workflow", "story-workflow"))',
+     'harness_config.load_workflow(harness_root, '
+     'config.get("workflow", "story-workflow"), config)'),
+)
+
+
+def repointed_at_todays_signature(source: str) -> str:
+    """Recovered source, with each historical `load_workflow` call repointed.
+
+    Only that call is touched, and only where it appears; everything else the
+    revision carried is byte for byte what it was.
+    """
+    for old, new in HISTORICAL_WORKFLOW_LOADS:
+        source = source.replace(old, new)
+    return source
+
+
+def shipped_workflow(root: Path = HARNESS_ROOT,
+                     name: str = "story-workflow") -> dict:
+    """The named workflow under `root`, resolved against this repository's config.
+
+    `root` is a harness root, which is this repository unless a test has
+    mirrored one; the configuration stays this repository's, because a
+    mirrored harness root has no target configuration of its own.
+    """
+    return harness_config.load_workflow(root, name, repository_config())
+
 
 # --------------------------------------------------------------------------
 # The one honest baseline resolution the per-story validation files share.
@@ -451,6 +518,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
+tests_dir: tests/
 """
 
 

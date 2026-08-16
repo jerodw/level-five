@@ -15,6 +15,12 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q
+# Where this repository's tests live. It is what the workflow's {{tests_dir}}
+# token resolves to, so the stage restricted from creating tests is restricted
+# here and the stage that writes them is told to write them here. There is no
+# default: leave it unset and the target declares no test directory at all, and
+# the restriction resolves out of the workflow entirely.
+tests_dir: tests/
 # The executable the clean-clone check runs the suite under. Deliberately an
 # older environment than the one the developer works in, and the one CI
 # exercises, so an incompatibility is found before CI rather than by it. It

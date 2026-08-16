@@ -48,6 +48,7 @@ import pytest
 
 from conftest import (BASELINE as BASELINE_BOUND, STORY, first_retry_route,
                       repository_file_at, story_commit_range, story_diff)
+import conftest
 
 import harness_config
 import schema_validator
@@ -57,7 +58,7 @@ from agent_runner import AgentResult
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = REPO_ROOT / "orchestration"
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "implementer")
 
 #: Both names are read off the declaration, never spelled here, for the same
@@ -102,6 +103,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {TEST_COMMAND}
+tests_dir: tests/
 """
 
 # --------------------------------------------------------------------------
@@ -454,7 +456,7 @@ def mirror_harness(tmp_path: Path, workflow: dict) -> Path:
 
 
 def loaded_workflow() -> dict:
-    return harness_config.load_workflow(REPO_ROOT, "story-workflow")
+    return conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def executable_source(text: str) -> str:

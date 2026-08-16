@@ -261,17 +261,20 @@ def test_every_problem_names_the_offending_key_and_lists_the_declared_set():
             assert name in problem, (name, problem)
 
 
-def test_the_declared_set_is_the_thirteen_the_schema_carries_and_no_more():
-    """The story's constraint that this change adds no key and removes none.
+def test_the_declared_set_is_what_the_schema_carries_and_no_more():
+    """This story's constraint was that it added no key and removed none; a
+    later story adding one is a change to the schema, not to this refusal.
 
     Read out of the schema file itself rather than out of the function that
     reads it, so the two are compared rather than one restating the other.
+    The count is not written here: `tests/test_config_keys_are_obeyed.py`
+    owns the declared set and holds it to a proof per key, and a second copy
+    of the number here would only ever go red for that story's reason.
     """
     schema = json.loads(
         (REPO_ROOT / "schemas" / "harness-config.schema.json").read_text(
             encoding="utf-8"))
     assert tuple(schema["properties"]) == harness_config.declared_config_keys()
-    assert len(schema["properties"]) == 13, sorted(schema["properties"])
     assert RETIRED not in schema["properties"]
     assert "project" not in schema["properties"]
 

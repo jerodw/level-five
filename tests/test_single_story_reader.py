@@ -22,6 +22,7 @@ import story_coordinator
 import story_parser
 from agent_runner import AgentResult
 from conftest import commit_setup
+import conftest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS = REPO_ROOT.joinpath(".harness", "stories")
@@ -73,7 +74,7 @@ EXPECTED_CRITERIA = [
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def parse(story_text: str) -> dict:

@@ -67,10 +67,11 @@ import harness_config
 import story_coordinator
 from agent_runner import AgentResult
 from conftest import BASELINE, ENDPOINT, repository_file_at
+import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 
 #: The stage that declares the routing table, found by the declaration
@@ -178,6 +179,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - {doc}
 test_command: {test_command}
+tests_dir: tests/
 """
 
 

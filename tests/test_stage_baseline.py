@@ -61,6 +61,7 @@ import pytest
 from conftest import (BASELINE as PRE_STORY_BOUND, ENDPOINT, STORY,
                       first_retry_route, function_source_at, load_mutant,
                       story_diff)
+import conftest
 
 import harness_config
 import schema_validator
@@ -72,7 +73,7 @@ ORCHESTRATION = REPO_ROOT / "orchestration"
 COORDINATOR_REL = "orchestration/story_coordinator.py"
 COORDINATOR_PATH = REPO_ROOT / COORDINATOR_REL
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "implementer")
 
 #: Both names are read off the declaration, never spelled here, for the same
@@ -113,6 +114,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {TEST_COMMAND}
+tests_dir: tests/
 """
 
 # --------------------------------------------------------------------------

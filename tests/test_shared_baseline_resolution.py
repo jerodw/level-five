@@ -146,7 +146,7 @@ SUBJECTS = [
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def git(root: Path, *args: str) -> str:
@@ -830,10 +830,15 @@ def test_a_well_written_absence_assertion_survives_the_check():
 # --------------------------------------------------------------------------
 
 
+#: The third phrase used to be the path this repository keeps the shared
+#: resolution at. The prompt ships to any target, so it now names the thing
+#: rather than the file, and this reads the sentence that survived: the
+#: instruction is still to use the shared resolution rather than to write a
+#: second one, which is the whole of what the guidance was for.
 TESTER_GUIDANCE = [
     "An assertion that claims an absence needs a negative control",
     "demonstrate that it can fail",
-    "tests/conftest.py",
+    "shared baseline resolution",
 ]
 VERIFIER_GUIDANCE = [
     "absence",

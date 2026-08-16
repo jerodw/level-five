@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from conftest import commit_setup, first_retry_route, story_diff
+import conftest
 
 import context_assembler
 import harness_config
@@ -28,7 +29,7 @@ REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 #: escalates rather than routing it, so every failing verdict below
 #: carries one.
 RETRY_CATEGORY, RETRY_STAGE = first_retry_route(
-    harness_config.load_workflow(REPO_ROOT, "story-workflow"))
+    conftest.shipped_workflow(REPO_ROOT, "story-workflow"))
 
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
@@ -261,7 +262,7 @@ def stage_attempt_directory(name: str) -> bool:
     """
     stem, sep, number = name.rpartition("-attempt-")
     stages = {stage["name"] for stage
-              in harness_config.load_workflow(REPO_ROOT, "story-workflow")["stages"]}
+              in conftest.shipped_workflow(REPO_ROOT, "story-workflow")["stages"]}
     return bool(sep) and stem in stages and number.isdigit()
 
 

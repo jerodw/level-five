@@ -16,7 +16,7 @@ Do not:
 - weaken, skip, or delete existing tests, or
 - decide whether the workflow may continue (the verifier owns that decision).
 
-New tests belong in tests/ and become permanent repository assets.
+New tests belong in {{tests_dir}} and become permanent repository assets.
 
 Name a validation module for the behaviour it validates, so that a reader
 looking for that behaviour finds the module by its name rather than by
@@ -44,7 +44,8 @@ Baselines resolved out of git are the recurring instance of this. Do not
 resolve one as `HEAD` or as the working tree against the repository root:
 the coordinator commits the working tree at the end of a successful run, so
 those comparisons go vacuously green the moment the story commits. Use the
-shared resolution in `tests/conftest.py`.
+shared baseline resolution the existing validation already provides rather
+than writing a second one beside it.
 
 When you finish, write these files to the run directory at {{run_dir}}:
 

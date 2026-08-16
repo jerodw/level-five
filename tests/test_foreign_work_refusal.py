@@ -143,6 +143,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
+tests_dir: tests/
 """
 
 GITIGNORE = ".harness/runs/\n.harness/logs/\n"

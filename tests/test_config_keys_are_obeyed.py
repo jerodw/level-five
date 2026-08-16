@@ -98,6 +98,7 @@ VARYING: dict[str, object] = {
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
     "test_command": "xyzzy-runner --all",
+    "tests_dir": "xyzzy-checks/",
     "verification_runner": "/xyzzy/bin/interpreter",
     "workflow": "xyzzy-workflow",
 }
@@ -119,6 +120,7 @@ FALLBACKS: dict[str, object] = {
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
     "test_command": None,
+    "tests_dir": None,
     "verification_runner": None,
     "workflow": "story-workflow",
 }
@@ -181,6 +183,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "test_command": Proof(
         "test_test_command_is_the_command_the_clean_clone_path_builds",
+        BEHAVIOURAL),
+    "tests_dir": Proof(
+        "test_tests_dir_is_the_location_the_workflow_and_the_prompt_are_governed_at",
         BEHAVIOURAL),
     "verification_runner": Proof(
         "test_verification_runner_is_the_executable_the_check_resolves",
@@ -268,6 +273,14 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/context_assembler.py",
          'config.get("test_command")',
          HARDCODED_TEST_COMMAND),
+    ),
+    "tests_dir": (
+        ("orchestration/harness_config.py",
+         'config.get("tests_dir")',
+         "None"),
+        ("orchestration/context_assembler.py",
+         'config.get("tests_dir")',
+         "None"),
     ),
     "verification_runner": (
         ("orchestration/story_coordinator.py",
@@ -548,11 +561,12 @@ def clean_clone_record(run: Run) -> dict:
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
     "logs_dir", "model", "permission_mode", "runs_dir", "standards_dir",
-    "stories_dir", "test_command", "verification_runner", "workflow",
+    "stories_dir", "test_command", "tests_dir", "verification_runner",
+    "workflow",
 )
 
 
-def test_declared_config_keys_returns_exactly_the_thirteen_names():
+def test_declared_config_keys_returns_exactly_the_declared_names():
     assert set(DECLARED) == set(EXPECTED_KEYS)
     assert len(DECLARED) == len(EXPECTED_KEYS)
 
@@ -594,7 +608,7 @@ def test_declared_config_keys_raises_rather_than_returning_a_partial_tuple(
     assert "harness-config.schema.json" in str(raised.value)
 
 
-def test_the_same_reader_returns_the_thirteen_names_from_a_copied_schema(tmp_path):
+def test_the_same_reader_returns_the_declared_names_from_a_copied_schema(tmp_path):
     """The positive control for the six refusals above.
 
     Each of them asserts a raise. That says nothing about whether the reader
@@ -782,7 +796,12 @@ def test_the_scan_does_not_count_a_subscript_through_a_variable(tmp_path):
         "    return config\n",
         encoding="utf-8")
     assert keys_read_under([planted]) == set()
-    assert keys_read_in(REPO_ROOT / "orchestration" / "harness_config.py") == set()
+    # And over the real module, which both builds the mapping that way *and*
+    # reads one key by name: exactly the literal read is counted, and neither
+    # of the two variables the mapping is built through joins it.
+    read = keys_read_in(REPO_ROOT / "orchestration" / "harness_config.py")
+    assert read == {"tests_dir"}
+    assert not read & {"key", "current_list"}
 
 
 # --------------------------------------------------------------------------
@@ -936,8 +955,33 @@ def test_workflow_names_the_definition_the_run_actually_executes(tmp_path):
                           AUDIT_STAGE]
     assert (run.run_dir / AUDIT_ARTIFACT).is_file()
     assert AUDIT_STAGE not in [
-        stage["name"] for stage in harness_config.load_workflow(
+        stage["name"] for stage in conftest.shipped_workflow(
             REPO_ROOT, "story-workflow")["stages"]]
+
+
+def test_tests_dir_is_the_location_the_workflow_and_the_prompt_are_governed_at(
+        tmp_path):
+    """The configured location governs both halves, observed rather than read.
+
+    The fixture configures its tests somewhere no harness would guess, and the
+    workflow definition names no directory at all — it carries the token. So
+    the restriction the coordinator enforces can only have come from the
+    configuration, and the same value has to reach the stage that writes the
+    tests, or the stage is told to write them somewhere the coordinator does
+    not govern.
+    """
+    run = complete_run(tmp_path)
+    workflow = harness_config.load_workflow(run.harness, FIXTURE_WORKFLOW,
+                                            run.config)
+    assert story_coordinator.stage_restrictions(workflow["stages"]) == [
+        ("implementer", "xyzzy-checks/")]
+    assert "xyzzy-checks/" in run.prompt_for("tester")
+    # The definition itself names no directory: what the restriction resolves
+    # to is the configuration's answer and nothing else.
+    definition = (run.harness / "workflows" / f"{FIXTURE_WORKFLOW}.json"
+                  ).read_text(encoding="utf-8")
+    assert "xyzzy-checks/" not in definition
+    assert "{{tests_dir}}" in definition
 
 
 def test_test_command_is_the_command_the_clean_clone_path_builds(tmp_path):

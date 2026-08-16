@@ -41,7 +41,7 @@ def main() -> None:
     target_root = harness_config.find_target_root(Path.cwd())
     config = harness_config.load_config(target_root)
     workflow = harness_config.load_workflow(
-        HARNESS_ROOT, config.get("workflow", "story-workflow")
+        HARNESS_ROOT, config.get("workflow", "story-workflow"), config
     )
     rules = harness_config.load_rules(HARNESS_ROOT)
     # The planner is not a workflow stage, so no coordinator renders its

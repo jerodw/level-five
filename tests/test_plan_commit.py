@@ -61,7 +61,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import BASELINE, repository_file_at, story_commit_range
+from conftest import (BASELINE, repointed_at_todays_signature,
+                      repository_file_at, story_commit_range)
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
@@ -86,6 +87,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
+tests_dir: tests/
 """
 
 ARTIFACT = """\
@@ -669,7 +671,7 @@ def pre_story_script(tmp_path: Path) -> Path:
     the old script loads the same config, workflow, rules and template the
     new one does without anything being written into the repository.
     """
-    source = pre_story_text("scripts/l5-plan")
+    source = repointed_at_todays_signature(pre_story_text("scripts/l5-plan"))
     root = tmp_path / "pre-story-harness"
     (root / "scripts").mkdir(parents=True)
     for name in ("orchestration", "prompts", "schemas", "workflows", "rules"):
