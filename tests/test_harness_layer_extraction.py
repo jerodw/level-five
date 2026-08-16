@@ -12,6 +12,7 @@ from pathlib import Path
 
 import context_assembler
 import harness_config
+import conftest
 import schema_validator
 import story_parser
 
@@ -21,7 +22,7 @@ STAGE_TEMPLATES = ("implementer.md", "tester.md", "documenter.md")
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = harness_config.load_workflow(
+WORKFLOW = conftest.shipped_workflow(
     Path(context_assembler.__file__).resolve().parents[1], "story-workflow")
 
 

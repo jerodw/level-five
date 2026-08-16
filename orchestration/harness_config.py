@@ -7,6 +7,7 @@ directly keeps the harness free of third-party dependencies.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -117,9 +118,94 @@ def declared_config_keys(harness_root: Path | None = None) -> tuple[str, ...]:
     return tuple(properties)
 
 
-def load_workflow(harness_root: Path, name: str) -> dict:
+#: A workflow declaration references configuration as `{{key}}`, and only as
+#: a whole list entry. A general mechanism -- any declaration reaching any
+#: config key -- was considered and rejected: one key needs this, and a
+#: narrow token leaves every existing reader of a loaded workflow untouched.
+_WORKFLOW_TOKEN = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+
+
+def workflow_token_values(config: dict) -> dict[str, str | None]:
+    """The configuration a workflow declaration may reference, by token name.
+
+    Written as a literal read per key rather than a lookup by whatever name
+    the definition happens to carry, so the keys this resolution reads are
+    visible to a reader -- and to the scan that holds the declared set equal
+    to the set the harness reads -- exactly like every other configured key.
+    That the mapping has one entry is the narrowness, stated in code.
+    """
+    return {"tests_dir": config.get("tests_dir")}
+
+
+class UnresolvedWorkflowToken(ValueError):
+    """A loaded workflow carries a reference the configuration cannot answer.
+
+    Carries `problems` in the shape every pre-flight refusal enumerates, so
+    the coordinator turns it into a refusal rather than composing its own
+    wording for it.
+    """
+
+    def __init__(self, workflow: str, tokens: list[str]):
+        self.workflow = workflow
+        self.tokens = tokens
+        referable = ", ".join(f"{{{{{name}}}}}" for name in workflow_token_values({}))
+        self.problems = [
+            f"'{{{{{token}}}}}' is not a configuration reference the harness "
+            f"resolves; a workflow declaration may reference {referable}, and "
+            f"only as a whole list entry"
+            for token in tokens
+        ]
+        super().__init__("; ".join(self.problems))
+
+
+def _resolve_tokens(value, values: dict[str, str | None], unresolved: list[str]):
+    """Substitute every `{{key}}` list entry, dropping the ones with no value.
+
+    An unset key resolves the entry *out of the list* rather than to an empty
+    string: a restriction whose prefix is "" is a prefix every path is under,
+    which is the opposite of the "this target declares none" the absence
+    means. Every other token-shaped string -- one naming a key outside the
+    narrow set, or a resolvable one somewhere a list entry cannot be dropped
+    from -- is collected as unresolved for the caller to refuse on.
+    """
+    if isinstance(value, dict):
+        return {key: _resolve_tokens(item, values, unresolved)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        resolved = []
+        for item in value:
+            match = _WORKFLOW_TOKEN.fullmatch(item) if isinstance(item, str) else None
+            if match is None:
+                resolved.append(_resolve_tokens(item, values, unresolved))
+                continue
+            name = match.group(1)
+            if name not in values:
+                unresolved.append(name)
+            elif values[name]:
+                resolved.append(values[name])
+        return resolved
+    if isinstance(value, str):
+        unresolved.extend(_WORKFLOW_TOKEN.findall(value))
+    return value
+
+
+def load_workflow(harness_root: Path, name: str, config: dict) -> dict:
+    """The workflow definition, with its configuration references resolved.
+
+    Resolution happens once, when the definition loads, so `stage_restrictions`
+    and every reader of a loaded workflow reads exactly what it read when the
+    declaration was a literal directory. `config` is required rather than
+    defaulted: a caller that omitted it would silently load a definition with
+    the configured entries missing, which is a quieter wrong answer than a
+    TypeError.
+    """
     path = harness_root / "workflows" / f"{name}.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    definition = json.loads(path.read_text(encoding="utf-8"))
+    unresolved: list[str] = []
+    resolved = _resolve_tokens(definition, workflow_token_values(config), unresolved)
+    if unresolved:
+        raise UnresolvedWorkflowToken(name, unresolved)
+    return resolved
 
 
 def load_rules(harness_root: Path) -> dict:

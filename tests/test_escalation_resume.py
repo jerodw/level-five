@@ -60,13 +60,14 @@ import pytest
 from conftest import (BASELINE as BASELINE_BOUND, ENDPOINT, first_retry_route,
                       function_source_at, load_script,
                       repository_file_at, story_commit_range, story_diff)
+import conftest
 
 import harness_config
 import story_coordinator
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
 #: Since story-028 the route is a category-keyed table rather than a constant,
@@ -161,6 +162,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
+tests_dir: tests/
 """
 
 APP_AT_HEAD = "print('hello')\n"

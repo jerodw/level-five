@@ -53,6 +53,7 @@ import pytest
 
 from conftest import (BASELINE, HARNESS_ROOT, load_mutant,
                       repository_file_at)
+import conftest
 
 import agent_runner
 import context_assembler
@@ -69,7 +70,7 @@ CONFIG_REL = ".harness/config.yaml"
 TEMPLATE_CONFIG_REL = "templates/config.yaml"
 HARNESS_LAYER_REL = "prompts/harness-layer.md"
 
-WORKFLOW = harness_config.load_workflow(HARNESS_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(HARNESS_ROOT, "story-workflow")
 
 
 # ---------------------------------------------------------------------------
@@ -704,18 +705,20 @@ def test_config_context_maps_allowed_tools_through_the_shared_helper():
     """AC12: dash-prefixed lines, and rendered by _dashed_lines rather than by
     a second copy of it — shown by replacing the helper and seeing the result
     change, which no independent formatting could do."""
-    assert context_assembler.config_context({"allowed_tools": GRANTS}) == {
-        "allowed_tools": "- Bash(grep:*)\n- Bash(git show:*)"}
-    assert context_assembler.config_context({"allowed_tools": GRANTS}) == {
-        "allowed_tools": context_assembler._dashed_lines(GRANTS)}
+    # Keyed on the grants alone rather than on the whole mapping:
+    # config_context maps every configured fact a prompt renders, so another
+    # key joining it must not read as this one having changed.
+    rendered = context_assembler.config_context({"allowed_tools": GRANTS})
+    assert rendered["allowed_tools"] == "- Bash(grep:*)\n- Bash(git show:*)"
+    assert rendered["allowed_tools"] == context_assembler._dashed_lines(GRANTS)
 
 
 def test_config_context_renders_none_when_the_config_declares_no_grants():
     """AC12's absence half, controlled by the populated case above: the same
     call with grants renders them, so None is about the config."""
-    assert context_assembler.config_context({}) == {"allowed_tools": None}
-    assert context_assembler.config_context({"allowed_tools": []}) == {
-        "allowed_tools": None}
+    assert context_assembler.config_context({})["allowed_tools"] is None
+    assert context_assembler.config_context(
+        {"allowed_tools": []})["allowed_tools"] is None
     assert context_assembler.config_context(
         {"allowed_tools": GRANTS})["allowed_tools"] is not None
 
@@ -725,7 +728,7 @@ def test_config_context_uses_the_shared_dashed_lines_helper(monkeypatch):
     monkeypatch.setattr(context_assembler, "_dashed_lines",
                         lambda items: "SENTINEL")
     assert context_assembler.config_context(
-        {"allowed_tools": GRANTS}) == {"allowed_tools": "SENTINEL"}
+        {"allowed_tools": GRANTS})["allowed_tools"] == "SENTINEL"
 
 
 def _context(target_root: Path, **extra) -> dict:
@@ -769,7 +772,8 @@ def test_omitting_the_argument_renders_what_it_rendered_before_this_story(
     history, so it stays honest when the story commits."""
     without_the_merge = load_mutant(
         HARNESS_ROOT / "orchestration" / "context_assembler.py",
-        [("    context.update(config_context({\"allowed_tools\": allowed_tools}))",
+        [("    context.update(config_context({**config, \"allowed_tools\": "
+          "allowed_tools}))",
           "    pass  # the merge this story added, removed")],
         name="context_assembler_before_story_035", tmp_path=tmp_path)
 
@@ -777,8 +781,11 @@ def test_omitting_the_argument_renders_what_it_rendered_before_this_story(
     before = without_the_merge.build_context(**_context(target_root))
 
     assert today["allowed_tools"] is None
+    # Every key the merge contributes is excluded, not the grants alone: the
+    # merge is one call, so removing it removes all of them at once.
+    merged = set(context_assembler.config_context({}))
     assert {key: value for key, value in today.items()
-            if key != "allowed_tools"} == before
+            if key not in merged} == before
 
     # The control: supplying the argument *does* change the render, so the
     # equality above is a statement about omission rather than about the merge

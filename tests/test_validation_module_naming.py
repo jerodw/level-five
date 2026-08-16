@@ -75,7 +75,7 @@ import harness_config  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 STAGES = WORKFLOW["stages"]
 
 #: The committed corpus. Reached with `joinpath` rather than the `/` operator

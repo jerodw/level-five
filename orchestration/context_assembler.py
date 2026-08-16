@@ -113,14 +113,20 @@ def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
 
 
 def config_context(config: dict) -> dict[str, str | None]:
-    """Map the target config's grants to their injectable placeholder name.
+    """Map the target config's own facts to their injectable placeholder names.
 
     The granted Bash commands are rendered from the target's own configuration
     rather than restated in prose, so what a stage is told it may run cannot
-    drift from what is actually permitted. A config declaring no allowed_tools
-    renders as None, the optional-placeholder convention.
+    drift from what is actually permitted. The same reasoning puts the test
+    location here: the stage that writes tests is told where they go by the
+    configuration the restriction is resolved from, so changing the config
+    changes the rendered prompt with no prompt edit. A config declaring
+    neither renders as None, the optional-placeholder convention.
     """
-    return {"allowed_tools": _dashed_lines(config.get("allowed_tools"))}
+    return {
+        "allowed_tools": _dashed_lines(config.get("allowed_tools")),
+        "tests_dir": config.get("tests_dir"),
+    }
 
 
 def _read(path: Path) -> str | None:
@@ -258,7 +264,11 @@ def build_context(
     # a stage rendered with no categories in it would be a defect, while a
     # stage rendered with no granted list is exactly what every call site
     # rendered before this existed, so omitting it must change nothing.
-    context.update(config_context({"allowed_tools": allowed_tools}))
+    # `allowed_tools` still arrives as its own argument rather than off the
+    # config, so a call that omits it renders exactly what it rendered before
+    # the argument existed; every other configured fact this renders comes off
+    # the config the caller already passed.
+    context.update(config_context({**config, "allowed_tools": allowed_tools}))
 
     # Two-pass render: resolve the shared harness-layer partial (including its
     # own {{blocked_paths}} placeholder) against the assembled context before

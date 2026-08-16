@@ -74,6 +74,13 @@ def mutant_repo(tmp_path: Path, replacements: list[tuple[str, str]]) -> Path:
     (root / "tests").mkdir()
     for name in ("conftest.py", CONTRACT_FILE.name):
         shutil.copy(TESTS_DIR / name, root / "tests" / name)
+    # `.harness/` is not symlinked, so a run started in here cannot write into
+    # the real one. Its config file is copied in all the same: a workflow
+    # declaration may reference configuration, so a root with no config has no
+    # answer for the reference and cannot load the definition at all.
+    (root / ".harness").mkdir()
+    shutil.copy(REPO_ROOT / ".harness" / "config.yaml",
+                root / ".harness" / "config.yaml")
 
     path = root / "orchestration" / "story_coordinator.py"
     source = path.read_text(encoding="utf-8")

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from conftest import commit_setup, story_diff
+import conftest
 
 import context_assembler
 import harness_config
@@ -40,7 +41,7 @@ EMPTY_RECORD = {"modified": [], "created": [], "deleted": []}
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -136,7 +137,7 @@ def exception_block(stage: str, create: str, reason: str = "the deliverable is t
 
 
 def workflow_stages(harness_root: Path) -> list[dict]:
-    return harness_config.load_workflow(harness_root, "story-workflow")["stages"]
+    return conftest.shipped_workflow(harness_root, "story-workflow")["stages"]
 
 
 def executable_source(text: str) -> str:
@@ -231,7 +232,7 @@ def ownership_only(tmp_path: Path, harness_root: Path) -> Path:
     ownership does not escalate on a modification or a deletion. The revert
     check's own behavior on those records is story-017's to demonstrate.
     """
-    workflow = harness_config.load_workflow(harness_root, "story-workflow")
+    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
     for stage in workflow["stages"]:
         stage.pop("revert_check", None)
     return mirror_harness(tmp_path, harness_root, workflow)
@@ -353,7 +354,7 @@ def test_moving_the_declaration_moves_the_enforcement(target_root, harness_root,
     """The strongest form of "no stage name and no prefix in the code": give
     the coordinator a workflow it has never seen, declaring a different prefix
     on a different stage, and the rule follows the declaration."""
-    workflow = harness_config.load_workflow(harness_root, "story-workflow")
+    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
     for stage in workflow["stages"]:
         stage.pop("may_not_create", None)
         if stage["name"] == "tester":
@@ -378,7 +379,7 @@ def test_moving_the_declaration_moves_the_enforcement(target_root, harness_root,
 
 def test_a_workflow_declaring_nothing_enforces_nothing(target_root, harness_root,
                                                         tmp_path):
-    workflow = harness_config.load_workflow(harness_root, "story-workflow")
+    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
     for stage in workflow["stages"]:
         stage.pop("may_not_create", None)
     fake_root = mirror_harness(tmp_path, harness_root, workflow)
@@ -468,7 +469,7 @@ def test_an_exception_does_not_lift_the_rule_for_another_stage(target_root,
                                                                 tmp_path):
     """The grant is per stage: a workflow restricting two stages and a story
     granting one leaves the other restricted."""
-    workflow = harness_config.load_workflow(harness_root, "story-workflow")
+    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
     for stage in workflow["stages"]:
         if stage["name"] in ("implementer", "tester"):
             stage["may_not_create"] = ["tests/"]

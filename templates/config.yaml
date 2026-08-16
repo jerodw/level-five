@@ -9,6 +9,14 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {test_command}
+# Where this repository's tests live, as a path prefix ending in a slash. It is
+# what the workflow's {{tests_dir}} token resolves to: the stage restricted from
+# creating tests is restricted here, and the stage that writes them is told to
+# write them here. A starter value like every other line in this file — change
+# it to wherever this repository actually keeps its tests. There is no default:
+# delete the key and this repository declares no test directory at all, and the
+# restriction resolves out of the workflow entirely.
+tests_dir: tests/
 # Bash commands stage agents may run without prompting. Headless agents
 # cannot answer permission prompts. Read-only search and inspection is
 # granted broadly: a denial costs a turn and buys nothing, because the

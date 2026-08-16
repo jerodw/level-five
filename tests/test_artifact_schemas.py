@@ -15,6 +15,7 @@ from pathlib import Path
 
 import context_assembler
 import harness_config
+import conftest
 import schema_validator
 import story_coordinator
 import story_parser
@@ -44,7 +45,7 @@ PLACEHOLDER = re.compile(r"\{\{[a-z_]+\}\}")
 #: into a harness copy holding only orchestration/, schemas/ and tests/,
 #: where workflows/ does not exist.
 def workflow_definition() -> dict:
-    return harness_config.load_workflow(
+    return conftest.shipped_workflow(
         Path(context_assembler.__file__).resolve().parents[1],
         "story-workflow")
 

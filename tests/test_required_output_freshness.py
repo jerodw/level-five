@@ -51,11 +51,11 @@ import pytest
 import story_coordinator
 import test_retry_history as story012
 from conftest import first_retry_route
+import conftest
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = json.loads(
-    (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+WORKFLOW = conftest.shipped_workflow()
 COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8")
 
 #: Read off the loaded workflow rather than written here, so this file names
@@ -143,6 +143,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
+tests_dir: tests/
 """
 
 

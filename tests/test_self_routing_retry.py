@@ -68,6 +68,7 @@ from pathlib import Path
 import pytest
 
 from conftest import BASELINE, load_mutant, repository_file_at
+import conftest
 
 # The suite target — a real module under a real pytest suite — and the helpers
 # that drive edits into it are story-017's. Reused rather than copied so a
@@ -104,7 +105,7 @@ DEFAULT_BRANCH = "main"
 # Everything about the workflow is read off the workflow
 # --------------------------------------------------------------------------
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 STAGES = WORKFLOW["stages"]
 STAGE_NAMES = [stage["name"] for stage in STAGES]
 
@@ -263,6 +264,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {test_command}
+tests_dir: tests/
 """
 
 
@@ -761,7 +763,7 @@ def test_a_consecutive_failure_past_the_budget_escalates(
     # The same run, with the budget removed from that same stage.
     harness = probe_harness(Path(subject).parent, f"nobudget-{failure}",
                             without_budget(BUDGETED))
-    workflow = harness_config.load_workflow(harness, f"nobudget-{failure}")
+    workflow = conftest.shipped_workflow(harness, f"nobudget-{failure}")
     control = build_target(Path(subject).parent / f"control-{failure}",
                            workflow=workflow["name"])
     spec = build(BUDGETED, BUDGET + 1)
@@ -973,7 +975,7 @@ def test_a_stage_that_self_routed_does_not_spend_another_stages_budget(
     """
     other = BUDGETLESS[0]
     harness = probe_harness(tmp_path, "two-budgets", with_budget(other, 1))
-    workflow = harness_config.load_workflow(harness, "two-budgets")
+    workflow = conftest.shipped_workflow(harness, "two-budgets")
     target_root = build_target(tmp_path / "two-budget-target",
                                workflow="two-budgets")
 
@@ -1466,7 +1468,7 @@ def test_a_boundary_violation_at_a_budgeted_stage_still_escalates(
 
     harness = probe_harness(tmp_path, f"nobudget-{name}",
                             without_budget(BUDGETED))
-    workflow = harness_config.load_workflow(harness, f"nobudget-{name}")
+    workflow = conftest.shipped_workflow(harness, f"nobudget-{name}")
     control = build_target(tmp_path / f"boundary-control-{name}",
                            workflow=workflow["name"])
     assert drive(control, harness, hooks={BUDGETED: [hook]},
@@ -1486,7 +1488,7 @@ def budgeted_clean_clone(tmp_path):
     name = "budgeted-clean-clone"
     harness = probe_harness(tmp_path, name,
                             with_budget(CLEAN_CLONE_STAGE["name"], 1))
-    return harness, harness_config.load_workflow(harness, name)
+    return harness, conftest.shipped_workflow(harness, name)
 
 
 def test_a_clean_clone_that_cannot_run_still_escalates_at_a_budgeted_stage(
@@ -1604,7 +1606,7 @@ def test_the_same_run_under_a_sound_budget_creates_all_of_it(tmp_path):
     target, same runner, with a budget the check accepts."""
     harness = probe_harness(tmp_path, "sound-budget", with_budget(BUDGETED, 0))
     target_root = build_target(tmp_path / "target-sound", workflow="sound-budget")
-    workflow = harness_config.load_workflow(harness, "sound-budget")
+    workflow = conftest.shipped_workflow(harness, "sound-budget")
     runner = Runner(target_root, workflow=workflow)
 
     assert story_coordinator.run_story(
@@ -1624,7 +1626,7 @@ def test_a_declared_budget_of_zero_escalates_like_declaring_nothing(tmp_path):
     """Zero is a deliberate declaration of no budget: accepted at pre-flight,
     and spent nowhere."""
     harness = probe_harness(tmp_path, "zero-budget", with_budget(BUDGETED, 0))
-    workflow = harness_config.load_workflow(harness, "zero-budget")
+    workflow = conftest.shipped_workflow(harness, "zero-budget")
     target_root = build_target(tmp_path / "target-zero", workflow="zero-budget")
 
     code, runner = drive(target_root, harness, {BUDGETED: [CRASH]},
@@ -1649,7 +1651,7 @@ def test_the_pre_flight_is_what_refuses_the_bad_budget(tmp_path):
 
     harness = probe_harness(tmp_path, "unchecked-budget",
                             with_budget(BUDGETED, -1))
-    workflow = harness_config.load_workflow(harness, "unchecked-budget")
+    workflow = conftest.shipped_workflow(harness, "unchecked-budget")
     target_root = build_target(tmp_path / "target-unchecked",
                                workflow="unchecked-budget")
     runner = Runner(target_root, workflow=workflow)

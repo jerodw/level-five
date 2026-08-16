@@ -64,12 +64,13 @@ import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
 from conftest import load_mutant
+import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_PATH = REPO_ROOT / "orchestration" / "story_coordinator.py"
 ASSEMBLER_PATH = REPO_ROOT / "orchestration" / "context_assembler.py"
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 
 #: The stage that declares the routing table, found by the declaration rather
@@ -170,6 +171,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {test_command}
+tests_dir: tests/
 """
 
 

@@ -86,6 +86,7 @@ from pathlib import Path
 import pytest
 
 from conftest import load_mutant, load_script
+import conftest
 
 from test_revert_check import (  # noqa: F401 - fixtures used by name
     APP_ADDITIVE,
@@ -133,7 +134,7 @@ PLANNER_PROMPT = HARNESS_ROOT / "prompts" / "planner.md"
 # Everything about the workflow is read off the workflow.
 # --------------------------------------------------------------------------
 
-WORKFLOW = harness_config.load_workflow(HARNESS_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(HARNESS_ROOT, "story-workflow")
 STAGES = WORKFLOW["stages"]
 STAGE_NAMES = [stage["name"] for stage in STAGES]
 RESTRICTIONS = story_coordinator.stage_restrictions(STAGES)

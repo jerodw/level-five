@@ -47,6 +47,7 @@ import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
 from conftest import first_retry_route, load_mutant, story_diff
+import conftest
 
 #: The two stories this module validates, as `conftest.STORY_ORIGINS`
 #: declares them. Every story-range call below names one of these, because a
@@ -57,8 +58,7 @@ STORY_033 = "tests/test_story_033_validation.py"
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_PATH = Path(story_coordinator.__file__)
 COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
-WORKFLOW = json.loads(
-    (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+WORKFLOW = conftest.shipped_workflow()
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
 #: Since story-028 the clean-clone declaration names both artifacts of the
 #: check — the result it writes and the stage a failure routes to — so the

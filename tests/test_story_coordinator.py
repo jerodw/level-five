@@ -8,6 +8,7 @@ import harness_config
 import story_coordinator
 from agent_runner import AgentResult
 from conftest import first_retry_route
+import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 
@@ -17,7 +18,7 @@ REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 #: escalates rather than routing it, so every failing verdict below
 #: carries one.
 RETRY_CATEGORY, RETRY_STAGE = first_retry_route(
-    harness_config.load_workflow(REPO_ROOT, "story-workflow"))
+    conftest.shipped_workflow(REPO_ROOT, "story-workflow"))
 
 
 def write_json(path: Path, payload: dict) -> None:

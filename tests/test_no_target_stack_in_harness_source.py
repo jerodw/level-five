@@ -8,16 +8,20 @@ lists, so what is validated here is the scan's *reach* and the lists'
 
   * **the two lists.** `TEMPORARY_TIES` and `PERMANENT_MENTIONS` below are
     asserted to equal exactly what `harness_source.scan()` reports against
-    this repository, in both directions, and to share no entry. Each entry
-    is keyed by repository-relative path and the exact text of the matched
-    line rather than by a line number, so an unrelated edit above a tie
-    does not churn the list and look like the burn-down.
-  * **the audited ties that are still grandfathered.** Asserted present by
-    name, by running the scan rather than by reading the list — a scan that
-    cannot see the ties that motivated it has not been shown to work. The
-    audit's other two both sat in `orchestration/story_coordinator.py` and
-    were repaired by the-interpreter-is-not-assumed-to-be-python, which is
-    also why "no tie was fixed" now guards two files rather than three.
+    this repository, in both directions, and to classify every reported
+    entry exactly once. Each entry is keyed by repository-relative path and
+    the exact text of the matched line rather than by a line number, so an
+    unrelated edit above a tie does not churn the list and look like the
+    burn-down.
+  * **the burn-down, now complete.** `TEMPORARY_TIES` is empty: the audit's
+    five ties are all repaired — two in `orchestration/story_coordinator.py`
+    by the-interpreter-is-not-assumed-to-be-python, and the remaining three
+    in `workflows/story-workflow.json` and `prompts/tester.md` by
+    the-test-location-comes-from-configuration. What is asserted is that the
+    scan reports *nothing* in either repaired file, by running the scan
+    rather than by reading the empty list, with each historical tie replanted
+    in a throwaway copy and reported there — a scan that cannot see the ties
+    that motivated it has not been shown to work.
   * **the matcher.** The four boundary cases the story names are
     constructed and run through the real `scan`, not reasoned about.
   * **the stated limits.** Read out of `orchestration/harness_source.py`'s
@@ -34,6 +38,12 @@ than by editing this one:
     with a tie planted in a file that is clean today, where the same
     comparison reports an unexpected entry, and beside one with a known tie
     removed, where it reports a stale entry;
+  * "every reported entry is classified exactly once" sits beside an entry
+    handed to the same check on both lists, and beside a planted tie that is
+    on neither, both of which it reports;
+  * "the coordinator carries nothing but its one permanent mention" sits
+    beside a coordinator tie replanted in a throwaway copy, which the same
+    checks report;
   * "nothing under `.harness/` or `tests/` is reported" sits beside ties
     planted in both, and beside the same tie planted in a scanned directory,
     which is reported;
@@ -45,9 +55,10 @@ than by editing this one:
     none, which the same check reports;
   * "the module states its limits" sits beside a rendering of that module
     with each stated limit stripped out, which the same check reports;
-  * "no tie was fixed" is resolved through the shared story range in
-    `tests/conftest.py` and sits beside a synthetic history whose run commit
-    edits one of the three files, which the same comparison reports.
+  * "the repaired files carry no mention at all" sits beside each of the
+    three historical ties replanted in a throwaway copy of the file it used
+    to sit in, which the same scan reports and which turns the same
+    two-directional list comparison red.
 
 Nothing here invokes a model, and nothing here writes to this repository.
 """
@@ -58,20 +69,28 @@ from pathlib import Path
 import pytest
 
 import harness_source
-from conftest import story_diff
-from test_shared_baseline_resolution import committed_story
 
 REPO_ROOT = Path(harness_source.__file__).resolve().parents[1]
 DECLARING_MODULE = "orchestration/harness_source.py"
-VALIDATION_REL = "tests/test_no_target_stack_in_harness_source.py"
 
-#: The files whose ties are still grandfathered below, and which no story
-#: since has edited. `orchestration/story_coordinator.py` was among them
-#: until the-interpreter-is-not-assumed-to-be-python repaired its ties, which
-#: is what taking it off this tuple records.
-UNTOUCHED = (
+#: The files the burn-down repaired last, and which the scan must now report
+#: nothing at all in. `orchestration/story_coordinator.py` was repaired ahead
+#: of them by the-interpreter-is-not-assumed-to-be-python, and is asserted
+#: separately below because one permanent mention legitimately survives there.
+REPAIRED_FILES = (
     "workflows/story-workflow.json",
     "prompts/tester.md",
+)
+
+#: The exact lines that used to sit in those files, kept verbatim so each can
+#: be replanted. This is what makes "the scan reports nothing there" an
+#: assertion rather than a claim about where the scan happens to be looking:
+#: put the tie back and the same scan reports it.
+HISTORICAL_TIES = (
+    ("workflows/story-workflow.json", '      "may_not_create": ["tests/"],'),
+    ("prompts/tester.md",
+     "New tests belong in tests/ and become permanent repository assets."),
+    ("prompts/tester.md", "shared resolution in `tests/conftest.py`."),
 )
 
 
@@ -94,24 +113,28 @@ UNTOUCHED = (
 # ==========================================================================
 
 
-TEMPORARY_TIES: frozenset[tuple[str, str]] = frozenset({
-    # --- Two lines of prose in a prompt naming a pytest layout. ---------
-    ('prompts/tester.md',
-     'New tests belong in tests/ and become permanent repository assets.'),
-    ('prompts/tester.md',
-     'shared resolution in `tests/conftest.py`.'),
+TEMPORARY_TIES: frozenset[tuple[str, str]] = frozenset()
 
-    # --- The workflow restriction naming a directory in the target. -----
-    ('workflows/story-workflow.json',
-     '      "may_not_create": ["tests/"],'),
-})
-
-#: What the-interpreter-is-not-assumed-to-be-python removed from the list
-#: above: every `orchestration/story_coordinator.py` entry — the version
-#: probe, the record's interpreter-shaped fields, and the retired
-#: configuration key with the prose explaining it — together with every
-#: entry in the three schemas that story names. What is left is the
-#: completion signal for the-test-location-comes-from-configuration alone.
+#: Empty, and that is the completion signal for the whole burn-down.
+#: the-interpreter-is-not-assumed-to-be-python removed every
+#: `orchestration/story_coordinator.py` entry — the version probe, the
+#: record's interpreter-shaped fields, and the retired configuration key with
+#: the prose explaining it — together with every entry in the three schemas it
+#: names. the-test-location-comes-from-configuration removed the last three:
+#: the workflow's create restriction, which is now the token `{{tests_dir}}`
+#: resolved from configuration when the definition loads, and the two lines of
+#: prose in the tester prompt, which now render the configured location and
+#: describe the shared baseline resolution without naming the file this
+#: repository keeps it in.
+#:
+#: An empty list is exactly the shape an assertion goes vacuous against, so no
+#: assertion below rests on reading it. `list_problems` and
+#: `classification_problems` both take it as one of two lists and would report
+#: an entry landing on neither, which is how a new tie surfaces; what is
+#: asserted about this repository is that the scan reports nothing outside
+#: `PERMANENT_MENTIONS`, and every one of those assertions carries a control
+#: that replants a historical tie, or hands the same check an entry it must
+#: object to, and observes it reported.
 
 
 #: Each entry carries a one-line reason saying why that mention is not a
@@ -144,22 +167,6 @@ PERMANENT_MENTIONS: dict[tuple[str, str], str] = {
         "a fact about what this parser returns to its own callers, not about any target",
 }
 
-
-#: The ties the 2026-08-15 audit found that are still grandfathered, each
-#: identified by the file it sits in and a fragment of the line, so the scan
-#: is asked for them by name rather than being read off the list above. The
-#: audit's other two — the version probe and the retired configuration key,
-#: both in `orchestration/story_coordinator.py` — are gone from the source,
-#: so asking the scan for them by name would now be asking it for something
-#: that is not there.
-AUDITED_TIES = (
-    ("the may_not_create restriction naming a directory",
-     "workflows/story-workflow.json", '"may_not_create": ["tests/"]', 9),
-    ("prompts/tester.md line 19",
-     "prompts/tester.md", "New tests belong in tests/", 19),
-    ("prompts/tester.md line 47",
-     "prompts/tester.md", "tests/conftest.py", 47),
-)
 
 #: The mentions that are honest sentences rather than ties. A rule that
 #: cannot tell these from a tie gets turned off within two stories.
@@ -205,6 +212,33 @@ def list_problems(findings) -> list[str]:
         problems.append(
             f"stale: {entry[0]} no longer carries the listed line, so its "
             f"entry must come off the list -- {entry[1].strip()!r}"
+        )
+    return problems
+
+
+def classification_problems(findings, temporary=None,
+                            permanent=None) -> list[str]:
+    """Every reported entry the two lists do not classify exactly once.
+
+    Exclusivity and coverage are one question -- the lists partition what the
+    scan reports -- and asking it this way keeps it answerable while
+    `TEMPORARY_TIES` is empty: an entry on neither list is a new tie, which is
+    a failure this repository can still produce. The lists are parameters so a
+    control can hand the same check an entry sitting on both.
+    """
+    temporary = set(TEMPORARY_TIES if temporary is None else temporary)
+    permanent = set(PERMANENT_MENTIONS if permanent is None else permanent)
+    problems = []
+    for entry in sorted(reported_entries(findings)):
+        on = [name for name, listed in (("temporary", temporary),
+                                        ("permanent", permanent))
+              if entry in listed]
+        if len(on) == 1:
+            continue
+        where = " and ".join(on) if on else "neither list"
+        problems.append(
+            f"{entry[0]} is on {where}, so its classification says nothing "
+            f"-- {entry[1].strip()!r}"
         )
     return problems
 
@@ -284,31 +318,46 @@ def test_the_throwaway_root_reports_what_this_repository_does(throwaway, here):
 
 
 # ==========================================================================
-# The five ties that motivated the story
+# The five ties that motivated the story, all now repaired
 # ==========================================================================
 
 
-@pytest.mark.parametrize("label,path,fragment,line_number",
-                         AUDITED_TIES, ids=[t[0] for t in AUDITED_TIES])
-def test_the_scan_reports_each_audited_tie(here, label, path, fragment,
-                                           line_number):
-    """Asked of the scan by name rather than read off the list. A scan that
-    cannot see the ties that motivated it has not been shown to work."""
-    matches = findings_for(here, path, fragment)
-    assert matches, f"{label}: nothing reported in {path} matching {fragment!r}"
-    if line_number is not None:
-        assert line_number in {f.line_number for f in matches}, (
-            label, sorted(f.line_number for f in matches))
+def test_the_burn_down_is_complete(here):
+    """The completion signal, stated as a fact about the scan rather than
+    about the list: nothing this repository's harness source says is a tie."""
+    assert TEMPORARY_TIES == frozenset()
+    assert reported_entries(here) <= set(PERMANENT_MENTIONS)
 
 
-@pytest.mark.parametrize("label,path,fragment,line_number",
-                         AUDITED_TIES, ids=[t[0] for t in AUDITED_TIES])
-def test_each_audited_tie_is_a_temporary_tie(here, label, path, fragment,
-                                             line_number):
-    for finding in findings_for(here, path, fragment):
-        entry = (finding.path, finding.line)
-        assert entry in TEMPORARY_TIES, (label, entry)
-        assert entry not in PERMANENT_MENTIONS, (label, entry)
+@pytest.mark.parametrize("repaired", REPAIRED_FILES)
+def test_the_repaired_files_carry_no_mention_at_all(here, repaired):
+    """Read off the scan rather than off the empty list: the workflow no
+    longer names a directory in the target and the tester prompt no longer
+    names a layout or a test-framework filename."""
+    assert [f for f in here if f.path == repaired] == []
+
+
+@pytest.mark.parametrize("path,tie", HISTORICAL_TIES,
+                         ids=[f"{p}:{t[:28]}" for p, t in HISTORICAL_TIES])
+def test_replanting_a_historical_tie_is_reported_by_the_same_scan(throwaway,
+                                                                  path, tie):
+    """The control for the two assertions above, which are both absences.
+
+    Each historical tie is put back verbatim into a throwaway copy of the file
+    it used to sit in, and the same scan has to report it and the same
+    two-directional comparison has to call it unexpected. Without this, "the
+    scan reports nothing there" would be satisfied just as happily by a scan
+    that had stopped reading the file at all.
+    """
+    assert not [f for f in harness_source.scan(throwaway) if f.path == path], \
+        f"{path} still carries a mention, so the replant proves nothing"
+
+    append(throwaway, path, "\n" + tie + "\n")
+
+    assert [f for f in harness_source.scan(throwaway) if f.path == path]
+    problems = list_problems(harness_source.scan(throwaway))
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"unexpected: {path}:")
 
 
 #: The three schemas the-interpreter-is-not-assumed-to-be-python names.
@@ -328,14 +377,37 @@ def test_the_repaired_schemas_carry_no_mention_at_all(here, schema):
     assert [f for f in here if f.path == schema] == []
 
 
+COORDINATOR = "orchestration/story_coordinator.py"
+
+#: One of the ties the-interpreter-is-not-assumed-to-be-python removed from
+#: the coordinator, kept verbatim so the absence below can be shown to fail.
+HISTORICAL_COORDINATOR_TIE = "    version = platform.python_version()"
+
+
 def test_the_coordinator_carries_no_temporary_tie(here):
     """Every grandfathered tie in the coordinator is repaired. What the scan
     still reports there is the one permanent mention describing this
     harness's own implementation language, which is the opposite of a tie."""
-    reported = {(f.path, f.line) for f in here
-                if f.path == "orchestration/story_coordinator.py"}
-    assert reported & set(TEMPORARY_TIES) == set()
-    assert reported <= set(PERMANENT_MENTIONS)
+    coordinator = [f for f in here if f.path == COORDINATOR]
+    assert coordinator, \
+        f"the scan reports nothing at all in {COORDINATOR}, so it is not " \
+        "looking there and this proves nothing"
+    assert not classification_problems(coordinator)
+    assert reported_entries(coordinator) <= set(PERMANENT_MENTIONS)
+
+
+def test_a_tie_replanted_in_the_coordinator_is_reported_as_one(throwaway):
+    """The control for the absence above: the version probe put back verbatim
+    into a throwaway copy, where the same scan reports it, it lands on neither
+    list, and it is no longer inside `PERMANENT_MENTIONS`."""
+    append(throwaway, COORDINATOR, "\n" + HISTORICAL_COORDINATOR_TIE + "\n")
+
+    coordinator = [f for f in harness_source.scan(throwaway)
+                   if f.path == COORDINATOR]
+    problems = classification_problems(coordinator)
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"{COORDINATOR} is on neither list")
+    assert not reported_entries(coordinator) <= set(PERMANENT_MENTIONS)
 
 
 @pytest.mark.parametrize("path,fragment", LEGITIMATE_MENTIONS)
@@ -346,10 +418,10 @@ def test_a_legitimate_mention_is_permanent_and_never_a_tie(here, path,
     language this harness is written in, not any target's."""
     matches = findings_for(here, path, fragment)
     assert matches, (path, fragment)
+    assert not classification_problems(matches)
     for finding in matches:
         entry = (finding.path, finding.line)
         assert entry in PERMANENT_MENTIONS, entry
-        assert entry not in TEMPORARY_TIES, entry
 
 
 # ==========================================================================
@@ -363,8 +435,37 @@ def test_the_two_lists_are_exactly_what_the_scan_reports(here):
     assert not list_problems(here), "\n".join(list_problems(here))
 
 
-def test_the_two_lists_share_no_entry():
-    assert not set(TEMPORARY_TIES) & set(PERMANENT_MENTIONS)
+def test_every_reported_entry_is_classified_exactly_once(here):
+    """What "the two lists share no entry" became once `TEMPORARY_TIES` went
+    empty: intersecting an empty set is a question with one possible answer,
+    while partitioning what the scan reports is one this repository can still
+    fail -- a mention that is a tie and a permanent mention at once, or a new
+    one that is neither."""
+    assert not classification_problems(here), \
+        "\n".join(classification_problems(here))
+
+
+def test_an_entry_on_both_lists_is_reported_by_the_same_check(here):
+    """The exclusivity half of the control: a mention the scan really reports,
+    handed to the same check as temporary *and* permanent."""
+    both = sorted(reported_entries(here) & set(PERMANENT_MENTIONS))[0]
+    problems = classification_problems(here, temporary={both})
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"{both[0]} is on temporary and permanent")
+
+
+def test_an_entry_on_neither_list_is_reported_by_the_same_check(throwaway):
+    """The coverage half: a tie planted in a file that is clean today lands on
+    neither list, and the same check reports it."""
+    clean = "prompts/documenter.md"
+    assert not [f for f in harness_source.scan(throwaway) if f.path == clean], \
+        f"{clean} is no longer clean, so it cannot serve as the plant site"
+
+    append(throwaway, clean, "\nThe target is built with gradle.\n")
+
+    problems = classification_problems(harness_source.scan(throwaway))
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"{clean} is on neither list")
 
 
 def test_every_permanent_mention_carries_a_reason():
@@ -404,9 +505,8 @@ def test_a_list_entry_left_behind_after_its_tie_is_removed_turns_the_lists_red(
 ):
     """The other direction: a file that stops violating must be taken off
     the list, or the burn-down counts work that is already done."""
-    removed = ('workflows/story-workflow.json',
-               '      "may_not_create": ["tests/"],')
-    assert removed in TEMPORARY_TIES
+    removed = ('scripts/l5-status', '#!/usr/bin/env python3')
+    assert removed in PERMANENT_MENTIONS
 
     text = (throwaway / removed[0]).read_text(encoding="utf-8")
     assert removed[1] + "\n" in text
@@ -414,7 +514,7 @@ def test_a_list_entry_left_behind_after_its_tie_is_removed_turns_the_lists_red(
 
     problems = list_problems(harness_source.scan(throwaway))
     assert len(problems) == 1, problems
-    assert problems[0].startswith("stale: workflows/story-workflow.json")
+    assert problems[0].startswith("stale: scripts/l5-status")
 
 
 # ==========================================================================
@@ -573,28 +673,8 @@ def test_the_stated_incompleteness_is_true_rather_than_modest(throwaway):
 
 
 # ==========================================================================
-# The story fixed nothing, and this run changed nothing
+# The declaration is still a declaration: nothing runs it
 # ==========================================================================
-
-
-def test_no_tie_was_fixed_by_this_story():
-    """The three files carrying the audited ties are untouched on this
-    story's branch. Resolved through the shared story range in
-    `tests/conftest.py`, never as HEAD against this repository."""
-    assert story_diff(list(UNTOUCHED),
-                      validation_file=Path(__file__)).strip() == ""
-
-
-@pytest.mark.parametrize("guarded", UNTOUCHED)
-def test_the_same_comparison_reports_a_story_that_did_edit_one(tmp_path,
-                                                               guarded):
-    """The control for the assertion above, over the shape this repository
-    cannot be in while these tests run: a story already committed, whose own
-    run commit rewrote the guarded file."""
-    root = committed_story(tmp_path, VALIDATION_REL, guarded, violate="modify",
-                           name=f"violating-{Path(guarded).name}")
-    assert story_diff([guarded], validation_file=root / VALIDATION_REL,
-                      repo=root).strip() != ""
 
 
 def readers_of_the_scan(root: Path) -> list[str]:

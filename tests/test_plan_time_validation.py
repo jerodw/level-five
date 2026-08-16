@@ -59,6 +59,7 @@ import pytest
 
 from conftest import (BASELINE, NothingToCompareAgainst, load_script,
                       repository_file_at, story_commit_range)
+import conftest
 from test_plan_commit import (
     ARTIFACT,
     Planning,
@@ -91,7 +92,7 @@ VALIDATION_FILE = Path(__file__).resolve()
 # below agree with a copy of the workflow rather than with the workflow.
 # --------------------------------------------------------------------------
 
-WORKFLOW = harness_config.load_workflow(HARNESS_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(HARNESS_ROOT, "story-workflow")
 STAGES = WORKFLOW["stages"]
 STAGE_NAMES = [stage["name"] for stage in STAGES]
 RESTRICTIONS = story_coordinator.stage_restrictions(STAGES)
@@ -219,10 +220,14 @@ def pre_story_harness(tmp_path: Path) -> Path:
             continue
         os.symlink(module, root / "orchestration" / module.name)
     (root / "orchestration" / "story_coordinator.py").write_text(
-        show("orchestration/story_coordinator.py"), encoding="utf-8")
+        conftest.repointed_at_todays_signature(
+            show("orchestration/story_coordinator.py")),
+        encoding="utf-8")
     for script in ("l5-plan", "l5-run"):
         written = root / "scripts" / script
-        written.write_text(show(f"scripts/{script}"), encoding="utf-8")
+        written.write_text(
+            conftest.repointed_at_todays_signature(show(f"scripts/{script}")),
+            encoding="utf-8")
         written.chmod(0o755)
     return root
 

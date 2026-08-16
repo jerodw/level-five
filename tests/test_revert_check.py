@@ -43,6 +43,7 @@ from pathlib import Path
 import pytest
 
 from conftest import STORY, story_diff
+import conftest
 
 import context_assembler
 import harness_config
@@ -55,7 +56,7 @@ ORCHESTRATION = REPO_ROOT / "orchestration"
 STORIES_DIR = REPO_ROOT / ".harness" / "stories"
 TESTS_DIR = REPO_ROOT / "tests"
 
-WORKFLOW = harness_config.load_workflow(REPO_ROOT, "story-workflow")
+WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "implementer")
 #: The artifact name and the governed prefix are read off the workflow, never
 #: spelled here, for the same reason the coordinator may not spell them. Since
@@ -86,6 +87,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {TEST_COMMAND}
+tests_dir: tests/
 """
 
 # --------------------------------------------------------------------------
@@ -374,7 +376,7 @@ def mirror_harness(tmp_path: Path, workflow: dict) -> Path:
 
 
 def loaded_workflow() -> dict:
-    return harness_config.load_workflow(REPO_ROOT, "story-workflow")
+    return conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 
 def append_to_story(target_root: Path, text: str) -> None:
