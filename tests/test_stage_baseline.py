@@ -362,6 +362,8 @@ class Runner:
                        self._nth(self.verdicts, seen))
         elif stage == "documenter":
             write(self.run_dir / "documentation-report.md", "Nothing.\n")
+            write_json(self.run_dir / "documenter-changed-files.json",
+                       {"modified": [], "created": [], "deleted": []})
         if self.interrupt == (stage, self.calls.count(stage)):
             raise KeyboardInterrupt(f"{stage} interrupted")
         return AgentResult(ok=True, result_text=f"{stage} done")

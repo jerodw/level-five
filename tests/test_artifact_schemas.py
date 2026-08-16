@@ -244,6 +244,7 @@ def test_an_extra_key_anywhere_validates(harness_root):
 
 VALID_CHANGED_FILES = {"modified": ["src/app.py"], "created": [], "deleted": []}
 VALID_TESTER_RECORD = {"modified": [], "created": ["tests/test_app.py"], "deleted": []}
+VALID_DOCUMENTER_RECORD = {"modified": [], "created": [], "deleted": []}
 VALID_TEST_RESULTS = {"status": "passed", "tests_run": 1, "tests_passed": 1}
 VALID_VERDICT = {
     "status": "passed",
@@ -281,6 +282,9 @@ class ArtifactRunner:
                    self._payload("verification-result.json", VALID_VERDICT))
         elif stage == "documenter":
             (self.run_dir / "documentation-report.md").write_text("n/a\n")
+            _write(self.run_dir / "documenter-changed-files.json",
+                   self._payload("documenter-changed-files.json",
+                                 VALID_DOCUMENTER_RECORD))
         return AgentResult(ok=True, result_text=f"{stage} ok")
 
 
@@ -445,8 +449,11 @@ def test_prompts_this_story_leaves_alone_carry_no_schema_placeholders(harness_ro
     # planner.md left this list in story-008, which injects {{story_schema}}
     # there deliberately; tests/test_story_008_validation.py holds that
     # property now. The assertion is unchanged for the prompts still without
-    # schema injection.
-    for name in ("assist.md", "documenter.md", "harness-layer.md"):
+    # schema injection. documenter.md left the list in story-044, which gave
+    # the documenter a changed-files record and so injects
+    # {{changed_files_schema}} there deliberately; the stage/schema sweep above
+    # holds that property, because the documenter now declares a schemas map.
+    for name in ("assist.md", "harness-layer.md"):
         text = (harness_root / "prompts" / name).read_text()
         assert "_schema}}" not in text, name
 

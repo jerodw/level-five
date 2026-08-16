@@ -132,6 +132,8 @@ class StageRunner:
             })
         elif stage == "documenter":
             self._write("documentation-report.md", "Nothing to document.\n")
+            self._write("documenter-changed-files.json",
+                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
     def _write(self, name: str, payload) -> None:

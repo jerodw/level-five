@@ -149,6 +149,8 @@ class Runner:
         elif stage == "documenter":
             (self.run_dir / "documentation-report.md").write_text(
                 "No changes needed.\n", encoding="utf-8")
+            _write_json(self.run_dir / "documenter-changed-files.json",
+                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 
