@@ -1,0 +1,160 @@
+story:
+  id: story-045
+  title: The documenter runs before verification
+  description: |
+    Move the documenter stage ahead of the verifier, so the workflow reads
+    implementer -> tester -> documenter -> verifier, and give the verifier a
+    third retry category, documentation, routing to the documenter.
+
+    One reorder closes two gaps. The verifier judges the documenter's output,
+    which nothing has ever done: story-034, 037, 039, 040, 041, 042 and 043
+    each carry a verifier note saying the documenter's file could not be
+    judged because the documenter runs later. And the clean-clone check --
+    declared on the verifier stage and run on a passing verdict -- runs with
+    the documenter's edits in the tree it commits, so a completed run can no
+    longer ship a red suite. story-043 is where that cost something: its
+    documenter wrote a sentence naming a tests/ module the same story deleted,
+    story-038's test_every_tests_path_the_architecture_document_names_exists
+    failed, all three CI jobs went red, and the run's own record shows the
+    clean-clone check passing minutes before the stage that broke it.
+
+    The third route is part of this story rather than a follow-on, in both
+    directions. Without it, a verifier handed documentation as a subject has
+    no category that owns a documentation defect, and story-028's rule is that
+    a missing or unrecognised category escalates rather than falling back --
+    so every documentation finding would become an escalation. And it cannot
+    land before the reorder: retry_routing_problems refuses a route whose
+    destination does not sit strictly before the declaring stage, so declaring
+    documentation -> documenter with the documenter at index 3 and the verifier
+    at 2 makes every run refuse at pre-flight. The two land together or not at
+    all.
+
+    The alternative considered and rejected was a fifth stage, a documentation
+    verifier with its own prompt, routing and retry budget. The reorder gets
+    the same judgement from the verifier that already exists, and gets the
+    clean-clone guarantee for free. Settled with the developer on 2026-08-15.
+
+    The cost, recorded as a decision rather than discovered in a bill:
+    documentation is redone on every retry. With the documenter before the
+    verifier, a failing verdict re-enters at the implementer and the documenter
+    runs again on the way back -- one extra agent invocation per retry, on a
+    stage that costs roughly two to four dollars. That is why it was placed
+    last originally. It is the right trade because the alternative is
+    documentation nothing judges, and because the cost is paid only when a
+    story retries.
+
+    This story cannot verify itself. The coordinator loads the workflow
+    definition at the start of a run, so the run that lands the reorder
+    executes under the old order, with its own documenter running last and
+    unjudged. That is expected, was recorded the same way by story-028 and
+    story-030, and is not a defect for the verifier to report.
+
+tasks:
+  - Move the documenter stage in workflows/story-workflow.json to sit between tester and verifier, leaving every stage's own declaration -- prompt, outputs, changed_files, schemas -- byte-identical.
+  - Add a third entry to the verifier stage's on_failure.retry_routing in workflows/story-workflow.json - category documentation, stage documenter - with a when description written as carefully as the other two, since the categories are injected into the verifier's prompt from this same table and this text is what the verifier chooses by.
+  - Extend orchestration/context_assembler.py build_context with documentation_report, read from documentation-report.md in the run directory, and documenter_changed_files, read from documenter-changed-files.json, using the same optional-by-absence reading as the artifacts already there.
+  - Add the two new placeholders to the runtime-state layer of prompts/verifier.md, and state in its role layer that the documenter's output is part of what it evaluates - without restating the routing categories, which continue to arrive through the existing {{retry_routes}} placeholder.
+  - Correct the ordering prose in orchestration/story_coordinator.py that describes the clean-clone check as running before the documenter, so the comment matches where the check now sits.
+  - Update the existing test modules whose fixtures or assertions encode the old stage order, including tests/test_clean_clone_check.py, tests/test_attempt_archiving.py, tests/test_artifact_schemas.py and tests/test_config_keys_are_obeyed.py, so the suite is green under the new order.
+  - Add a standing regression module at tests/test_documenter_before_verification.py covering the reorder, the third route and the verifier's new subject.
+  - Record the reorder, the third category and the redone-documentation cost in .harness/docs/ARCHITECTURE.md, and note the further divergence from Appendix A, whose excerpts describe the four stages in their previous order.
+
+acceptance_criteria:
+  - workflows/story-workflow.json lists its stages in the order implementer, tester, documenter, verifier.
+  - The verifier stage's on_failure.retry_routing declares exactly three categories - implementation, validation and documentation - and the documentation entry names stage documenter and carries a non-empty when.
+  - The documentation route's when description distinguishes a defect in the documentation from a defect in the code the documentation describes, and says explicitly that a document accurately describing wrong behaviour is an implementation defect rather than a documentation one.
+  - story_coordinator.retry_routing_problems returns no problems for the reordered workflow, and returns a problem naming the documentation route if the stage order is restored to the previous one while the route stays.
+  - A run whose verifier passes records clean-clone-passed after the documenter's stage-completed entry and before the story-completed entry, on the execution history.
+  - The tree the clean-clone check clones and runs the suite in contains the documenter's edits - asserted on what the scratch clone holds, not on the check's exit code alone.
+  - A run whose documenter writes into an architecture document a claim the suite rejects - the story-043 case, a sentence naming a tests/ module the same story deleted - ends the run rather than completing it.
+  - The verifier's rendered prompt contains the contents of documentation-report.md and documenter-changed-files.json, and contains no unresolved {{placeholder}}.
+  - The verifier's rendered prompt names all three retry categories with their destination stages and when descriptions, and a fourth category added to the workflow definition appears in that prompt with no edit to prompts/verifier.md.
+  - A verification-result.json whose status is failed and whose retry_target is documentation routes the next attempt to the documenter - the documenter is the stage invoked next, the implementer is not re-invoked before it, and the execution-history entry records the category the same way it records implementation and validation.
+  - A run that passes verification on its first attempt invokes the documenter exactly once.
+  - prompts/verifier.md states that the documenter's output is part of the verifier's subject, and does not restate the routing categories, their destinations or their when descriptions in its own prose.
+  - The full suite passes under the reordered workflow, including tests/test_clean_clone_check.py, tests/test_attempt_archiving.py, tests/test_artifact_schemas.py and tests/test_config_keys_are_obeyed.py.
+  - .harness/docs/ARCHITECTURE.md describes the four stages in their new order, names the documentation category and its destination, records that documentation is redone on every retry and why that trade was accepted, and notes that Appendix A's excerpts show the previous order.
+
+technical_plan:
+  implementation_steps:
+    - Move the documenter stage object in workflows/story-workflow.json ahead of the verifier stage object. The stage list is data the coordinator's loop indexes; nothing in the loop names a stage position, so the move is the reorder.
+    - Add the documentation entry to the verifier's retry_routing table. Its destination is legal only after the move - the pre-flight check compares stage indices - so make the move first and confirm a run reaches pre-flight before adding the route.
+    - Add documentation_report and documenter_changed_files to the context dict in context_assembler.build_context, beside changed_files and tester_changed_files, read through the same _read helper so an absent artifact renders as the optional-placeholder None rather than failing.
+    - Add the two placeholders to the runtime-state layer of prompts/verifier.md with a short label each, following the shape of the changed_files and tester_changed_files entries, and add the documenter's output to the responsibilities in the role layer.
+    - Correct the clean-clone comment block in orchestration/story_coordinator.py, and the matching module docstring in tests/test_clean_clone_check.py, which both describe the check as running after the verifier passes and before the documenter runs.
+    - Work through the existing suite and repair what encodes the old order. Known cases - tests/test_clean_clone_check.py asserts the check runs before the documenter starts and asserts the call list in stage order; tests/test_attempt_archiving.py asserts the documenter never runs before a retry, which the reorder makes false, so documentation-report.md is now present in the attempt-1 archive; tests/test_artifact_schemas.py and tests/test_config_keys_are_obeyed.py assert stage call lists. Run the suite rather than trusting this list to be complete.
+    - Confirm rather than assume what else depended on the documenter being last - _complete runs after the final stage and commits, the completion report names verification/iteration-N.json and documentation-report.md, and archivable_artifacts derives from the workflow. Report anything found that this plan did not predict.
+    - Write the regression module, which is the tester's work - the reorder itself, the third route's presence and legality, the pre-flight refusal when the order is restored while the route stays, the two new placeholders resolving in the rendered verifier prompt, a documentation verdict routing to the documenter, the clean clone containing the documenter's edits, the single documenter invocation on a clean run, and the story-043 case ending the run.
+    - Record the change in the architecture document, which is the documenter's work.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The reorder and the third retry category.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Two new placeholders carrying the documenter's artifacts into the verifier's prompt.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: The new placeholders and the statement that the documenter's output is part of the verifier's subject.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The clean-clone comment block describes the check as running before the documenter, which the reorder makes false.
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: Existing module - its docstring, its ordering assertion and its call-list assertions encode the previous order and stop passing without them being brought up to date.
+    - file: tests/test_attempt_archiving.py
+      stage: implementer
+      reason: Existing module - it asserts the documenter never runs before a retry, which the reorder makes false, so the attempt-1 archive now holds documentation-report.md.
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: Existing module - it asserts the stage call list in the previous order.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: implementer
+      reason: Existing module - its workflow fixture and call-list assertions carry the previous order.
+    - file: tests/test_documenter_before_verification.py
+      stage: tester
+      reason: The standing regression module for the reorder, the third route and the verifier's new subject. New validation belongs to the stage that validates.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The stage order, the third retry category, the redone-documentation cost and the further divergence from Appendix A.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - orchestration/context_assembler.py
+    - orchestration/story_coordinator.py
+    - prompts/verifier.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/documenter.md
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/planner.md
+    - prompts/harness-layer.md
+    - schemas/
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the observed failure is now caught - reconstruct story-043's case, a documenter writing into the architecture document a sentence naming a deleted tests/ module, and show the run ends rather than completing.
+  - Confirm the verifier sees the documenter's output, by inspecting the rendered verifier prompt for the documentation report and the documenter's changed-files record, and for the absence of any unresolved placeholder.
+  - Confirm a documentation verdict routes to the documenter, that the category is recorded on the execution-history entry as implementation and validation are, and that the retry re-runs the documenter rather than the implementer.
+  - Confirm the rendered verifier prompt names all three categories with their destinations and when descriptions, and that adding a fourth category to the workflow definition changes that prompt with no edit to prompts/verifier.md - the property story-028 landed, of which a third category is the first real test.
+  - Confirm the workflow is refused at pre-flight if the stage order is restored while the documentation route stays, since that rule is what makes the reorder and the route inseparable.
+  - Confirm the clean-clone check now commits and runs a tree containing the documenter's edits, by asserting on the contents of the scratch clone rather than on the check's exit code alone.
+  - Confirm a run with no retry costs exactly one documenter invocation, so the reorder has not quietly doubled the common case.
+  - Confirm nothing else assumed the documenter ran last - specifically that _complete's commit, the completion report's evidence list, archivable_artifacts and the attempt archive behave correctly under the new order - and report anything found that the plan did not predict.
+  - Confirm the tests added under tests/ can fail - each new assertion about ordering, routing or prompt content must be shown to fail against the previous behaviour, and any assertion of an absence must be accompanied by a demonstration that it notices a violation.
+  - Confirm the full suite passes.
+
+constraints:
+  - Do not add a fifth stage. The reorder replaces the documentation-verifier stage that was considered and rejected.
+  - Do not change what the documenter writes, or the content or schema of documentation-report.md.
+  - Do not change the clean-clone check's mechanics, including its retry_stage, its scratch-clone construction or its recorded result. Only when it runs changes, and that follows from the reorder rather than being edited.
+  - Do not change the retry ceiling in rules/execution-rules.json or the way retries are counted. A redone documentation stage does not spend one.
+  - No category name and no destination stage may be written into prompts/verifier.md, orchestration/context_assembler.py or orchestration/story_coordinator.py. The three categories reach the prompt through the existing retry_routes derivation off the loaded workflow, and the coordinator routes on that same table.
+  - Preserve every existing retry route. implementation continues to route to the implementer and validation to the tester, with their when descriptions unchanged.
+  - Preserve each stage's own declaration across the move - prompt, outputs, changed_files, schemas, may_not_create, max_self_routes and revert_check are unchanged by a reorder.
+  - implementer may not create files under tests/
