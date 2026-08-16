@@ -115,6 +115,8 @@ class StampingRunner:
         elif stage == "documenter":
             (self.run_dir / "documentation-report.md").write_text(
                 f"Documented after attempt {self.attempt}.\n", encoding="utf-8")
+            write_json(self.run_dir / "documenter-changed-files.json",
+                       {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 

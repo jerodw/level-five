@@ -63,6 +63,8 @@ class FakeRunner:
                 })
         elif stage == "documenter":
             (self.run_dir / "documentation-report.md").write_text("No changes needed.\n")
+            write_json(self.run_dir / "documenter-changed-files.json",
+                       {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 

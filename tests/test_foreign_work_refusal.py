@@ -266,6 +266,8 @@ class Runner:
             write(self.target_root / DOC_OUTPUT,
                   f"# Architecture\n\nDocumented on attempt {attempt}.\n")
             write(self.run_dir / "documentation-report.md", "Documented.\n")
+            write_json(self.run_dir / "documenter-changed-files.json",
+                       {"modified": [DOC_OUTPUT], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 

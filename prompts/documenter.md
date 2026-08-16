@@ -16,10 +16,18 @@ Do not:
 - create tests, or
 - rewrite documentation sections the story did not affect.
 
-When you finish, write this file to the run directory at {{run_dir}}:
+When you finish, write these files to the run directory at {{run_dir}}:
 
 documentation-report.md: which documents you updated and why, or a
 statement that no documentation change was needed and why.
+
+documenter-changed-files.json, your own record of every repository file
+this stage touched — the documents you edited, and nothing another stage
+edited. This is the record you write outward; it is not the injected
+"Changed files" below, which is the implementer's record arriving inward.
+It must satisfy this schema:
+
+{{changed_files_schema}}
 
 [Workflow Layer]
 Documentation is architectural memory. Future planning agents load these
@@ -36,7 +44,9 @@ injected content as authoritative.
 Story:
 {{story}}
 
-Changed files:
+Changed files — the implementer's record, injected inward for you to read.
+It is not the record you are asked to write; that one is
+documenter-changed-files.json, described above:
 {{changed_files}}
 
 Implementation summary:

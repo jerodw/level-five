@@ -84,6 +84,8 @@ class Runner:
             write_json(self.run_dir / "verification-result.json", self.verdicts.pop(0))
         elif stage == "documenter":
             (self.run_dir / "documentation-report.md").write_text("Nothing.\n")
+            write_json(self.run_dir / "documenter-changed-files.json",
+                       {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 

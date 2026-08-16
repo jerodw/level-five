@@ -455,6 +455,8 @@ class RecordingRunner:
         elif stage == "documenter":
             (self.run_dir / "documentation-report.md").write_text(
                 "No changes needed.\n", encoding="utf-8")
+            _write_json(self.run_dir / "documenter-changed-files.json",
+                        {"modified": [], "created": [], "deleted": []})
         elif stage == AUDIT_STAGE:
             (self.run_dir / AUDIT_ARTIFACT).write_text(
                 "Audited.\n", encoding="utf-8")

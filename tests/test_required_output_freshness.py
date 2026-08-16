@@ -255,6 +255,8 @@ class Runner:
             return write_json(path, {"modified": [],
                                      "created": [f"tests/test_attempt_{attempt}.py"],
                                      "deleted": []})
+        if artifact == "documenter-changed-files.json":
+            return write_json(path, {"modified": [], "created": [], "deleted": []})
         if artifact == "test-results.json":
             return write_json(path, {"status": "passed", "tests_written": attempt,
                                      "tests_run": 5, "tests_passed": 5,
