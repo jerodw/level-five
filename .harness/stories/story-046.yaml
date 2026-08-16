@@ -1,0 +1,179 @@
+story:
+  id: story-046
+  title: The test location comes from configuration
+  description: |
+    The harness writes a target repository's test layout into its own
+    definitions. workflows/story-workflow.json declares the implementer's
+    create restriction as the literal "tests/", and prompts/tester.md tells
+    every tester that new tests belong in tests/ and to use the shared
+    baseline resolution in tests/conftest.py -- a path and a pytest filename,
+    so the prompt carries a framework tie as well as a layout one. A target
+    that keeps its tests in spec/ or __tests__/ is governed in the wrong
+    place, and a target with no test directory at all cannot be expressed.
+
+    Take the location from configuration. A new config key, tests_dir, names
+    where a target's tests live. The workflow references it as the token
+    {{tests_dir}}, and harness_config.load_workflow resolves that token when
+    the workflow loads, so stage_restrictions and its six readers -- the
+    ownership check, the revert check's governed edits, the stage-baseline
+    capture, stage_exception_problems, and both of plan_validation's checks --
+    read exactly what they read today. The tester prompt renders the same
+    value as an injected placeholder rather than restating it, so changing
+    the config changes the prompt with no prompt edit.
+
+    The key carries no default. Set, it is the prefix the restriction
+    governs; unset, the target declares no test directory and the restriction
+    resolves out of the list entirely, which is what a Go project is. This
+    repository's own config sets it to tests/, so this repository's behaviour
+    is unchanged.
+
+    A general mechanism for workflow declarations to reference configuration
+    was considered and rejected: one key needs this, and the narrow token
+    leaves every existing reader of a loaded workflow untouched.
+
+    a-test-reads-a-fixture-workflow-not-the-shipped-one has not landed, so
+    this story is the larger version of itself: the test modules that learn
+    the restricted prefix by reading the shipped workflow file are repointed
+    to load it through harness_config, never weakened to accept either value.
+
+    This story also empties TEMPORARY_TIES in
+    tests/test_no_target_stack_in_harness_source.py, which is story-040's
+    completion signal for the whole burn-down, and owns the tidying that
+    follows in that module.
+
+tasks:
+  - Declare tests_dir in schemas/harness-config.schema.json, saying what a set value governs and what its absence means, in the shape the other declared keys take.
+  - Resolve the {{tests_dir}} token in harness_config.load_workflow, against a config passed by the caller, so a loaded workflow definition carries the configured value and every existing reader is unchanged.
+  - Refuse a run at pre-flight when a loaded workflow carries a token the config does not answer, naming the token and the workflow.
+  - Resolve an unset tests_dir by dropping the token's entry from the list it appears in, rather than leaving an empty string that would match every path.
+  - Pass the loaded config to load_workflow from both callers, orchestration/story_coordinator.py and scripts/l5-plan.
+  - Declare the implementer's create restriction in workflows/story-workflow.json as the token rather than a literal directory.
+  - Set tests_dir in .harness/config.yaml and in templates/config.yaml so this repository and every newly initialized target declare the location explicitly.
+  - Inject the configured location into the tester prompt from context_assembler.config_context, and render it in prompts/tester.md instead of the literal directory.
+  - Rewrite the tester prompt's baseline-resolution sentence to say what the tester should use rather than naming the file this repository happens to keep it in.
+  - Repoint the test modules that learn the restricted prefix by reading workflows/story-workflow.json as raw text, so they resolve it through harness_config against this repository's config.
+  - Add validation against a fixture target that configures its tests somewhere the harness would never guess, and against a fixture that configures none at all.
+  - Add the tests_dir proof to tests/test_config_keys_are_obeyed.py and keep its set equality with declared_config_keys() true in both directions.
+  - Empty TEMPORARY_TIES in tests/test_no_target_stack_in_harness_source.py, fix the docstring that still says three files, and repoint the assertions that go vacuous once UNTOUCHED is empty.
+
+acceptance_criteria:
+  - schemas/harness-config.schema.json declares tests_dir, and declared_config_keys() returns it.
+  - A config declaring tests_dir loads a workflow whose implementer create restriction is the configured value, observed through story_coordinator.stage_restrictions rather than by reading the definition file.
+  - A config declaring no tests_dir loads a workflow whose implementer carries no create restriction at all, and story_coordinator.stage_restrictions reports no pair for it.
+  - No resolved restriction is ever the empty string; an unset key removes the entry rather than emptying it.
+  - A workflow definition carrying a token the config does not answer refuses the run before any run directory, state.json, log, branch or agent invocation exists, with a message naming the unresolved token and the workflow.
+  - Against a target configuring tests_dir to a location other than tests/, a stage creating a file under that location is caught by the ownership check and escalates.
+  - Against that same target, an edit under the configured location reaches the revert check, and the stage baseline is captured over that location.
+  - Against that same target, a stage_exceptions grant naming a path at or beneath the configured location is accepted by stage_exception_problems, and one naming a path outside it is refused.
+  - workflows/story-workflow.json contains no target directory name, and prompts/ contains no target directory name and no test-framework filename, established by search over both directories.
+  - The rendered tester prompt names the location the config declares and carries no unresolved placeholder.
+  - Changing tests_dir changes the rendered tester prompt, with prompts/tester.md itself unedited between the two renderings.
+  - Every committed story artifact under .harness/stories/ passes plan-time validation unchanged, including those whose scope, do_not_modify or stage_exceptions name tests/.
+  - This repository's config declares tests_dir as its existing test directory, and every existing assertion about the implementer's declared boundary holds with the value resolved rather than literal.
+  - TEMPORARY_TIES in tests/test_no_target_stack_in_harness_source.py is empty, and harness_source.scan() over this repository reports nothing outside PERMANENT_MENTIONS.
+  - No assertion in tests/test_no_target_stack_in_harness_source.py is vacuous with UNTOUCHED empty: an assertion that can no longer fail is replaced by one that can, each carrying a control that plants a violation and observes the same check report it.
+  - tests/test_config_keys_are_obeyed.py varies tests_dir to a value the harness would never pick and observes the harness obey it, and its set equality against declared_config_keys() holds in both directions.
+
+technical_plan:
+  implementation_steps:
+    - Add the tests_dir property to schemas/harness-config.schema.json, describing a set value as the prefix a target's test location governs and its absence as a target that has no test directory.
+    - Give harness_config.load_workflow a config parameter and resolve {{tests_dir}} in the loaded definition against it, with an unset key removing the containing list entry and an unanswered token raising a problem the coordinator turns into a pre-flight refusal.
+    - Update the call in story_coordinator.run_story to pass the config it has already loaded, ordering the refusal with the other pre-flight refusals so nothing is created before it.
+    - Update the call in scripts/l5-plan to pass the config it has already loaded.
+    - Replace the literal in workflows/story-workflow.json with the token.
+    - Add tests_dir to .harness/config.yaml and templates/config.yaml, with a comment saying what its absence means.
+    - Add the configured location to context_assembler.config_context and render it in prompts/tester.md, and rewrite the baseline-resolution sentence to describe the shared resolution rather than name a file.
+    - Repoint the raw-text readers of the workflow definition in tests/ so they resolve the prefix through harness_config against this repository's config.
+    - Build the fixture targets and the validation for the configured location, the absent key, the grants, the rendered prompt and the committed artifacts.
+    - Empty TEMPORARY_TIES, repoint the assertions that go vacuous with UNTOUCHED empty, and fix the docstring that still counts three files.
+  likely_file_changes:
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: declares tests_dir, which is what makes it a key the harness may read
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: resolves the token when the workflow loads, and reports one the config cannot answer
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: passes the loaded config to load_workflow and refuses an unresolved token at pre-flight
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: injects the configured location as a placeholder for the tester prompt
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: declares the create restriction as the token instead of a literal directory
+    - file: prompts/tester.md
+      stage: implementer
+      reason: renders the injected location, and states the baseline resolution without naming a framework file
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: passes the loaded config to load_workflow
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: declares this repository's test location explicitly
+    - file: templates/config.yaml
+      stage: implementer
+      reason: a newly initialized target declares its test location rather than inheriting one
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: carries the proof that tests_dir is obeyed, and the set equality that admits it
+    - file: tests/test_no_target_stack_in_harness_source.py
+      stage: tester
+      reason: TEMPORARY_TIES empties, the stale docstring is corrected, and the vacuous assertions are repointed
+    - file: tests/test_stage_output_ownership.py
+      stage: tester
+      reason: the ownership check governs the configured location, proven against a fixture target
+    - file: tests/test_revert_baseline.py
+      stage: tester
+      reason: the stage baseline is captured over the configured location
+    - file: tests/test_plan_time_validation.py
+      stage: tester
+      reason: grants and committed artifacts validate against the configured location
+    - file: tests/test_context_assembler.py
+      stage: tester
+      reason: the rendered tester prompt follows the config with no prompt edit
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records that a workflow declaration may reference configuration, and what an unset test location means
+
+scope:
+  modify:
+    - schemas/harness-config.schema.json
+    - orchestration/harness_config.py
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - prompts/tester.md
+    - scripts/l5-plan
+    - .harness/config.yaml
+    - templates/config.yaml
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/stories/
+    - schemas/story.schema.json
+    - orchestration/harness_source.py
+    - orchestration/plan_validation.py
+    - prompts/implementer.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+
+verification_requirements:
+  - Confirm a target configuring its test location somewhere other than tests/ is governed there, by exercising the ownership check, the revert baseline and the grant validation against that location rather than by reading the code.
+  - Confirm a target declaring no test location leaves the implementer with no create restriction, and that no resolved restriction is ever an empty prefix.
+  - Confirm a workflow carrying a token the config does not answer refuses the run, leaving no run directory, no state.json, no log, no branch and no agent invocation.
+  - Confirm this repository is unchanged in behaviour: its config declares the same directory the workflow used to name, and every existing assertion about the implementer's declared boundary passes.
+  - Confirm every committed story artifact still passes plan-time validation, by running that validation over all of them rather than by sampling.
+  - Confirm the rendered tester prompt names the configured location, carries no unresolved placeholder, and follows a changed config with prompts/tester.md unedited.
+  - Confirm by search that no target directory name and no test-framework filename remains in workflows/ or prompts/.
+  - Confirm TEMPORARY_TIES is empty and that no assertion in that module passes only because the list it reads is empty; each repointed assertion must be shown to fail against a planted violation.
+  - Confirm the full test suite passes.
+
+constraints:
+  - Committed story artifacts are historical records and are not rewritten, including those naming tests/ in scope, do_not_modify or stage_exceptions.
+  - This repository's own tests/ directory keeps its name.
+  - stage_restrictions and its readers keep their present shape: the resolution happens when the workflow loads, not at each use.
+  - No stage name and no path prefix is written into orchestration source; both keep coming off the loaded workflow definition and the loaded config.
+  - The interpreter ties are the subject of a separate story and are not touched here.
+  - No general mechanism for arbitrary workflow declarations to reference arbitrary config keys.
+  - An assertion that goes vacuous is replaced by one that can still fail, with a control demonstrating the failure; it is not deleted and it is not skipped.
