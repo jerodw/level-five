@@ -214,8 +214,8 @@ def test_the_retried_run_records_both_attempts_in_one_stream(retry_then_pass):
     started = [e["stage"] for e in history if e["event"] == "stage-started"]
     assert started == runner.calls
     assert started == [
-        "implementer", "tester", "verifier",
-        "implementer", "tester", "verifier", "documenter",
+        "implementer", "tester", "documenter",
+        "verifier", "implementer", "tester", "documenter", "verifier",
     ]
     assert [e["sequence"] for e in history] == list(range(1, len(history) + 1))
     # Not a stage output, so the retry archive neither copies nor overwrites it.
@@ -270,7 +270,10 @@ def test_a_completed_stage_carries_an_elapsed_duration(retry_then_pass):
     states it."""
     _, run_dir = retry_then_pass
     completions = [e for e in history_of(run_dir) if e["event"] == "stage-completed"]
-    assert len(completions) == 5          # implementer and tester twice, documenter
+    # implementer, tester and documenter twice: since story-045 the
+    # documenter runs before the verifier, so a failed attempt has
+    # already completed it.
+    assert len(completions) == 6
     for entry in completions:
         assert isinstance(entry["duration_seconds"], (int, float))
         assert not isinstance(entry["duration_seconds"], bool)
@@ -708,7 +711,11 @@ def test_the_retry_ceiling_and_its_counters_are_untouched(escalated):
     assert state["retry_count"] == 2
     assert state["verification_iterations"] == 3
     assert runner.calls.count("implementer") == 3
-    assert "documenter" not in runner.calls
+    # The run did not finish. Stated as the completion report's
+    # absence rather than as the documenter never running: since
+    # story-045 the documenter runs before the verifier, so an
+    # escalating run has invoked it.
+    assert not (run_dir / "completion-report.md").is_file()
     assert (run_dir / "verification" / "iteration-3.json").is_file()
 
 

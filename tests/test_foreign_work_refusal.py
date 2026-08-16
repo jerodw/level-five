@@ -546,7 +546,7 @@ def test_a_gitignored_path_is_not_what_the_check_is_about(
 #: ends on. Every entry is something the pre-story coordinator produced and
 #: this one still produces; the point of the check this story adds is that it
 #: changes none of them when the tree is clean.
-CLEAN_RUN_STAGES = ["implementer", "tester", "verifier", "documenter"]
+CLEAN_RUN_STAGES = ["implementer", "tester", "documenter", "verifier"]
 CLEAN_RUN_ARTIFACTS = [
     "changed-files.json", "clean-clone-result.json", "escalation-summary.md",
     "events.log", "execution-history.json", "implementation-summary.md",
@@ -557,9 +557,9 @@ CLEAN_RUN_EVENTS = [
     "workflow started for story-001",
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
+    "documenter stage started", "documenter stage completed",
     "verifier stage started", "verification passed",
     "clean-clone suite passed with the story committed",
-    "documenter stage started", "documenter stage completed",
     "story completed on branch story/story-001",
 ]
 
@@ -971,7 +971,14 @@ def test_a_resumed_escalated_runs_commit_carries_nothing_that_predated_it(
     assert code == 0
     assert runner.calls != []
     assert STRAY not in files_in(target)
-    assert files_in(target) != []                      # it did commit something
+    # It did end on a commit of its own. Stated as the completion commit's
+    # subject rather than as "the commit holds files": since story-045 the
+    # verifier is the last stage, so a resume entering at it changes no
+    # repository file and its completion commit is legitimately empty. The
+    # non-vacuity this guard is for is unchanged - the reading below still
+    # finds the stray in the developer's commit.
+    assert subject_of(target) == story_coordinator.completion_commit_subject(
+        STORY_ID, STORY_TITLE)
     assert STRAY in files_in(target, developers)       # the control
 
 

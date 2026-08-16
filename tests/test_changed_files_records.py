@@ -153,7 +153,7 @@ def test_enforcement_follows_declaration_not_stage_name(target_root, harness_roo
     )
     code = story_coordinator.run_story("story-001", harness_copy, target_root, runner)
     assert code == 0
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
 
 # --------------------------------------------------------------------------
@@ -168,7 +168,13 @@ def test_enforcement_follows_declaration_not_stage_name(target_root, harness_roo
 # --------------------------------------------------------------------------
 
 
-ALL_STAGES = ["implementer", "tester", "verifier", "documenter"]
+ALL_STAGES = ["implementer", "tester", "documenter", "verifier"]
+
+#: Where a run ends when the documenter's own record is what escalates it.
+#: Since story-045 the documenter runs before the verifier, so an escalation
+#: at that stage leaves the stage after it uninvoked. Derived from the list
+#: above rather than written out, so the two cannot disagree.
+THROUGH_DOCUMENTER = ALL_STAGES[:ALL_STAGES.index("documenter") + 1]
 
 #: A record naming a path the rules block, used for both the tester's and the
 #: documenter's blocked-path case so the two messages are comparable.
@@ -291,21 +297,39 @@ def _sources_naming(directory: Path, name: str) -> list[str]:
                   if name in p.read_text(encoding="utf-8"))
 
 
+#: The one module allowed to spell the documenter's record, and it is the
+#: injection side rather than the enforcement side: since story-045 the
+#: verifier is handed the documenter's record through a placeholder, and
+#: context_assembler already spells the implementer's and the tester's records
+#: the same way. The exemption is held shut from both directions below — the
+#: exempt module must actually contain the name, or it is stale — and the
+#: subject is unchanged: what the *coordinator* enforces still reaches it only
+#: off the loaded workflow.
+NAMES_THE_RECORD_FOR_INJECTION = "context_assembler.py"
+
+
 def test_no_orchestration_source_names_the_documenters_record(harness_root, tmp_path):
     """The record name reaches the coordinator only off the loaded workflow.
 
-    The absence is that no module under orchestration/ spells it; the control
-    is a copy of orchestration/ with the name planted in one module, which the
-    same scan reports.
+    The absence is that no module under orchestration/ spells it, save the one
+    exempt module named above; the control is a copy of orchestration/ with the
+    name planted in one module, which the same scan reports.
     """
     orchestration = harness_root / "orchestration"
-    assert _sources_naming(orchestration, "documenter-changed-files.json") == []
+    naming = _sources_naming(orchestration, "documenter-changed-files.json")
+    assert naming == [NAMES_THE_RECORD_FOR_INJECTION]
+    # Held shut from the other side: the coordinator, which is what enforces
+    # the record, still spells neither the record nor the stage's own name for
+    # it, so the exemption cannot quietly widen into the routing code.
+    assert "documenter-changed-files.json" not in (
+        orchestration / "story_coordinator.py").read_text(encoding="utf-8")
 
     planted = tmp_path / "orchestration-with-the-name"
     shutil.copytree(orchestration, planted)
     (planted / "planted.py").write_text(
         'RECORD = "documenter-changed-files.json"\n', encoding="utf-8")
-    assert _sources_naming(planted, "documenter-changed-files.json") == ["planted.py"]
+    assert _sources_naming(planted, "documenter-changed-files.json") == [
+        NAMES_THE_RECORD_FOR_INJECTION, "planted.py"]
 
 
 def test_documenter_writing_a_clean_record_completes_the_run(target_root, harness_root):
@@ -329,7 +353,7 @@ def test_documenter_without_a_record_escalates_as_a_missing_artifact(
     runner = StageRunner(target_root, write_documenter_record=False)
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    assert runner.calls == ALL_STAGES
+    assert runner.calls == THROUGH_DOCUMENTER
     reason = story_coordinator.escalation_reason(runner.run_dir)
     assert reason == ("documenter did not produce required artifacts: "
                       "documenter-changed-files.json")
@@ -340,7 +364,7 @@ def test_documenter_naming_a_blocked_path_escalates(target_root, harness_root):
     runner = StageRunner(target_root, documenter_record=BLOCKED_RECORD)
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    assert runner.calls == ALL_STAGES
+    assert runner.calls == THROUGH_DOCUMENTER
     reason = story_coordinator.escalation_reason(runner.run_dir)
     assert reason == "documenter modified blocked path: rules/execution-rules.json"
 
@@ -376,7 +400,7 @@ def test_documenter_record_failing_the_schema_escalates_as_invalid(
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    assert runner.calls == ALL_STAGES
+    assert runner.calls == THROUGH_DOCUMENTER
     reason = story_coordinator.escalation_reason(runner.run_dir)
     assert reason.startswith(
         "documenter wrote an invalid artifact: documenter-changed-files.json "

@@ -934,7 +934,8 @@ def append_retry_record(
 # commits the tree after every check the workflow performs. Everything below
 # runs the same suite once more where the code actually ships — a fresh clone
 # of the repository with the story committed into it — after the verifier
-# passes and before the documenter runs.
+# passes, which since story-045 is the last stage of the workflow, so the tree
+# it clones already holds the documenter's edits.
 # --------------------------------------------------------------------------
 
 #: How much of the run's combined output the record keeps. Enough to identify
@@ -2501,7 +2502,16 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     )
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
     _git(target_root, "add", "-A")
-    _git(target_root, "commit", "-m", completion_commit_message(state, title))
+    # `--allow-empty`, for the reason the escalation commits carry it: the
+    # commit is how a finished run is recognised — completion_commits reads it,
+    # and the pre-flight that refuses a re-run onto a finished branch reads
+    # that — so a run whose last stage changed no repository file must still
+    # leave one. Before story-045 the documenter ran last and all but
+    # guaranteed a dirty tree here; with the verifier last, a run that entered
+    # at it writes only run-directory artifacts, which a repository ignoring
+    # its run directory has nothing to commit from.
+    _git(target_root, "commit", "--allow-empty", "-m",
+         completion_commit_message(state, title))
     append_event(
         run_dir,
         f"story completed on branch {state.branch}",

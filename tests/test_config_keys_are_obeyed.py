@@ -932,7 +932,7 @@ def test_workflow_names_the_definition_the_run_actually_executes(tmp_path):
     # distinguishes "the named definition was loaded" from "a definition with
     # the same stages as the shipped one was loaded".
     assert AUDIT_STAGE in run.stages
-    assert run.stages == ["implementer", "tester", "verifier", "documenter",
+    assert run.stages == ["implementer", "tester", "documenter", "verifier",
                           AUDIT_STAGE]
     assert (run.run_dir / AUDIT_ARTIFACT).is_file()
     assert AUDIT_STAGE not in [

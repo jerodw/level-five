@@ -598,9 +598,17 @@ def test_the_functions_that_did_change_are_only_those_that_took_the_baseline():
 
 
 def test_the_named_survivors_are_present_and_unchanged():
-    """The three the acceptance criteria name outright."""
+    """The three the acceptance criteria name outright.
+
+    Bounded at *this story's* endpoint, like both siblings above and for the
+    same reason: read against today's working tree it asks what the file looks
+    like now, so a later story that legitimately edits one of the three turns
+    it red for something story-011 has nothing to say about — which is what
+    story-045 did to it by reordering the stage list those assertions name.
+    The subject and the strictness are unchanged; only the upper bound moves.
+    """
     before = functions_of(story_011_before_this_story())
-    after = functions_of(STORY_011_FILE.read_text(encoding="utf-8"))
+    after = functions_of(story_011_at_this_storys_endpoint())
     for name in ("test_every_log_line_has_one_history_entry_in_the_same_order",
                  "test_the_retried_run_records_both_attempts_in_one_stream",
                  "test_the_history_a_run_produced_validates_against_the_schema"):

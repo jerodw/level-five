@@ -371,7 +371,7 @@ def test_the_same_fixture_without_the_key_creates_all_five(
         encoding="utf-8"))["status"] == "completed"
     assert (sound_target / ".harness" / "logs" / f"{STORY_ID}.log").is_file()
     assert branches(sound_target) - before == {f"story/{STORY_ID}"}
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
 
 def test_removing_the_offending_key_from_a_refused_target_lets_it_run(
@@ -388,7 +388,7 @@ def test_removing_the_offending_key_from_a_refused_target_lets_it_run(
 
     code, runner, _ = run(sound_target, harness_root)
     assert code == 0, runner.calls
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
 
 def test_several_undeclared_keys_are_all_named_in_one_refusal(
@@ -429,7 +429,7 @@ def test_a_comment_naming_a_retired_or_unknown_key_is_not_refused(
     code, runner, _ = run(sound_target, harness_root)
 
     assert code == 0, runner.calls
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
 
 def test_the_same_line_without_its_comment_marker_is_refused(
@@ -649,7 +649,7 @@ def test_a_freshly_initialised_target_can_run_a_story(
 
     code, runner, _ = run(target_root, harness_root)
     assert code == 0, (runner.calls, result.stdout)
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
 
 #: The declared set, read once, for deciding which runs of lines in a test

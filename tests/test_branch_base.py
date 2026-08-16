@@ -676,8 +676,8 @@ def test_the_note_does_not_change_where_execution_goes(stale, make_based):
     git(fresh, "branch", STORY_BRANCH)
     assert run(fresh)[0] == 0
 
-    assert stale_runner.calls == ["implementer", "tester", "verifier",
-                                  "documenter"]
+    assert stale_runner.calls == ["implementer", "tester", "documenter",
+                                  "verifier"]
     assert notes(fresh) == []
 
 

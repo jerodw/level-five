@@ -345,9 +345,10 @@ def test_the_file_appears_at_the_first_retry_and_not_before(retry_then_pass):
     did."""
     runner, _ = retry_then_pass
     assert runner.history_seen == [
-        ("implementer", False), ("tester", False), ("verifier", False),
-        ("implementer", True), ("tester", True), ("verifier", True),
-        ("documenter", True),
+        ("implementer", False), ("tester", False),
+        ("documenter", False), ("verifier", False),
+        ("implementer", True), ("tester", True),
+        ("documenter", True), ("verifier", True),
     ]
 
 
@@ -694,7 +695,10 @@ def test_the_retry_ceiling_and_its_counters_are_unchanged(retries_exhausted):
     assert state["retry_count"] == MAX_RETRIES == 2
     assert state["verification_iterations"] == MAX_RETRIES + 1
     assert runner.calls.count(RETRY_STAGE) == MAX_RETRIES + 1
-    assert "documenter" not in runner.calls
+    # The run did not finish. Stated as the completion report's
+    # absence rather than as the documenter never running: since
+    # story-045 the documenter runs before the verifier.
+    assert not (run_dir / "completion-report.md").is_file()
     assert (run_dir / "escalation-summary.md").is_file()
 
 

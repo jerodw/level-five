@@ -88,7 +88,7 @@ def test_happy_path_completes(target_root, harness_root):
     state = read_state(target_root)
     assert state["status"] == "completed"
     assert state["retry_count"] == 0
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
     run_dir = target_root / ".harness" / "runs" / "story-001"
     assert (run_dir / "completion-report.md").is_file()
     assert (run_dir / "verification" / "iteration-1.json").is_file()
@@ -104,8 +104,8 @@ def test_verification_failure_retries_then_completes(target_root, harness_root):
     assert state["status"] == "completed"
     assert state["retry_count"] == 1
     assert runner.calls == [
-        "implementer", "tester", "verifier",
-        "implementer", "tester", "verifier", "documenter",
+        "implementer", "tester", "documenter",
+        "verifier", "implementer", "tester", "documenter", "verifier",
     ]
     run_dir = target_root / ".harness" / "runs" / "story-001"
     assert (run_dir / "verification" / "iteration-2.json").is_file()
@@ -390,7 +390,7 @@ def test_invalid_verifier_artifact_escalates_without_a_retry(target_root, harnes
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["retry_count"] == 0
-    assert runner.calls == ["implementer", "tester", "verifier"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
     assert "retry-guidance.json" in summary
     assert "$.retry_scope" in summary

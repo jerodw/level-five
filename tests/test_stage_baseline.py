@@ -605,7 +605,8 @@ def test_the_pre_story_code_escalates_on_the_same_run(target, harness_root, tmp_
 
     assert code == 2
     assert state_of(target)["status"] == "escalated"
-    assert runner.calls == ["implementer", "tester", "verifier", "implementer"]
+    assert runner.calls == ["implementer", "tester", "documenter",
+                            "verifier", "implementer"]
 
     record = record_of(target)
     assert record["ran"] is True
@@ -642,8 +643,8 @@ def test_the_second_attempts_edit_to_a_file_it_also_edited_is_permitted(
 
     assert code == 0
     assert state_of(target)["status"] == "completed"
-    assert runner.calls == ["implementer", "tester", "verifier",
-                            "implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter",
+                            "verifier", "implementer", "tester", "documenter", "verifier"]
 
     record = record_of(target)
     assert record["ran"] is True
@@ -690,7 +691,8 @@ def test_a_retry_editing_a_path_it_did_not_touch_before_is_still_escalated(
 
     assert code == 2
     assert state_of(target)["status"] == "escalated"
-    assert runner.calls == ["implementer", "tester", "verifier", "implementer"]
+    assert runner.calls == ["implementer", "tester", "documenter",
+                            "verifier", "implementer"]
 
     record = record_of(target)
     assert record["ran"] is True

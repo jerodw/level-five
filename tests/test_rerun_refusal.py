@@ -605,7 +605,7 @@ def test_a_branch_that_exists_but_never_finished_still_runs(
 #: The artifacts are required rather than exhaustive, per the standing rule
 #: that a run directory is not asserted as an exact set: every story that adds
 #: an artifact would otherwise fail an assertion about something else.
-FIRST_RUN_STAGES = ["implementer", "tester", "verifier", "documenter"]
+FIRST_RUN_STAGES = ["implementer", "tester", "documenter", "verifier"]
 FIRST_RUN_ARTIFACTS = [
     "changed-files.json", "clean-clone-result.json", "completion-report.md",
     "events.log", "execution-history.json", "implementation-summary.md",
@@ -616,9 +616,9 @@ FIRST_RUN_EVENTS = [
     f"workflow started for {STORY_ID}",
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
+    "documenter stage started", "documenter stage completed",
     "verifier stage started", "verification passed",
     "clean-clone suite passed with the story committed",
-    "documenter stage started", "documenter stage completed",
     f"story completed on branch {STORY_BRANCH}",
 ]
 

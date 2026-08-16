@@ -27,6 +27,15 @@
       }
     },
     {
+      "name": "documenter",
+      "prompt": "documenter.md",
+      "outputs": ["documentation-report.md", "documenter-changed-files.json"],
+      "changed_files": "documenter-changed-files.json",
+      "schemas": {
+        "documenter-changed-files.json": "changed-files"
+      }
+    },
+    {
       "name": "verifier",
       "prompt": "verifier.md",
       "max_self_routes": 1,
@@ -48,17 +57,12 @@
           "validation": {
             "stage": "tester",
             "when": "the defect is in the tests themselves: a wrong, missing or fragile assertion, an assertion that cannot fail, or coverage that does not exercise what it claims"
+          },
+          "documentation": {
+            "stage": "documenter",
+            "when": "the defect is in the documentation itself: it describes behaviour the code does not have, names a file, module or symbol that does not exist, contradicts what the run's own artifacts record, or omits a change the story required be written down. Judge the document against the code as it now stands: a document that accurately describes wrong behaviour is an implementation defect, not a documentation one, and belongs to the category that owns the code"
           }
         }
-      }
-    },
-    {
-      "name": "documenter",
-      "prompt": "documenter.md",
-      "outputs": ["documentation-report.md", "documenter-changed-files.json"],
-      "changed_files": "documenter-changed-files.json",
-      "schemas": {
-        "documenter-changed-files.json": "changed-files"
       }
     }
   ],

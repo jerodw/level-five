@@ -921,17 +921,20 @@ def test_the_placeholder_check_sees_a_placeholder_when_there_is_one():
     assert "{{retry_routes}}" in template
 
 
-def test_a_third_category_changes_the_prompt_with_no_edit_to_the_template(
+def test_a_further_category_changes_the_prompt_with_no_edit_to_the_template(
     tmp_path, harness_root, target,
 ):
     """The routes are injected, not restated.
 
-    A workflow with a third category renders a verifier prompt naming it,
-    while `prompts/verifier.md` is byte-identical in both harness roots.
+    A workflow with one more category than the shipped one renders a verifier
+    prompt naming it, while `prompts/verifier.md` is byte-identical in both
+    harness roots. The added name is whatever the shipped workflow lacks:
+    it was `documentation` until story-045 shipped that category, and the
+    subject is the injection rather than any particular category.
     """
-    added = "documentation"
+    added = "tooling"
     assert added not in ROUTES, "pick a category the shipped workflow lacks"
-    when = "the defect is in the documentation this story was to leave behind"
+    when = "the defect is in the harness tooling this story was to leave behind"
 
     def mutate(workflow: dict) -> None:
         verifier_stage_of(workflow)["on_failure"]["retry_routing"][added] = {

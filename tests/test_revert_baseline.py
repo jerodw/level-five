@@ -615,8 +615,8 @@ def test_a_forced_edit_to_a_file_created_earlier_in_the_run_is_permitted(
     code, runner = run(target, harness_root, RETRY_SHAPE, [FAIL, PASS])
     assert code == 0
     assert state_of(target)["status"] == "completed"
-    assert runner.calls == ["implementer", "tester", "verifier",
-                            "implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter",
+                            "verifier", "implementer", "tester", "documenter", "verifier"]
 
     record = record_of(target)
     assert record["ran"] is True
@@ -653,7 +653,8 @@ def test_an_additive_edit_to_a_file_created_earlier_in_the_run_is_escalated(
     )
     assert code == 2
     assert state_of(target)["status"] == "escalated"
-    assert runner.calls == ["implementer", "tester", "verifier", "implementer"]
+    assert runner.calls == ["implementer", "tester", "documenter",
+                            "verifier", "implementer"]
 
     record = record_of(target)
     assert record["ran"] is True

@@ -499,7 +499,7 @@ def test_a_forced_edit_under_the_governed_prefix_is_permitted(target, harness_ro
     code, runner = run(target, harness_root, {"implementer": forced_repair})
     assert code == 0
     assert state_of(target)["status"] == "completed"
-    assert runner.calls == ["implementer", "tester", "verifier", "documenter"]
+    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
     record = record_of(target)
     assert record["ran"] is True
