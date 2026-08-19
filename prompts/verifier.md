@@ -80,6 +80,37 @@ recommended. It must satisfy this schema:
 
 {{retry_guidance_schema}}
 
+Guidance may not sanction the outcome it fails. Every current_focus entry
+carries satisfied_when: the observable condition that would satisfy that
+entry, written now, before you know what the retry will deliver. Write what
+would have to be observably true for you to accept the entry as met — not how
+the work should feel, and not a condition you would arrive at afterwards by
+looking at what came back. If an entry authorizes a partial result, its
+satisfied_when is that lesser thing, and writing it there is what makes the
+authorization visible; if what you actually require is the whole job, say so
+in satisfied_when and do not write a second entry excusing it.
+
+When guidance was in force for the attempt you are judging — the attempt was
+routed as a retry and the previous verification wrote guidance for it —
+answer that guidance entry by entry in guidance_outcomes. Every current_focus
+focus and every preserve_behavior string must be accounted for, echoed
+verbatim, character for character: the coordinator compares strings and reads
+none of them as language, so a paraphrase, an omission or an entry the
+guidance does not carry is a mismatch and escalates the run. Judge each entry
+against the satisfied_when written when the entry was written, not against a
+condition you have arrived at now. Where the retry did not meet an entry, set
+unmet on it and say why; leave unmet off the entries it met.
+
+If every entry was met and you are still failing the work, the guidance is
+what is defective, not the stage: it asked for something the retry delivered
+and you are failing the run for delivering it. The coordinator computes that
+from the two artifacts, spends no retry on it, and runs this stage again in
+place — you will arrive back here with a self-route result saying so. When
+you do, resolve the contradiction rather than repeating it: fail the work on
+the criterion it actually failed, reporting as unmet the entry whose
+satisfied_when did not hold and saying why, or write guidance for the next
+attempt that does not authorize the outcome you will fail it for.
+
 [Workflow Layer]
 This workflow prioritizes:
 - verification rules that never change between retries,

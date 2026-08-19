@@ -92,7 +92,10 @@ def failing_verdict(attempt: int) -> dict:
 def guidance_for(attempt: int) -> dict:
     """The guidance the verifier writes for the attempt *after* `attempt`."""
     return {
-        "current_focus": [f"guidance issued after attempt {attempt}"],
+        "current_focus": [{
+            "focus": f"guidance issued after attempt {attempt}",
+            "satisfied_when": f"attempt {attempt + 1} closes what it names",
+        }],
         "preserve_behavior": ["existing behavior"],
         "retry_scope": [f"src/attempt_{attempt}.py"],
     }
@@ -153,7 +156,12 @@ class RetryRunner:
                 "deleted": [],
             })
         elif stage == "verifier":
-            verdict = self.verdicts.pop(0)
+            # A failed verdict must account for the guidance in force for the
+            # attempt it judges, or the coordinator escalates on the
+            # mismatch. Every entry is reported unmet, which is the ordinary
+            # under-delivery case and routes exactly as it always did.
+            verdict = conftest.answering_guidance(
+                self.verdicts.pop(0), self.run_dir)
             write_json(self.run_dir / "verification-result.json", verdict)
             if verdict["status"] == "failed":
                 write_json(self.run_dir / GUIDANCE_ARTIFACT,

@@ -104,11 +104,18 @@ class StampingRunner:
                 "deleted": [],
             })
         elif stage == "verifier":
-            verdict = self.verdicts.pop(0)
+            # A failed verdict accounts for the guidance in force for the
+            # attempt it judges, reporting every entry unmet — the ordinary
+            # under-delivery case, which routes as it always has.
+            verdict = conftest.answering_guidance(
+                self.verdicts.pop(0), self.run_dir)
             write_json(self.run_dir / "verification-result.json", verdict)
             if verdict["status"] == "failed":
                 write_json(self.run_dir / "retry-guidance.json", {
-                    "current_focus": [f"guidance issued after attempt {self.attempt}"],
+                    "current_focus": [{
+                        "focus": f"guidance issued after attempt {self.attempt}",
+                        "satisfied_when": "the next attempt closes it",
+                    }],
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })
@@ -183,7 +190,8 @@ def test_the_archived_contents_are_attempt_1s_not_attempt_2s(retry_then_pass):
     assert verdict["status"] == "failed"
     assert "attempt 1" in verdict["blocking_issues"][0]["issue"]
     guidance = json.loads((archive / "retry-guidance.json").read_text())
-    assert guidance["current_focus"] == ["guidance issued after attempt 1"]
+    assert [entry["focus"] for entry in guidance["current_focus"]] == [
+        "guidance issued after attempt 1"]
 
 
 def test_the_root_copies_describe_attempt_2(retry_then_pass):

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "self-route-result",
-  "description": "The coordinator's record of one self-route: a stage that failed mechanically — its agent process died, or it did not write a required output, or the required output at the run root is a previous attempt's — running again in place, bounded by the budget its stage declares. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a run directory can say why a stage ran twice, rather than the reason living only in the re-run's prompt. A self-route spends neither retry_count nor max_retries, archives nothing under attempts/attempt-N/ and appends nothing to retry-history.json, so this file and the self-routed entry in execution-history.json are the whole of what it leaves. One is written per self-route under a name keyed by the stage, the attempt and the try, so no self-route overwrites another's. Optional fields are expressed by absence rather than by null, as clean-clone-result and execution-history do.",
+  "description": "The coordinator's record of one self-route: a stage running again in place after a failure computed from what it produced — its agent process died, or it did not write a required output, or the required output at the run root is a previous attempt's, or the retry guidance it wrote was met in full by a retry its own verdict then failed — bounded by the budget its stage declares. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a run directory can say why a stage ran twice, rather than the reason living only in the re-run's prompt. A self-route spends neither retry_count nor max_retries, archives nothing under attempts/attempt-N/ and appends nothing to retry-history.json, so this file and the self-routed entry in execution-history.json are the whole of what it leaves. One is written per self-route under a name keyed by the stage, the attempt and the try, so no self-route overwrites another's. Optional fields are expressed by absence rather than by null, as clean-clone-result and execution-history do.",
   "type": "object",
   "required": ["stage", "attempt", "try", "failure", "reason", "statement"],
   "properties": {
@@ -19,11 +19,12 @@
     },
     "failure": {
       "type": "string",
-      "description": "Which mechanical failure occurred. None of the three is a judgement about the work: the stage simply did not produce what it declared, which is why running it again is a plausible answer to all three and why a boundary or schema violation is not among them.",
+      "description": "Which failure occurred. None of the four is a judgement about the work, which is why running the stage again is a plausible answer to all of them and why a boundary or schema violation is not among them. The first three are mechanical: the stage simply did not produce what it declared. The fourth, defective-retry-guidance, belongs beside them for the same reason rather than because it is mechanical — it is a fact computed from what the stage produced, that the retry guidance in force was met in full and the verdict failed the work anyway, so the guidance sanctioned the outcome it fails. Nothing there reads a guidance entry, an unmet reason or a blocking issue as language; the whole comparison is set equality over strings the verifier echoed.",
       "enum": [
         "agent-process-failed",
         "missing-required-artifacts",
-        "stale-required-artifacts"
+        "stale-required-artifacts",
+        "defective-retry-guidance"
       ]
     },
     "reason": {
@@ -36,7 +37,7 @@
     },
     "artifacts": {
       "type": "array",
-      "description": "The required outputs the failure named, as the check reported them. Absent for a failed agent process, which names none.",
+      "description": "The artifacts the failure named, as the check reported them: the required outputs that were missing or stale, or — for a defective retry guidance — the artifacts the contradiction is between, the guidance that was met and the verdict that failed it anyway. Absent for a failed agent process, which names none.",
       "items": { "type": "string" }
     }
   }

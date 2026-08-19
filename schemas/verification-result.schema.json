@@ -50,6 +50,24 @@
       "type": "string",
       "description": "The retry category the next attempt is routed on, named exactly as the workflow's retry_routing table declares it. The coordinator requires it whenever retry_recommended is true, and escalates on a missing or unrecognised one rather than falling back to a default route. It is not in required because this schema cannot express that condition: the validator subset has no if/then and no dependentRequired, so 'required when retry_recommended is true' is inexpressible, and requiring it unconditionally would force a routing key onto a passing verification that routes nowhere."
     },
+    "guidance_outcomes": {
+      "type": "array",
+      "description": "One object per entry of the retry guidance in force for the attempt this verdict judges: every current_focus focus and every preserve_behavior string of it, each echoed verbatim and answered. Every entry must be accounted for, so a retry that regressed behaviour it was told to preserve fails normally rather than reading as defective guidance. The coordinator compares the echoed set against the guidance in force it recorded when the retry was routed, and escalates on any mismatch — missing, extra, misquoted or absent altogether — rather than assuming what silence meant. When every entry is accounted for and none is unmet, a failed verdict is a contradiction: the guidance sanctioned the outcome it is being failed for, and the verifier runs again in place to rewrite guidance that does not authorize what it will fail, or to fail the work on the criterion it actually failed. It is optional because a first verification has no guidance in force to answer.",
+      "items": {
+        "type": "object",
+        "required": ["guidance"],
+        "properties": {
+          "guidance": {
+            "type": "string",
+            "description": "One entry of the guidance in force, echoed verbatim: a current_focus focus or a preserve_behavior string, character for character as the guidance carries it. The coordinator compares strings and reads none of them as language, so a paraphrase is a mismatch."
+          },
+          "unmet": {
+            "type": "string",
+            "description": "Why this entry was not met. Its presence is the signal that the retry did not meet the entry, and its content is the reason. It is one string rather than a boolean with a sibling reason for the same limitation retry_target and unfinishable_by_retry record: this validator subset has no if/then and no dependentRequired, so 'reason required when the flag is true' is inexpressible, and a flag with a sibling reason has a state where the flag is set and the reason is missing, while presence-as-signal has none. Judge the entry against the satisfied_when written when the entry was written, not against a condition arrived at now. Absent means the entry was met."
+          }
+        }
+      }
+    },
     "unfinishable_by_retry": {
       "type": "string",
       "description": "The verifier's judgement that no number of retries closes the gap between what remains and what an attempt delivers, together with the split it recommends between this story and a follow-on. Its presence on a failed verdict ends the run in escalation at that verification, before the retry count is compared to the ceiling: the budget is left unspent and the retry count untouched, because the judgement is that spending them would not finish the work. Its content is both the judgement and the escalation's recorded reason, so the developer reads the verifier's own words rather than a reason the coordinator composed. It is one string rather than a boolean with a sibling reason for the same limitation retry_target records above: the validator subset has no if/then and no dependentRequired, so 'reason required when the flag is true' is inexpressible, and presence-as-signal leaves no state where the signal is set and the reason is missing. It is optional because almost every verdict has no such judgement to make, and it is read only on a failed verdict — a passing verification routes nowhere, so nothing there could act on it."

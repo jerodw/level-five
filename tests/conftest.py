@@ -1,6 +1,7 @@
 import ast
 import importlib.machinery
 import importlib.util
+import json
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -576,6 +577,58 @@ def first_retry_route(workflow: dict) -> tuple[str, str]:
         for category, route in routes.items():
             return category, route["stage"]
     raise AssertionError("the loaded workflow declares no retry routes")
+
+
+def echo_guidance(entries: Sequence[str], *,
+                  unmet: str | None = "the retry did not close this") -> list[dict]:
+    """The `guidance_outcomes` a verdict must carry to account for `entries`.
+
+    story-050 made a failed verdict answer the guidance that directed the
+    attempt it judges, entry by entry: every `current_focus` focus and every
+    `preserve_behavior` string, echoed verbatim. A verdict that does not is
+    escalated by the coordinator as a mismatch, so any fixture whose fake
+    verifier fails a *retried* attempt has to echo the guidance in force for
+    it. That composition lives here rather than once per module, for the same
+    reason the baseline resolution and the retry route do.
+
+    `unmet` marks every entry as not met, which is the ordinary under-delivery
+    case and routes exactly as a failed verdict always has. Passing `None`
+    reports every entry met, which is the contradiction the
+    defective-guidance branch exists for.
+    """
+    return [
+        {"guidance": entry} if unmet is None
+        else {"guidance": entry, "unmet": unmet}
+        for entry in entries
+    ]
+
+
+def guidance_in_force(run_dir: Path) -> list[str]:
+    """The guidance entries the coordinator recorded as directing this attempt.
+
+    Read off `state.json`, which is where story-050 put the routing input for
+    the defective-guidance check: a fake verifier that answers this answers
+    exactly what the coordinator will compare it against, whichever path
+    routed the attempt — including the clean-clone reroute, which writes no
+    guidance and so leaves none in force.
+    """
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    return list(state.get("guidance_in_force", []))
+
+
+def answering_guidance(verdict: dict, run_dir: Path, *,
+                       unmet: str | None = "the retry did not close this") -> dict:
+    """`verdict` with the guidance in force accounted for, when there is any.
+
+    The one call a fixture whose subject is something else needs: a failed
+    verdict on a retried attempt reports every entry unmet, and a verdict with
+    no guidance in force is returned untouched, so a first verification
+    carries no `guidance_outcomes` key at all.
+    """
+    entries = guidance_in_force(run_dir)
+    if not entries or verdict.get("status") != "failed":
+        return verdict
+    return {**verdict, "guidance_outcomes": echo_guidance(entries, unmet=unmet)}
 
 
 @pytest.fixture

@@ -7,8 +7,21 @@
   "properties": {
     "current_focus": {
       "type": "array",
-      "description": "The specific things the retry must fix.",
-      "items": { "type": "string" }
+      "description": "The specific things the retry must fix, each carrying the condition that would satisfy it. Guidance declares its own success condition so that a clause sanctioning a partial result is visible rather than merely present: an instruction that authorizes not doing the whole job has to write the lesser thing as its satisfied_when, where the next verdict answers it entry by entry.",
+      "items": {
+        "type": "object",
+        "required": ["focus", "satisfied_when"],
+        "properties": {
+          "focus": {
+            "type": "string",
+            "description": "The specific thing the retry must fix."
+          },
+          "satisfied_when": {
+            "type": "string",
+            "description": "The observable condition that would satisfy this entry. It is written at the moment the entry is written, before the outcome is known, rather than judged later against what the retry happened to deliver: a condition arrived at after the fact can be fitted to the outcome, and then guidance that authorized a partial result and a verdict that failed it are indistinguishable. Write what would have to be observably true, not how the work should feel."
+          }
+        }
+      }
     },
     "preserve_behavior": {
       "type": "array",

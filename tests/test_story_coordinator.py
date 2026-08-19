@@ -54,11 +54,18 @@ class FakeRunner:
             })
             write_json(self.run_dir / "tester-changed-files.json", self.tester_changed_files)
         elif stage == "verifier":
-            verdict = self.verifier_verdicts.pop(0)
+            # A failed verdict accounts for the guidance in force for the
+            # attempt it judges, reporting every entry unmet — the ordinary
+            # under-delivery case, which routes as it always has.
+            verdict = conftest.answering_guidance(
+                self.verifier_verdicts.pop(0), self.run_dir)
             write_json(self.run_dir / "verification-result.json", verdict)
             if verdict["status"] == "failed":
                 write_json(self.run_dir / "retry-guidance.json", {
-                    "current_focus": ["fix the sample behavior"],
+                    "current_focus": [{
+                        "focus": "fix the sample behavior",
+                        "satisfied_when": "the sample behavior exists",
+                    }],
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })

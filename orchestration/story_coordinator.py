@@ -66,6 +66,16 @@ class RunState:
     #: stage self-routed over the run is a query against the history, where
     #: one `self-routed` entry per self-route names its stage.
     self_route_count: int = 0
+    #: The entries of the retry guidance directing the attempt now running:
+    #: every current_focus focus and every preserve_behavior string of the
+    #: guidance the attempt that just ended actually wrote. Set where a retry
+    #: is routed with freshly written guidance and cleared where a retry is
+    #: routed without any, so the input to the defective-guidance check is
+    #: state rather than a read of retry-history.json or the attempts/
+    #: archive — every routing decision must be reconstructable from
+    #: state.json and events.log. Empty means no guidance is in force, and a
+    #: verification then routes exactly as a first verification does.
+    guidance_in_force: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -927,6 +937,138 @@ def append_retry_record(
 
 
 # --------------------------------------------------------------------------
+# Guidance that may not sanction the outcome it fails
+#
+# The verifier writes retry-guidance.json to direct a retry, and until now
+# nothing stood between two checks: the guidance's shape, and the verdict's
+# route. Between them, guidance could instruct a stage to deliver a partial
+# result and the same verifier could then fail the run for delivering it.
+#
+# The check is behavioural and reads no prose. Guidance declares its own
+# success condition when it is written, in each current_focus entry's
+# satisfied_when; the next verdict answers the guidance entry by entry in
+# guidance_outcomes, echoing each entry verbatim and marking the ones it did
+# not meet. The coordinator compares two sets of strings and inspects what no
+# string says. A failed verdict whose echoed set does not match the guidance
+# in force escalates naming the mismatch; a failed verdict that accounts for
+# every entry and reports none unmet is a contradiction — the guidance
+# authorized the outcome it is failing — and the verifier runs again in place
+# on the budget its own stage declares, spending no retry.
+# --------------------------------------------------------------------------
+
+#: The fourth self-route failure, beside the three mechanical ones. It belongs
+#: there for the same reason they do: it is a fact computed from what the
+#: stage produced, not a judgement about the work.
+DEFECTIVE_RETRY_GUIDANCE = "defective-retry-guidance"
+
+
+def guidance_entries(guidance: dict | None) -> list[str]:
+    """Every string of a guidance that the next verdict must account for.
+
+    One flat list of the strings themselves: each current_focus entry's focus
+    and every preserve_behavior string. The preserved behaviour is in it so a
+    retry that regressed something it was told to leave alone fails normally
+    rather than reading as defective guidance, and satisfied_when is not,
+    because the verdict answers the entry rather than restating its condition.
+
+    The guidance handed here is the one the record of the retry just taken was
+    built from, already narrowed to what the attempt that just ended actually
+    wrote, so a stale guidance left at the run root can never be read as in
+    force. Nothing is read back off disk here.
+    """
+    if not guidance:
+        return []
+    entries = [
+        item["focus"]
+        for item in guidance.get("current_focus", [])
+        if isinstance(item, dict) and isinstance(item.get("focus"), str)
+    ]
+    entries += [
+        text for text in guidance.get("preserve_behavior", []) if isinstance(text, str)
+    ]
+    return entries
+
+
+@dataclass(frozen=True)
+class GuidanceComparison:
+    """What one verdict's guidance_outcomes said about the guidance in force.
+
+    `missing` and `extra` are the two directions of set difference — a
+    misquoted entry appears as one of each — and `matched` is the whole of
+    whether the verdict accounted for the guidance. `unmet` names the entries
+    the verdict reported it did not meet; when the set matched and nothing is
+    unmet, the guidance sanctioned the outcome it failed.
+    """
+
+    missing: tuple[str, ...]
+    extra: tuple[str, ...]
+    unmet: tuple[str, ...]
+
+    @property
+    def matched(self) -> bool:
+        return not self.missing and not self.extra
+
+
+def compare_guidance_outcomes(
+    in_force: list[str], verdict: dict
+) -> GuidanceComparison:
+    """Compare what a verdict echoed against the guidance in force.
+
+    Set equality over strings and nothing else: no branch here reads what a
+    guidance entry or an unmet reason says, so varying the wording of either
+    while holding the sets equal cannot change what this returns. An absent
+    guidance_outcomes echoes nothing and so reports every entry missing,
+    which is what stops silence being read as everything met or as nothing
+    met.
+    """
+    echoed = [
+        outcome["guidance"]
+        for outcome in verdict.get("guidance_outcomes", [])
+        if isinstance(outcome, dict) and isinstance(outcome.get("guidance"), str)
+    ]
+    unmet = [
+        outcome["guidance"]
+        for outcome in verdict.get("guidance_outcomes", [])
+        if isinstance(outcome, dict)
+        and isinstance(outcome.get("guidance"), str)
+        and "unmet" in outcome
+    ]
+    return GuidanceComparison(
+        missing=tuple(sorted(set(in_force) - set(echoed))),
+        extra=tuple(sorted(set(echoed) - set(in_force))),
+        unmet=tuple(sorted(set(unmet))),
+    )
+
+
+def guidance_mismatch_reason(
+    comparison: GuidanceComparison, verdict: dict
+) -> str:
+    """Say what did not match, so the escalation is actionable as it stands.
+
+    Named rather than counted, and the absent case is said outright: a verdict
+    carrying no guidance_outcomes at all and one carrying the wrong entries
+    both escalate here, and a developer should be able to tell them apart from
+    the recorded reason alone.
+    """
+    parts = []
+    if "guidance_outcomes" not in verdict:
+        parts.append("it carried no guidance_outcomes at all")
+    if comparison.missing:
+        parts.append(
+            f"it does not account for: {', '.join(comparison.missing)}"
+        )
+    if comparison.extra:
+        parts.append(
+            f"it accounts for entries the guidance in force does not carry: "
+            f"{', '.join(comparison.extra)}"
+        )
+    return (
+        f"the verifier's guidance_outcomes does not match the retry guidance "
+        f"in force; {'; '.join(parts)}"
+    )
+
+
+# --------------------------------------------------------------------------
 # The clean-clone check
 #
 # The verifier runs the suite in the working tree, which is the one
@@ -1681,7 +1823,9 @@ def self_route_artifacts(run_dir: Path, stages: list[dict], attempt: int) -> lis
     return names
 
 
-def self_route_statement(failure: str, artifacts: list[str]) -> str:
+def self_route_statement(
+    failure: str, artifacts: list[str], entries: list[str] | None = None
+) -> str:
     """What the coordinator tells a stage it is re-running, in its own words.
 
     Nothing here is an agent's judgement and the text says so. The failed
@@ -1689,8 +1833,32 @@ def self_route_statement(failure: str, artifacts: list[str]) -> str:
     is no output to name, because the invocation did not reach the point of
     declaring what it had done, and what the stage most needs to know is that
     the tree already holds whatever that invocation wrote before it exited.
+
+    The defective-guidance statement names the guidance entries that were met
+    and the verdict that failed anyway, because the contradiction is between
+    those two things and a re-running verifier told only that it contradicted
+    itself has nothing to act on. `entries` carries them, and they are written
+    out verbatim rather than counted.
     """
     named = ", ".join(artifacts)
+    if failure == DEFECTIVE_RETRY_GUIDANCE:
+        listed = "; ".join(entries or [])
+        return (
+            f"Every entry of the retry guidance in force was met, and your "
+            f"verdict failed the work anyway. Your own guidance_outcomes "
+            f"accounts for all of these and reports none of them unmet: "
+            f"{listed}. That contradiction indicts the guidance rather than "
+            f"the stage: guidance may not sanction the outcome it fails. "
+            f"This is the coordinator's own statement, not an agent's, and no "
+            f"verifier judged it — it is computed from the guidance in force "
+            f"and the verdict you wrote, by comparing strings alone. The "
+            f"artifacts it is between are {named}. Either fail the work on "
+            f"the criterion it actually failed, reporting the entry whose "
+            f"satisfied_when did not hold as unmet and saying why, or write "
+            f"guidance that does not authorize the outcome you will fail. No "
+            f"retry has been spent and no attempt archived; this is the same "
+            f"attempt, running the verification again."
+        )
     if failure == AGENT_PROCESS_FAILED:
         return (
             "The previous invocation of this stage exited without completing, "
@@ -1740,11 +1908,14 @@ def self_route(
     reason: str,
     artifacts: list[str],
     attempt: int,
+    entries: list[str] | None = None,
 ) -> SelfRouteDecision:
     """Decide one mechanical failure, and record it when the stage runs again.
 
-    The one decision behind all three mechanical failure sites, so they share a
-    rule rather than repeating it three times. A stage that declares no budget
+    The one decision behind every self-routing failure site — the three
+    mechanical ones and the defective-guidance one that joined them — so they
+    share a rule rather than repeating it per site. A stage that declares no
+    budget
     escalates with exactly the reason it escalated with before this existed,
     which is what makes landing this change nothing until a workflow opts in.
 
@@ -1773,7 +1944,7 @@ def self_route(
         "try": state.self_route_count,
         "failure": failure,
         "reason": reason,
-        "statement": self_route_statement(failure, artifacts),
+        "statement": self_route_statement(failure, artifacts, entries),
     }
     # Optional by absence, as clean-clone-result and execution-history already
     # are: a failed process names no artifact, and null would claim it named
@@ -3207,7 +3378,7 @@ def run_story(
                         archive_attempt(
                             run_dir, archivable_artifacts(stages), state.retry_count + 1
                         )
-                        append_retry_record(
+                        entry = append_retry_record(
                             run_dir,
                             state.retry_count + 1,
                             destination,
@@ -3215,6 +3386,18 @@ def run_story(
                             artifacts_written_since(
                                 run_dir, conditional, artifacts_before
                             ),
+                        )
+                        # A retry routed with no guidance this attempt wrote
+                        # leaves none in force, so the verification that
+                        # follows is not subjected to the defective-guidance
+                        # check. This is that path: a clean-clone failure
+                        # follows a passing verdict, which writes no guidance
+                        # at all. Taken off the same freshness-checked view
+                        # the retry-history entry was built from rather than
+                        # read back out of the run root, so a stale guidance
+                        # can never be read as in force.
+                        state.guidance_in_force = guidance_entries(
+                            entry.get("guidance")
                         )
                         state.retry_count += 1
                         save_state(run_dir, state)
@@ -3272,6 +3455,85 @@ def run_story(
                     ),
                     retry_category=target,
                 )
+            elif state.guidance_in_force and not (
+                comparison := compare_guidance_outcomes(
+                    state.guidance_in_force, verdict
+                )
+            ).matched:
+                # Placed after the two escalations for an unroutable
+                # recommended retry, so how one of those is reported is
+                # unchanged, and before the unfinishable_by_retry branch,
+                # deliberately: a fast exit paired with guidance that still
+                # sanctions partial results is worse than what came before it,
+                # because the verifier then escalates confidently on runs that
+                # were only stalling because it misdirected them. Misdirection
+                # is ruled out first.
+                #
+                # There is no default and no assumption about what silence
+                # meant — the same strictness retry_target is held to. Through
+                # _escalate, so retry_count is untouched, and above
+                # archive_attempt, so no attempts/attempt-N/ is written.
+                reason = guidance_mismatch_reason(comparison, verdict)
+                return _escalate(
+                    run_dir,
+                    state,
+                    reason,
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason=reason,
+                )
+            elif state.guidance_in_force and not comparison.unmet:
+                # Every entry of the guidance in force was accounted for and
+                # none was reported unmet, and the verdict failed the work
+                # anyway. The retry delivered what its guidance asked and
+                # verification failed regardless, which indicts the guidance
+                # rather than the stage. A defective-guidance finding spends
+                # no retry budget: the verifier runs again in place on the
+                # self-route budget its own stage already declares, told what
+                # the contradiction is, so it can rewrite guidance that does
+                # not authorize the outcome it will fail or fail the work on
+                # the criterion it actually failed. Routed through the
+                # existing self_route decision rather than a new path, so when
+                # the budget is already spent the run escalates with the
+                # reason self_route already returns — escalation is the
+                # fallback without a second escalation path being written for
+                # it.
+                met = list(state.guidance_in_force)
+                reason = (
+                    f"the retry guidance in force was met in full and the "
+                    f"verifier failed the work anyway, so the guidance "
+                    f"sanctioned the outcome it failed; every entry was "
+                    f"accounted for and none reported unmet: {'; '.join(met)}"
+                )
+                decision = self_route(
+                    run_dir,
+                    state,
+                    stage,
+                    failure=DEFECTIVE_RETRY_GUIDANCE,
+                    reason=reason,
+                    # The artifacts the contradiction is between, named off
+                    # the stage's own declarations rather than written here.
+                    artifacts=sorted(conditional + required),
+                    attempt=attempt,
+                    entries=met,
+                )
+                if decision.taken:
+                    self_routed = True
+                    continue
+                return _escalate(
+                    run_dir,
+                    state,
+                    decision.reason,
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason=decision.reason,
+                )
             elif verdict.get("unfinishable_by_retry"):
                 # The verifier's judgement that retrying cannot finish this,
                 # read on the first sighting and above the ceiling comparison
@@ -3327,13 +3589,20 @@ def run_story(
                 # the same reason the archive is: state.retry_count + 1 names
                 # the attempt that ended, matching attempts/attempt-N/.
                 destination = routes[target]["stage"]
-                append_retry_record(
+                entry = append_retry_record(
                     run_dir,
                     state.retry_count + 1,
                     destination,
                     verdict,
                     artifacts_written_since(run_dir, conditional, artifacts_before),
                 )
+                # The guidance directing the attempt about to begin, recorded
+                # on the state so the check on the next verdict reads a
+                # routing input reconstructable from state.json and events.log
+                # alone. Built from the same freshness-checked view the
+                # retry-history entry was, so an attempt that wrote no
+                # guidance clears it rather than inheriting the run root's.
+                state.guidance_in_force = guidance_entries(entry.get("guidance"))
                 state.retry_count += 1
                 save_state(run_dir, state)
                 append_event(
