@@ -1902,3 +1902,392 @@ def test_the_scan_leaves_the_two_modules_named_for_a_story_subject_alone():
     # And the control for that control: the same prefix followed by digits is
     # reported, so "not reported" above is a property of these names.
     assert STORY_NUMBERED_MODULE.match("test_story_038_validation.py")
+
+
+# --------------------------------------------------------------------------
+# A sixth rule: a test reads a live harness artifact only when that artifact is
+# what it is about
+#
+# Its own rule again, and it shares nothing with the five above. Those are about
+# a comparison that cannot fail, an instrument built out of history, where a
+# file's historical text is read, what a control may mutate, and what a module
+# may be called. This one is about where an assertion's *inputs* come from.
+#
+# The shipped workflow, `rules/execution-rules.json`, this repository's own
+# `.harness/config.yaml`, the prompt templates and the schemas are live harness
+# artifacts. They are legitimate *subjects*: an assertion about what this
+# harness ships has to read what it ships. They are usually the wrong *input*.
+# An assertion about how the coordinator routes needs *a* workflow, not the
+# shipped one, and reading the live one there turns a deployment fact into
+# something the suite enforces.
+#
+# Observed, not predicted. story-047 granted one stage a `max_self_routes`
+# budget — a correct one-line change — and reddened four assertions in a module
+# with nothing to say about whether that grant was right. Adding a stage or
+# renaming an artifact does the same thing to a different set.
+#
+# **This rule reports rather than forbids, and the grandfathered list is why.**
+# Twenty modules read a live artifact this way at the moment the rule landed.
+# Converting them is not this rule's job and was not done here; recording them
+# is. The list is asserted *equal* to what the scan reports, in both directions,
+# so it can only shrink: a module that joins the set fails because it is not on
+# the list, and a module converted off the set fails because the list still
+# names it. A subset assertion either way would let one of those pass silently.
+#
+# It matches on the **shape of the path**, never on a helper name — the same
+# reasoning the second and third rules use. A path built by joining onto one of
+# the module-level names that stand for this repository, reaching one of the
+# five artifact families. Both join idioms the suite writes are read, the `/`
+# operator and `.joinpath(...)`, because story-004 forces the second one in
+# places and covering only the first would leave an unreported route to the
+# same read. Renaming the local that holds the result changes nothing.
+#
+# What it does not cover, stated here because this is where a reader meets it:
+#
+#   * **an equivalent read reached through a helper in another module.**
+#     `conftest.shipped_workflow(REPO_ROOT, "story-workflow")` and
+#     `harness_config.load_rules(REPO_ROOT)` resolve the same live artifacts and
+#     are not reported: the path is joined inside the helper, in a module this
+#     scan is not looking at while it reads this one. The scan reads what a
+#     module's own source states and follows nothing across a module boundary.
+#   * **the difference between a subject and an input.** This is the rule's
+#     central limit and it is not a small one. The scan cannot tell an assertion
+#     *about* the shipped workflow — which must read it — from an assertion that
+#     merely needed *a* workflow and reached for the shipped one. Every report is
+#     a place to ask the question, not a verdict that the read is wrong, and the
+#     grandfathered list holds both kinds.
+#   * **a read resolved against a name this scan does not recognise.** A path
+#     built from a fixture parameter, an `os.environ` lookup, or a string
+#     concatenation rather than a `/` join is not seen. The scan does not
+#     evaluate expressions or track values.
+#
+# And the same standing limit as everything mechanical here: it is not
+# tamper-proof. An edit deleting this check alongside a genuinely forced repair
+# is not caught, at any granularity, because deleting the check that fails you
+# satisfies the revert rule's own definition of a forced edit.
+# --------------------------------------------------------------------------
+
+
+#: The five families of live harness artifact, as the path segment each is
+#: reached through from the repository root. Naming them here is not the
+#: hard-coding the rule warns about: this scan's *subject* is what this
+#: repository ships, so the families are the thing being asserted rather than an
+#: input smuggled into an assertion about something else.
+LIVE_ARTIFACT_SEGMENTS = (
+    "workflows",     # the shipped workflow definition
+    "rules",         # rules/execution-rules.json
+    "prompts",       # the prompt templates
+    "schemas",       # the artifact schemas
+    "config.yaml",   # this repository's own .harness/config.yaml
+)
+
+
+def _path_fragments(node: ast.AST) -> list[str]:
+    """Every literal path segment inside an expression.
+
+    Fragments are split on "/" so a segment written as part of a longer literal
+    — `REPO_ROOT / ".harness/config.yaml"` — reads the same as one written on
+    its own. A computed field of an f-string contributes nothing, which is what
+    keeps a resolved name from being mistaken for a literal segment.
+    """
+    fragments: list[str] = []
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            fragments.extend(inner.value.split("/"))
+        elif isinstance(inner, ast.JoinedStr):
+            for value in inner.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    fragments.extend(value.value.split("/"))
+    return fragments
+
+
+def _is_path_join(node: ast.AST) -> bool:
+    """Whether an expression joins segments onto a path.
+
+    Both idioms the suite writes: the `/` operator, and `.joinpath(...)`, which
+    story-004 forces in the places where a `/` join would name a path under
+    this repository's own run directory. Covering only the operator would leave
+    the second idiom an unreported route to the same read.
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return True
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "joinpath")
+
+
+def live_artifact_reads(source: str, module: str) -> list[Flag]:
+    """Every path in one module that resolves a live harness artifact.
+
+    A join rooted at one of the module-level names that stand for this
+    repository — `_names_the_repository_root`, the same recognition the first
+    and third rules use rather than a second copy of it — whose literal
+    segments reach one of the five families. A path a test built for itself,
+    under `tmp_path` or a local it assembled, names none of those roots and is
+    not this rule's business.
+
+    Only the outermost join of a chain is reported, so
+    `REPO_ROOT / "prompts" / "tester.md"` is one read rather than two.
+
+    No exemption is applied, here or by any caller. The grandfathered list is
+    not an exemption: it is asserted equal to what this returns, so it records
+    the set rather than hiding it.
+    """
+    tree = ast.parse(source)
+    nested = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) \
+                and _is_path_join(node.left):
+            nested.add(id(node.left))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "joinpath" and _is_path_join(node.func.value):
+            nested.add(id(node.func.value))
+
+    flags = []
+    for node in ast.walk(tree):
+        if not _is_path_join(node) or id(node) in nested:
+            continue
+        if not _names_the_repository_root(node):
+            continue
+        reached = [segment for segment in _path_fragments(node)
+                   if segment in LIVE_ARTIFACT_SEGMENTS]
+        if not reached:
+            continue
+        flags.append(Flag(
+            module=module, line=node.lineno,
+            reason=(f"resolves the live harness artifact under {reached[0]!r} "
+                    f"against this repository's root; that is right when the "
+                    f"shipped artifact is what the assertion is about, and "
+                    f"wrong when the assertion merely needed one — build a "
+                    f"fixture for the second case"),
+        ))
+    return flags
+
+
+def live_artifact_reading_modules() -> list[str]:
+    """Every module under tests/ the scan reports, by name.
+
+    Discovered by globbing, never by naming, so a module that starts reading a
+    live artifact joins this set the moment it lands — which is what makes the
+    equality below bite.
+    """
+    return sorted(
+        path.name for path in all_modules()
+        if live_artifact_reads(path.read_text(encoding="utf-8"), path.name)
+    )
+
+
+#: The modules reading a live harness artifact when this rule landed, carried
+#: rather than converted. story-047 converts none of them: the two stories it
+#: precedes do that, and each conversion removes a name from here. The list is
+#: asserted equal to what the scan reports in both directions, so it cannot
+#: grow silently and cannot keep a name whose module was converted.
+GRANDFATHERED_LIVE_ARTIFACT_READERS = (
+    "test_attempt_archiving.py",
+    "test_clean_clone_check.py",
+    "test_config_keys_are_obeyed.py",
+    "test_configured_test_location.py",
+    "test_contract_assertions_bite.py",
+    "test_documenter_before_verification.py",
+    "test_escalation_summary.py",
+    "test_plan_assignment_refusal.py",
+    "test_plan_commit.py",
+    "test_plan_time_validation.py",
+    "test_planner_injection.py",
+    "test_retry_history.py",
+    "test_retry_routing.py",
+    "test_revert_baseline.py",
+    "test_revert_check.py",
+    "test_schema_inventory_location.py",
+    "test_self_routing_retry.py",
+    "test_stage_baseline.py",
+    "test_undeclared_config_keys.py",
+    "test_validation_module_naming.py",
+)
+
+
+def test_the_modules_reading_a_live_artifact_are_exactly_the_grandfathered_ones():
+    """The rule, run rather than inspected, and asserted in both directions.
+
+    Set equality rather than either subset. A module that begins reading a live
+    artifact is absent from the list and fails; a module converted to a fixture
+    stops being reported and its stale entry fails. Written as two explicit
+    differences so the failure says which of the two happened.
+    """
+    reported = set(live_artifact_reading_modules())
+    listed = set(GRANDFATHERED_LIVE_ARTIFACT_READERS)
+
+    joined = sorted(reported - listed)
+    assert not joined, (
+        "these modules read a live harness artifact and are not grandfathered; "
+        "build a fixture instead of reading what this repository ships: "
+        + ", ".join(joined))
+
+    left = sorted(listed - reported)
+    assert not left, (
+        "these modules no longer read a live harness artifact and must be "
+        "removed from the grandfathered list, which only shrinks: "
+        + ", ".join(left))
+
+    assert reported == listed
+    # The companion assertion the glob needs: a scan over zero files agrees
+    # with an empty list for the wrong reason.
+    assert len(all_modules()) >= 15
+    assert reported
+
+
+@pytest.mark.parametrize("planted,segment", [
+    pytest.param("P = REPO_ROOT / 'workflows' / 'story-workflow.json'\n",
+                 "workflows", id="the-shipped-workflow"),
+    pytest.param("P = REPO_ROOT / 'rules' / 'execution-rules.json'\n",
+                 "rules", id="the-execution-rules"),
+    pytest.param("T = (HARNESS_ROOT / 'prompts' / 'tester.md').read_text()\n",
+                 "prompts", id="a-prompt-template"),
+    pytest.param("S = REPO_ROOT / 'schemas' / 'story.schema.json'\n",
+                 "schemas", id="a-schema"),
+    pytest.param("C = REPO_ROOT / '.harness' / 'config.yaml'\n",
+                 "config.yaml", id="the-target-configuration"),
+    pytest.param("C = REPO_ROOT / '.harness/config.yaml'\n",
+                 "config.yaml", id="the-target-configuration-in-one-literal"),
+    pytest.param("def probe(name):\n"
+                 "    return (REPO_ROOT / 'prompts' / f'{name}.md').read_text()\n",
+                 "prompts", id="a-computed-leaf-under-a-live-family"),
+    pytest.param("P = REPO_ROOT.joinpath('workflows', 'story-workflow.json')\n",
+                 "workflows", id="the-joinpath-idiom-story-004-forces"),
+])
+def test_the_live_artifact_scan_reports_a_planted_violation(planted, segment):
+    """Its reach demonstrated rather than asserted, on the same terms as the
+    scans above: a scan with no planted violation is indistinguishable from one
+    that has stopped looking. Each of the five families is planted, because a
+    scan that had quietly lost one would still pass a control over the others.
+    """
+    flags = live_artifact_reads(planted, "probe.py")
+    assert len(flags) == 1, flags
+    assert segment in flags[0].reason
+
+
+def test_the_live_artifact_scan_leaves_a_module_reading_its_own_fixture_alone():
+    """The distinction stated as a control rather than as an absence.
+
+    Two sources asking for the same five artifacts. The first builds a harness
+    of its own under a temporary directory and reads that; the second reaches
+    for what this repository ships. Only the second is reported, so "not
+    reported" above is a property of where the path is rooted rather than of
+    the scan having stopped looking.
+    """
+    against_a_fixture = (
+        "def probe(tmp_path):\n"
+        "    harness = tmp_path / 'harness'\n"
+        "    workflow = harness / 'workflows' / 'story-workflow.json'\n"
+        "    rules = harness / 'rules' / 'execution-rules.json'\n"
+        "    prompt = harness / 'prompts' / 'tester.md'\n"
+        "    schema = harness / 'schemas' / 'story.schema.json'\n"
+        "    config = harness / '.harness' / 'config.yaml'\n"
+        "    return workflow, rules, prompt, schema, config\n"
+    )
+    assert live_artifact_reads(against_a_fixture, "probe.py") == []
+
+    against_this_repository = against_a_fixture.replace(
+        "harness = tmp_path / 'harness'", "harness = REPO_ROOT")
+    assert len(live_artifact_reads(against_this_repository, "probe.py")) == 0, (
+        "a local rebound to the repository root is a stated limit: the scan "
+        "does not track values")
+
+    rooted = against_a_fixture.replace("harness /", "REPO_ROOT /")
+    assert len(live_artifact_reads(rooted, "probe.py")) == 5
+
+
+@pytest.mark.parametrize("benign", [
+    pytest.param("P = REPO_ROOT / 'tests' / 'test_thing.py'\n",
+                 id="a-path-outside-every-live-family"),
+    pytest.param("P = REPO_ROOT / '.harness' / 'stories' / 'story-001.yaml'\n",
+                 id="a-story-artifact-which-is-not-configuration"),
+    pytest.param("P = tmp_path / 'workflows' / 'story-workflow.json'\n",
+                 id="a-fixture-workflow-under-tmp_path"),
+    pytest.param("def probe(harness_root):\n"
+                 "    return harness_root / 'prompts' / 'tester.md'\n",
+                 id="a-fixture-parameter-which-is-a-stated-limit"),
+    pytest.param("W = conftest.shipped_workflow(REPO_ROOT, 'story-workflow')\n",
+                 id="a-helper-mediated-read-which-is-a-stated-limit"),
+])
+def test_the_live_artifact_scan_leaves_these_alone(benign):
+    """What it must not report, including two of its own stated limits: a read
+    routed through a fixture parameter and a read whose path is joined inside a
+    helper in another module are outside this rule by construction, and the
+    prose above says so rather than leaving the silence to be discovered."""
+    assert live_artifact_reads(benign, "probe.py") == []
+
+
+def test_the_live_artifact_rules_stated_limits_are_in_the_module_and_are_true():
+    """The limits are load-bearing — the grandfathered list is only honest if
+    the reader knows what the scan cannot see — so they are asserted present
+    and each is demonstrated by the controls above rather than only claimed.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    stated = source[:source.index("def live_artifact_reads(")]
+    limits = stated[stated.rindex("What it does not cover"):]
+
+    assert "helper in another module" in limits
+    assert "subject and an input" in limits
+    assert "evaluate expressions or track values" in limits
+    assert "tamper-proof" in stated
+
+    # And the claims are true of the scan, not just written above it.
+    assert live_artifact_reads(
+        "W = conftest.shipped_workflow(REPO_ROOT, 'story-workflow')\n",
+        "probe.py") == []
+    assert live_artifact_reads(
+        "def probe(harness_root):\n"
+        "    return harness_root / 'workflows' / 'story-workflow.json'\n",
+        "probe.py") == []
+    # The subject/input limit: the same expression, one legitimate and one not,
+    # and the scan says exactly the same thing about both.
+    subject = "W = (REPO_ROOT / 'workflows' / 'story-workflow.json').read_text()\n"
+    an_input = "F = (REPO_ROOT / 'workflows' / 'story-workflow.json').read_text()\n"
+    assert [flag.reason for flag in live_artifact_reads(subject, "a.py")] \
+        == [flag.reason for flag in live_artifact_reads(an_input, "b.py")]
+
+
+def test_this_rule_draws_nothing_from_the_five_above():
+    """Six rules, six purposes. No scan calls another, and this one's
+    vocabulary is expressible in none of theirs."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    functions = {node.name: node for node in ast.parse(source).body
+                 if isinstance(node, ast.FunctionDef)}
+    others = ("flagged_calls", "undeclared_targets", "module_construction",
+              "git_text_reads", "mutation_controls", "story_numbered_modules")
+    called = {inner.func.id
+              for inner in ast.walk(functions["live_artifact_reads"])
+              if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)}
+    assert called.isdisjoint(others)
+
+    for vocabulary in (set(MODULE_CONSTRUCTORS + SOURCE_EXECUTORS),
+                       set(CONTENT_SUBCOMMANDS),
+                       set(REVISION_KEYWORDS + PATH_WRITES + LOADER_INTERFACE)):
+        assert vocabulary.isdisjoint(LIVE_ARTIFACT_SEGMENTS), vocabulary
+
+    assert ("a test reads a live harness artifact only when that artifact is"
+            in source)
+
+
+def test_the_grandfathered_list_is_a_list_and_not_a_derivation():
+    """It is written out, and it must be: a list derived from the scan would
+    equal it by construction and the equality above would assert nothing.
+
+    Read off this module's own source rather than asserted about the value, so
+    a later edit that replaces the tuple with a comprehension goes red here.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    assignment = next(
+        node for node in ast.parse(source).body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "GRANDFATHERED_LIVE_ARTIFACT_READERS")
+    assert isinstance(assignment.value, ast.Tuple)
+    assert all(isinstance(element, ast.Constant)
+               for element in assignment.value.elts)
+    assert len(assignment.value.elts) == len(
+        set(GRANDFATHERED_LIVE_ARTIFACT_READERS))
+    assert list(GRANDFATHERED_LIVE_ARTIFACT_READERS) \
+        == sorted(GRANDFATHERED_LIVE_ARTIFACT_READERS)
+    for name in GRANDFATHERED_LIVE_ARTIFACT_READERS:
+        assert (TESTS_DIR / name).is_file(), name

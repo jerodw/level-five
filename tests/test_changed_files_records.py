@@ -123,11 +123,30 @@ def test_tester_deleting_blocked_path_escalates(target_root, harness_root):
     assert "tester modified blocked path: rules/execution-rules.json" in summary
 
 
+def _invocations_before_escalating(harness_root: Path, stage_name: str) -> int:
+    """How many times a stage runs before a mechanical failure escalates it.
+
+    Its first invocation plus its declared self-route budget, read off the
+    stage's own declaration. Written out as a literal, this was
+    `["implementer", "tester"]` — a list that assumed the tester never runs
+    again in place, and that went red the moment story-047 granted it a budget
+    of two. What the assertion below claims is unchanged; only how it resolves
+    the number of calls is.
+    """
+    workflow = json.loads(
+        (harness_root / "workflows" / "story-workflow.json").read_text())
+    declaration = next(s for s in workflow["stages"] if s["name"] == stage_name)
+    return 1 + declaration.get("max_self_routes", 0)
+
+
 def test_tester_without_record_escalates_before_verifier(target_root, harness_root):
     runner = StageRunner(target_root, write_tester_record=False)
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    assert runner.calls == ["implementer", "tester"]
+    tries = _invocations_before_escalating(harness_root, "tester")
+    assert runner.calls == ["implementer"] + ["tester"] * tries
+    # The escalation is still before the verifier however many tries it took.
+    assert "verifier" not in runner.calls
     summary = (runner.run_dir / "escalation-summary.md").read_text()
     assert "tester did not produce required artifacts" in summary
     assert "tester-changed-files.json" in summary

@@ -47,6 +47,34 @@ those comparisons go vacuously green the moment the story commits. Use the
 shared baseline resolution the existing validation already provides rather
 than writing a second one beside it.
 
+Ask, at the moment you write an assertion: is the shipped artifact the
+subject of this assertion, or an input to it? The shipped workflow, the
+execution rules, the target's own configuration, the prompt templates and
+the schemas are live harness artifacts. They are legitimate subjects — an
+assertion about what this harness ships has to read what it ships. They are
+usually the wrong input: an assertion about how the coordinator routes
+needs *a* workflow, not the shipped one, and reading the live one there
+turns a deployment fact into something the suite enforces. Granting one
+stage a budget, adding a stage, or renaming an artifact then reddens
+assertions that had nothing to say about whether that change was right.
+
+When the artifact is an input rather than the subject, build a fixture and
+assert against that. The suite already provides the idioms rather than
+leaving you to invent one: a mirrored harness root carrying a workflow
+definition this repository does not ship, a target repository built under a
+temporary directory, a probe workflow derived from the shipped one by
+mutating the single declaration the test is about. Reuse whichever of those
+fits and extend it if it does not, rather than writing a fourth beside them.
+
+This does not reverse the rule that a test writes no stage name, no
+restricted prefix and no artifact name of its own, deriving each from the
+workflow instead. That rule stands, and a fixture satisfies it identically:
+the fixture defines those names once, in one place, and the test derives
+them from the fixture exactly as it would have derived them from the
+shipped definition. What a fixture changes is which workflow the names are
+derived from, not whether they are derived — so a test that hard-codes
+`"implementer"` or `"changed-files.json"` is wrong either way.
+
 When you finish, write these files to the run directory at {{run_dir}}:
 
 test-results.json, the structured outcome of the validation you ran. It
