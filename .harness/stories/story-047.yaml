@@ -1,0 +1,150 @@
+story:
+  id: story-047
+  title: The tester writes fixture-based tests
+  description: |
+    prompts/tester.md says nothing about where a test's inputs come from, so
+    every tester stage has derived its subject from the live harness: the
+    shipped workflow, rules/execution-rules.json, this repository's own
+    config, its prompts and its schemas. Thirty-four of forty-eight test
+    modules read one of those today, and each one turns a deployment fact
+    into something the suite enforces. Granting one workflow stage a
+    max_self_routes budget -- a correct one-line change -- reddened four
+    assertions in a module with nothing to say about whether that grant was
+    right.
+
+    The rule the tester has been told is good and is what produces this:
+    write no stage name, prefix or artifact name into the test, derive it
+    from the workflow. A fixture satisfies that rule identically, because the
+    names are defined once in the fixture. The guidance added here has to say
+    so, or it reads as a reversal of a rule that was right.
+
+    Three things, together. The prompt gains the rule, stated as a question
+    the tester can answer at the moment it writes an assertion: is the
+    shipped artifact the subject of this assertion, or an input to it. A scan
+    in tests/test_baseline_honesty.py reports the modules that read a live
+    harness artifact, with today's readers grandfathered on a list asserted
+    equal to what the scan reports in both directions, so a new module cannot
+    join it and a converted one must leave it. And the tester is granted a
+    self-route budget of two, because this story changes what the tester is
+    asked to produce and a stage learning a new rule is exactly a stage that
+    fails mechanically on a first attempt.
+
+    Prompt guidance alone would not hold and this story does not pretend it
+    would. This repository has measured that twice: the git diff HEAD rule
+    was documented and injected into every stage prompt and shipped five more
+    times, and the git-history-loader rule was documented and shipped three
+    more times. Both stopped when a scan landed. That is why the scan is in
+    the same story as the guidance.
+
+    The self-route grant was verified before this story was written rather
+    than assumed. Granting the tester a budget of two leaves the documenter
+    as the budget-less stage, and the documenter sits inside RERUN_STAGES, so
+    every mechanical failure class stays reachable at a budget-less stage and
+    story-036's three compatibility guards hold. Exactly two assertions in
+    the suite fail under the grant, and both are latent defects it exposes
+    rather than guards it loses: one pins a literal call list that assumed
+    the tester never re-runs, and one compares filename-sorted evidence
+    against workflow order, which agrees only while the second budgeted stage
+    sorts after the first. Both are repaired here.
+
+    This story converts none of the thirty-four existing readers. It stops
+    the number growing while a-test-reads-a-fixture-workflow-not-the-shipped-one
+    and a-test-resolves-history-from-a-fixture-repository are written.
+
+    Nothing here verifies that a tester followed the guidance. There is no
+    deterministic way to check that, and the story says so rather than
+    constructing a test that appears to.
+
+tasks:
+  - Add guidance to prompts/tester.md framed as a question answerable while writing an assertion -- is the shipped artifact the subject of this assertion or an input to it -- with the instruction to build a fixture and assert against that when it is an input.
+  - Say in that guidance that deriving names from a fixture satisfies the existing derive-from-the-workflow rule rather than reversing it, because a fixture defines the names once.
+  - Point that guidance at the fixture idioms the suite already provides, so it names an existing practice rather than describing a principle.
+  - Add a fourth standing rule to tests/test_baseline_honesty.py -- an AST scan reporting a test module that reads a live harness artifact rooted at a module-level repository-root name, covering the shipped workflow, the rules, the target configuration, the prompts and the schemas.
+  - Reuse the existing repository-root-name idiom in that scan, so a read resolved against a path a test built for itself is not reported.
+  - Carry the modules that read a live harness artifact today on a grandfathered list, asserted equal to what the scan reports in both directions.
+  - State the scan's reach limits in the module the way the existing three rules state theirs -- it cannot see a helper in another module doing the same thing, and it cannot tell a subject from an input.
+  - Give the scan a negative control that plants a violation and observes it reported, and a control that a module reading only a fixture it built itself is not reported.
+  - Grant the tester max_self_routes of 2 in workflows/story-workflow.json, and record beside it why the budget is two where every other budget in this workflow is one.
+  - Repair the assertion in tests/test_changed_files_records.py that pins a literal stage-call list which assumed the tester never runs again in place.
+  - Repair the assertion in tests/test_self_routing_retry.py that compares filename-sorted self-route evidence against workflow order.
+
+acceptance_criteria:
+  - The rendered tester prompt carries the fixture guidance and contains no unresolved placeholder.
+  - The rendered tester prompt states that deriving a name from a fixture satisfies the existing derive-from-the-workflow rule, so the two rules cannot be read as contradicting each other.
+  - tests/test_baseline_honesty.py carries a scan that reports a test module reading the shipped workflow, the rules, the target configuration, a prompt or a schema, when the read is resolved against a module-level repository-root name.
+  - That scan reports nothing for a read resolved against a path the test built for itself, demonstrated against a constructed module rather than asserted of the suite.
+  - The set of modules the scan reports over tests/ is exactly the grandfathered list, asserted in both directions -- a reported module absent from the list fails, and a listed module the scan no longer reports fails.
+  - A constructed module containing a planted live-artifact read is reported by the same scan, and a constructed module reading only its own fixture is not.
+  - The scan's docstring or comments state what it cannot see -- an equivalent read in a helper module, and the difference between a shipped artifact that is the assertion's subject and one that is merely its input.
+  - workflows/story-workflow.json declares max_self_routes of 2 on the tester, and the definition records why that budget is two.
+  - A mechanical failure at the tester runs the tester again in place, a second consecutive one runs it again, and a third escalates with a reason naming the exhausted budget of two.
+  - Every mechanical failure class remains reachable at a stage declaring no budget, and the compatibility property that such a stage escalates on the first failure with no self-route artifact, no try-suffixed prompt and no self-routed event still holds.
+  - tests/test_changed_files_records.py asserts the tester's missing-record escalation against what the stage declares rather than against a literal call list, and the escalation it asserts is unchanged.
+  - tests/test_self_routing_retry.py compares self-route evidence in an order that does not depend on which stage names happen to sort first, and the property it asserts -- that a stage's self-route spends no other stage's budget -- is unchanged.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Write the fixture guidance into prompts/tester.md beside the existing negative-control guidance, as a question about subject versus input, with the reconciliation of the two rules and a pointer at the fixture idioms already in the suite.
+    - Add max_self_routes of 2 to the tester stage in workflows/story-workflow.json, with the reason recorded where a reader of the definition meets it.
+    - Add the live-artifact scan to tests/test_baseline_honesty.py as a fourth rule in the shape of the three already there, reusing the repository-root-name recognition rather than writing a second one.
+    - Populate the grandfathered list from what the scan reports over tests/, and assert set equality in both directions.
+    - Write the two controls -- a planted violation reported, a fixture-only module not reported -- and the statement of the scan's limits.
+    - Repair the literal call list in tests/test_changed_files_records.py so it derives the expected invocation count from the tester's declared budget.
+    - Repair the ordering comparison in tests/test_self_routing_retry.py so it does not depend on stage names sorting in workflow order.
+  likely_file_changes:
+    - file: prompts/tester.md
+      stage: implementer
+      reason: carries the fixture guidance the story exists to add
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: grants the tester a self-route budget of two and records why
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: the established home for standing rules of this kind gains the live-artifact scan, its grandfathered list, its limits and its controls
+    - file: tests/test_changed_files_records.py
+      stage: tester
+      reason: its literal call list assumed the tester never runs again in place
+    - file: tests/test_self_routing_retry.py
+      stage: tester
+      reason: its evidence comparison agrees with workflow order only while the second budgeted stage sorts after the first
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the fixture rule, the scan's scope and limits, the grandfathered list's shrink-only contract, and why the tester's budget is the workflow's one outlier
+
+scope:
+  modify:
+    - prompts/tester.md
+    - workflows/story-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - schemas/
+    - .harness/config.yaml
+    - .harness/stories/
+    - prompts/implementer.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/planner.md
+    - prompts/harness-layer.md
+
+verification_requirements:
+  - Confirm the scan reports every module under tests/ that reads a live harness artifact rooted at a repository-root name, and that the grandfathered list is exactly that set, checked in both directions rather than as a subset either way.
+  - Confirm the scan reports a planted violation, and leaves alone a module whose reads resolve against a fixture it built for itself.
+  - Confirm the scan's stated limits are in the module and are accurate -- that it does not claim to see an equivalent read reached through a helper, and does not claim to distinguish a subject from an input.
+  - Confirm the rendered tester prompt carries the guidance with no unresolved placeholder, and that it reconciles the fixture rule with the existing derive-from-the-workflow rule rather than appearing to reverse it.
+  - Confirm a mechanical failure at the tester self-routes, that a second consecutive one self-routes, and that a third escalates naming the exhausted budget -- the budget is two, so all three points need exercising.
+  - Confirm story-036's compatibility guards still hold against the stage that still declares no budget, including that every mechanical failure class remains reachable there. This is the assertion most likely to be quietly lost.
+  - Confirm the two repaired assertions still assert what they asserted before, and that neither was weakened to accommodate the new budget.
+  - Confirm the full test suite passes.
+
+constraints:
+  - The existing derive-names-from-the-workflow guidance in prompts/tester.md stays; the new guidance is added beside it and reconciled with it, not written over it.
+  - No existing module under tests/ is converted to a fixture by this story; the grandfathered list records them and the conversion belongs to the two stories this one precedes.
+  - The grandfathered list is asserted equal to what the scan reports, never as a subset in either direction, so a module leaving the set must be removed from it and one entering must fail.
+  - No test asserts that a tester followed the prompt guidance; there is no deterministic way to check that.
+  - The three standing rules already in tests/test_baseline_honesty.py keep their present behaviour and their present controls.
+  - The two repaired assertions keep their subjects; the repair is to how each resolves what it expects, not to what it claims.
+  - Self-route budgets on the implementer and the verifier are settled and are not changed.
+  - Every absence the new scan asserts carries a control demonstrating that the same check reports the violation.
