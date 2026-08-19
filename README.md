@@ -3,7 +3,7 @@
 [![tests](https://github.com/jerodw/level-five/actions/workflows/tests.yml/badge.svg)](https://github.com/jerodw/level-five/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A **level 3 agentic harness** built by following *Agentic Programming* by Jerod W. Wilkerson. The harness is a story execution system: stories enter with an approved plan, move through implementation, testing, and verification, retry when verification fails, and end completed or escalated.
+A **level 3 agentic harness** built by following *Agentic Programming* by Jerod W. Wilkerson. The harness is a story execution system: stories enter with an approved plan, move through implementation, testing, documentation, and verification, retry when verification fails, and end completed or escalated.
 
 > **About the name.** The name is aspirational. What you'll find here is a *level 3* harness, but level five is where the ladder leads, and the repository is built to grow in that direction.
 
@@ -27,7 +27,7 @@ The exact harness Appendix A describes is tagged **`appendix-a`**. If you are re
 
 ### What has changed since
 
-Each story below is a step the book's roadmap calls for, or a failure the build hit that the roadmap did not anticipate. The story artifacts are committed in `.harness/stories/`. Run directories are execution state rather than source, so `.harness/runs/` is gitignored and does not travel with a clone; the runs worth keeping — two escalations and a reset — are copied into `.harness/runs-archive/`.
+Each story below is a step the book's roadmap calls for, or a failure the build hit that the roadmap did not anticipate. The story artifacts are committed in `.harness/stories/`. Run directories are execution state rather than source, so `.harness/runs/` is gitignored and does not travel with a clone; the runs worth keeping — three escalations, and three runs preserved for what they showed — are copied into `.harness/runs-archive/`.
 
 | Story | Change | Where the book argues for it |
 | --- | --- | --- |
@@ -37,8 +37,17 @@ Each story below is a step the book's roadmap calls for, or a failure the build 
 | 008–009 | The story schema and the workflow's stage rules injected into the planner prompt | Ch. 16, injection over restatement |
 | 010–012 | `attempts/attempt-N/` archives, `execution-history.json`, `retry-history.json` | Ch. 17–18, retry evidence |
 | 013–017 | Verification hardening: the suite re-run in a clean clone, assertions that can be shown to fail, the schema inventory moved out of `tests/`, the coordinator's output contract asserted directly, an implementer's test edits decided by reverting them | Failures this build hit; Ch. 18 in spirit |
+| 018–020 | Story artifacts validated at plan time; the revert check reverting to what the stage found rather than to `HEAD`; escalated runs made resumable, committing their work when they stop | Ch. 18, hardening; Ch. 17, retry evidence |
+| 021–024 | A run commits only what it produced; required outputs must be written by the attempt that ran; `l5-plan` commits the artifact it caused; `escalation-summary.md` carries the finding rather than a pointer to it | Ch. 18, hardening |
+| 025–027 | Plan time validates the artifact it just wrote; one resolution of a story's own commit range; a re-run onto a branch already holding finished work refused | Ch. 18, hardening |
+| 028–031 | Retries routed to the stage that owns the defect; loading code retired out of git history and the rule enforced mechanically; a story branched from a declared base; mutation controls that mutate the working tree, never a pinned revision | Ch. 17, retry routing; Ch. 18 |
+| 032–035 | A plan refused when it assigns work a stage cannot own; cloning over the normal transport instead of copying a live object store; a resume guard that works when the harness is its own target; stages granted the read-only tools they need, with mutation denied at the door by a hook | Ch. 15, governance boundaries; Ch. 18 |
+| 036–038 | A stage that failed mechanically runs again in place, on its own budget; a stage's baseline is what that stage first found; a test module named for what it checks | Ch. 18, hardening |
+| 039–043 | Every configurable value proven configurable; no target-stack literal in harness source; the verification runner no longer assumed to be Python; a plan may assign an existing file to the implementer; an undeclared config key refused | Ch. 15, governance; portability the appendix assumes |
+| 044–046 | The documenter records what it changed; the documenter runs before verification, so its output is judged; the test location comes from configuration | Ch. 18, hardening |
+| 047, 049 | The tester writes fixture-based tests, asking whether a shipped artifact is an assertion's subject or its input; a verifier verdict can say that retrying cannot finish the work, ending the run without spending the budget | Ch. 18, hardening |
 
-Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, hooks in place of a static `allowed_tools` allowlist, an adjudicator, an inspector, resumable escalated runs, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
+Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, a fuller hook-based tool policy in place of the static `allowed_tools` allowlist, an adjudicator, an inspector, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
 
 The harness stays at level 3. Epics and products (Chapters 20–22) are a different unit of coordination, and the book is explicit that the story workflow earns that step through a track record rather than a feature list.
 
@@ -76,12 +85,14 @@ Example:
     orchestration/   the Story Coordinator and its supporting modules
     rules/           execution rules enforced by the coordinator
     scripts/         thin l5- entry points
+    hooks/           the deny-only tool guard each stage invocation carries
     templates/       starter files l5-init copies into a new target repository
+    tests/           the coordinator's test suite, run without model calls
     .harness/        target-repository state: config, standards, stories, and
-                     docs/ARCHITECTURE.md; plus runs and logs, which are
-                     gitignored execution state
+                     docs/ARCHITECTURE.md; plus runs, logs and requests, which
+                     are gitignored execution state
 
-The harness pieces (`workflows/`, `schemas/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`, `templates/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
+The harness pieces (`workflows/`, `schemas/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`, `hooks/`, `templates/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
 
 This repository is both the harness repository and its own first target repository. Every demo story is a real harness feature, so the harness participates in building itself from the start.
 
@@ -91,9 +102,10 @@ This repository is both the harness repository and its own first target reposito
 
 1. `l5-plan` runs an interactive planning session and writes an approved story artifact to `.harness/stories/`.
 2. `l5-run` hands the story to the Story Coordinator, which creates a story branch and a run directory under `.harness/runs/<story-id>/`.
-3. The coordinator advances the workflow stage by stage (implement → test → verify → document), assembling each stage's context, injecting it into the stage prompt, and invoking the agent headlessly (`claude -p`).
-4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry the implementer with structured retry guidance, or escalate. On a passing verdict it re-runs the suite in a fresh clone with the story committed, because the working tree is the one place that commit does not yet exist.
-5. Every run leaves its state (`state.json`), the same events in two renderings (`events.log` and `execution-history.json`), a record of any retry (`retry-history.json`), and the artifacts each stage produced.
+3. The coordinator advances the workflow stage by stage (implement → test → document → verify), assembling each stage's context, injecting it into the stage prompt, and invoking the agent headlessly (`claude -p`). The documenter runs before verification so that what it writes is judged rather than taken on trust.
+4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry, or escalate. A retry goes to the stage that owns the defect — named by the verifier as a category the workflow defines, with no default route — carrying structured guidance in `retry-guidance.json`. A verdict may also report that retrying cannot finish the work at all, which escalates immediately and leaves the retry budget unspent. On a passing verdict the coordinator re-runs the suite in a fresh clone with the story committed, because the working tree is the one place that commit does not yet exist.
+5. A stage that fails *mechanically* — rather than being judged wrong — runs again in place, on a separate per-stage budget that retries do not share.
+6. Every run leaves its state (`state.json`), the same events in two renderings (`events.log` and `execution-history.json`), a record of any retry (`retry-history.json`), and the artifacts each stage produced.
 
 See `.harness/docs/ARCHITECTURE.md` for the full architecture.
 
