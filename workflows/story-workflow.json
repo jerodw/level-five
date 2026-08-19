@@ -21,6 +21,8 @@
       "prompt": "tester.md",
       "outputs": ["test-results.json", "tester-changed-files.json"],
       "changed_files": "tester-changed-files.json",
+      "max_self_routes": 2,
+      "max_self_routes_reason": "Two, where every other budget in this workflow is one. The tester is the stage most often asked to produce something it has not produced before -- a new rule, a new idiom, a new fixture shape -- and a stage learning what to produce is the stage most likely to fail mechanically on a first attempt and then again while correcting itself. One budget covers the dropped connection; the second covers the first correction landing incomplete. Nothing reads this key; it records the judgement where a reader of the definition meets the budget.",
       "schemas": {
         "test-results.json": "test-results",
         "tester-changed-files.json": "changed-files"

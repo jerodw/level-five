@@ -784,6 +784,157 @@ def test_a_consecutive_failure_past_the_budget_escalates(
 
 
 # --------------------------------------------------------------------------
+# A budget above one: the middle of a budget is walked
+#
+# Everything above drives the first stage the workflow budgets, and while every
+# budget was one, "spend the budget" and "self-route once" were the same event.
+# A budget of two has a middle: an invocation that has already self-routed once
+# fails again and is *still* re-run in place. Nothing above walks it, so a
+# coordinator that stopped after the first self-route would have passed every
+# case in this file.
+#
+# Which stages those are is read off the workflow and never written here.
+# --------------------------------------------------------------------------
+
+
+#: Every declaration with room for more than one consecutive self-route.
+DEEP_BUDGETS = [(s["name"], s[BUDGET_KEY]) for s in BUDGETED_DECLARATIONS
+                if s[BUDGET_KEY] > 1]
+DEEP_BUDGET_IDS = [f"{name}-of-{budget}" for name, budget in DEEP_BUDGETS]
+
+
+def test_some_stage_declares_room_for_more_than_one_self_route():
+    """The companion assertion the parametrization needs.
+
+    With no such stage the two cases below vanish, and a parametrization that
+    collected nothing reports as an absence of failures rather than as an
+    absence of tests.
+    """
+    assert DEEP_BUDGETS, (
+        "no stage declares a budget above one, so the middle of a budget is "
+        "unreachable and the two cases below assert nothing")
+
+
+@pytest.mark.parametrize("stage_name,budget", DEEP_BUDGETS, ids=DEEP_BUDGET_IDS)
+def test_every_failure_within_the_budget_re_runs_the_stage_in_place(
+    make_target, harness_root, stage_name, budget,
+):
+    """One consecutive mechanical failure per unit of budget, each of them
+    re-running the same stage where it stands, and the run still completes."""
+    target_root = make_target(f"deep-{stage_name}")
+    code, runner = drive(target_root, harness_root,
+                         **crash_plan(stage_name, budget))
+
+    assert code == 0
+    assert state_of(target_root)["status"] == "completed"
+
+    # Every invocation in place: the failures and the success that follows them
+    # are one unbroken run of the same stage, with no reroute between.
+    first = runner.calls.index(stage_name)
+    assert runner.calls[first:first + budget + 1] == [stage_name] * (budget + 1)
+    assert runner.calls.count(stage_name) == budget + 1
+    assert runner.calls[-1] == STAGE_NAMES[-1]
+
+    # And the count climbed rather than resetting: try 1 through the budget.
+    records = self_route_records(target_root)
+    assert [record["try"] for _, record in records] == list(range(1, budget + 1))
+    assert {record["stage"] for _, record in records} == {stage_name}
+
+
+@pytest.mark.parametrize("stage_name,budget", DEEP_BUDGETS, ids=DEEP_BUDGET_IDS)
+def test_one_failure_past_a_budget_above_one_escalates_naming_that_budget(
+    make_target, harness_root, stage_name, budget,
+):
+    """The failure after the last one the budget covers ends the run, and the
+    reason names the stage and the number it exhausted rather than a generic
+    ceiling."""
+    target_root = make_target(f"deep-exhausted-{stage_name}")
+    code, runner = drive(target_root, harness_root,
+                         **crash_plan(stage_name, budget + 1))
+
+    assert code == 2
+    state = state_of(target_root)
+    assert state["status"] == "escalated"
+    assert state["current_stage"] == stage_name
+
+    reason = escalation_reason(target_root)
+    assert f"{stage_name} has exhausted its self-route budget of {budget}" in reason
+
+    # It spent the whole budget before stopping rather than escalating early.
+    assert len(self_route_records(target_root)) == budget
+    assert runner.calls.count(stage_name) == budget + 1
+
+
+# --------------------------------------------------------------------------
+# A budget that is not the common one says why it is not
+# --------------------------------------------------------------------------
+
+
+#: The key recording the judgement behind a budget. A sibling of the budget
+#: rather than a comment, because JSON has none. Nothing in the coordinator
+#: reads it; it exists where a reader of the definition meets the number.
+BUDGET_REASON_KEY = f"{BUDGET_KEY}_reason"
+
+
+def outliers_missing_a_reason(stages: list[dict]) -> list[str]:
+    """Every budgeted stage whose budget differs from the smallest declared one
+    and that records no reason for the difference.
+
+    A workflow budgeting every stage alike has no outlier and this reports
+    nothing — which is why the control below plants one rather than relying on
+    the shipped definition to keep having one.
+    """
+    declared = [s for s in stages if BUDGET_KEY in s]
+    if not declared:
+        return []
+    common = min(s[BUDGET_KEY] for s in declared)
+    return [s["name"] for s in declared
+            if s[BUDGET_KEY] != common
+            and not str(s.get(BUDGET_REASON_KEY, "")).strip()]
+
+
+def test_every_budget_that_is_not_the_common_one_records_why():
+    """The rule over the shipped definition, whose budgets are its own subject."""
+    assert outliers_missing_a_reason(STAGES) == []
+
+
+def test_the_same_check_reports_an_outlier_with_its_reason_removed():
+    """The control for the absence above, against a probe definition rather
+    than the shipped one: without it, a workflow whose budgets were all equal
+    would pass the assertion above while checking nothing."""
+    probe = json.loads(json.dumps(STAGES))
+    budgeted = [s for s in probe if BUDGET_KEY in s]
+    assert budgeted, "the probe needs a budgeted stage to make an outlier from"
+
+    outlier = budgeted[0]
+    outlier[BUDGET_KEY] = min(s[BUDGET_KEY] for s in budgeted) + 7
+    outlier.pop(BUDGET_REASON_KEY, None)
+    assert outliers_missing_a_reason(probe) == [outlier["name"]]
+
+    outlier[BUDGET_REASON_KEY] = "because the probe says so"
+    assert outliers_missing_a_reason(probe) == []
+
+
+def test_a_recorded_reason_states_the_number_it_is_explaining():
+    """A reason that never mentions the budget it justifies would satisfy the
+    check above while explaining nothing, so the shipped reasons are read.
+
+    Digits or the English word, because a sentence about a budget of two reads
+    better as "two" and either spelling states the number.
+    """
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+    declared = [s for s in STAGES if BUDGET_KEY in s]
+    common = min(s[BUDGET_KEY] for s in declared)
+    for stage in declared:
+        if stage[BUDGET_KEY] == common:
+            continue
+        reason = stage[BUDGET_REASON_KEY].lower()
+        budget = stage[BUDGET_KEY]
+        assert str(budget) in reason or words.get(budget, "\0") in reason, \
+            stage["name"]
+
+
+# --------------------------------------------------------------------------
 # The two budgets are separate
 # --------------------------------------------------------------------------
 
@@ -986,8 +1137,14 @@ def test_a_stage_that_self_routed_does_not_spend_another_stages_budget(
     assert code == 0
     assert runner.calls.count(BUDGETED) == 2
     assert runner.calls.count(other) == 2
-    assert [record["stage"] for _, record in self_route_records(target_root)] \
-        == sorted([BUDGETED, other], key=STAGE_NAMES.index)
+    # One self-route record apiece, which is the property: neither stage's
+    # crash spent the other's budget. Compared as a sorted multiset rather
+    # than in workflow order — the evidence comes back sorted by filename, and
+    # that agreed with workflow order only while the second budgeted stage
+    # happened to sort after the first. Which stage sorts first says nothing
+    # about whose budget was spent.
+    spent = sorted(record["stage"] for _, record in self_route_records(target_root))
+    assert spent == sorted([BUDGETED, other])
 
 
 # --------------------------------------------------------------------------
