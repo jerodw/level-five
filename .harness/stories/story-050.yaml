@@ -1,0 +1,225 @@
+story:
+  id: story-050
+  title: Retry guidance may not sanction the failure it corrects
+  description: |
+    The verifier writes retry-guidance.json to direct a retry, and nothing
+    stands between two checks. The coordinator checks the guidance's shape
+    against schemas/retry-guidance.schema.json -- three arrays of free strings
+    -- and checks the verdict's route strictly, with no default and no
+    fallback. Between them, guidance may instruct a stage to deliver a partial
+    result and the same verifier may then fail the run for delivering it.
+
+    story-048's tester is on record as complying and being failed for it. The
+    guidance rendered into prompt-tester-attempt-3.md asked for the whole job
+    in its first instruction -- "Empty WORKFLOW_INPUT_READERS_AWAITING_CONVERSION
+    by converting the seventeen modules it names" -- and authorized not doing it
+    in its third: for any module that cannot be converted within this retry,
+    rewrite its reason so it discloses that its workflow read is an input
+    awaiting conversion. The fourth commissioned the machinery that tracks
+    exactly what does not get converted. The tester delivered all four,
+    converting two modules and rewriting eight disclosures, and the final
+    verdict praised the machinery as "a working control" while failing the run
+    for not emptying the list. The rate everyone read as a stage
+    underperforming was the guidance working as written.
+
+    The detectable signature is behavioural and needs no reading of prose: the
+    retry delivered what its guidance asked, and verification failed anyway.
+    That contradiction indicts the guidance rather than the stage. Making it
+    computable takes two additions and no natural-language analysis.
+
+    Guidance declares its own success condition. Each current_focus entry
+    becomes an object carrying the focus and, in one new field satisfied_when,
+    the observable condition that would satisfy it -- written at the moment the
+    entry is written, before the outcome is known. That is what makes a
+    sanctioning clause visible rather than merely present: story-048's third
+    instruction would have had to write "the disclosure reasons are rewritten"
+    as the success condition of an entry whose real criterion was that the list
+    is empty.
+
+    The next verdict answers it entry by entry. verification-result.json gains
+    guidance_outcomes: one object per entry of the guidance in force, echoing
+    that entry verbatim, with an optional unmet whose presence is the signal
+    that the retry did not meet it and whose content is why -- the shape
+    story-049 chose for unfinishable_by_retry, for the reason
+    verification-result.schema.json already records: this validator subset has
+    no if/then and no dependentRequired, so a flag with a sibling reason has a
+    state where the flag is set and the reason is missing, and presence-as-
+    signal has none. Every current_focus focus and every preserve_behavior
+    string must be accounted for, so a retry that regressed behaviour it was
+    told to preserve fails normally instead of reading as defective guidance.
+
+    The coordinator compares two sets of strings. On a failed verdict, when
+    guidance was in force: if the echoed set does not match the guidance in
+    force -- missing, extra, misquoted or absent altogether -- the run
+    escalates naming the mismatch, with no default and no assumption about what
+    silence meant, the same strictness retry_target is already held to. If
+    every entry was met and the verdict still failed, the guidance is defective.
+
+    A defective-guidance finding spends no retry budget. The verifier runs
+    again in place on the self-route budget its stage already declares, told by
+    the coordinator what the contradiction is, so it can rewrite guidance that
+    does not authorize the outcome it will fail, or fail the work on the
+    criterion it actually failed. That is a fourth entry in the self-route
+    failure enum beside the three mechanical ones, and it belongs there for the
+    same reason they do: it is a fact computed from what the stage produced,
+    not a judgement about the work. When the verifier's budget is already
+    spent, self_route returns its existing exhausted-budget reason and the run
+    escalates naming the defective guidance -- so escalation is the fallback
+    without a second escalation path being written for it.
+
+    The check sits ahead of unfinishable_by_retry deliberately. story-049 gave
+    the verifier an honest exit; a fast exit paired with guidance that still
+    sanctions partial results is worse than what came before it, because the
+    verifier then escalates confidently on runs that were only stalling because
+    it misdirected them. Misdirection is ruled out first.
+
+    Guidance in force is carried in state.json rather than read back out of
+    retry-history.json or the attempts/ archive. retry-history.schema.json says
+    outright that history is evidence and no routing decision reads it, and the
+    repository's architecture standard requires every routing decision to be
+    reconstructable from state.json and events.log. Setting it when a retry is
+    routed with freshly written guidance, and clearing it when a retry is
+    routed without any, is also what keeps the clean-clone reroute -- which
+    follows a passing verdict and writes no guidance -- outside the check.
+
+    Nothing here judges guidance quality. The claim is narrow and mechanical:
+    guidance may not authorize the outcome it will fail. A verifier could still
+    evade the check by reporting an entry unmet that was met, and nothing can
+    stop that; it is the same trust boundary retry_target already sits on, and
+    the answer to it is the same -- the record says what was claimed.
+
+tasks:
+  - Change current_focus in schemas/retry-guidance.schema.json from an array of strings to an array of objects requiring focus and satisfied_when, describing satisfied_when as the observable condition written when the entry is written and stating why it is written then rather than judged later.
+  - Mirror that shape in the inline guidance object of schemas/retry-history.schema.json, which duplicates the guidance shape because this validator subset has no cross-file reference.
+  - Add guidance_outcomes to schemas/verification-result.schema.json as an optional array of objects requiring guidance, the entry echoed verbatim, with an optional unmet whose presence means the entry was not met and whose content is why, and record why presence-as-signal is used rather than a boolean with a sibling reason.
+  - Carry the entries of the guidance in force on RunState in orchestration/story_coordinator.py, set when a retry is routed with guidance this attempt actually wrote and cleared when a retry is routed without any, so the routing input is in state.json and no routing decision reads retry-history.json or the attempts/ archive.
+  - Add the mismatch branch in the verifier-result handling - a failed verdict whose echoed set is not exactly the guidance in force escalates naming what was missing, extra or misquoted - placed after the two escalations for an unroutable recommended retry and before the unfinishable_by_retry branch.
+  - Add the defective-guidance branch beside it - a failed verdict in which every entry of the guidance in force was met - routing it through the existing self_route decision for the verifier stage rather than a new path, so the exhausted-budget case escalates with the reason self_route already returns.
+  - Add the fourth value to the failure enum in schemas/self-route-result.schema.json, describing it as computed from what the stage produced rather than judged, and widen the artifacts description to cover a failure that names the artifacts the contradiction is between.
+  - Add the branch in self_route_statement that tells the re-running verifier what the contradiction is, naming the guidance entries that were met and the verdict that failed anyway, in the coordinator's own voice as the other three statements are.
+  - Add to prompts/verifier.md what satisfied_when must carry, that every entry of the guidance in force must be accounted for in guidance_outcomes, that an entry is judged against the condition written when it was written rather than one arrived at now, and what to do on arriving at a defective-guidance self-route.
+  - Write tests/test_defective_retry_guidance.py as the standing regression module for the whole of the above.
+  - Bring any existing module the schema, state or prompt changes redden up to date, reporting each edited assertion with the reason the edit is not a weakening.
+
+acceptance_criteria:
+  - schemas/retry-guidance.schema.json declares current_focus as an array of objects requiring focus and satisfied_when, and the schema remains valid against the validator this repository ships.
+  - schemas/retry-history.schema.json declares the same current_focus shape in its inline guidance object, so a guidance recorded in history and a guidance at the run root validate identically.
+  - schemas/verification-result.schema.json declares guidance_outcomes as an optional array of objects requiring guidance, with unmet optional, and states what the presence of unmet means.
+  - schemas/self-route-result.schema.json declares a fourth failure value for defective retry guidance and says what distinguishes it from the three mechanical failures beside it.
+  - state.json records the entries of the guidance in force for the current attempt after a retry is routed with freshly written guidance, so the routing input for this check is reconstructable from state.json and events.log alone.
+  - A retry routed without any guidance written by the attempt that just ended - the clean-clone path is the one that occurs - leaves no guidance in force recorded, and the following verification is not subjected to this check.
+  - A failed verdict whose guidance_outcomes echoes every current_focus focus and every preserve_behavior string of the guidance in force, with at least one carrying unmet, routes exactly as it does today.
+  - A failed verdict whose guidance_outcomes accounts for every entry of the guidance in force and carries no unmet ends with the verifier running again in place, not with a retry - the recorded retry count is unchanged, no attempts/attempt-N directory is written for it, and the self-route record on disk names the defective-guidance failure.
+  - The statement the coordinator writes for that self-route names the guidance entries that were met and the verdict that failed anyway, and reaches the re-running verifier in its rendered prompt.
+  - A defective-guidance finding raised when the verifier has no self-route budget left escalates, with a recorded reason naming both the defective guidance and the exhausted budget, and still consumes no retry.
+  - A failed verdict with guidance in force whose guidance_outcomes is absent, is missing an entry, carries an entry the guidance in force does not contain, or misquotes one, escalates with a recorded reason naming what did not match, rather than being read as everything met or as nothing met.
+  - A failed verdict carrying both a fully-met guidance_outcomes and unfinishable_by_retry self-routes the verifier rather than escalating on the unfinishable judgement, so a run that was being misdirected is not ended by a confident exit built on the misdirection.
+  - A first verification, which has no guidance in force, routes exactly as it does today whatever guidance_outcomes it carries or omits.
+  - A verifier that self-routes on this finding writes a second verification/iteration-N.json within the one attempt, because two verdicts were written, and the attempt number in every rendered prompt filename is unmoved.
+  - Every existing routing behaviour for a verdict outside this check is preserved exactly - a passing verdict runs the clean-clone check, a recommended retry below the ceiling reroutes, a recommended retry naming no category or an unknown one escalates naming the defined categories, an exhausted budget escalates naming the ceiling, and unfinishable_by_retry escalates on first sighting.
+  - The rendered verifier prompt states what satisfied_when must carry, that every entry of the guidance in force must be accounted for, and what a defective-guidance self-route means, and resolves every placeholder.
+  - tests/test_defective_retry_guidance.py drives a real run for each of the above rather than calling the routing branch directly.
+  - Every absence this story asserts - no retry consumed, no attempt archive written, the check not applied where no guidance was in force - carries a control demonstrating the same assertion fails when the behaviour is violated.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Change the two guidance schemas together, since retry-history duplicates the shape, and add guidance_outcomes to the verification result taking the wording of unfinishable_by_retry beside it as the model for why presence is the signal.
+    - Add the guidance-in-force field to RunState and set it at the one place a retry is routed, from the same freshness-checked view of what the attempt wrote that the retry-history entry is built from, so a stale run-root guidance can never be read as in force.
+    - Add the two branches in the verifier-result handling after the unroutable-target escalations and before the unfinishable_by_retry branch, computing the comparison as two sets of strings with no inspection of what any string says.
+    - Route the defective-guidance branch through the existing self_route call for the verifier stage, adding the fourth failure constant and its statement beside the three that are there, and let its exhausted-budget return value carry the escalation as it already does for the other three.
+    - Add the criterion to the verifier prompt beside the retry-guidance paragraph that already tells it when to write guidance at all.
+    - Run the suite and bring up to date whatever the schema, state and prompt changes reddened, reporting each edited assertion with why the edit is not a weakening.
+  likely_file_changes:
+    - file: schemas/retry-guidance.schema.json
+      stage: implementer
+      reason: current_focus becomes objects carrying the focus and the condition that would satisfy it
+    - file: schemas/retry-history.schema.json
+      stage: implementer
+      reason: it duplicates the guidance shape inline and must not drift from it
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: guidance_outcomes, and the record of why presence of unmet is the signal
+    - file: schemas/self-route-result.schema.json
+      stage: implementer
+      reason: the fourth failure value and what distinguishes it from the three mechanical ones
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the guidance-in-force state, the two branches, the fourth self-route failure and its statement
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: what satisfied_when must carry, the requirement to account for every entry, and what a defective-guidance self-route means
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: existing module - it holds the schema inventory and the declared shapes of the verifier's outputs, three of which change
+    - file: tests/test_retry_routing.py
+      stage: implementer
+      reason: existing module - it states how a failed verdict is routed, which gains two branches ahead of the unfinishable comparison
+    - file: tests/test_retry_history.py
+      stage: implementer
+      reason: existing module - it states what a retry-history entry carries, including the guidance whose shape changes
+    - file: tests/test_self_routing_retry.py
+      stage: implementer
+      reason: existing module - it states what a self-route is and may encode the failure set that gains a fourth member
+    - file: tests/test_unfinishable_retry_verdict.py
+      stage: implementer
+      reason: existing module - the unfinishable branch is now reached past two branches that were not there, and its fixtures write guidance
+    - file: tests/test_coordinator_contract.py
+      stage: implementer
+      reason: existing module - it states what run state carries, which gains the guidance in force
+    - file: tests/test_defective_retry_guidance.py
+      stage: tester
+      reason: the standing regression module for the comparison, the self-route it raises, the mismatch escalation and their controls
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the contradiction the harness now computes, why it is checked ahead of the unfinishable verdict, and why the guidance in force is state rather than history
+
+scope:
+  modify:
+    - schemas/retry-guidance.schema.json
+    - schemas/retry-history.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/self-route-result.schema.json
+    - orchestration/story_coordinator.py
+    - prompts/verifier.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - orchestration/context_assembler.py
+    - orchestration/plan_validation.py
+    - schemas/story.schema.json
+    - schemas/harness-config.schema.json
+    - prompts/planner.md
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the defective-guidance path consumes no retry budget by reading the run's recorded retry count and the configured ceiling from the run state, and confirm the budget was genuinely available so the self-route is a decision rather than a ceiling reached early.
+  - Confirm no attempts/attempt-N directory is written on that path by listing the run directory rather than by trusting the code path taken.
+  - Confirm the coordinator's statement reaches the re-running verifier by planting a distinctive string in the guidance entries and finding it in the self-route record on disk and in the rendered prompt of the re-run.
+  - Confirm the comparison is between strings alone - that no branch depends on what a guidance entry or an unmet reason says - by varying the wording of both while holding the sets equal and observing the routing is unchanged.
+  - Confirm the under-delivery case is not reported as defective guidance, by running a retry that reports one entry unmet and observing it routes exactly as a failed verdict does today. This is the distinction the story lives or dies on.
+  - Confirm the mismatch escalation is distinguishable in the record from both a met set and an unmet one, by reading the recorded reason rather than the decision alone, and confirm it fires for an absent guidance_outcomes as well as for a wrong one.
+  - Confirm the clean-clone reroute leaves no guidance in force, by reading state.json after that reroute rather than by inferring it from the following verification's outcome.
+  - Confirm the ordering against unfinishable_by_retry by running a verdict carrying both signals and observing which one the run acts on.
+  - Confirm the new module's absence assertions can fail, by breaking each behaviour in turn and observing the assertion that catches it. An assertion that no retry was consumed passes equally when none was and when the assertion has stopped looking.
+  - Confirm the rendered verifier prompt carries the new criteria and resolves every placeholder, by inspecting a rendered prompt rather than the template.
+  - Confirm every routing behaviour outside this check is unchanged, by running the modules that state them and reporting any assertion that had to be edited together with why the edit was not a weakening.
+  - Confirm the full test suite passes.
+
+constraints:
+  - No branch reads the content of a guidance entry, an unmet reason or a blocking issue as language; the whole comparison is set equality over strings the verifier echoed.
+  - No configured scalar, threshold or budget is introduced; the self-route uses the budget the verifier's stage already declares.
+  - The workflow definition is unchanged - no new stage, no new retry category, no new declared output, no new budget key.
+  - No routing decision reads retry-history.json or the attempts/ archive; the guidance in force is state, as the architecture standard requires of every routing input.
+  - A self-route on this finding keeps every property a self-route already has - it spends neither retry_count nor max_retries, archives nothing under attempts/attempt-N, appends nothing to retry-history.json, and does not move the attempt number in any rendered prompt filename.
+  - The existing routing behaviour for a verdict this check does not apply to is preserved exactly, including which escalations consume a retry and which do not.
+  - Guidance is injected into a retried stage's context as the file's own text, so the shape change reaches that stage with no edit to orchestration/context_assembler.py and no edit to the retried stages' prompts.
+  - No assertion is weakened, narrowed or deleted to accommodate the new branches; an existing assertion that must change is reported with the reason it is not a weakening.
+  - The new module derives stage names, categories, budgets and artifact names from the workflow it drives rather than writing them inline.
