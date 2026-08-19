@@ -1,0 +1,159 @@
+story:
+  id: story-049
+  title: A verifier verdict can say retrying cannot finish this
+  description: |
+    story-048 escalated after three full retry cycles and roughly two hours of
+    wall clock, having completed about a third of what it was assigned. Nothing
+    refused it and nothing stopped it early: the run hit no timeout, no cost
+    ceiling and no mechanical failure -- self_route_count is 0 and every stage
+    logged stage-completed -- so the escalation was reached by spending the
+    entire retry budget rather than by anyone judging that the budget could not
+    cover the work.
+
+    The request this story comes from asked for a plan-time size check: refuse a
+    story whose assigned work is too large for one stage to finish inside the
+    retry budget. Planning found that size does not separate the failure. Across
+    the committed corpus, the largest per-stage likely_file_changes counts are
+    story-038 with 35 assigned to one stage and story-044 with 21, both of which
+    completed in a single attempt, against story-048's 32, which did not. The
+    quantifier shape does not separate them either: story-038's task reads
+    "Rename the thirty-four modules" and story-044's reads "Update the fake
+    runners in every tests/ module", and both finished. What differed was the
+    cost of each item -- a uniform rename against a per-module classification
+    and rewrite -- and no plan-time check reads that. Any ceiling low enough to
+    refuse story-048 refuses two stories that landed first time.
+
+    The axis that did predict the failure is progress against remaining work,
+    and it is only visible once a run is underway. story-048's tester converted
+    0 modules in its first attempt, then 3, then 2, leaving 14 of 22 when the
+    budget ran out; at the observed rate roughly seven more cycles were needed.
+    The verifier reached that conclusion unaided and wrote it into
+    retry-guidance.json -- "Batch the work rather than converting two modules
+    per attempt: three verifications have now named this same gap and the
+    per-attempt rate is what is failing, not the approach" -- and had no way to
+    act on it. It could only recommend another retry of a rate it had just said
+    was failing, or decline a retry with no way to say why declining was the
+    right answer rather than a giving-up.
+
+    This story gives it the way to say so. The verifier's result gains one
+    optional string, unfinishable_by_retry, carrying its judgement that no
+    number of retries closes the gap and the split it recommends. The
+    coordinator reads it on a failed verdict before the ceiling comparison and
+    escalates on the first sighting, leaving the retry count untouched and the
+    budget unspent, with the verifier's own words as the escalation's reason.
+    In story-048's case that would have ended the run after the first
+    verification rather than the third.
+
+    One string rather than a boolean and a sibling reason, because
+    verification-result.schema.json already records why a conditional
+    requirement cannot be expressed in it: the validator subset has no if/then
+    and no dependentRequired. Presence is the signal and content is the reason,
+    so there is no state where the signal is set and the reason is missing.
+
+    No threshold, no configured scalar and no plan-time refusal are added. That
+    matters beyond simplicity: rules/execution-rules.json is blocked for every
+    stage of every story, so a scalar declared there could not have been written
+    by the run that needed it, and this design needs no scalar anywhere.
+
+tasks:
+  - Add unfinishable_by_retry to schemas/verification-result.schema.json as an optional string, describing what its presence means, that its content is both the judgement and the escalation's reason, and why it is one string rather than a boolean with a sibling reason.
+  - Route on it in orchestration/story_coordinator.py, on a failed verdict and ahead of the retry-ceiling comparison, escalating through the existing escalation path with the verifier's text as the recorded reason.
+  - Leave the retry count and the attempt archive untouched on that path, matching the existing escalation for a retry recommended without a routable target.
+  - Ignore the field on a passing verdict, where verification routes nowhere.
+  - Escalate a verdict that carries both the field and retry_recommended true, with a reason naming the contradiction rather than silently preferring one of them.
+  - Carry the verifier's judgement into escalation-summary.md and into the execution-history entry, so the reason is read without opening verification-result.json.
+  - Add the criterion to prompts/verifier.md - when the work remaining against the story's declared scope cannot plausibly close in the attempts left, say so on the first sighting instead of recommending a retry that repeats the rate, naming what remains, what this attempt delivered, and which parts a first story would carry and which a follow-on.
+  - Write tests/test_unfinishable_retry_verdict.py as the standing regression module for the whole of the above.
+  - Bring any existing module the schema or prompt change reddens up to date.
+
+acceptance_criteria:
+  - schemas/verification-result.schema.json declares unfinishable_by_retry as an optional string and states what its presence means, and the schema remains valid against the validator this repository ships.
+  - A run whose verifier writes a failed verdict carrying unfinishable_by_retry ends in escalation at that verification, with no further stage invoked.
+  - That escalation happens on the first sighting - the run's recorded retry count is unchanged from what it was before the verification, and it is below the configured ceiling when the escalation is recorded.
+  - No attempts/attempt-N directory is written on that path, and the artifacts at the run root are the ones describing the attempt that just ended.
+  - The escalation's recorded reason is the verifier's own text from unfinishable_by_retry rather than a reason composed by the coordinator, and it appears in escalation-summary.md.
+  - The execution-history entry for that verification records the escalation decision and the same reason, and validates against the execution-history schema.
+  - A passing verdict carrying unfinishable_by_retry completes the run exactly as a passing verdict without it does, including the clean-clone check, so the field is read only where it can mean something.
+  - A failed verdict carrying both unfinishable_by_retry and retry_recommended true escalates, and the recorded reason names the contradiction rather than reading as either an ordinary declined retry or an ordinary routed one.
+  - A failed verdict without the field routes and escalates exactly as it does today - a recommended retry below the ceiling still reroutes, an unroutable target still escalates naming the defined categories, an exhausted budget still escalates naming the ceiling.
+  - The rendered verifier prompt states the criterion for declaring work unfinishable by retrying and requires the split to be named, and states it against the schema injected into that prompt rather than restating the field's shape inline.
+  - tests/test_unfinishable_retry_verdict.py drives a real run for each of the above rather than calling the routing branch directly, so the assertions are about what a run does.
+  - Every absence this story asserts - no further stage invoked, no attempt archive written, no retry consumed - carries a control demonstrating the same assertion fails when the behaviour is violated.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Add the field to the schema first, taking the wording of the retry_target property beside it as the model, since it is the property that already explains why a conditional requirement cannot be stated here.
+    - Add the routing branch in the verifier-result handling, immediately after the two existing branches that escalate an unroutable recommended retry and before the branch comparing the retry count to the ceiling, so a verdict that says retrying cannot finish is never weighed against how much budget is left.
+    - Reuse the existing escalation call rather than adding a second escalation path, passing retry_decision escalate and the verifier's text as retry_reason, so the summary and the history entry are written by the code that already writes them.
+    - Add the criterion to the verifier prompt beside the existing retry_target paragraph, which is where a verifier reading about routing meets the decision not to route.
+    - Write the regression module against a workflow the test builds for itself where the shipped definition is an input rather than the subject, following the question prompts/tester.md asks, and without depending on any builder this repository does not yet have.
+    - Run the suite and bring up to date whatever the schema and prompt changes reddened.
+  likely_file_changes:
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: the new optional field and the description of what its presence means
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the routing branch ahead of the ceiling comparison, and the comment block explaining why it sits there
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: the criterion for declaring work unfinishable by retrying, and the requirement to name the split
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: existing module - it holds the schema inventory and the shape of the verifier's declared outputs, and may encode the property set the schema change widens
+    - file: tests/test_retry_routing.py
+      stage: implementer
+      reason: existing module - it states how a failed verdict is routed, which gains a branch ahead of the ceiling comparison
+    - file: tests/test_escalation_summary.py
+      stage: implementer
+      reason: existing module - it asserts what an escalation summary carries, which gains a reason it did not have
+    - file: tests/test_unfinishable_retry_verdict.py
+      stage: tester
+      reason: the standing regression module for the verdict, its first-sighting escalation, its no-ops and its controls
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the verdict, why it is read ahead of the retry ceiling, and the finding that plan-time size does not separate an unfinishable story from a merely large one
+
+scope:
+  modify:
+    - schemas/verification-result.schema.json
+    - orchestration/story_coordinator.py
+    - prompts/verifier.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - orchestration/plan_validation.py
+    - schemas/harness-config.schema.json
+    - schemas/story.schema.json
+    - prompts/planner.md
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/documenter.md
+    - prompts/harness-layer.md
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the escalation happens on the first sighting by reading the run's recorded retry count and the configured ceiling from the run state, not by inferring it from the absence of a second verification.
+  - Confirm no attempt archive was written on that path, by listing the run directory rather than by trusting the code path taken.
+  - Confirm the recorded reason is the verifier's own text, by planting a distinctive string in unfinishable_by_retry and finding that string in escalation-summary.md and in the execution-history entry.
+  - Confirm the retry budget is genuinely unspent - that a run escalating this way could have retried, so the escalation is a judgement rather than a ceiling reached early.
+  - Confirm a passing verdict carrying the field behaves identically to one without it, including that the clean-clone check still ran, by comparing the two runs' artifacts rather than only their exit status.
+  - Confirm the contradiction case is distinguishable in the record from both an ordinary declined retry and an ordinary routed one, by reading the recorded reason rather than the decision alone.
+  - Confirm every existing routing behaviour is unchanged, by running the modules that state them and reporting any assertion that had to be edited together with why the edit was not a weakening.
+  - Confirm the new module's absence assertions can fail, by breaking each behaviour in turn and observing the assertion that catches it. This is the check most likely to be quietly lost - an assertion that no further stage ran passes equally when nothing ran and when the assertion stopped looking.
+  - Confirm the rendered verifier prompt carries the criterion and resolves every placeholder, by inspecting a rendered prompt rather than the template.
+  - Confirm the full test suite passes.
+
+constraints:
+  - No configured scalar, threshold or budget is introduced anywhere; the verdict is a judgement and the coordinator obeys it without weighing it against a number.
+  - Nothing under rules/ changes and nothing in this story depends on it changing.
+  - No plan-time check is added or altered; orchestration/plan_validation.py keeps its five classes of problem exactly as they are.
+  - The workflow definition is unchanged - no new stage, no new retry category, no new declared output.
+  - The existing routing behaviour for a verdict without the new field is preserved exactly, including which escalations consume a retry and which do not.
+  - Presence of the field is the signal; nothing reads a separate flag and nothing infers the judgement from the absence of a retry recommendation.
+  - No assertion is weakened, narrowed or deleted to accommodate the new branch; an existing assertion that must change is reported with the reason it is not a weakening.
+  - The new module derives stage names, categories and artifact names from the workflow it drives rather than writing them inline.
