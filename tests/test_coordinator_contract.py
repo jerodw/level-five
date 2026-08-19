@@ -121,6 +121,12 @@ def state_contract_problems(state: dict) -> list[str]:
         # live count for the current stage only; how many self-routes a run
         # took is read from the history.
         "self_route_count": int,
+        # story-050's guidance in force: the entries of the retry guidance
+        # directing the attempt now running, recorded so the check on the
+        # next verdict reads state rather than retry-history.json or the
+        # attempts/ archive. Defaulted like the fields above, and empty means
+        # no guidance is in force.
+        "guidance_in_force": list,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []
@@ -371,11 +377,18 @@ class FakeRunner:
                 "modified": [], "created": ["tests/test_app.py"], "deleted": [],
             })
         elif stage == "verifier":
-            verdict = self.verdicts.pop(0)
+            # A failed verdict accounts for the guidance in force for the
+            # attempt it judges, reporting every entry unmet — the ordinary
+            # under-delivery case, which routes as it always has.
+            verdict = conftest.answering_guidance(
+                self.verdicts.pop(0), self.run_dir)
             self._write_json("verification-result.json", verdict)
             if verdict["status"] == "failed":
                 self._write_json("retry-guidance.json", {
-                    "current_focus": ["fix the sample behavior"],
+                    "current_focus": [{
+                        "focus": "fix the sample behavior",
+                        "satisfied_when": "the sample behavior exists",
+                    }],
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })

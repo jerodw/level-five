@@ -374,10 +374,17 @@ class Runner:
         elif stage == VERIFIER_NAME:
             verdict = self.verdicts.pop(0) if len(self.verdicts) > 1 \
                 else self.verdicts[0]
+            # A failed verdict accounts for the guidance in force for the
+            # attempt it judges, reporting every entry unmet — the ordinary
+            # under-delivery case, which routes as it always has.
+            verdict = conftest.answering_guidance(verdict, self.run_dir)
             write_json(self.run_dir / "verification-result.json", verdict)
             if verdict["status"] == "failed":
                 write_json(self.run_dir / "retry-guidance.json", {
-                    "current_focus": ["fix what the verdict named"],
+                    "current_focus": [{
+                        "focus": "fix what the verdict named",
+                        "satisfied_when": "what the verdict named is fixed",
+                    }],
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })

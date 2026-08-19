@@ -106,7 +106,10 @@ PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
 GUIDANCE_MARK = "the assertion added on attempt one cannot fail"
 
 GUIDANCE = {
-    "current_focus": [GUIDANCE_MARK],
+    "current_focus": [{
+        "focus": GUIDANCE_MARK,
+        "satisfied_when": "the assertion added on attempt one can fail",
+    }],
     "preserve_behavior": ["the sample behavior"],
     "retry_scope": ["tests/test_sample.py"],
 }
@@ -321,6 +324,10 @@ class Runner:
         elif stage == VERIFIER_NAME:
             seen = self.calls.count(stage) - 1
             verdict = self.verdicts[min(seen, len(self.verdicts) - 1)]
+            # A failed verdict accounts for the guidance in force for the
+            # attempt it judges, reporting every entry unmet — the ordinary
+            # under-delivery case, which routes as it always has.
+            verdict = conftest.answering_guidance(verdict, self.run_dir)
             write_json(self.run_dir / "verification-result.json", verdict)
             if verdict.get("retry_recommended"):
                 write_json(self.run_dir / "retry-guidance.json", GUIDANCE)

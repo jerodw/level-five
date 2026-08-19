@@ -160,7 +160,10 @@ def failing(attempt: int) -> dict:
 
 
 GUIDANCE = {
-    "current_focus": ["make the sample behavior exist"],
+    "current_focus": [{
+        "focus": "make the sample behavior exist",
+        "satisfied_when": "the sample behavior exists",
+    }],
     "preserve_behavior": ["the existing behavior"],
     "retry_scope": ["src/"],
 }
@@ -431,6 +434,10 @@ class Runner:
         skipped = {action[1]} if isinstance(action, tuple) else set()
         verdict = self.verdicts[min(self.calls.count(VERIFIER_NAME) - 1,
                                     len(self.verdicts) - 1)]
+        # A failed verdict accounts for the guidance in force for the attempt
+        # it judges, reporting every entry unmet — the ordinary under-delivery
+        # case, which routes as it always has.
+        verdict = conftest.answering_guidance(verdict, self.run_dir)
         record = None
         edit = _nth(self.tree.get(stage, []), call - 1, None)
         if edit:
@@ -561,13 +568,29 @@ FAILURES = [
 ]
 FAILURE_IDS = [name for name, _ in FAILURES]
 
+#: The self-route failures this file does not drive, each with the reason it
+#: is not one of the mechanical three above. story-050 added the first: a
+#: retry guidance that was met in full by an attempt the same verdict then
+#: failed is a fact computed from what the stage produced, not a stage failing
+#: to produce what it declared, so it has no plan here and is driven by
+#: tests/test_defective_retry_guidance.py instead.
+NON_MECHANICAL_FAILURES = ["defective-retry-guidance"]
 
-def test_the_three_failure_classes_are_the_three_the_schema_declares():
+
+def test_every_failure_class_the_schema_declares_is_accounted_for():
     """The plans above are named for the schema's enum, so a class added or
     renamed there reddens the parametrizations rather than silently leaving
-    one untested."""
+    one untested.
+
+    Still exact set equality in both directions, and still every mechanical
+    class parametrized: a class that joins the enum has to be named here as a
+    plan or as a stated non-mechanical exclusion, and a fifth value belonging
+    to neither fails.
+    """
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    assert sorted(schema["properties"]["failure"]["enum"]) == sorted(FAILURE_IDS)
+    assert sorted(schema["properties"]["failure"]["enum"]) == sorted(
+        FAILURE_IDS + NON_MECHANICAL_FAILURES)
+    assert not set(FAILURE_IDS) & set(NON_MECHANICAL_FAILURES)
 
 
 # --------------------------------------------------------------------------

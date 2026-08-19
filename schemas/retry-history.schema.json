@@ -49,12 +49,25 @@
       },
       "guidance": {
         "type": "object",
-        "description": "The retry-guidance.json written for the following attempt, as it stood when the retry was routed. Absent when no guidance was written.",
+        "description": "The retry-guidance.json written for the following attempt, as it stood when the retry was routed. Absent when no guidance was written. The shape is duplicated here rather than referenced because this validator subset has no cross-file reference; a guidance recorded in history and a guidance at the run root must validate identically, so the two definitions are edited together.",
         "properties": {
           "current_focus": {
             "type": "array",
-            "description": "The specific things the retry must fix.",
-            "items": { "type": "string" }
+            "description": "The specific things the retry must fix, each carrying the condition that would satisfy it.",
+            "items": {
+              "type": "object",
+              "required": ["focus", "satisfied_when"],
+              "properties": {
+                "focus": {
+                  "type": "string",
+                  "description": "The specific thing the retry must fix."
+                },
+                "satisfied_when": {
+                  "type": "string",
+                  "description": "The observable condition that would satisfy this entry, written at the moment the entry was written rather than judged later against what the retry happened to deliver."
+                }
+              }
+            }
           },
           "preserve_behavior": {
             "type": "array",
