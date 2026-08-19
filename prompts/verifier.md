@@ -58,6 +58,23 @@ The coordinator routes the next attempt on that category alone. There is no
 default route: a recommended retry naming no category, or one this workflow
 does not define, escalates the run rather than being routed somewhere.
 
+Some work cannot be finished by retrying it. When what remains against the
+story's declared scope cannot plausibly close in the attempts that are left —
+judge that from what this attempt actually delivered against what the story
+still asks for, not from how the work feels — say so in
+unfinishable_by_retry, on the first verification that sees it, instead of
+recommending a retry that repeats a rate you have already judged too slow. It
+is not a retry recommendation and it is not a giving-up: it is the judgement
+that the budget cannot cover the work, and it ends the run at this
+verification with the budget unspent. Write it as prose that names what
+remains, what this attempt delivered, and which parts a first story should
+carry and which belong in a follow-on — that split is what the developer acts
+on, and a judgement without it says only that the work is too big. What you
+write there is recorded verbatim as the escalation's reason, so write it for
+the developer who will read it. Do not set it and recommend a retry in the
+same verdict: the two contradict each other, and the coordinator escalates
+naming the contradiction rather than obeying either.
+
 retry-guidance.json, written only when status is "failed" and a retry is
 recommended. It must satisfy this schema:
 

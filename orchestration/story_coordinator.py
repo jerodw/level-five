@@ -3272,6 +3272,46 @@ def run_story(
                     ),
                     retry_category=target,
                 )
+            elif verdict.get("unfinishable_by_retry"):
+                # The verifier's judgement that retrying cannot finish this,
+                # read on the first sighting and above the ceiling comparison
+                # deliberately: a verdict saying no number of retries closes
+                # the gap must not be weighed against how much budget is left,
+                # or the run spends a budget the verifier has just said cannot
+                # cover the work. Through _escalate, so retry_count is
+                # untouched and the budget is left unspent, and above
+                # archive_attempt, so no attempts/attempt-N/ is written — the
+                # artifacts at the run root already describe the attempt that
+                # just ended, and nothing is being superseded. That is the same
+                # shape as the two escalations above, for the same reasons.
+                #
+                # The recorded reason is the verifier's own text, so the
+                # escalation summary and the history entry carry the judgement
+                # rather than a coordinator paraphrase of it. The one exception
+                # is a verdict that also recommends a retry: it says both that
+                # retrying is the answer and that retrying cannot finish, and
+                # neither half is silently preferred — the reason names the
+                # contradiction and still carries the text.
+                judgement = verdict["unfinishable_by_retry"]
+                if verdict.get("retry_recommended"):
+                    reason = (
+                        f"the verifier's verdict contradicts itself: it "
+                        f"recommended a retry and also reported that retrying "
+                        f"cannot finish this work: {judgement}"
+                    )
+                else:
+                    reason = judgement
+                return _escalate(
+                    run_dir,
+                    state,
+                    reason,
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason=reason,
+                )
             elif verdict.get("retry_recommended") and state.retry_count < rules["max_retries"]:
                 # Archive before the retry begins, while the root artifacts
                 # still describe the attempt that just failed. The attempt

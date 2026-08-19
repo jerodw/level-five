@@ -49,6 +49,10 @@
     "retry_target": {
       "type": "string",
       "description": "The retry category the next attempt is routed on, named exactly as the workflow's retry_routing table declares it. The coordinator requires it whenever retry_recommended is true, and escalates on a missing or unrecognised one rather than falling back to a default route. It is not in required because this schema cannot express that condition: the validator subset has no if/then and no dependentRequired, so 'required when retry_recommended is true' is inexpressible, and requiring it unconditionally would force a routing key onto a passing verification that routes nowhere."
+    },
+    "unfinishable_by_retry": {
+      "type": "string",
+      "description": "The verifier's judgement that no number of retries closes the gap between what remains and what an attempt delivers, together with the split it recommends between this story and a follow-on. Its presence on a failed verdict ends the run in escalation at that verification, before the retry count is compared to the ceiling: the budget is left unspent and the retry count untouched, because the judgement is that spending them would not finish the work. Its content is both the judgement and the escalation's recorded reason, so the developer reads the verifier's own words rather than a reason the coordinator composed. It is one string rather than a boolean with a sibling reason for the same limitation retry_target records above: the validator subset has no if/then and no dependentRequired, so 'reason required when the flag is true' is inexpressible, and presence-as-signal leaves no state where the signal is set and the reason is missing. It is optional because almost every verdict has no such judgement to make, and it is read only on a failed verdict — a passing verification routes nowhere, so nothing there could act on it."
     }
   }
 }
