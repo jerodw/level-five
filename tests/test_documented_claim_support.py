@@ -52,10 +52,24 @@ beside the assertion it protects:
     templates at this story's own baseline, resolved through the shared
     baseline resolution rather than against HEAD.
 
+story-054 widened the quantity half of that decision: a quantity is now a
+digit *or* one word of a bounded set, so story-047's "a fourth standing rule"
+is a claim this reports where the shipped check saw nothing. Its assertions
+are driven through the same `claim_support_check` as the rest, and the control
+each of them carries is the check with its quantity decision monkeypatched
+back to the digits-only one — a predicate written in this module, because a
+one-line predicate written here is the same predicate with no revision under
+it to be squashed, renamed or rebased away. The boundary is asserted in the
+two places this repository states it and that exist when this module runs: the
+comment beside the pattern and the schema description.
+
 Nothing here invokes a model: every run goes through a fake agent runner, and
 `no_model` turns the single call that would reach one into a failure.
 """
+import ast
+import inspect
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -784,6 +798,257 @@ def test_every_configured_document_is_scanned_and_no_other(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# A spelled-out quantity is a quantity too
+#
+# story-054 widened the quantity test from a digit to a digit *or* one word of
+# a bounded set. Every assertion here is driven through `claim_support_check`
+# rather than through the pattern, because what the story is about is which
+# blocks get reported.
+#
+# The control every one of them carries is the check with its quantity
+# decision reverted to the one this story widened — `a_digit_and_nothing_
+# cleverer` below, monkeypatched over the coordinator's own. That is the
+# demonstration that these cases were invisible before rather than a claim
+# about it, and it is a written predicate rather than a revision resolved out
+# of this repository's commit graph: the predicate is one line, and a line
+# written here is the same line with nothing under it to be squashed, renamed
+# or rebased away.
+# --------------------------------------------------------------------------
+
+
+def a_digit_and_nothing_cleverer(text: str) -> bool:
+    """`carries_a_quantity` exactly as it stood before story-054.
+
+    The reference stripping is the coordinator's, because the stripping is not
+    what this story changed and reverting it too would make the control differ
+    from the shipped check in two ways rather than one.
+    """
+    return bool(re.search(r"\d", story_coordinator.STORY_REFERENCE.sub(" ", text)))
+
+
+def revert_the_quantity_test(monkeypatch) -> None:
+    """Put the digits-only decision back, leaving the rest of the check whole.
+
+    The seam is the coordinator's own `carries_a_quantity`, which is where the
+    story required the widening to land — so a widening written as a second
+    decision point somewhere else would leave this control green and this
+    module would be looking in the wrong place. The test below asserts the
+    seam is real before relying on it.
+    """
+    monkeypatch.setattr(story_coordinator, "carries_a_quantity",
+                        a_digit_and_nothing_cleverer)
+
+
+def test_the_reverted_control_is_wired_to_the_decision_it_claims_to_revert(
+    tmp_path, monkeypatch,
+):
+    """The control for the controls: reverting the quantity test really does
+    change what the check reports.
+
+    Without this, every "and it reported nothing before" below would hold
+    equally against a monkeypatch that landed on a name nothing calls.
+    """
+    root = build_target(tmp_path / "seam")
+    add_to_document(root, "story-048 converted eight of twenty-two modules.")
+
+    assert reports_of(root) != []
+    revert_the_quantity_test(monkeypatch)
+    assert reports_of(root) == []
+    monkeypatch.undo()
+    assert reports_of(root) != []
+
+
+@pytest.mark.parametrize("sentence", [
+    pytest.param("story-048 introduced a fourth standing rule for the planner.",
+                 id="story-047s-own-wording"),
+    pytest.param("story-048 left the three standing rules already in force "
+                 "untouched.", id="the-other-half-of-story-047s-wording"),
+    pytest.param("story-048 converted eight of twenty-two modules.",
+                 id="the-case-the-architecture-document-named-as-unseen"),
+])
+def test_a_spelled_out_quantity_is_reported(tmp_path, monkeypatch, sentence):
+    """The three wordings this story exists for.
+
+    Two are story-047's actual prose — the claim that motivated the check and
+    which the check as shipped could not see — and the third is the worked
+    example `.harness/docs/ARCHITECTURE.md` offered as a quantity this could
+    never catch.
+
+    Each is asserted reported, and then the same repository is checked again
+    with the quantity decision reverted, where nothing is reported. So the
+    report is owed to the widening rather than to something the shipped check
+    already did.
+    """
+    root = build_target(tmp_path / "spelled-out")
+    add_to_document(root, sentence)
+
+    assert [report["stories"] for report in reports_of(root)] == [["story-048"]]
+
+    revert_the_quantity_test(monkeypatch)
+    assert reports_of(root) == []
+
+
+@pytest.mark.parametrize("text,reported", [
+    pytest.param(ADDED_CLAIM, True, id="the-paragraph-this-module-reports-on"),
+    pytest.param("story-048 converted 5 of 22 modules.", True,
+                 id="the-sentence-most-of-this-module-uses"),
+    pytest.param("story-048 was the story that motivated 2 of these.", True,
+                 id="a-reference-with-a-figure-beside-it"),
+    pytest.param("The lesson of story-048 and story-049 is attribution.", False,
+                 id="references-whose-only-digits-are-their-own"),
+    pytest.param("story-048 is the motivating case.\n\nIt took 3 tries.", False,
+                 id="a-reference-and-a-figure-in-paragraphs-apart"),
+    pytest.param("The next story in this line will carry 3 more modules.", False,
+                 id="a-forward-reference-naming-no-story"),
+])
+def test_the_digit_cases_report_identically_to_before_the_widening(
+    tmp_path, monkeypatch, text, reported,
+):
+    """Widening added a case rather than changed one.
+
+    The same documents, the same stories and the same text, checked twice: once
+    by the widened decision and once by the digits-only one it replaced. The
+    two records are compared whole — document, stories and reported text — so a
+    widening that had quietly moved a block boundary or swallowed a reference
+    would differ here even though both runs still reported something.
+
+    The `reported` flag is carried so the equality cannot pass by both sides
+    reporting nothing: the cases that reported before are asserted to still
+    report, and the cases that did not are asserted to still not.
+    """
+    root = build_target(tmp_path / "unchanged")
+    add_to_document(root, text)
+
+    widened = reports_of(root)
+    assert (widened != []) is reported
+
+    revert_the_quantity_test(monkeypatch)
+    assert reports_of(root) == widened
+
+
+def test_the_excluded_number_words_are_excluded_on_purpose(tmp_path):
+    """`one`, `a`, `an` and `first` carry no enumeration and are left out.
+
+    The control differs in exactly one word — `first` becomes `second` — so
+    this is a statement about which words are in the set rather than about a
+    sentence the check cannot see at all.
+    """
+    excluded = ("story-048 added a rule: one of the standing rules, an obvious "
+                "one, and the first of its kind.")
+    included = excluded.replace("the first of its kind", "the second of its kind")
+
+    quiet = build_target(tmp_path / "only-excluded-words")
+    add_to_document(quiet, excluded)
+    loud = build_target(tmp_path / "one-included-word")
+    add_to_document(loud, included)
+
+    assert reports_of(quiet) == []
+    assert [report["stories"] for report in reports_of(loud)] == [["story-048"]]
+
+
+def test_a_number_word_inside_a_longer_word_is_not_a_quantity(tmp_path):
+    """A word the set holds, buried in a longer word, is not a quantity:
+    "often" is not "ten" and "someone" is not "one".
+
+    The control is the same sentence with a bare set word in it, which is
+    reported — so the absence is about the letters around the word rather than
+    about the check having stopped looking. `hone` and `someone` are in both
+    sentences, which makes the control differ in the bare word alone.
+    """
+    inside = ("story-048 is often revisited, and someone will hone those rules "
+              "again.")
+    bare = inside.replace("is often revisited", "is revisited ten times")
+
+    quiet = build_target(tmp_path / "inside-a-longer-word")
+    add_to_document(quiet, inside)
+    loud = build_target(tmp_path / "the-bare-word")
+    add_to_document(loud, bare)
+
+    assert reports_of(quiet) == []
+    assert [report["stories"] for report in reports_of(loud)] == [["story-048"]]
+
+
+def test_the_quantity_words_are_matched_whatever_their_case(tmp_path):
+    """A sentence starting "Three" is reported.
+
+    The control is the same sentence with a capitalised word that enumerates
+    nothing mechanically — "Several" — which is not reported, so this is a
+    statement about case rather than about any capitalised word reporting.
+    """
+    shouted = "story-048 changed the planner. Three standing rules survived it."
+    vaguer = shouted.replace("Three", "Several")
+
+    loud = build_target(tmp_path / "sentence-initial-three")
+    add_to_document(loud, shouted)
+    quiet = build_target(tmp_path / "sentence-initial-several")
+    add_to_document(quiet, vaguer)
+
+    assert [report["stories"] for report in reports_of(loud)] == [["story-048"]]
+    assert reports_of(quiet) == []
+
+
+def test_a_hyphenated_compound_is_reported_without_a_rule_of_its_own(
+    tmp_path, monkeypatch,
+):
+    """A compound reports on the strength of the bounded set alone:
+    "twenty-two" is `twenty` with a non-letter after it.
+
+    Asserted beside the digits-only control, which reports nothing, and beside
+    the same sentence carrying `twenty` unhyphenated — the compound is not a
+    case of its own, it is the set word with a non-letter after it.
+    """
+    compound = build_target(tmp_path / "hyphenated")
+    add_to_document(compound, "story-048 converted twenty-two of the modules.")
+    plain = build_target(tmp_path / "unhyphenated")
+    add_to_document(plain, "story-048 converted twenty of the modules.")
+
+    assert [report["stories"] for report in reports_of(compound)] == \
+        [["story-048"]]
+    assert [report["stories"] for report in reports_of(plain)] == [["story-048"]]
+
+    revert_the_quantity_test(monkeypatch)
+    assert reports_of(compound) == []
+
+
+def test_the_widened_test_still_looks_outside_the_story_reference(tmp_path):
+    """The digits of `story-048` are still part of a name.
+
+    The reference stripping is shared by both alternatives rather than by the
+    digit one alone, so the control is the same sentence with a set word added
+    outside the names, which is reported.
+    """
+    named = build_target(tmp_path / "widened-just-the-name")
+    add_to_document(named, "The lesson of story-048 and story-049 is attribution.")
+    counted = build_target(tmp_path / "widened-a-real-count")
+    add_to_document(counted, "The lesson of story-048 and story-049 is "
+                             "attribution, and it took a second attempt.")
+
+    assert reports_of(named) == []
+    assert len(reports_of(counted)) == 1
+
+
+def test_the_bounded_set_is_what_decides_and_the_regex_is_built_from_it():
+    """The set is written once: the alternation is derived from it.
+
+    Every word in the set is a quantity when it stands alone, no word outside
+    the set is, and the four excluded words are absent from the set — the
+    exclusion is a decision about membership rather than a special case bolted
+    on somewhere else. Run through `carries_a_quantity`, which is the decision
+    the check makes, rather than through the pattern that implements it.
+    """
+    for word in story_coordinator.NUMBER_WORDS:
+        assert story_coordinator.carries_a_quantity(f"it took {word} attempts"), \
+            word
+
+    for outside in ("quadrillion", "several", "many", "few", "umpteen",
+                    "one", "a", "an", "first"):
+        assert not story_coordinator.carries_a_quantity(
+            f"it took {outside} attempts"), outside
+
+    assert {"one", "a", "an", "first"}.isdisjoint(story_coordinator.NUMBER_WORDS)
+
+
+# --------------------------------------------------------------------------
 # The check reports; it never judges
 # --------------------------------------------------------------------------
 
@@ -1075,6 +1340,50 @@ def test_a_reported_claim_routes_exactly_as_a_run_without_one(
         assert not (run_dir_of(root) / "retry-history.json").exists()
 
 
+def test_a_reported_spelled_out_claim_routes_exactly_as_a_run_without_one(
+    tmp_path, harness_root,
+):
+    """Widening what is seen did not widen what is done about it.
+
+    The same comparison as the run above, with the reported claim carrying a
+    spelled-out quantity instead of a figure: same exit code, same stages
+    invoked, same event stream, same retry count, same self-route count and no
+    retry history in either. The premise is asserted first, and asserted twice
+    over — one run reported and the other did not, *and* the reported text
+    carries no digit at all, so the report travelled the path this story added
+    rather than the one that already existed.
+
+    `test_a_retry_and_a_retry_history_entry_are_things_this_run_could_have_had`
+    below is the control for the zeroes here: the same fixture routed by a
+    verdict moves every counter this run leaves still.
+    """
+    reported = build_target(tmp_path / "spelled-routes-reported")
+    quiet = build_target(tmp_path / "spelled-routes-quiet")
+    loud_runner = Runner(
+        reported, documented="story-048 introduced a fourth standing rule.")
+    quiet_runner = Runner(
+        quiet, documented="The harness runs its stages in the declared order.")
+
+    assert story_coordinator.run_story(
+        STORY_ID, harness_root, reported, loud_runner) == 0
+    assert story_coordinator.run_story(
+        STORY_ID, harness_root, quiet, quiet_runner) == 0
+
+    assert record_of(reported)["reports"] != []
+    assert record_of(quiet)["reports"] == []
+    assert not a_digit_and_nothing_cleverer(
+        record_of(reported)["reports"][0]["text"])
+
+    assert loud_runner.calls == quiet_runner.calls == STAGE_NAMES
+    assert stream_of(reported) == stream_of(quiet)
+    for root in (reported, quiet):
+        state = state_of(root)
+        assert state["status"] == "completed"
+        assert state["retry_count"] == 0
+        assert state.get("self_route_count", 0) == 0
+        assert not (run_dir_of(root) / "retry-history.json").exists()
+
+
 def test_a_retry_and_a_retry_history_entry_are_things_this_run_could_have_had(
     tmp_path, harness_root,
 ):
@@ -1290,3 +1599,232 @@ def test_a_stage_running_before_the_check_reads_no_record(tmp_path, harness_root
     assert context["claim_support_result"] is None
     assert PLANTED not in prompt
     assert context_assembler.PLACEHOLDER.search(prompt) is None
+
+
+# --------------------------------------------------------------------------
+# The stated limit, in the places it is stated
+#
+# Shipped-artifact readings, deliberately: the claim is that *this repository*
+# tells a reader where the check's boundary now falls. The schema this
+# repository ships and the comment beside the pattern in the coordinator are
+# the subjects, so they are read as shipped.
+#
+# Each absence — that no one of them still asserts the digits-only limit — is
+# asserted beside the text it replaced, written here as a constant. The same
+# predicate reports that text, so a predicate that had stopped recognising the
+# old sentence would fail rather than pass quietly.
+#
+# `.harness/docs/ARCHITECTURE.md` states the same limit in its scope-limits
+# paragraph and is deliberately not asserted here: that document is the
+# documenting stage's to write and it has not run yet when this module does.
+# --------------------------------------------------------------------------
+
+
+#: The two sentences that stated the digits-only limit before story-054,
+#: quoted from the artifacts they were removed from. They are the controls for
+#: the absences below, not a second copy of anything live.
+PRE_STORY_QUANTITY_COMMENT = (
+    "What counts as a quantity: a digit, and nothing cleverer. A spelled-out "
+    'number ("eight of twenty-two") is a quantity this does not see, and that '
+    "limit is stated rather than papered over."
+)
+PRE_STORY_SCHEMA_SENTENCE = (
+    "the whole decision is the story-0NN reference shape, whether that story "
+    "has a completion commit reachable from the base, and whether a digit "
+    "appears outside the reference itself."
+)
+
+
+def normalized(text: str) -> str:
+    """One line, lowercased, with the markup a comment or a schema wraps words
+    in removed — so a needle matches the words rather than their backticks."""
+    return " ".join(text.lower().replace("`", "").replace('"', "").split())
+
+
+def states_the_digits_only_limit(text: str) -> bool:
+    """Whether `text` still says a quantity is a digit and nothing else."""
+    lowered = normalized(text)
+    return any(needle in lowered for needle in (
+        "whether a digit appears outside the reference",
+        "a digit, and nothing cleverer",
+        "a quantity is a digit and nothing cleverer",
+    ))
+
+
+def states_the_widened_limit(text: str) -> bool:
+    """Whether `text` states story-054's boundary: what is matched, how, and
+    which words are kept out of it."""
+    lowered = normalized(text)
+    return all(needle in lowered for needle in (
+        "digit",
+        "one, a, an and first",
+        "case-insensitiv",
+        "whole word",
+    ))
+
+
+def comment_above(source: str, assignment: str) -> str:
+    """The `#:` block immediately above a module-level assignment."""
+    lines = source.splitlines()
+    index = next(number for number, line in enumerate(lines)
+                 if line.startswith(assignment))
+    collected = []
+    while index and lines[index - 1].startswith("#:"):
+        index -= 1
+        collected.append(lines[index].removeprefix("#:").strip())
+    return " ".join(reversed(collected))
+
+
+COORDINATOR_SOURCE = inspect.getsource(story_coordinator)
+
+
+def test_the_comment_beside_the_pattern_states_the_new_boundary():
+    """The limit is written where the pattern is, and it is the new one.
+
+    The comment is located by the assignment it sits above rather than by a
+    line number, and the control for "it no longer asserts digits-only" is the
+    sentence it replaced, which the same predicate reports.
+    """
+    comment = comment_above(COORDINATOR_SOURCE, "QUANTITY = ")
+
+    assert comment, "no comment block was found above the pattern"
+    assert states_the_widened_limit(comment)
+    assert not states_the_digits_only_limit(comment)
+    # The control: the sentence that stood there before is still recognised.
+    assert states_the_digits_only_limit(PRE_STORY_QUANTITY_COMMENT)
+    assert not states_the_widened_limit(PRE_STORY_QUANTITY_COMMENT)
+
+
+def test_the_exclusion_is_reasoned_beside_the_set_rather_than_left_to_be_found():
+    """A reader can tell an omission from a decision.
+
+    The four excluded words are named beside the set and a reason is given for
+    leaving them out. Both halves are required, and both controls show it: a
+    comment naming them without a reason, and one giving neither, are rejected
+    by the same predicate that accepts what is shipped.
+    """
+    comment = comment_above(COORDINATOR_SOURCE, "NUMBER_WORDS = ")
+
+    def reasons_the_exclusion(text: str) -> bool:
+        lowered = normalized(text)
+        return ("one, a, an and first" in lowered
+                and "on purpose" in lowered
+                and "carry no enumeration" in lowered)
+
+    assert reasons_the_exclusion(comment)
+    assert not reasons_the_exclusion(
+        "The bounded set of words that count as a quantity. one, a, an and "
+        "first are not in it.")
+    assert not reasons_the_exclusion(
+        "The bounded set. one, a, an and first are excluded on purpose.")
+
+
+def test_the_shipped_schema_description_states_the_new_boundary():
+    """The record's own description tells the reader where the boundary falls.
+
+    Asserted of the schema this repository ships, with the sentence it
+    replaced as the control for the absence — and the shape asserted unchanged
+    beside it, since only the description sentence was this story's to move.
+    """
+    description = SCHEMA["description"]
+
+    assert states_the_widened_limit(description)
+    assert not states_the_digits_only_limit(description)
+    # The control: the sentence that stood there before is still recognised.
+    assert states_the_digits_only_limit(PRE_STORY_SCHEMA_SENTENCE)
+    assert not states_the_widened_limit(PRE_STORY_SCHEMA_SENTENCE)
+
+    # And the record is still the same record: the description moved, the
+    # shape did not.
+    assert list(SCHEMA["properties"]) == [
+        "ran", "base", "story_id", "documents", "reports", "reason"]
+    assert SCHEMA["required"] == ["ran"]
+    assert schema_validator.validate({"ran": True, "reports": []}, SCHEMA) == []
+
+
+# --------------------------------------------------------------------------
+# What story-053 left, still standing
+#
+# This story edits this module, so the two properties story-053 established
+# here are carried as guards rather than trusted: exactly one test drives the
+# report-a-claim paragraph, and that paragraph is prose somebody could have
+# written rather than a synthetic one-liner. The other half — that no test
+# here resolves a fixture out of this repository's commit graph — is held by
+# `tests/test_baseline_honesty.py`, which scans every module for exactly that
+# and names this one, with its own planted control.
+# --------------------------------------------------------------------------
+
+
+MODULE_SOURCE = Path(__file__).read_text(encoding="utf-8")
+
+#: The test that drives the paragraph, named — so a second one added beside it
+#: fails here rather than being noticed a story later.
+THE_REPORT_A_CLAIM_TEST = \
+    "test_an_added_claim_about_a_story_with_no_merged_work_is_reported"
+
+
+#: The calls that put text through the check. A test of the report-a-claim
+#: behaviour is one whose body drives the paragraph through one of these —
+#: which is what makes it a test *of that behaviour* rather than a test that
+#: merely mentions the paragraph. The parity test above hands it to the same
+#: calls as a parametrization, so the paragraph is one input among six there
+#: rather than the subject, and the guard below reads it only to ask whether
+#: it is prose.
+PARAGRAPH_DRIVERS = frozenset({"check", "reports_of", "add_to_document"})
+
+
+def _callee(node: ast.Call) -> str:
+    func = node.func
+    return func.attr if isinstance(func, ast.Attribute) else \
+        getattr(func, "id", "")
+
+
+def report_a_claim_tests(source: str) -> list[str]:
+    """Every test in `source` that drives this module's claim paragraph
+    through the check."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test_"):
+            continue
+        # The body only: a decorator naming the paragraph is a parametrization
+        # handing it in as data, not a test whose subject it is.
+        inner = [descendant for statement in node.body
+                 for descendant in ast.walk(statement)]
+        names = {leaf.id for leaf in inner if isinstance(leaf, ast.Name)}
+        calls = {_callee(leaf) for leaf in inner if isinstance(leaf, ast.Call)}
+        if "ADDED_CLAIM" in names and calls & PARAGRAPH_DRIVERS:
+            found.append(node.name)
+    return sorted(found)
+
+
+def is_multi_clause_prose(text: str) -> bool:
+    """Whether `text` reads like a paragraph a documenter wrote.
+
+    Several sentences, more than one line, and at least one of the marks prose
+    uses to join clauses — a dash, a parenthesis, a semicolon or a colon.
+    """
+    return (text.count(".") >= 3
+            and len(text.strip().splitlines()) > 1
+            and any(mark in text for mark in ("—", "(", ";", ":")))
+
+
+def test_this_module_holds_exactly_one_test_of_the_report_a_claim_behaviour():
+    """One test, carrying realistic prose — the state story-053 left.
+
+    Both halves carry their control: the counting is shown to report two when
+    a second such test is planted in a copy of this module's source, and the
+    prose predicate is shown to reject the one-liner the paragraph replaced.
+    """
+    assert report_a_claim_tests(MODULE_SOURCE) == [THE_REPORT_A_CLAIM_TEST]
+    assert is_multi_clause_prose(ADDED_CLAIM)
+
+    # The controls, both by construction rather than by observation.
+    planted = MODULE_SOURCE + (
+        "\n\ndef test_a_second_reader_of_the_paragraph(tmp_path):\n"
+        "    root = build_target(tmp_path / 'planted')\n"
+        "    add_to_document(root, ADDED_CLAIM)\n"
+        "    assert reports_of(root) != []\n")
+    assert len(report_a_claim_tests(planted)) == 2
+    assert not is_multi_clause_prose("story-048 converted 5 of 22 modules.")
