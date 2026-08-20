@@ -1767,12 +1767,59 @@ def _revert_check_permitted(
 #: the quantity test below, which looks outside the references it removes.
 STORY_REFERENCE = re.compile(r"story-\d+")
 
-#: What counts as a quantity: a digit, and nothing cleverer. A spelled-out
-#: number ("eight of twenty-two") is a quantity this does not see, and that
-#: limit is stated rather than papered over — the check reports a narrow,
-#: mechanical class and every branch of it is decidable without reading the
-#: text as language.
+#: What counts as a quantity: a digit, or one word of the bounded set below.
+#: The boundary is stated rather than papered over. Matched: any digit, and
+#: any of NUMBER_WORDS — the cardinals two through nineteen, the tens twenty
+#: through ninety, hundred, thousand, million and dozen, and the ordinals
+#: second through nineteenth plus the -ieth forms — case-insensitively and
+#: only as a whole word. Deliberately not matched: `one`, `a`, `an` and
+#: `first`, which the set excludes on purpose (see NUMBER_WORDS); a number
+#: word inside a longer word, so "often" is not "ten" and "someone" is not
+#: "one"; any number word outside the set, so "quadrillion" and "twentieth-
+#: century" prose beyond the -ieth forms are quantities this does not see;
+#: and anything that would need the text read as language. The set is a
+#: bounded vocabulary match, decidable without parsing prose, which is the
+#: property the whole check is built on.
 QUANTITY = re.compile(r"\d")
+
+#: The bounded set of words that count as a quantity, written as a list so a
+#: reader meets the set rather than a regex. `one`, `a`, `an` and `first` are
+#: excluded on purpose rather than overlooked: they appear in ordinary prose
+#: constantly ("one of the two", "a paragraph", "the first sentence") and
+#: carry no enumeration, so admitting them would report almost every added
+#: block naming an unmerged story. Everything here enumerates something.
+NUMBER_WORDS = (
+    # cardinals two through nineteen
+    "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+    "seventeen", "eighteen", "nineteen",
+    # the tens
+    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty",
+    "ninety",
+    # the multipliers, and the informal one
+    "hundred", "thousand", "million", "dozen",
+    # the matching ordinals, second through nineteenth
+    "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+    "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth",
+    "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth",
+    # and the -ieth forms of the tens
+    "twentieth", "thirtieth", "fortieth", "fiftieth", "sixtieth",
+    "seventieth", "eightieth", "ninetieth",
+)
+
+#: NUMBER_WORDS as one case-insensitive alternation, longest token first so
+#: "seventeen" claims its own match rather than being read as "seven"
+#: followed by "teen". The boundaries are non-letter lookarounds rather than
+#: `\b`, so a hyphenated compound reports on the strength of the set alone —
+#: "twenty-two" is `twenty` followed by a non-letter — while a number word
+#: inside a longer word is not a quantity, because "often" has a letter
+#: before "ten" and "someone" has one before "one".
+NUMBER_WORD = re.compile(
+    r"(?<![A-Za-z])(?:"
+    + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True))
+    + r")(?![A-Za-z])",
+    re.IGNORECASE,
+)
 
 
 def added_blocks(diff: str) -> list[str]:
@@ -1816,11 +1863,17 @@ def story_references(text: str, story_id: str) -> list[str]:
 def carries_a_quantity(text: str) -> bool:
     """Whether `text` carries a quantity outside the story references in it.
 
+    A quantity is a digit or one word of the bounded NUMBER_WORDS set: the
+    two are alternatives of one decision rather than two decisions, so the
+    reference stripping and the block granularity are shared by construction
+    and no caller changes.
+
     The references are removed before looking, because `story-049` is a name
     and the digits in it are part of that name rather than an assertion about
     how many of anything there were.
     """
-    return bool(QUANTITY.search(STORY_REFERENCE.sub(" ", text)))
+    stripped = STORY_REFERENCE.sub(" ", text)
+    return bool(QUANTITY.search(stripped) or NUMBER_WORD.search(stripped))
 
 
 @dataclass(frozen=True)
@@ -1870,8 +1923,9 @@ def unsupported_claims(
     in the coordinator rather than a second spelling of it.
 
     No branch reads what a block *says* beyond the references in it and
-    whether a digit appears outside them, so varying a reported figure — to
-    another wrong value or to the right one — cannot change what is reported.
+    whether a quantity — a digit or a word of the bounded NUMBER_WORDS set —
+    appears outside them, so varying a reported figure — to another wrong
+    value or to the right one — cannot change what is reported.
     """
     reports = []
     for block in added_blocks(diff):
