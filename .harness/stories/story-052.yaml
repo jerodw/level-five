@@ -1,0 +1,143 @@
+story:
+  id: story-052
+  title: A new test may not resolve this repository's own history
+  description: |
+    Thirty modules under tests/ resolve commits out of this repository's own
+    git history -- the commit that added a file, the range between a story's
+    baseline and its endpoint, a file's text at a revision -- through the
+    shared helpers in tests/conftest.py. Most of them are not testing the
+    commit graph. They want a sentence, a prior version of a function, a set
+    of paths a story touched, and they reach into the repository the harness
+    lives in to get it. The result is a suite whose answers change when
+    something is committed, renamed, squashed or rebased, none of which is a
+    property of the code under test.
+
+    The cost was measured rather than predicted. story-051 wrote a new one of
+    these into a module created that day, for a single sentence, and spent the
+    run's entire retry budget on it: a pinned revision rebased away by a
+    squash-merge, then a content search that collided with the story's own
+    documentation quoting the very figure it searched for. The third attempt
+    passes because no line in the prose happens to carry two words together,
+    which is a property nobody is holding. The test immediately above it
+    asserts the same behaviour against a constructed sentence, with no git at
+    all, and asserts more besides.
+
+    Nothing caught it, and that is the part this story answers. story-047 and
+    story-048 built the scan that holds the subject-versus-input question, and
+    it covers five families of file that ship -- workflows, rules, prompts,
+    schemas, config.yaml. The commit graph is in none of them and structurally
+    cannot be: that scan matches a path shape joined onto a repository-root
+    name, and a history read has no path shape to match. So a brand-new module
+    took a git-history dependency and the suite had nothing to say. The rule
+    itself has been documented and shipped past three times now. Guidance is
+    not what closes this.
+
+    This story lands the mechanism and converts nothing, which is the shape
+    that worked once already: story-047 landed the live-artifact scan with a
+    list recording that day's readers, and story-048 did the conversion
+    against it. The conversion here is larger and is planned separately. What
+    this story leaves behind is a rule that reports every module resolving
+    this repository's history through the shared helpers, a declared list
+    classifying today's readers as subject or pending, agreement asserted in
+    both directions, and a ceiling on the pending count so the next module to
+    take such a dependency goes red rather than being discovered two stories
+    later.
+
+    The classification is the judgement in this story and is made module by
+    module. Some of these reads are correct and must survive: a module whose
+    subject genuinely is this repository -- that a value is defined exactly
+    once across the tree, that a committed archive holds a particular patch,
+    that a stage declaration moved in a named commit -- reads the repository
+    as its subject rather than as an instrument. Those are classified subject
+    and carry a recorded reason. Everything else is classified pending, which
+    is a statement that the module has not been decided yet, not a verdict
+    that it is wrong.
+
+    Two deliberate limits. The subject reasons are recorded on the list
+    entries rather than in thirty module docstrings, so this story edits no
+    module it is not converting. And the ceiling is a literal constant
+    compared against the length of the pending list -- it resolves nothing
+    from history itself, because a rule against reading the commit graph that
+    reads the commit graph to enforce itself would be the third instance of
+    the practice it exists to stop.
+
+tasks:
+  - Add a sixth rule to tests/test_baseline_honesty.py -- an AST scan reporting any module under tests/ that resolves this repository's history through the shared helpers story_commit_range, story_diff, repository_file_at, function_source_at and revision_carrying.
+  - Recognise the call however the helper reached the module -- imported by name from conftest, reached as an attribute of the conftest module, or bound to a local alias -- reusing the alias handling the existing reader scan already carries rather than writing a second one.
+  - Give the new rule its own "What it does not cover" paragraph in the module's established shape, and register it in the parametrized test that requires each rule to state its own limits.
+  - Keep the new rule independent of the five already in the module -- it derives nothing from them and shares no vocabulary list with the live-artifact rule, which is asserted as it is asserted for the rule before it.
+  - Declare, in one literal list, every module the new scan reports, with each entry classified as a subject reader or as pending conversion.
+  - Record on each subject entry the reason this repository's history is the subject of that module's assertions rather than an input to them, deciding module by module and never by pattern.
+  - Assert the scan's reported set equal to the declared list in both directions, so a reported module absent from the list fails and a listed module the scan no longer reports fails.
+  - Declare a ceiling constant equal to the number of pending entries this story finds, assert the pending list against it, and state on the constant that a converting story lowers it and nothing raises it.
+  - Give the new detection a planted-violation control for each of the five helpers, observing each reported.
+  - Give it the benign controls the module's convention requires -- a module that builds its own fixture repository and runs git inside it is not reported, and the existing throwaway-repository idiom stays unflagged by this rule as it is by the others.
+  - Extend prompts/tester.md so the subject-versus-input question it already asks of the shipped workflow is asked of this repository's commit graph, pointing at the fixture-repository idiom the suite already uses to build a target repository for every coordinator test.
+  - Convert no module in this story. A module classified pending is a module whose conversion is planned separately, and reclassifying one as a subject reader to reduce the pending count is not a conversion.
+
+acceptance_criteria:
+  - A module under tests/ that calls story_commit_range, story_diff, repository_file_at, function_source_at or revision_carrying against this repository is reported by the new scan, which reports nothing today.
+  - Each of the five helpers has a planted-violation control -- a constructed module calling it is reported -- and each control fails if that helper is dropped from the detection.
+  - A constructed module that builds its own repository in a temporary directory and runs git inside it is not reported by the new rule, and neither is a module that reads a fixture it wrote.
+  - The set of modules the new scan reports over tests/ equals the declared list exactly, asserted in both directions, with a control demonstrating each direction fails when it should.
+  - Every entry on the declared list is classified as a subject reader or as pending conversion, and every subject entry carries a stated reason naming what about this repository its assertions are about.
+  - tests/test_documented_claim_support.py appears on the declared list as pending, since the read story-051 spent its retry budget on is the case this story exists to have caught.
+  - The pending list is asserted against a declared ceiling constant, that constant equals the number of pending entries at this story's completion, and adding an entry beyond it fails -- shown by a control that constructs an over-length list rather than by the assertion continuing to pass.
+  - The ceiling assertion resolves nothing from this repository's git history, demonstrated of the code that performs it rather than asserted of the story.
+  - The new rule carries a "What it does not cover" paragraph naming what it cannot see, and the parametrized limits test covers it alongside the rules already there.
+  - The new rule draws no vocabulary or predicate from the live-artifact rule, asserted the way the live-artifact rule asserts its independence from the rules before it.
+  - prompts/tester.md asks the subject-versus-input question of this repository's commit graph, says that a test needing a history builds one in a repository it constructs, and names the existing fixture idiom rather than describing a principle.
+  - That guidance reaches the rendered tester prompt, read from the render rather than from the template.
+  - No module under tests/ other than tests/test_baseline_honesty.py changes, and tests/conftest.py's helpers are unchanged -- the shared route is the sanctioned one and this rule is about who takes it.
+  - The five rules already in tests/test_baseline_honesty.py report exactly what they reported before, and their declared lists are unchanged.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the live-artifact rule and the reader rule in tests/test_baseline_honesty.py first -- the new rule takes their shape, reuses their alias and import handling, and states its limits the way they state theirs.
+    - Write the detection as a call-site scan over the five helper names rather than a path-shape scan, since a history read has no path to match, and cover the imported-name, module-attribute and local-alias forms.
+    - Run the scan over tests/ and take its report as the classification work list.
+    - Classify each reported module by reading what its assertions are about, recording the reason on the subject entries and leaving the rest pending.
+    - Assert the agreement in both directions, then add the ceiling constant and its control.
+    - Write the planted controls for the five helpers and the benign controls for a fixture repository and a self-written fixture file.
+    - Write the commit-graph half of the subject-versus-input guidance into prompts/tester.md beside the fixture guidance story-047 added, and assert it from the rendered prompt.
+  likely_file_changes:
+    - file: prompts/tester.md
+      stage: implementer
+      reason: carries the subject-versus-input question extended to this repository's commit graph
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: the standing home for these rules gains the sixth one, its declared list, its ceiling and its controls
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records what the suite now refuses, why the commit graph could not be a sixth family of the live-artifact scan, and why the conversion is a separate story
+
+scope:
+  modify:
+    - prompts/tester.md
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - tests/conftest.py
+    - orchestration/
+    - workflows/
+    - schemas/
+    - scripts/
+    - Every module under tests/ other than tests/test_baseline_honesty.py
+
+verification_requirements:
+  - Confirm the new scan reports a planted call to each of the five helpers, by running the scan over constructed sources rather than by reading the detection.
+  - Confirm the scan does not report a module that builds its own repository and runs git inside it.
+  - Confirm the declared list agrees with the scan's report in both directions, and that each direction fails when a name is added to or removed from the list.
+  - Confirm every subject entry carries a reason and that no entry is unclassified.
+  - Confirm the ceiling rejects a pending list one entry longer than today's, and that nothing in the ceiling's own evaluation reads this repository's history.
+  - Confirm the guidance is present in the rendered tester prompt and not only in the template.
+  - Confirm no module under tests/ other than tests/test_baseline_honesty.py was changed, and that the five existing rules report what they reported before.
+  - Confirm the full test suite passes.
+
+constraints:
+  - No module is converted in this story. The declared pending entries are the work list for the conversion story that follows.
+  - No assertion anywhere in the suite changes what it claims.
+  - The declared list is a literal list, not a derivation from the scan's own output.
+  - The shared helpers in tests/conftest.py keep their behaviour and their signatures.
+  - A module leaves the pending class by being converted, never by being reclassified a subject reader.
