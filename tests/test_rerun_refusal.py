@@ -46,8 +46,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, ENDPOINT, function_source_at,
-                      repository_file_at, story_commit_range)
+from conftest import BASELINE, ENDPOINT
+import conftest
 
 import story_coordinator
 from agent_runner import AgentResult
@@ -345,30 +345,14 @@ def abandon_the_branch(target_root: Path) -> None:
 COORDINATOR_REL = "orchestration/story_coordinator.py"
 
 
-def pre_story(path: str) -> str:
-    """A repository file as it stood before this story's own run.
-
-    Through `conftest.repository_file_at` since story-029, which folded the
-    eleven private copies of this reader into one. Subject and strictness
-    unchanged; only where the text comes from moved.
-    """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=BASELINE, repo=REPO_ROOT)
+#: The story a bound belongs to, when a caller does not say. This module's
+#: assertions are about story-027's own range; the one comparison below that is
+#: about story-020's range names that story instead, because what it re-checks
+#: is the repoint story-020's own assertion received.
+THIS_STORY = "027"
 
 
-def at_story_endpoint(path: str) -> str:
-    """A repository file as *this* story's own run left it.
-
-    The counterpart of `pre_story`. Against today's working tree a "this story
-    changed only X" comparison asks what the file looks like *now*, which a
-    later story changes without this story having done anything.
-    """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=ENDPOINT, repo=REPO_ROOT)
-
-
-def coordinator_function(name: str, bound: str,
-                         validation_file: Path | None = None) -> str:
+def coordinator_function(name: str, bound: str, story: str = THIS_STORY) -> str:
     """One coordinator function's source text at one end of a story's range.
 
     story-029 retired the pre-story and endpoint *modules* this file used to
@@ -376,10 +360,18 @@ def coordinator_function(name: str, bound: str,
     workflow, schemas and config, and stops running as soon as any of them
     legitimately changes. Every comparison here only ever read a function's
     text, so it reads the text.
+
+    story-053 moved where the text comes from. Both ends of a past story's
+    range are frozen texts, and resolving them out of this repository's commit
+    graph made every comparison depend on facts about the graph rather than
+    about the code: a squash makes a range unresolvable in a clone, and a
+    rename gives a path a new add-commit and empties the range silently. Each
+    bound is carried as a committed fixture, lifted from exactly the bound this
+    used to resolve.
     """
-    return function_source_at(COORDINATOR_REL, name,
-                              validation_file=validation_file or Path(__file__),
-                              bound=bound, repo=REPO_ROOT)
+    assert bound in (BASELINE, ENDPOINT), bound
+    return conftest.history_fixture(
+        f"story_coordinator.{name}.at-story-{story}-{bound}.py.txt")
 
 
 # --------------------------------------------------------------------------
@@ -1189,13 +1181,18 @@ def test_reverting_the_repointed_story_020_assertion_re_breaks_it():
     to have been made vacuous: read against the working tree the two sources
     differ, which is the red the revert restores, and read at story-020's own
     endpoint — the bound the repointed assertion uses — they are equal.
-    """
-    story_020 = REPO_ROOT / "tests" / "test_story_020_validation.py"
-    span = story_commit_range(story_020)
-    assert span.committed, "story-020 is in this history"
 
+    story-020's two bounds are carried as committed fixtures since story-053,
+    for the reason `coordinator_function` records. That story being *in this
+    history* was asserted here before; it is not what this test is about, and
+    it is exactly the kind of claim that stops being answerable in a shallow
+    clone or after a squash. The third comparison below already says what that
+    guard was there for — `_escalate`'s two bounds differ, so the fixtures are
+    two files rather than one read twice.
+    """
     def at(name: str, bound: str) -> str:
-        return coordinator_function(name, bound, validation_file=story_020)
+        return coordinator_function(name, bound, story="020")
+
 
     assert inspect.getsource(story_coordinator._complete) \
         != at("_complete", BASELINE)                    # the reverted form: red

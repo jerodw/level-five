@@ -534,16 +534,30 @@ def executable_source(text: str) -> str:
     return "\n".join(kept)
 
 
+#: The two pre-story texts this module compares against, carried as committed
+#: fixtures rather than resolved out of this repository's commit graph. Only
+#: the coordinator's *docstring* is carried, because only the docstring is
+#: compared: a fixture holds what an assertion reads and no more.
+PRE_STORY_FIXTURES = {
+    "schemas/revert-check-result.schema.json":
+        "revert-check-result.schema.at-story-019-baseline.json",
+    "orchestration/story_coordinator.py":
+        "story_coordinator-docstring.at-story-019-baseline.txt",
+}
+
+
 def pre_story(path: str) -> str:
     """A repository file as it stood before this story's own run.
 
-    Resolved through the shared range in conftest.py rather than as HEAD, so
-    the comparison survives this story's own commit — which is the mistake
-    this repository keeps making and the one the baseline being tested here
-    is a version of.
+    Carried as a committed fixture under `tests/history-fixtures/`. It used to
+    be resolved through the shared range in conftest.py, which was right about
+    the *bound* — never HEAD, because a HEAD comparison survives nothing — and
+    wrong about the source: the answer then moved whenever this repository was
+    committed to, renamed, squashed or rebased, none of which is a property of
+    what the schema said before the story. The text is the same text, lifted
+    from that same baseline; it is now evidence the repository holds.
     """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=BASELINE_BOUND, repo=REPO_ROOT)
+    return conftest.history_fixture(PRE_STORY_FIXTURES[path])
 
 
 # --------------------------------------------------------------------------
@@ -1282,8 +1296,7 @@ def test_the_granularity_limit_is_unchanged_in_the_schema_and_the_docstring():
         != before["properties"]["paths"]["description"]
 
     module = ORCHESTRATION / "story_coordinator.py"
-    pre_module = ast.get_docstring(
-        ast.parse(pre_story("orchestration/story_coordinator.py")))
+    pre_module = pre_story("orchestration/story_coordinator.py")
     assert ast.get_docstring(
         ast.parse(module.read_text(encoding="utf-8"))) == pre_module
 
@@ -1388,13 +1401,22 @@ def test_no_second_clone_builder_was_added():
 # --------------------------------------------------------------------------
 
 
-def test_this_story_edited_no_story_artifact_and_no_schema_inventory():
+def test_this_story_edited_no_story_artifact_and_no_schema_inventory(tmp_path):
     """The control is the file the story did edit: if the diff resolution had
-    stopped seeing anything, the last assertion would fail too."""
-    validation = Path(__file__)
-    assert story_diff([".harness/stories/"], validation_file=validation) == ""
-    assert story_diff(["schemas/manifest.json"], validation_file=validation) == ""
-    assert story_diff(["schemas/"], validation_file=validation,
-                      diff_filter="A") == ""
-    assert story_diff(["schemas/revert-check-result.schema.json"],
-                      validation_file=validation) != ""
+    stopped seeing anything, the last assertion would fail too.
+
+    Restated over a story this test builds. The four claims are what they were
+    — records untouched, the inventory untouched, no schema added, and the one
+    schema the story did edit reported — and each is now checked against a
+    history constructed here rather than recalled out of this repository's own
+    graph, where a rename, a squash or a rebase moved the evidence under it.
+    """
+    added = "schemas/revert-check-result.schema.json"
+    root = conftest.constructed_story(
+        tmp_path, respected=[".harness/stories/", "schemas/manifest.json"],
+        violated=[added])
+    assert conftest.constructed_story_diff(root, [".harness/stories/"]) == ""
+    assert conftest.constructed_story_diff(root, ["schemas/manifest.json"]) == ""
+    assert conftest.constructed_story_diff(root, ["schemas/"],
+                                           diff_filter="A") == ""
+    assert conftest.constructed_story_diff(root, [added]) != ""

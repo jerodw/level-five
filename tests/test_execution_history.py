@@ -35,7 +35,7 @@ import run_status
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import commit_setup, first_retry_route, load_mutant, story_diff
+from conftest import commit_setup, first_retry_route, load_mutant
 import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -929,8 +929,8 @@ def test_a_retry_recorded_without_its_decision_is_caught(
     assert "retry_decision" not in entry
 
 
-def test_no_prompt_template_was_changed_by_this_story():
-    """Bounded at both ends of this story's own commit range.
+def test_no_prompt_template_was_changed_by_this_story(tmp_path):
+    """Bounded at both ends of the story's own commit range.
 
     `git diff HEAD` answers "is the working tree dirty here", which stops
     being a statement about this story the moment the story is committed.
@@ -948,7 +948,31 @@ def test_no_prompt_template_was_changed_by_this_story():
     come from somewhere else. While the story is still in flight the file
     has no adding commit and the range degrades to HEAD against the working
     tree, which is the correct pre-story baseline at that moment.
+
+    Since story-053 the repository the range is resolved in is one this test
+    builds. Asked of this repository's own graph the assertion re-stated a
+    frozen fact and took its evidence from a history that moves under it: a
+    rename gives a path a new add-commit and empties the range, a squash makes
+    it unresolvable in a clone. The predicate and the paths are unchanged, and
+    the control below shows the same call reporting a story that does touch
+    them.
     """
-    assert story_diff(
-        ["prompts/", "workflows/", "rules/"], validation_file=Path(__file__),
-    ).strip() == ""
+    paths = ["prompts/", "workflows/", "rules/"]
+    respecting = conftest.constructed_story(tmp_path, respected=paths,
+                                            name="templates-left-alone")
+    assert _templates_unchanged_by_this_story(respecting, paths)
+    violating = conftest.constructed_story(tmp_path, violated=paths,
+                                           name="templates-edited")
+    assert not _templates_unchanged_by_this_story(violating, paths)
+
+
+def _templates_unchanged_by_this_story(repo, paths) -> bool:
+    """Whether a story's own run commit left `paths` alone, in `repo`.
+
+    The predicate the assertion above is made of, named so it can be driven
+    against a repository somebody else built:
+    `tests/test_baseline_resolution_is_single.py` runs it over its own
+    synthetic histories to show that the folded resolution still turns this
+    module's assertion red when a story touches one of the three paths.
+    """
+    return conftest.constructed_story_diff(repo, list(paths)).strip() == ""

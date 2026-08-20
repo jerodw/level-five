@@ -59,8 +59,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (BASELINE as PRE_STORY_BOUND, ENDPOINT, STORY,
-                      first_retry_route, function_source_at, load_mutant,
-                      story_diff)
+                      first_retry_route, load_mutant)
 import conftest
 
 import harness_config
@@ -1125,9 +1124,14 @@ def test_the_check_and_the_clone_builder_are_byte_for_byte_pre_story():
     bounding the comparison at both ends rather than by relaxing it.
     """
     def at(name: str, bound: str) -> str:
-        return function_source_at(COORDINATOR_REL, name,
-                                  validation_file=Path(__file__),
-                                  bound=bound, repo=REPO_ROOT)
+        # Both bounds are frozen past texts, carried as committed fixtures
+        # since story-053 rather than resolved out of this repository's commit
+        # graph — where a squash makes the range unresolvable in a clone and a
+        # rename empties it silently, neither of which is a property of what
+        # the story changed.
+        assert bound in (PRE_STORY_BOUND, ENDPOINT), bound
+        return conftest.history_fixture(
+            f"story_coordinator.{name}.at-story-037-{bound}.py.txt")
 
     for name in ("revert_check", "_build_clone", "_revert_check_permitted",
                  "run_clean_clone", "governed_edits"):
@@ -1243,13 +1247,21 @@ def test_the_baseline_still_carries_no_schema_and_no_manifest_entry():
 # --------------------------------------------------------------------------
 
 
-def test_this_story_edited_no_schema_no_workflow_and_no_story_artifact():
+def test_this_story_edited_no_schema_no_workflow_and_no_story_artifact(tmp_path):
     """The control is the file the story did edit: if the diff resolution had
-    stopped seeing anything, the last assertion would fail too."""
-    validation = Path(__file__)
-    for untouched in (".harness/stories/", "schemas/", "workflows/", "prompts/",
-                      "orchestration/context_assembler.py",
-                      "orchestration/agent_runner.py",
-                      "orchestration/plan_validation.py"):
-        assert story_diff([untouched], validation_file=validation) == "", untouched
-    assert story_diff([COORDINATOR_REL], validation_file=validation) != ""
+    stopped seeing anything, the last assertion would fail too.
+
+    Restated over a story this test builds rather than recalled out of this
+    repository's own commit graph, whose answers moved whenever something was
+    committed, renamed, squashed or rebased. The scoped paths, the control and
+    the predicate are unchanged.
+    """
+    untouched_paths = [".harness/stories/", "schemas/", "workflows/", "prompts/",
+                       "orchestration/context_assembler.py",
+                       "orchestration/agent_runner.py",
+                       "orchestration/plan_validation.py"]
+    root = conftest.constructed_story(tmp_path, respected=untouched_paths,
+                                      violated=[COORDINATOR_REL])
+    for untouched in untouched_paths:
+        assert conftest.constructed_story_diff(root, [untouched]) == "", untouched
+    assert conftest.constructed_story_diff(root, [COORDINATOR_REL]) != ""

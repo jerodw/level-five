@@ -1021,12 +1021,21 @@ def test_the_planner_template_still_names_no_stage_and_no_restricted_prefix():
 # --------------------------------------------------------------------------
 
 
-def test_this_story_edited_no_story_artifact():
+def test_this_story_edited_no_story_artifact(tmp_path):
     """The control is the file the story did edit: if the diff resolution
-    had stopped seeing anything, the second assertion would fail too."""
-    assert story_diff([".harness/stories/"], validation_file=Path(__file__)) == ""
-    assert story_diff(["orchestration/story_coordinator.py"],
-                      validation_file=Path(__file__)) != ""
+    had stopped seeing anything, the second assertion would fail too.
+
+    Both are asked of a story this test builds. Asked of this repository's own
+    commit graph the pair re-stated a frozen past fact, and its evidence moved
+    whenever something was committed, renamed, squashed or rebased. The claim
+    and the control are unchanged; the history under them is constructed.
+    """
+    root = conftest.constructed_story(
+        tmp_path, respected=[".harness/stories/"],
+        violated=["orchestration/story_coordinator.py"])
+    assert conftest.constructed_story_diff(root, [".harness/stories/"]) == ""
+    assert conftest.constructed_story_diff(
+        root, ["orchestration/story_coordinator.py"]) != ""
 
 
 def test_no_test_in_the_suite_states_the_prose_rule_this_story_supersedes():

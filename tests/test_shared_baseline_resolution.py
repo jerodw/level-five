@@ -192,15 +192,6 @@ def commit(root: Path, message: str) -> str:
     return git(root, "rev-parse", "HEAD").strip()
 
 
-def _under(guarded: str) -> tuple[str, str]:
-    """A file the guarded pathspec covers, and a second one it would also
-    cover if the story added it."""
-    if guarded.endswith("/") or not Path(guarded).suffix:
-        base = guarded.rstrip("/")
-        return f"{base}/kept.txt", f"{base}/brand-new.txt"
-    return guarded, f"{guarded}.new"
-
-
 def committed_story(tmp_path: Path, validation_rel: str, guarded: str, *,
                     violate: str | None = None, name: str = "synthetic") -> Path:
     """A repository in which one story has already run and committed.
@@ -210,47 +201,34 @@ def committed_story(tmp_path: Path, validation_rel: str, guarded: str, *,
     `violate` says so, touches the guarded path in the same commit. That is
     the shape of a finished branch, and the shape under which `git diff HEAD`
     reports nothing no matter what the story did.
+
+    The building itself moved to `conftest.constructed_story` when story-053
+    converted every history-reading module in the suite: the shape this module
+    established is now what a dozen of them build, and one home for it is the
+    same argument the shared resolution below is built on. This wrapper keeps
+    the calling convention every assertion here already uses.
     """
-    root = tmp_path / name
-    root.mkdir()
-    git(root, "init", "-q")
-    subject, sibling = _under(guarded)
-    write(root, subject, "the pre-story content\n")
-    write(root, "unrelated.txt", "something the story may touch\n")
-    commit(root, "pre-story")
-
-    write(root, validation_rel, "def test_it():\n    assert True\n")
-    write(root, "unrelated.txt", "the story's own legitimate change\n")
-    if violate == "modify":
-        write(root, subject, "rewritten inside the story's own run commit\n")
-    elif violate == "delete":
-        (root / subject).unlink()
-    elif violate == "add":
-        write(root, sibling, "an addition\n")
-    commit(root, "the story's own run commit")
-    return root
+    return conftest.constructed_story(
+        tmp_path,
+        respected=() if violate else (guarded,),
+        violated=(guarded,) if violate else (),
+        violation=violate or "modify",
+        validation_rel=validation_rel, name=name)
 
 
-def redirect(monkeypatch, module, root: Path, validation_rel: str) -> None:
-    """Point one repaired module's assertions at a synthetic repository.
+def repaired_story(tmp_path: Path, guarded: str, *, violate: str | None = None,
+                   name: str = "synthetic") -> Path:
+    """A synthetic story built at the validation path a repaired helper expects.
 
-    The module's own helper runs unmodified — only the repository it asks
-    about moves. That is what makes the failure below a property of the
-    repaired code rather than of a reimplementation of it.
+    story-053 converted the four repaired modules to take the repository they
+    ask about as an argument, so pointing one at a synthetic history is now the
+    helper's own parameter rather than a monkeypatch over the name it imported.
+    The helper still runs unmodified — which is what makes the failures below a
+    property of the repaired code rather than of a reimplementation of it — and
+    the repository it resolves is the constructed one.
     """
-    real = conftest.story_diff
-
-    def patched(paths, *, validation_file=None, repo=None, origin=None,
-                **kwargs):
-        # `origin` is dropped deliberately. In this repository it names which
-        # of a merged module's two stories a range belongs to; the synthetic
-        # repository holds exactly one story, so the file's own path is the
-        # only lineage there and naming an origin it never declared would
-        # raise instead of resolving.
-        return real(paths, validation_file=root / validation_rel, repo=root,
-                    **kwargs)
-
-    monkeypatch.setattr(module, "story_diff", patched)
+    return committed_story(tmp_path, conftest.CONSTRUCTED_VALIDATION_REL,
+                           guarded, violate=violate, name=name)
 
 
 # --------------------------------------------------------------------------
@@ -264,6 +242,62 @@ def test_the_resolution_lives_in_one_place_and_takes_a_repository():
         assert "repo" in parameters, function.__name__
         assert parameters["repo"].default == conftest.HARNESS_ROOT
     assert "validation_file" in inspect.signature(story_diff).parameters
+
+
+#: The five resolvers, each with the full signature it carries, spelled out
+#: rather than derived. story-053 converted twenty-six modules off them and was
+#: required to change neither their behaviour nor their interface, and that is a
+#: claim about *these five signatures* -- so they are written here and compared,
+#: rather than asserted one keyword at a time in a way that could not notice a
+#: parameter appearing, disappearing, changing default, or changing kind.
+RESOLVER_SIGNATURES = {
+    "story_commit_range":
+        "(validation_file: pathlib.Path, repo: pathlib.Path = HARNESS_ROOT, "
+        "origin: str | None = None) -> conftest.StoryRange",
+    "story_diff":
+        "(paths: list[str], *, validation_file: pathlib.Path, "
+        "repo: pathlib.Path = HARNESS_ROOT, diff_filter: str | None = None, "
+        "options: tuple[str, ...] = (), origin: str | None = None) -> str",
+    "repository_file_at":
+        "(relative: str, *, revision: str | None = None, "
+        "validation_file: pathlib.Path | None = None, bound: str | None = None, "
+        "repo: pathlib.Path = HARNESS_ROOT, origin: str | None = None) -> str",
+    "function_source_at":
+        "(relative: str, name: str, *, revision: str | None = None, "
+        "validation_file: pathlib.Path | None = None, bound: str | None = None, "
+        "repo: pathlib.Path = HARNESS_ROOT, origin: str | None = None) -> str",
+    "revision_carrying":
+        "(relative: str, *needles: str, repo: pathlib.Path = HARNESS_ROOT) -> str",
+}
+
+
+def test_the_five_resolvers_keep_their_signatures():
+    """Asserted of the signatures, not claimed of them.
+
+    `inspect.signature` renders parameter names, kinds, defaults and
+    annotations, so a resolver that gained a keyword, lost one, changed a
+    default or moved a parameter between positional and keyword-only reports a
+    different string here. The `HARNESS_ROOT` default renders as the repository
+    path, which would make this a machine-specific literal, so it is folded
+    back to the name it is written under.
+    """
+    for name, expected in RESOLVER_SIGNATURES.items():
+        rendered = str(inspect.signature(getattr(conftest, name)))
+        rendered = rendered.replace(repr(conftest.HARNESS_ROOT), "HARNESS_ROOT")
+        assert rendered == expected, name
+
+    # The control: the comparison can differ. A resolver's signature read
+    # without the fold, and one read from a function with a parameter added,
+    # are both reported as different by the same comparison.
+    def with_one_more(relative: str, *needles: str, repo=conftest.HARNESS_ROOT,
+                      shallow: bool = False) -> str:
+        return ""
+
+    widened = str(inspect.signature(with_one_more)).replace(
+        repr(conftest.HARNESS_ROOT), "HARNESS_ROOT")
+    assert widened != RESOLVER_SIGNATURES["revision_carrying"]
+    assert str(inspect.signature(conftest.revision_carrying)) \
+        != RESOLVER_SIGNATURES["revision_carrying"]
 
 
 def test_no_repaired_file_carries_its_own_copy_of_the_resolution():
@@ -430,6 +464,267 @@ def test_the_raise_is_not_swallowed_by_the_diff_helper(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# The three less-proven resolvers, over the shapes this repository has hit
+#
+# `story_commit_range` has been exercised above since story-015.
+# `repository_file_at`, `function_source_at` and `revision_carrying` arrived
+# later and were proven only by the callers that happened to use them -- which
+# is no proof at all, because every one of those callers asked *this*
+# repository's history, where the shape under test is whatever the history
+# happens to be on the day. So they are proven here, against histories this
+# module builds, over the four shapes this repository has actually hit: a
+# rename, a revert-and-restore, a squash, and a path with no history.
+#
+# Each case carries its own break rather than its own reimplementation. The
+# helper under test is loaded from `tests/conftest.py` in the working tree with
+# one substitution applied -- the mutation idiom the suite already uses, and
+# the one that keeps the subject the shipped code rather than a copy of it --
+# and the same case is shown answering differently under the break. A case that
+# no break can redden is not proving the helper; it is watching it.
+# --------------------------------------------------------------------------
+
+
+#: One substitution per resolver, each the defect that resolver exists to
+#: prevent. Applied to `tests/conftest.py` in the working tree, so what is
+#: broken is the shipped helper and not a stand-in for it.
+BREAKS = {
+    #: The bound dropped: every read answers HEAD, which is the trap the
+    #: reader's own docstring records under the HEAD-baseline bullets.
+    "repository_file_at": ('result = _git(repo, "show", f"{resolved}:{relative}")',
+                           'result = _git(repo, "show", f"HEAD:{relative}")'),
+    #: Decorators dropped, which `function_source` includes deliberately --
+    #: `_escalate` carries one that decides when its work is committed.
+    "function_source": ("first = min([node.lineno] + "
+                        "[d.lineno for d in node.decorator_list])",
+                        "first = node.lineno"),
+    #: The needles no longer required together on one line, so a revision
+    #: carrying the same words in different sentences answers instead. That is
+    #: the exact collision story-051 spent its retry budget on.
+    "revision_carrying": ("for line in text.splitlines()",
+                          "for line in [text]"),
+}
+
+
+def broken(resolver: str, tmp_path: Path):
+    """`tests/conftest.py` with one resolver's defining line broken."""
+    module = conftest.load_mutant(
+        Path(conftest.__file__), [BREAKS[resolver]],
+        name=f"conftest_with_{resolver}_broken", tmp_path=tmp_path)
+    return module
+
+
+DECORATED = '''\
+import functools
+
+
+@functools.cache
+def marked() -> str:
+    return "{answer}"
+'''
+
+
+def test_repository_file_at_reads_a_renamed_paths_text_at_its_own_name(tmp_path):
+    """A rename is the shape that silently empties a history-bound read.
+
+    Before the rename the text lives at the old path and the new path does not
+    exist; after it, the reverse. Each end is read at the name it has there,
+    which is what the helper is for -- and a read that had drifted to HEAD
+    would find nothing at the old name at all.
+    """
+    root = tmp_path / "renamed"
+    before, after = conftest.build_history(root, [
+        {"write": {"orchestration/old_name.py": DECORATED.format(answer="first")},
+         "message": "the original"},
+        {"rename": {"orchestration/old_name.py": "orchestration/new_name.py"},
+         "write": {"orchestration/new_name.py": DECORATED.format(answer="second")},
+         "message": "renamed and rewritten"},
+    ])
+
+    assert 'return "first"' in conftest.repository_file_at(
+        "orchestration/old_name.py", revision=before, repo=root)
+    assert 'return "second"' in conftest.repository_file_at(
+        "orchestration/new_name.py", revision=after, repo=root)
+    with pytest.raises(NothingToCompareAgainst):
+        conftest.repository_file_at("orchestration/new_name.py", revision=before,
+                                    repo=root)
+
+    # The break: the same two reads with the bound dropped answer HEAD, where
+    # the old name is gone and the new one carries the later text.
+    hobbled = broken("repository_file_at", tmp_path)
+    with pytest.raises(hobbled.NothingToCompareAgainst):
+        hobbled.repository_file_at("orchestration/old_name.py", revision=before,
+                                   repo=root)
+    assert 'return "second"' in hobbled.repository_file_at(
+        "orchestration/new_name.py", revision=before, repo=root)
+
+
+def test_function_source_at_recovers_a_decorated_function_across_a_rename(
+    tmp_path,
+):
+    """The text half, over the same rename, decorators included."""
+    root = tmp_path / "renamed-function"
+    before, after = conftest.build_history(root, [
+        {"write": {"orchestration/old_name.py": DECORATED.format(answer="first")},
+         "message": "the original"},
+        {"rename": {"orchestration/old_name.py": "orchestration/new_name.py"},
+         "write": {"orchestration/new_name.py": DECORATED.format(answer="second")},
+         "message": "renamed and rewritten"},
+    ])
+
+    recovered = conftest.function_source_at("orchestration/old_name.py", "marked",
+                                            revision=before, repo=root)
+    assert recovered.startswith("@functools.cache")
+    assert 'return "first"' in recovered
+    assert conftest.function_source_at("orchestration/new_name.py", "marked",
+                                       revision=after,
+                                       repo=root).startswith("@functools.cache")
+
+    # The break: without the decorator the recovered source is a different
+    # text, so a comparison of two revisions' sources would miss a decorator
+    # added or removed between them.
+    hobbled = broken("function_source", tmp_path)
+    without = hobbled.function_source_at("orchestration/old_name.py", "marked",
+                                         revision=before, repo=root)
+    assert not without.startswith("@functools.cache")
+    assert without != recovered
+
+
+def test_revision_carrying_skips_the_commit_that_removed_the_path(tmp_path):
+    """A revert-and-restore: the path is written, deleted, and written again.
+
+    `git log -- <path>` reports the deleting commit too, and that revision
+    holds no blob at all. The helper has to answer no rather than raise there,
+    and go on to the revision that does carry the text.
+    """
+    root = tmp_path / "revert-and-restore"
+    written, removed, restored = conftest.build_history(root, [
+        {"write": {"docs/note.md": "the original sentence, exactly as written\n"},
+         "message": "written"},
+        {"delete": ["docs/note.md"], "message": "reverted"},
+        {"write": {"docs/note.md": "a replacement sentence\n"}, "message": "restored"},
+    ])
+
+    assert conftest.revision_carrying("docs/note.md", "original", "sentence",
+                                      repo=root) == written
+    assert conftest.revision_carrying("docs/note.md", "replacement",
+                                      repo=root) == restored
+    # The deleting commit really is in the path's log, so the skip is doing
+    # work rather than never being reached.
+    log = git(root, "log", "--format=%H", "--", "docs/note.md").split()
+    assert removed in log
+    with pytest.raises(NothingToCompareAgainst):
+        conftest.repository_file_at("docs/note.md", revision=removed, repo=root)
+
+
+def test_revision_carrying_requires_the_needles_on_one_line(tmp_path):
+    """The property story-051's retry budget paid for.
+
+    A later revision carrying the same two words in *different* sentences must
+    not answer a search for the sentence that held them together.
+    """
+    root = tmp_path / "one-line"
+    sentence, scattered = conftest.build_history(root, [
+        {"write": {"docs/note.md": "the check reports twenty-six modules\n"},
+         "message": "the sentence"},
+        {"write": {"docs/note.md": "the check was rewritten.\n"
+                                   "it now covers twenty-six of something else.\n"
+                                   "it reports nothing about them.\n"},
+         "message": "the same words, different sentences"},
+    ])
+
+    assert conftest.revision_carrying("docs/note.md", "reports", "twenty-six",
+                                      repo=root) == sentence
+
+    # The break: dropping the one-line requirement answers with the later
+    # revision, which carries both words and says the opposite.
+    hobbled = broken("revision_carrying", tmp_path)
+    assert hobbled.revision_carrying("docs/note.md", "reports", "twenty-six",
+                                     repo=root) == scattered
+
+
+def test_the_resolvers_survive_a_squash_that_makes_a_pinned_revision_unreachable(
+    tmp_path,
+):
+    """The squash-merge shape, end to end.
+
+    Several commits are replayed as one, and the repository is cloned so the
+    replaced commits are genuinely absent rather than merely unreferenced. A
+    pinned revision is then unreadable — which is how a suite that passed
+    locally failed in the clean clone — while the search finds the text in the
+    commit that now carries it.
+    """
+    root = tmp_path / "before-squash"
+    base, _, pinned = conftest.build_history(root, [
+        {"write": {"docs/note.md": "nothing yet\n"}, "message": "base"},
+        {"write": {"docs/note.md": "an intermediate sentence\n"},
+         "message": "step one"},
+        {"write": {"docs/note.md": "the sentence that survives the squash\n"},
+         "message": "step two"},
+    ])
+    squashed = conftest.squash_onto(root, base, "the squash merge")
+
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", root.as_uri(), str(clone)],
+                   cwd=tmp_path, capture_output=True, text=True, check=True)
+    assert git(clone, "rev-parse", "HEAD").strip() == squashed
+    assert pinned not in git(clone, "log", "--format=%H")
+
+    # The pinned revision cannot be read in the clone at all.
+    with pytest.raises(NothingToCompareAgainst):
+        conftest.repository_file_at("docs/note.md", revision=pinned, repo=clone)
+    # The search, which is what the helper is for, still finds it.
+    assert conftest.revision_carrying("docs/note.md", "survives", "squash",
+                                      repo=clone) == squashed
+    assert "survives the squash" in conftest.repository_file_at(
+        "docs/note.md", revision=squashed, repo=clone)
+
+    # The break: with the bound dropped, the unreachable pinned revision reads
+    # *successfully* — it silently answers HEAD — so the unreachability the
+    # clean clone would have reported disappears into a green assertion. That
+    # is the shape of the failure this whole resolution exists to prevent, and
+    # the raise above is what prevents it.
+    hobbled = broken("repository_file_at", tmp_path)
+    assert "survives the squash" in hobbled.repository_file_at(
+        "docs/note.md", revision=pinned, repo=clone)
+
+
+def test_a_path_with_no_history_raises_rather_than_answering(tmp_path):
+    """A file in the working tree that no commit has ever carried.
+
+    Every one of the three has to refuse it. Degrading to the working tree
+    there is the failure mode the whole resolution exists to prevent: it hands
+    the caller a value that looks like an answer and makes the assertion built
+    on it unfalsifiable.
+    """
+    root = tmp_path / "no-history"
+    conftest.build_history(root, [
+        {"write": {"docs/note.md": "committed\n"}, "message": "only this"},
+    ])
+    write(root, "docs/never-committed.md", "written but never committed\n")
+
+    with pytest.raises(NothingToCompareAgainst):
+        conftest.repository_file_at("docs/never-committed.md", revision="HEAD",
+                                    repo=root)
+    with pytest.raises(NothingToCompareAgainst):
+        conftest.function_source_at("docs/never-committed.md", "marked",
+                                    revision="HEAD", repo=root)
+    with pytest.raises(NothingToCompareAgainst) as raised:
+        conftest.revision_carrying("docs/never-committed.md", "written",
+                                   repo=root)
+    assert "no revision" in str(raised.value)
+
+    # The break: a read that answers the working tree instead returns the text
+    # happily, which is the shape of an answer nobody can falsify.
+    hobbled = broken("repository_file_at", tmp_path)
+    with pytest.raises(hobbled.NothingToCompareAgainst):
+        hobbled.repository_file_at("docs/never-committed.md", revision="HEAD",
+                                   repo=root)
+    # And the working-tree file really is there, so the refusal is about the
+    # history rather than about the path being absent.
+    assert (root / "docs/never-committed.md").is_file()
+
+
+# --------------------------------------------------------------------------
 # The four repairs, shown failing
 # --------------------------------------------------------------------------
 
@@ -451,16 +746,15 @@ def test_every_repaired_subject_is_covered_here():
 
 @pytest.mark.parametrize("rel,subject", SUBJECTS)
 def test_a_repaired_assertion_passes_when_its_story_respects_its_subject(
-    monkeypatch, tmp_path, rel, subject,
+    tmp_path, rel, subject,
 ):
-    root = committed_story(tmp_path, rel, subject)
-    redirect(monkeypatch, REPAIRED[rel], root, rel)
-    assert _assert_unchanged(rel, subject) is None
+    root = repaired_story(tmp_path, subject)
+    assert _assert_unchanged(rel, subject, root) is None
 
 
 @pytest.mark.parametrize("rel,subject", SUBJECTS)
 def test_a_repaired_assertion_fails_when_its_story_violates_its_subject(
-    monkeypatch, tmp_path, rel, subject,
+    tmp_path, rel, subject,
 ):
     """The guarantee: not that the assertion passes, but that it can fail.
 
@@ -468,35 +762,39 @@ def test_a_repaired_assertion_fails_when_its_story_violates_its_subject(
     names, and the repaired code — the module's own helper, unmodified — must
     say so.
     """
-    root = committed_story(tmp_path, rel, subject, violate="modify")
-    redirect(monkeypatch, REPAIRED[rel], root, rel)
+    root = repaired_story(tmp_path, subject, violate="modify")
     with pytest.raises(AssertionError):
-        _assert_unchanged(rel, subject)
+        _assert_unchanged(rel, subject, root)
 
 
 #: The helper each repaired module names its own "did my story leave this
 #: alone" assertion. Keyed by origin rather than by module object, because
 #: story-038's merge gave story-008 and story-009 one module with one helper
 #: apiece, and `module is story008` can no longer tell them apart.
+#:
+#: story-007's entry arrived with story-053: converting that assertion to take
+#: the repository it asks about turned its body into a helper beside it, and
+#: naming the helper here is what lets this table drive all four the same way.
 UNCHANGED_HELPER = {
+    "tests/test_story_007_validation.py": "_no_committed_story_artifact_edited",
     "tests/test_story_008_validation.py": "_unchanged_by_story_008",
     "tests/test_story_009_validation.py": "_unchanged_by_story_009",
     "tests/test_story_010_validation.py": "_unchanged_by_this_story",
 }
 
 
-def _assert_unchanged(rel: str, subject) -> None:
-    """Run the module's own assertion for `subject`, raising AssertionError
-    when it reports a change."""
+def _assert_unchanged(rel: str, subject, root: Path) -> None:
+    """Run the module's own assertion for `subject` against `root`, raising
+    AssertionError when it reports a change."""
     module = REPAIRED[rel]
-    if rel == "tests/test_story_007_validation.py":
-        module.test_no_committed_story_artifact_was_edited()
-        return None
     helper = getattr(module, UNCHANGED_HELPER[rel])
-    if rel == "tests/test_story_008_validation.py" and subject == ".harness/stories":
-        assert helper(subject, diff_filter="MD")
+    if rel == "tests/test_story_007_validation.py":
+        assert helper(root)
         return None
-    assert helper(subject)
+    if rel == "tests/test_story_008_validation.py" and subject == ".harness/stories":
+        assert helper(subject, root, diff_filter="MD")
+        return None
+    assert helper(subject, root)
     return None
 
 
@@ -507,51 +805,42 @@ def test_the_same_violation_is_invisible_to_the_baseline_this_story_removed(
     """Why every one of these repairs was needed, demonstrated per subject:
     over the identical history, `git diff HEAD` is empty and the honest range
     is not."""
-    root = committed_story(tmp_path, rel, subject, violate="modify")
+    root = repaired_story(tmp_path, subject, violate="modify")
     assert git(root, "diff", "HEAD", "--", subject).strip() == ""
-    assert story_diff([subject], validation_file=root / rel,
-                      repo=root).strip() != ""
+    assert conftest.constructed_story_diff(root, [subject]).strip() != ""
 
 
 @pytest.mark.parametrize("violation", ["modify", "delete"])
 def test_the_narrowed_assertions_still_catch_a_rewritten_execution_record(
-    monkeypatch, tmp_path, violation,
+    tmp_path, violation,
 ):
     """Narrowed to modifications and deletions is not weakened: a committed
     story artifact rewritten or removed inside the story's own run commit is
     still caught, by both narrowed assertions."""
-    for rel, module, subject in (
-        ("tests/test_story_007_validation.py", REPAIRED[
-            "tests/test_story_007_validation.py"], ".harness/stories/"),
-        ("tests/test_story_008_validation.py", REPAIRED[
-            "tests/test_story_008_validation.py"], ".harness/stories"),
+    for rel, subject in (
+        ("tests/test_story_007_validation.py", ".harness/stories/"),
+        ("tests/test_story_008_validation.py", ".harness/stories"),
     ):
-        root = committed_story(tmp_path, rel, subject, violate=violation,
-                               name=f"{Path(rel).stem}-{violation}")
-        redirect(monkeypatch, module, root, rel)
+        root = repaired_story(tmp_path, subject, violate=violation,
+                              name=f"{Path(rel).stem}-{violation}")
         with pytest.raises(AssertionError):
-            _assert_unchanged(rel, subject)
+            _assert_unchanged(rel, subject, root)
 
 
-def test_the_narrowing_permits_exactly_the_storys_own_new_artifact(
-    monkeypatch, tmp_path,
-):
+def test_the_narrowing_permits_exactly_the_storys_own_new_artifact(tmp_path):
     """And what it lets through: an *addition* inside the story's own run
     commit, which was never an edit. The control is the test above — the same
     assertion still fires on a modification or a deletion."""
-    for rel, module, subject in (
-        ("tests/test_story_007_validation.py", REPAIRED[
-            "tests/test_story_007_validation.py"], ".harness/stories/"),
-        ("tests/test_story_008_validation.py", REPAIRED[
-            "tests/test_story_008_validation.py"], ".harness/stories"),
+    for rel, subject in (
+        ("tests/test_story_007_validation.py", ".harness/stories/"),
+        ("tests/test_story_008_validation.py", ".harness/stories"),
     ):
-        root = committed_story(tmp_path, rel, subject, violate="add",
-                               name=f"{Path(rel).stem}-added")
-        added = story_diff([subject], validation_file=root / rel, repo=root,
-                           diff_filter="A", options=("--name-only",))
+        root = repaired_story(tmp_path, subject, violate="add",
+                              name=f"{Path(rel).stem}-added")
+        added = conftest.constructed_story_diff(
+            root, [subject], diff_filter="A", options=("--name-only",))
         assert added.strip(), "the synthetic story was supposed to add a record"
-        redirect(monkeypatch, module, root, rel)
-        assert _assert_unchanged(rel, subject) is None
+        assert _assert_unchanged(rel, subject, root) is None
 
 
 def test_no_repaired_assertion_changed_its_subject_or_its_strictness():
@@ -617,17 +906,25 @@ def _guarded_paths(source: str) -> set[str]:
     return paths
 
 
-def test_the_repaired_assertions_pass_on_this_repository():
-    """Run for real, unpatched, against the repository under test."""
-    story007.test_no_committed_story_artifact_was_edited()
-    assert story008._unchanged_by_story_008("scripts/l5-assist")
-    assert story008._unchanged_by_story_008("schemas/story.schema.json")
-    assert story008._unchanged_by_story_008(".harness/stories", diff_filter="MD")
-    for rel in ("workflows/", "rules/", "schemas/"):
-        assert story009._unchanged_by_story_009(rel)
-    for rel in ("orchestration/context_assembler.py", "workflows/", "schemas/",
-                "rules/", "prompts/"):
-        assert story010._unchanged_by_this_story(rel)
+def test_the_repaired_assertions_pass_on_this_repository(tmp_path):
+    """Run for real and unpatched: the repaired modules' own test functions,
+    as this repository ships them, executed here end to end.
+
+    Their subjects, their controls and their strictness are the modules' own —
+    nothing here reaches inside them — so what this asserts is that the four
+    repaired assertions, as they stand in this repository, pass.
+    """
+    story007.test_no_committed_story_artifact_was_edited(tmp_path / "story-007")
+    story008.test_l5_assist_is_unchanged(tmp_path / "assist")
+    story008.test_the_story_schema_is_unchanged(tmp_path / "story-schema")
+    story008.test_no_committed_story_artifact_was_edited(tmp_path / "story-008")
+    for index, rel in enumerate(("workflows/", "rules/", "schemas/")):
+        story009.test_the_definitions_this_story_injects_are_unchanged(
+            rel, tmp_path / f"story-009-{index}")
+    story010.test_context_assembler_is_unchanged(tmp_path / "assembler")
+    for index, rel in enumerate(("workflows/", "schemas/", "rules/", "prompts/")):
+        story010.test_the_definitions_this_story_reads_are_unchanged(
+            rel, tmp_path / f"story-010-{index}")
 
 
 # --------------------------------------------------------------------------
@@ -638,12 +935,19 @@ def test_the_repaired_assertions_pass_on_this_repository():
 def pre_repair_source(rel: str) -> str:
     """A repaired file as it stood before this story touched it.
 
-    Resolved through the shared resolution applied to *this* file: HEAD while
-    story-015 is in flight, the pre-story revision once it commits. No pinned
-    SHA, so a rebase or a squash does not move the answer.
+    Carried as a committed fixture under `tests/history-fixtures/` rather than
+    resolved out of this repository's commit graph. The text is the same text
+    -- it was lifted from the baseline of story-015's own commit range, which
+    is where this used to read it from -- but it is now evidence the repository
+    *holds* rather than an answer git recomputes. A rebase, a squash or a
+    rename moved the old answer and moves nothing here, and the fixture is
+    diffable, so a story that changes the regression set changes it visibly.
+
+    What the fixture claims about itself is asserted rather than trusted, by
+    `test_the_recovered_pre_repair_sources_are_the_pre_repair_sources` below
+    and by every scan that is fed it.
     """
-    return repository_file_at(rel, validation_file=Path(__file__),
-                              bound=BASELINE, repo=REPO_ROOT)
+    return conftest.history_fixture(f"{Path(rel).name}.txt")
 
 
 def test_the_recovered_pre_repair_sources_are_the_pre_repair_sources():
@@ -762,19 +1066,39 @@ def test_the_throwaway_repository_tests_are_unflagged_by_the_scanner(name):
     assert check.flagged_calls(path.read_text(encoding="utf-8"), name) == []
 
 
-def test_story_011s_validation_file_is_unflagged_and_unchanged_by_this_story():
+def test_story_011s_validation_file_is_unflagged_and_unchanged_by_this_story(
+    tmp_path,
+):
     """Two names for one module, and each is the name it has where it is read.
 
     The scan reads the working tree, where story-038 renamed the file to
-    `test_execution_history.py`; the diff asks what story-015's own run
-    commit did to it, and inside that range it is `test_story_011_validation
-    .py`. Asking for either at the other's name reads nothing.
+    `test_execution_history.py`. The diff asks whether a story left that
+    module's baseline-era path alone, and it asks it of a repository this test
+    builds: a story that touches nothing there is reported clean, and the same
+    call over a story that rewrites it reports the change. Reading this
+    repository's own commit graph for it made the answer move on a rename, a
+    squash or a rebase, none of which is a property of the module being
+    unflagged.
     """
     current = "tests/test_execution_history.py"
     at_story_015 = "tests/test_story_011_validation.py"
     assert check.flagged_calls((REPO_ROOT / current).read_text(encoding="utf-8"),
                                current) == []
-    assert story_diff([at_story_015], validation_file=Path(__file__)).strip() == ""
+
+    respecting = committed_story(tmp_path, "tests/test_story_015_validation.py",
+                                 at_story_015, name="story-011-left-alone")
+    assert story_diff([at_story_015],
+                      validation_file=respecting / "tests/test_story_015_validation.py",
+                      repo=respecting).strip() == ""
+    # The control: the identical call over a story whose own run commit did
+    # rewrite that path reports it, so the emptiness above is a statement about
+    # the story rather than about a comparison that cannot differ.
+    violating = committed_story(tmp_path, "tests/test_story_015_validation.py",
+                                at_story_015, violate="modify",
+                                name="story-011-rewritten")
+    assert story_diff([at_story_015],
+                      validation_file=violating / "tests/test_story_015_validation.py",
+                      repo=violating).strip() != ""
 
 
 def test_exactly_one_module_is_exempt_and_the_exemption_is_stated():
@@ -930,8 +1254,21 @@ def test_the_guidance_is_read_from_the_render_and_not_from_the_template(
                                  "prompts/implementer.md", "prompts/planner.md",
                                  "prompts/documenter.md",
                                  "prompts/harness-layer.md", "prompts/assist.md"])
-def test_this_story_changed_nothing_outside_its_scope(rel):
-    assert story_diff([rel], validation_file=Path(__file__)).strip() == ""
+def test_this_story_changed_nothing_outside_its_scope(rel, tmp_path):
+    """Each scoped path, over a repository in which the story respected it.
+
+    Restated rather than recalled. Asked of this repository's own commit graph
+    the assertion re-stated a frozen past fact, and its answer moved whenever
+    something was committed, renamed, squashed or rebased — a rename gives a
+    path a new add-commit and silently empties every assertion bounded by that
+    path's range. Here the story is built, the predicate is the same predicate,
+    and the control beside it shows the same call reporting the violation.
+    """
+    validation_rel = "tests/test_story_015_validation.py"
+    respecting = committed_story(tmp_path, validation_rel, rel,
+                                 name="in-scope")
+    assert story_diff([rel], validation_file=respecting / validation_rel,
+                      repo=respecting).strip() == ""
 
 
 def test_the_scope_assertion_above_can_fail(tmp_path):
@@ -943,7 +1280,7 @@ def test_the_scope_assertion_above_can_fail(tmp_path):
                       repo=root).strip() != ""
 
 
-def test_the_archived_story_013_copy_was_not_restored_or_edited():
+def test_the_archived_story_013_copy_was_not_restored_or_edited(tmp_path):
     """Held by content rather than by the path's absence.
 
     This was written as `not (TESTS_DIR / "test_story_013_validation.py")
@@ -961,8 +1298,21 @@ def test_the_archived_story_013_copy_was_not_restored_or_edited():
     # check still flags it.
     assert check.flagged_calls(archived, ARCHIVED_INSTANCE.name)
     assert ARCHIVED_INSTANCE.is_file()
-    assert story_diff([str(ARCHIVED_INSTANCE.relative_to(REPO_ROOT))],
-                      validation_file=Path(__file__)).strip() == ""
+    # And the archive is not a path a story edits in passing. Asked of this
+    # repository's history that was a frozen fact whose evidence moved under
+    # it; asked of a story this test builds it is checked, with the control
+    # beside it showing the same call reporting an edit to the archive.
+    archive = str(ARCHIVED_INSTANCE.parent.relative_to(REPO_ROOT))
+    validation_rel = "tests/test_story_015_validation.py"
+    respecting = committed_story(tmp_path, validation_rel, archive,
+                                 name="archive-left-alone")
+    assert story_diff([archive],
+                      validation_file=respecting / validation_rel,
+                      repo=respecting).strip() == ""
+    violating = committed_story(tmp_path, validation_rel, archive,
+                                violate="modify", name="archive-edited")
+    assert story_diff([archive], validation_file=violating / validation_rel,
+                      repo=violating).strip() != ""
 
 
 def test_the_suite_still_has_the_tests_the_repaired_files_shipped_with():

@@ -93,7 +93,6 @@ import context_assembler
 import harness_config
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import BASELINE, ENDPOINT, repository_file_at
 import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -531,18 +530,22 @@ def test_the_move_changed_no_stage_declaration(harness_root):
     was, apart from the one route the story adds.
 
     A shipped-artifact reading, deliberately. The subject is what *this
-    repository's* story-045 commit did to the definition it deploys, so the
-    definition is read at both ends of this story's own commit range through
-    the shared resolution — not the working tree against whatever HEAD
-    happens to be, and not a definition this module built, which has no
-    history to compare.
+    repository's* story-045 commit did to the definition it deploys — not the
+    working tree against whatever HEAD happens to be, and not a definition this
+    module built, which has no reorder to compare.
+
+    Both ends are frozen past texts, and since story-053 both are carried as
+    committed fixtures rather than resolved out of this repository's commit
+    graph. What the story did to the definition does not change when the
+    repository is committed to, renamed, squashed or rebased; the resolution
+    did. The two texts are the same two texts, lifted from exactly those
+    bounds, and the assertion that they carry different stage orders is the
+    control that they are two files rather than one read twice.
     """
-    before = json.loads(repository_file_at(
-        "workflows/story-workflow.json", validation_file=Path(__file__),
-        bound=BASELINE))
-    after = json.loads(repository_file_at(
-        "workflows/story-workflow.json", validation_file=Path(__file__),
-        bound=ENDPOINT))
+    before = json.loads(conftest.history_fixture(
+        "story-workflow.at-story-045-baseline.json"))
+    after = json.loads(conftest.history_fixture(
+        "story-workflow.at-story-045-endpoint.json"))
 
     old = {stage["name"]: stage for stage in before["stages"]}
     new = {stage["name"]: stage for stage in after["stages"]}

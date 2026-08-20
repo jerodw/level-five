@@ -1,0 +1,11 @@
+def _revert_check_permitted(
+    run_dir: Path, stage_name: str, artifact: str, edits: GovernedEdits
+) -> None:
+    append_event(
+        run_dir,
+        f"{stage_name} edits under {', '.join(edits.prefixes)} permitted: the "
+        f"suite fails with {', '.join(edits.paths)} reverted",
+        kind="revert-check-permitted",
+        stage=stage_name,
+        artifacts=[artifact],
+    )

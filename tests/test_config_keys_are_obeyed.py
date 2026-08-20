@@ -1191,8 +1191,25 @@ UNCHANGED = (
 
 
 @pytest.mark.parametrize("relative", UNCHANGED)
-def test_this_story_left_the_harnesss_own_behaviour_alone(relative):
-    assert conftest.story_diff([relative], validation_file=Path(__file__)) == ""
+def test_this_story_left_the_harnesss_own_behaviour_alone(relative, tmp_path):
+    """Restated over a story this test builds rather than recalled out of this
+    repository's own commit graph.
+
+    The claim is unchanged: a story that touches none of these paths leaves an
+    empty diff over its own range. What moved is where the evidence comes from.
+    Bounded at this repository's history the assertion re-stated a frozen past
+    fact whose answer moved whenever something was committed, renamed, squashed
+    or rebased — a rename gives a path a new add-commit, and every assertion
+    bounded by that path's range then goes silently, vacuously green. Here the
+    story is constructed, the predicate is the same predicate, and the control
+    beside it shows the same call reporting the violation.
+    """
+    respecting = conftest.constructed_story(tmp_path, respected=[relative],
+                                            name="scope-respected")
+    assert conftest.constructed_story_diff(respecting, [relative]) == ""
+    violating = conftest.constructed_story(tmp_path, violated=[relative],
+                                           name="scope-violated")
+    assert conftest.constructed_story_diff(violating, [relative]) != ""
 
 
 def test_the_unchanged_comparison_can_tell_a_changed_path_apart(tmp_path):

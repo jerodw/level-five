@@ -1,0 +1,49 @@
+def capture_stage_baseline(
+    run_dir: Path,
+    target_root: Path,
+    baseline: str,
+    stage_name: str,
+    attempt: int,
+    prefixes: list[str],
+) -> Path:
+    """Record what the tree held under a stage's governed prefixes before it ran.
+
+    The file set is `git ls-files --cached --others --exclude-standard` under
+    each prefix — the same tracked-plus-untracked set `_build_clone` carries
+    into a clone — so a file an earlier stage of this run created and never
+    committed is captured. Tracked files alone would miss exactly that file,
+    which is the whole reason this exists.
+
+    Capture once, reuse afterwards: a directory already recorded for this stage
+    and attempt is returned untouched, so a re-entered stage is decided against
+    the state it originally found rather than against its own completed edits.
+    The directory is created even when it captures nothing, so its existence
+    answers "was a baseline taken" and its absence is a distinct, reportable
+    condition rather than an empty capture.
+
+    It names no stage and no prefix: both come from the loaded workflow. The
+    result is evidence — nothing routes on it, and it is not in state.json.
+    """
+    directory = stage_baseline_dir(run_dir, baseline, stage_name, attempt)
+    if directory.exists():
+        return directory
+    directory.mkdir(parents=True)
+    for prefix in prefixes:
+        listed = _git(
+            target_root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            prefix,
+        ).stdout
+        for rel in filter(None, listed.split("\0")):
+            source = target_root / rel
+            if not source.is_file():
+                continue
+            destination = directory / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+    return directory

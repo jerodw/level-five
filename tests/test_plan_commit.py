@@ -61,8 +61,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, repointed_at_todays_signature,
-                      repository_file_at, story_commit_range)
+from conftest import repointed_at_todays_signature
+import conftest
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
@@ -652,15 +652,28 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
 # --------------------------------------------------------------------------
 
 
+#: The two pre-story texts this module runs and reads, carried as committed
+#: fixtures rather than resolved out of this repository's commit graph.
+PRE_STORY_FIXTURES = {
+    "scripts/l5-plan": "l5-plan.at-story-023-baseline.py.txt",
+    "prompts/planner.md": "prompts-planner.at-story-023-baseline.md.txt",
+}
+
+
 def pre_story_text(rel: str) -> str:
     """One repository file as it stood before this story's own run.
 
     story-029 folded this module's three private `git show` calls into
-    `conftest.repository_file_at`, which resolves the same shared baseline
-    they each resolved for themselves. Subject and strictness unchanged.
+    `conftest.repository_file_at`, which resolved the same shared baseline they
+    each resolved for themselves. story-053 moved where the text comes from:
+    it is an *input* — an earlier version of a script, run below to show what it
+    did not do — and resolving an input out of this repository's commit graph
+    made it move whenever something was committed, renamed, squashed or
+    rebased. Subject and strictness unchanged; the text is the same text,
+    lifted from exactly that baseline and committed under
+    `tests/history-fixtures/`.
     """
-    return repository_file_at(rel, validation_file=VALIDATION_FILE,
-                              bound=BASELINE, repo=HARNESS_ROOT)
+    return conftest.history_fixture(PRE_STORY_FIXTURES[rel])
 
 
 def pre_story_script(tmp_path: Path) -> Path:

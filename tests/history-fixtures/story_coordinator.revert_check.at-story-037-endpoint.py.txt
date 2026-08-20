@@ -1,0 +1,71 @@
+def revert_check(
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    artifact: str,
+    paths: tuple[str, ...],
+    baseline: Path | None = None,
+) -> RevertCheckResult:
+    """Run the suite once with every governed path reverted, and record it.
+
+    Shaped like clean_clone_check: a scratch directory outside the target
+    repository, the shared runner, and removal in a finally whatever the
+    result. The decision is the suite's exit status — a non-zero exit means
+    the edits were needed, which is what makes them maintenance rather than
+    authorship.
+
+    The paths are restored to the content `baseline` holds for them, and a
+    governed path the baseline does not hold is deleted in the clone rather
+    than skipped: skipping decides nothing and would report a permission the
+    check never established.
+
+    Two things stop the check from running, and both are reported as a check
+    that did not run, with the reason, rather than as a permission: a stage
+    that declares the check with no baseline captured, and a clone that
+    cannot be built at all.
+    """
+    command = config["test_command"]
+    python = config.get("clean_clone_python") or shlex.split(command)[0]
+    resolved = baseline if baseline is not None and baseline.is_dir() else None
+
+    if resolved is None:
+        result = CleanCloneResult(
+            ran=False,
+            command=command,
+            python=python,
+            reason=(
+                "no baseline was captured for the stage, so there is no state "
+                f"to revert the edits to: {baseline}"
+            ),
+        )
+    else:
+        scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
+        try:
+            result = run_clean_clone(
+                target_root,
+                command,
+                config.get("clean_clone_python"),
+                scratch,
+                revert=list(paths),
+                baseline=resolved,
+            )
+        except (RuntimeError, OSError) as error:
+            result = CleanCloneResult(
+                ran=False,
+                command=command,
+                python=python,
+                reason=f"the clone with the edits reverted could not be built: {error}",
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    decided = RevertCheckResult(
+        result=result,
+        paths=paths,
+        permitted=(result.exit_code != 0) if result.ran else None,
+        baseline=str(resolved) if resolved is not None else None,
+    )
+    (run_dir / artifact).write_text(
+        json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
+    )
+    return decided

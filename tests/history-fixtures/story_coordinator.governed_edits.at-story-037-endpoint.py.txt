@@ -1,0 +1,23 @@
+def governed_edits(
+    run_dir: Path, record_name: str, prefixes: list[str], granted: list[str]
+) -> GovernedEdits:
+    """Read a stage's record for the edits the revert check decides on.
+
+    Names no stage and no prefix; the caller passes the stage's enforced list
+    whole and, beside it, the values the story grants that stage. A path a
+    grant covers is skipped, so it is exempt from this check exactly as it is
+    exempt from the ownership check, and by the same decision — grant_covers,
+    which both read. Sorted, so the record and the escalation reason are
+    deterministic.
+    """
+    changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
+    paths, matched = set(), set()
+    for group in ("modified", "deleted"):
+        for path in changed.get(group, []):
+            if grant_covers(granted, path):
+                continue
+            for prefix in prefixes:
+                if path.startswith(prefix):
+                    paths.add(path)
+                    matched.add(prefix)
+    return GovernedEdits(tuple(sorted(paths)), tuple(sorted(matched)))

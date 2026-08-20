@@ -623,6 +623,230 @@ def commit_setup(root: Path, message: str = "setup for this test") -> None:
 
 
 
+# --------------------------------------------------------------------------
+# Building a history instead of reaching for this repository's own
+#
+# The five resolvers above answer a question about a commit graph, and they are
+# the sanctioned route to *this* repository's. What they are not is a source of
+# ordinary inputs. A module that wanted a sentence, an earlier version of a
+# function, or the set of paths some past change touched was using the history
+# as an instrument, and its answers then moved when something was committed,
+# renamed, squashed or rebased -- none of which is a property of the code under
+# test. story-051 measured the price: a pinned revision rebased away by a
+# squash merge, then a content search that collided with the story's own
+# documentation, and a whole retry budget spent on one sentence.
+#
+# So a test that needs a commit graph builds one, exactly as a test that needs
+# a workflow builds one. `constructed_story` is that builder: a repository
+# under a temporary directory in which one story has already run and committed,
+# with the paths it respected and the paths it violated named by the caller. It
+# is the same shape `target_root` builds for a run, and the same shape the
+# pre-story control family in `tests/test_shared_baseline_resolution.py`
+# established -- generalised here once rather than copied into each of the
+# modules that needs it.
+#
+# And a test that needs a *text* this repository once carried -- the source of
+# a file before a repair, the wording of a document before a correction --
+# carries it as a committed fixture under `tests/history-fixtures/` and reads
+# it with `history_fixture`. Committed, so it is evidence the repository holds
+# rather than an answer git recomputes; read from the working tree, so no
+# rebase, squash or rename moves it.
+# --------------------------------------------------------------------------
+
+
+#: Where a constructed story's validation file sits inside a repository a test
+#: builds. Deliberately not the name of any module under `tests/`: the
+#: resolution consults `STORY_ORIGINS` by basename, and a constructed
+#: repository holds exactly one story, whose only lineage is its own path.
+CONSTRUCTED_VALIDATION_REL = "tests/test_constructed_story_validation.py"
+
+#: What the builder writes as the constructed story's own validation file. Its
+#: content is irrelevant to every assertion -- what matters is the commit that
+#: adds it -- so it is a file that would run if anybody ran it.
+CONSTRUCTED_VALIDATION_SOURCE = "def test_the_constructed_story():\n    assert True\n"
+
+
+def _sample_under(guarded: str) -> tuple[str, str]:
+    """A file the guarded pathspec covers, and a second one it would also cover.
+
+    A pathspec naming a directory -- `schemas/`, or `.harness/stories` -- is
+    covered by anything beneath it, and a pathspec naming a file is covered by
+    itself. The second name is what an *addition* inside the story's own run
+    commit looks like, which is the case a `--diff-filter=MD` assertion
+    deliberately lets through.
+    """
+    if guarded.endswith("/") or not Path(guarded).suffix:
+        base = guarded.rstrip("/")
+        return f"{base}/kept.txt", f"{base}/brand-new.txt"
+    return guarded, f"{guarded}.new"
+
+
+def constructed_story(tmp_path: Path, *,
+                      respected: Sequence[str] = (),
+                      violated: Sequence[str] = (),
+                      violation: str = "modify",
+                      validation_rel: str = CONSTRUCTED_VALIDATION_REL,
+                      name: str = "constructed-story") -> Path:
+    """A repository in which one story has already run and committed.
+
+    Commit 1 is the pre-story state: every path named in `respected` and in
+    `violated` exists there. Commit 2 is the story's own run commit -- it adds
+    the validation file, makes an unrelated change the story is entitled to,
+    and touches each path in `violated` and nothing else.
+
+    That is the shape of a finished branch, and the shape in which `git diff
+    HEAD` reports nothing no matter what the story did. `story_diff` bounded at
+    the story's own range reports the violated paths and stays empty for the
+    respected ones, which is what lets a scope assertion be *checked* here
+    rather than recalled out of a history that moves.
+
+    `violation` says how the run commit touches a violated path: `modify`
+    rewrites it, `delete` removes it, and `add` leaves it alone and adds a
+    sibling beside it instead.
+    """
+    if violation not in ("modify", "delete", "add"):
+        raise ValueError(f"violation must be modify, delete or add, not "
+                         f"{violation!r}")
+    root = Path(tmp_path) / name
+    root.mkdir(parents=True)
+    _run_git(root, "init", "-q")
+    for guarded in (*respected, *violated):
+        subject, _ = _sample_under(guarded)
+        _write(root, subject, "the pre-story content\n")
+    _write(root, "unrelated.txt", "something the story may touch\n")
+    _commit(root, "pre-story")
+
+    _write(root, validation_rel, CONSTRUCTED_VALIDATION_SOURCE)
+    _write(root, "unrelated.txt", "the story's own legitimate change\n")
+    for guarded in violated:
+        subject, sibling = _sample_under(guarded)
+        if violation == "modify":
+            _write(root, subject, "rewritten inside the story's own run commit\n")
+        elif violation == "delete":
+            (root / subject).unlink()
+        else:
+            _write(root, sibling, "an addition inside the story's own run commit\n")
+    _commit(root, "the story's own run commit")
+    return root
+
+
+def constructed_story_range(root: Path,
+                            validation_rel: str = CONSTRUCTED_VALIDATION_REL
+                            ) -> StoryRange:
+    """The commit range of the story `constructed_story` built, as it resolves.
+
+    One call rather than a `root / validation_rel` spelled at every site, and
+    the same resolution the live suite uses -- pointed at a repository the test
+    owns.
+    """
+    return story_commit_range(Path(root) / validation_rel, Path(root))
+
+
+def constructed_story_diff(root: Path, paths: Sequence[str], **kwargs) -> str:
+    """`story_diff` for the story `constructed_story` built.
+
+    The caller's own predicate keeps its shape -- empty means the constructed
+    story left those paths alone -- and the repository it asks is the one the
+    test built.
+    """
+    return story_diff(list(paths),
+                      validation_file=Path(root) / kwargs.pop(
+                          "validation_rel", CONSTRUCTED_VALIDATION_REL),
+                      repo=Path(root), **kwargs)
+
+
+def build_history(root: Path, commits: Sequence[dict]) -> list[str]:
+    """A repository built commit by commit, returning each commit's sha.
+
+    Each entry describes one commit: `write` maps a repository-relative path to
+    its text, `delete` names paths to remove, `rename` maps an old path to a
+    new one, and `message` names the commit. It exists so a module proving one
+    of the resolvers can build the *shape* it is about -- a rename, a
+    revert-and-restore, a squash -- rather than a repository plus four
+    hand-rolled `subprocess` calls beside it.
+
+    Renames are applied first, then writes, then deletions, so one commit can
+    move a path and rewrite it at its new name -- which is the rename this
+    repository actually made, and the one that silently empties a read bounded
+    by a path's own add-commit.
+    """
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    _run_git(root, "init", "-q")
+    shas = []
+    for index, entry in enumerate(commits):
+        for old, new in entry.get("rename", {}).items():
+            (root / new).parent.mkdir(parents=True, exist_ok=True)
+            _run_git(root, "mv", old, new)
+        for relative, text in entry.get("write", {}).items():
+            _write(root, relative, text)
+        for relative in entry.get("delete", ()):
+            (root / relative).unlink()
+        shas.append(_commit(root, entry.get("message", f"commit {index + 1}")))
+    return shas
+
+
+def squash_onto(root: Path, base: str, message: str = "squashed") -> str:
+    """Every commit since `base`, replayed as one commit on top of it.
+
+    The shape a squash merge leaves behind, which is the shape that makes a
+    pinned sha unreachable: the individual commits are gone from the branch and
+    the tree they produced is carried by a single new one.
+    """
+    root = Path(root)
+    _run_git(root, "reset", "-q", "--soft", base)
+    return _commit(root, message)
+
+
+def _write(root: Path, relative: str, text: str) -> Path:
+    path = Path(root) / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _run_git(root: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(root), *args],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def _commit(root: Path, message: str) -> str:
+    _run_git(root, "add", "-A")
+    _run_git(root, "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "--allow-empty", "-m", message)
+    return _run_git(root, "rev-parse", "HEAD").strip()
+
+
+#: Where a text this repository once carried is kept, once committed. A
+#: directory rather than a module, and a `.py.txt` suffix rather than `.py`, so
+#: the suite's own scans -- each of which globs `tests/*.py` -- neither collect
+#: a fixture as a test module nor report the very defect a pre-repair fixture
+#: exists to carry.
+HISTORY_FIXTURES = Path(__file__).resolve().parent / "history-fixtures"
+
+
+def history_fixture(name: str) -> str:
+    """A text this repository once carried, read from the fixture that holds it.
+
+    The alternative is `git show <revision>:<path>`, which answers the same
+    question until the revision is rebased away, the path is renamed or the
+    branch is squashed -- and then answers a different one, or none. A
+    committed fixture is the same evidence with none of that: it is in the tree
+    this repository ships, it is diffable, and a story that changes it changes
+    it visibly.
+
+    Raises rather than returning empty, so a fixture that has been moved fails
+    as itself rather than as an assertion that has stopped seeing anything.
+    """
+    path = HISTORY_FIXTURES / name
+    if not path.is_file():
+        raise AssertionError(
+            f"{name} is not carried under {HISTORY_FIXTURES.name}/; a text this "
+            f"repository once carried is committed there rather than resolved "
+            f"out of the commit graph")
+    return path.read_text(encoding="utf-8")
+
+
 def first_retry_route(workflow: dict) -> tuple[str, str]:
     """The first retry category a workflow declares, and where it routes.
 

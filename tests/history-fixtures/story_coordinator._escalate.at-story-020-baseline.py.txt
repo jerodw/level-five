@@ -1,0 +1,28 @@
+def _escalate(run_dir: Path, state: RunState, reason: str, **event_fields) -> int:
+    """End the run, recording the escalation in both renderings.
+
+    A run that failed must be as reconstructable as one that passed, so the
+    history ends with this entry. Callers forward whatever structured fields
+    the escalation has — the stage's elapsed time, the verifier's outcome,
+    the decision that routed here — through event_fields.
+    """
+    state.status = "escalated"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        f"escalated: {reason}",
+        kind="escalated",
+        stage=state.current_stage or None,
+        **event_fields,
+    )
+    summary = (
+        f"# {state.story_id} Escalation Summary\n\n"
+        f"## Status\nEscalated\n\n"
+        f"## Reason\n{reason}\n\n"
+        f"## Where Execution Stopped\nStage: {state.current_stage}, "
+        f"retry count: {state.retry_count}\n\n"
+        f"## Where to Look\nSee events.log for the run history and the "
+        f"verification/ directory for verifier findings.\n"
+    )
+    (run_dir / "escalation-summary.md").write_text(summary, encoding="utf-8")
+    return 2

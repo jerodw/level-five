@@ -1,0 +1,68 @@
+{
+  "name": "story-workflow",
+  "stages": [
+    {
+      "name": "implementer",
+      "prompt": "implementer.md",
+      "outputs": ["changed-files.json", "implementation-summary.md"],
+      "changed_files": "changed-files.json",
+      "may_not_create": ["tests/"],
+      "max_self_routes": 1,
+      "revert_check": {
+        "result": "revert-check-result.json",
+        "baseline": "stage-baseline"
+      },
+      "schemas": {
+        "changed-files.json": "changed-files"
+      }
+    },
+    {
+      "name": "tester",
+      "prompt": "tester.md",
+      "outputs": ["test-results.json", "tester-changed-files.json"],
+      "changed_files": "tester-changed-files.json",
+      "schemas": {
+        "test-results.json": "test-results",
+        "tester-changed-files.json": "changed-files"
+      }
+    },
+    {
+      "name": "verifier",
+      "prompt": "verifier.md",
+      "max_self_routes": 1,
+      "outputs": ["verification-result.json"],
+      "schemas": {
+        "verification-result.json": "verification-result",
+        "retry-guidance.json": "retry-guidance"
+      },
+      "clean_clone": {
+        "result": "clean-clone-result.json",
+        "retry_stage": "implementer"
+      },
+      "on_failure": {
+        "retry_routing": {
+          "implementation": {
+            "stage": "implementer",
+            "when": "the defect is in the code under test: behaviour the story asked for is missing, wrong, or incomplete, and the tests report it correctly"
+          },
+          "validation": {
+            "stage": "tester",
+            "when": "the defect is in the tests themselves: a wrong, missing or fragile assertion, an assertion that cannot fail, or coverage that does not exercise what it claims"
+          }
+        }
+      }
+    },
+    {
+      "name": "documenter",
+      "prompt": "documenter.md",
+      "outputs": ["documentation-report.md", "documenter-changed-files.json"],
+      "changed_files": "documenter-changed-files.json",
+      "schemas": {
+        "documenter-changed-files.json": "changed-files"
+      }
+    }
+  ],
+  "escalation_rules": {
+    "max_retries_exceeded": { "action": "escalate" }
+  }
+}

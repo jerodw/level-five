@@ -872,21 +872,46 @@ def test_every_pre_era_story_still_parses():
         assert parsed["story"]["id"] == path.stem
 
 
-def test_no_committed_story_artifact_was_edited():
-    """Execution records are never rewritten to satisfy a later contract.
+def _no_committed_story_artifact_edited(repo: Path) -> bool:
+    """Whether the story `repo` carries rewrote or removed a story artifact.
 
     Scoped to modifications and deletions, which is what "edited" has always
-    meant here: this story's own commit *added* `.harness/stories/story-007.yaml`,
-    and an addition was never an edit. The baseline is this story's own run
-    commit against its parent, resolved by `conftest.story_commit_range` —
-    not `git diff HEAD`, which asks whether the working tree is dirty and
-    goes vacuously green the moment the story commits.
+    meant here: a story's own commit *adds* its own artifact, and an addition
+    was never an edit. The baseline is the story's own run commit against its
+    parent, resolved by `conftest.story_commit_range` — not `git diff HEAD`,
+    which asks whether the working tree is dirty and goes vacuously green the
+    moment the story commits.
     """
-    edited = story_diff(
-        [".harness/stories/"], validation_file=Path(__file__),
-        diff_filter="MD", options=("--name-only",),
-    )
-    assert edited.strip() == ""
+    return story_diff(
+        [".harness/stories/"],
+        validation_file=Path(repo) / conftest.CONSTRUCTED_VALIDATION_REL,
+        repo=Path(repo), diff_filter="MD", options=("--name-only",),
+    ).strip() == ""
+
+
+def test_no_committed_story_artifact_was_edited(tmp_path):
+    """Execution records are never rewritten to satisfy a later contract.
+
+    Restated over a story this test builds. Asked of this repository's own
+    commit graph the assertion re-stated a frozen past fact and drew its
+    evidence from a history that moves under it — a rename gives a path a new
+    add-commit and silently empties the range, a squash makes the range
+    unresolvable in a clone. The claim, the pathspec and the narrowing are
+    unchanged; what moved is where the evidence comes from, and the two
+    controls beside it show the same call reporting a rewrite and permitting
+    an addition.
+    """
+    assert _no_committed_story_artifact_edited(
+        conftest.constructed_story(tmp_path, respected=[".harness/stories/"],
+                                   name="records-left-alone"))
+    assert not _no_committed_story_artifact_edited(
+        conftest.constructed_story(tmp_path, violated=[".harness/stories/"],
+                                   name="records-rewritten"))
+    # And what the narrowing lets through: an addition inside the story's own
+    # run commit, which was never an edit.
+    assert _no_committed_story_artifact_edited(
+        conftest.constructed_story(tmp_path, violated=[".harness/stories/"],
+                                   violation="add", name="records-added"))
 
 
 def test_this_storys_own_artifact_parses_and_validates_under_the_new_schema():

@@ -42,8 +42,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, ENDPOINT, function_source_at,
-                      repository_file_at)
+from conftest import BASELINE, ENDPOINT, function_source
+import conftest
 from test_baseline_honesty import Flag, mutation_controls
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -61,14 +61,18 @@ THE_RULES_IT_JOINS = ("flagged_calls", "undeclared_targets",
                       "module_construction", "git_text_reads")
 
 #: The file that carried the one known instance, and the validation file of
-#: the story whose run commit repaired it. Named, not pinned: the pre-repair
-#: text is the baseline of *that* story's own commit range, resolved through
-#: the shared reader, so a rebase does not move it and no SHA is written here.
+#: the story whose run commit repaired it. Named, not pinned: no SHA is written
+#: here and none is resolved -- the pre-repair text is carried as a committed
+#: fixture under `tests/history-fixtures/`, lifted from the baseline of that
+#: story's own commit range.
 #:
 #: Two spellings for one file, because story-038 renamed it: inside
 #: story-028's range it is `tests/test_story_029_validation.py`, and in the
 #: working tree it is `tests/test_git_history_loading_retired.py`. Each read
-#: below uses the name the file has at the end of the range it is reading.
+#: below uses the name the file has at the end of the range it is reading --
+#: and a rename is exactly the shape that made resolving it out of this
+#: repository's commit graph unsafe, since a rename gives a path a new
+#: add-commit and empties every range bounded by it.
 THE_REPAIRED_FILE = "tests/test_story_029_validation.py"
 THE_REPAIRED_FILE_TODAY = "tests/test_git_history_loading_retired.py"
 THE_STORY_THAT_REPAIRED_IT = "tests/test_retry_routing.py"
@@ -76,6 +80,20 @@ THE_STORY_THAT_REPAIRED_IT = "tests/test_retry_routing.py"
 
 def the_rules_module() -> str:
     return (REPO_ROOT / THE_RULES_MODULE).read_text(encoding="utf-8")
+
+
+def the_rules_module_at(bound: str) -> str:
+    """The rules module as it stood at one end of this story's own range.
+
+    Both ends are frozen past texts, and since story-053 both are carried as
+    committed fixtures rather than resolved out of this repository's commit
+    graph. What this story did to the three scans it joined does not change
+    when the repository is committed to, renamed, squashed or rebased; the
+    resolution did, and CI carried `fetch-depth: 0` for no other reason.
+    """
+    assert bound in (BASELINE, ENDPOINT), bound
+    return conftest.history_fixture(
+        f"test_baseline_honesty.at-story-031-{bound}.py.txt")
 
 
 # --------------------------------------------------------------------------
@@ -501,10 +519,8 @@ def before_the_repair() -> str:
     """`tests/test_story_029_validation.py` as it stood before story-028's run
     commit repaired it: the baseline of that story's own commit range, which is
     the parent of the commit that added its validation file."""
-    return repository_file_at(
-        THE_REPAIRED_FILE,
-        validation_file=REPO_ROOT / THE_STORY_THAT_REPAIRED_IT,
-        bound=BASELINE, repo=REPO_ROOT)
+    return conftest.history_fixture(
+        "test_story_029_validation.before-story-028-repair.py.txt")
 
 
 def test_the_recovered_text_is_the_pre_repair_text_and_not_todays():
@@ -683,12 +699,8 @@ def test_no_existing_scan_was_widened_by_this_story(name):
     """A fourth rule, not three wider ones. Each existing scan's source at this
     story's baseline is required to equal its source today, which is a stronger
     reading than "the suite still passes"."""
-    before = function_source_at(THE_RULES_MODULE, name,
-                                validation_file=THIS_FILE, bound=BASELINE,
-                                repo=REPO_ROOT)
-    after = function_source_at(THE_RULES_MODULE, name,
-                               validation_file=THIS_FILE, bound=ENDPOINT,
-                               repo=REPO_ROOT)
+    before = function_source(the_rules_module_at(BASELINE), name)
+    after = function_source(the_rules_module_at(ENDPOINT), name)
     assert before == after, name
 
 
@@ -696,8 +708,7 @@ def test_the_baseline_comparison_above_can_tell_two_sources_apart():
     """The control for it: the same comparison over a function this story did
     change reports a difference, so an equal-source assertion that could never
     differ is not what the parametrization above is doing."""
-    before = repository_file_at(THE_RULES_MODULE, validation_file=THIS_FILE,
-                                bound=BASELINE, repo=REPO_ROOT)
+    before = the_rules_module_at(BASELINE)
     assert THE_NEW_SCAN not in before
     assert THE_NEW_SCAN in the_rules_module()
 
@@ -709,8 +720,7 @@ def test_the_baseline_comparison_above_can_tell_two_sources_apart():
 def test_no_existing_rules_vocabulary_was_changed(constant):
     """The other half of "unchanged in reach": the word lists the three scans
     match on are what they were at this story's baseline."""
-    before = repository_file_at(THE_RULES_MODULE, validation_file=THIS_FILE,
-                                bound=BASELINE, repo=REPO_ROOT)
+    before = the_rules_module_at(BASELINE)
     assert assignment(before, constant) == assignment(the_rules_module(), constant)
 
 

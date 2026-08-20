@@ -1,0 +1,542 @@
+def run_story(
+    story_id: str,
+    harness_root: Path,
+    target_root: Path,
+    runner=agent_runner.run_agent,
+    start_stage: str | None = None,
+) -> int:
+    """Execute one story, from a fresh run or from where a run left off.
+
+    `start_stage` overrides where execution enters — the recorded stage on a
+    resume, the workflow's first stage on a fresh run. It is named
+    `start_stage` rather than `stage` because `stage` is the loop's name for
+    the stage being executed, and one name for two things is how this
+    repository has repeatedly confused itself.
+    """
+    config = harness_config.load_config(target_root)
+    workflow = harness_config.load_workflow(harness_root, config.get("workflow", "story-workflow"))
+    rules = harness_config.load_rules(harness_root)
+    stages = workflow["stages"]
+    stage_names = [s["name"] for s in stages]
+
+    # A stage the developer named overrides where execution enters, which is
+    # what makes a resume useful: an escalation caused by an amended story is
+    # re-entered at the implementer rather than at the verifier that recorded
+    # it. Refused above everything else, in the shape the other pre-flight
+    # refusals take — exit 1, one message, nothing created and no agent run.
+    if start_stage is not None and start_stage not in stage_names:
+        print(
+            f"'{start_stage}' is not a stage the loaded workflow defines. "
+            f"{workflow['name']} defines: {', '.join(stage_names)}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
+    if not story_path.is_file():
+        print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
+        return 1
+    story_text = story_path.read_text(encoding="utf-8")
+
+    # Pre-flight: refuse a bad story before any run state exists, so a
+    # rejection leaves no run directory, no state.json, and no new branch.
+    # The schema ships with the harness code, so it is resolved by
+    # schema_validator relative to its own module, not from harness_root.
+    reading = read_story(story_text)
+    if reading.problems:
+        return _refuse_bad_story(story_path, reading.problems)
+
+    # Conformance is one question, agreement with this workflow another. A
+    # stage exception is checked here rather than inside read_story so schema
+    # reading stays schema reading, and both refusals stay above run-directory
+    # creation.
+    exception_problems = stage_exception_problems(reading.parsed, stages)
+    if exception_problems:
+        return _refuse_bad_story(story_path, exception_problems)
+
+    run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
+    state = load_state(run_dir)
+
+    # Pre-flight: a run commits the tree it ends on, so it has to start from a
+    # tree it can account for. Which runs this applies to is decided by the
+    # state the run is *starting from*, which is already loaded above for the
+    # resume decision. No state is a fresh run; an escalated state is a resume
+    # of a run that left the tree clean when it escalated, so anything
+    # uncommitted now is the developer's own fix and committing it deliberately
+    # is what this check is for. A `running` state is the one exclusion, and it
+    # is not an exception to the rule so much as a different tree: nothing
+    # commits when a process dies, so that working tree holds the run's own
+    # unfinished work and refusing it would refuse the run its own state.
+    #
+    # It sits above the run-directory creation and the branch checkout, so a
+    # refusal leaves no run directory, no state.json, no log, no new branch,
+    # and invokes no agent. There is deliberately no flag, environment variable
+    # or configuration key that skips it: a bypass on a correctness guard
+    # becomes the default invocation.
+    if state is None or state.status == "escalated":
+        dirty = dirty_paths(target_root)
+        if dirty:
+            return _refuse_dirty_tree(target_root, dirty)
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "verification").mkdir(exist_ok=True)
+    log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
+
+    if state and state.status == "completed":
+        # Name the branch as well as the run directory. _checkout_story_branch
+        # reuses an existing branch rather than resetting it, so deleting only
+        # the run directory re-runs the story on top of the finished work — the
+        # implementer opens a repository where the story is already done, and
+        # the run reports success having changed nothing. This guard is about
+        # finished work; an escalated run resumes below, because its work is
+        # not finished and its evidence is what the resume exists to keep.
+        print(
+            f"{story_id} already ended with status '{state.status}'. "
+            f"Inspect {run_dir} to review it.\n"
+            f"To run the story again, delete {run_dir} *and* reset branch "
+            f"{state.branch}, which still holds the finished work. Archive both "
+            f"first if the run is worth keeping — {run_dir} is gitignored.",
+            file=sys.stderr,
+        )
+        return 1
+    if state:
+        # A resume, of a crashed run or an escalated one. Chapter 18 treats
+        # the two identically and so does this: restore nothing, because the
+        # artifacts and the state are already here, and continue at the
+        # recorded stage. Nothing is reinitialized — retry_count and
+        # verification_iterations key the rendered prompt and verification
+        # iteration filenames, so resetting them would overwrite the evidence
+        # of the attempt being resumed.
+        if state.status == "escalated":
+            # Resuming is inferred from the recorded status and from nothing
+            # else. What the guard adds is a refusal in the one case where a
+            # resume is knowably pointless: the story, the tree and the harness
+            # are all establishably what they were when the run escalated.
+            evidence = unchanged_since_escalation(
+                state, story_text, target_root, harness_root
+            )
+            if evidence:
+                print(
+                    _resume_refusal(story_path, run_dir, state, evidence),
+                    file=sys.stderr,
+                )
+                return 1
+        if start_stage:
+            state.current_stage = start_stage
+        if state.status == "escalated":
+            # The interrupted attempt is archived before the resumed stage
+            # runs, under the attempt number it was written with. Refuse rather
+            # than overwrite: the archive is the evidence a resume exists to
+            # preserve, and story-010 recorded exactly this case as open.
+            attempt = state.retry_count + 1
+            destination = attempt_dir(run_dir, attempt)
+            if destination.exists():
+                print(
+                    f"{destination} already holds an archived attempt, and "
+                    f"resuming {story_id} would write attempt {attempt} over "
+                    f"it. Move or remove it if that attempt is not worth "
+                    f"keeping, then run the story again.",
+                    file=sys.stderr,
+                )
+                return 1
+            archive_attempt(
+                run_dir, interrupted_attempt_artifacts(stages, attempt), attempt
+            )
+            state.status = "running"
+            save_state(run_dir, state)
+        append_event(
+            run_dir,
+            f"resumed at stage {state.current_stage}",
+            kind="resumed",
+            stage=state.current_stage,
+        )
+    else:
+        branch = config.get("branch_prefix", "story/") + story_id
+        state = RunState(
+            story_id=story_id,
+            branch=branch,
+            current_stage=start_stage or stage_names[0],
+            # Recorded from the same text read_story was given, so the digest
+            # and the run's one reading describe one artifact.
+            story_digest=story_digest(story_text),
+        )
+        save_state(run_dir, state)
+        append_event(
+            run_dir, f"workflow started for {story_id}", kind="workflow-started"
+        )
+
+    _checkout_story_branch(target_root, state.branch)
+
+    # Stage timing: started where the stage-started event is appended, read at
+    # whichever event ends the stage, so a completed stage carries an elapsed
+    # duration the log only made derivable.
+    stage_started_at: float | None = None
+
+    def elapsed() -> float | None:
+        if stage_started_at is None:
+            return None
+        return round(time.monotonic() - stage_started_at, 3)
+
+    index = stage_names.index(state.current_stage)
+    while index < len(stages):
+        stage = stages[index]
+        name = stage["name"]
+        state.current_stage = name
+        save_state(run_dir, state)
+        stage_started_at = time.monotonic()
+        append_event(run_dir, f"{name} stage started", kind="stage-started", stage=name)
+
+        context = context_assembler.build_context(
+            story_text=story_text,
+            story=reading.parsed,
+            run_dir=run_dir,
+            target_root=target_root,
+            harness_root=harness_root,
+            config=config,
+            rules=rules,
+            retry_count=state.retry_count,
+        )
+        template = context_assembler.load_template(harness_root, stage["prompt"])
+        prompt = context_assembler.render(template, context)
+        attempt = state.retry_count + 1
+        (run_dir / f"prompt-{name}-attempt-{attempt}.md").write_text(prompt, encoding="utf-8")
+
+        # What this stage's artifacts looked like before it ran. One snapshot,
+        # covering the conditional artifacts and the required ones together,
+        # feeding one comparison function. The conditional readers ask which
+        # of them this attempt wrote — nothing clears the retry guidance
+        # between attempts — and the required reader below asks the same
+        # question of the outputs, because a retry that leaves one untouched
+        # satisfies a presence check with a superseded attempt's file.
+        # artifacts_written_since narrows by the names its caller passes, so
+        # widening what is covered here changes neither conditional reader.
+        conditional = conditional_artifacts(stage)
+        required = required_artifacts(stage)
+        artifacts_before = artifact_signatures(run_dir, conditional + required)
+
+        # What the tree held under this stage's governed prefixes before it
+        # ran, which is the baseline the revert check below decides against.
+        # Both names come off the stage's declaration, so removing that one
+        # key disables the capture and the check together. Captured over the
+        # declared prefixes rather than the grant-subtracted list: the
+        # enforced list is computed after the stage, and capturing a superset
+        # costs a few file copies while the restore set stays narrowed.
+        declaration = stage.get("revert_check") or {}
+        baseline_dir = (
+            capture_stage_baseline(
+                run_dir,
+                target_root,
+                declaration["baseline"],
+                name,
+                attempt,
+                stage.get("may_not_create", []),
+            )
+            if declaration
+            else None
+        )
+
+        result = runner(
+            prompt,
+            stage=name,
+            cwd=target_root,
+            log_path=log_path,
+            permission_mode=config.get("permission_mode", "acceptEdits"),
+            model=config.get("model"),
+            allowed_tools=config.get("allowed_tools"),
+        )
+        if not result.ok:
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} agent process failed",
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
+        missing = [out for out in stage.get("outputs", []) if not (run_dir / out).is_file()]
+        if missing:
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} did not produce required artifacts: {', '.join(missing)}",
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
+        # Present is not written. On a retry an artifact a superseded attempt
+        # left at the run root satisfies the check above, and the run finishes
+        # carrying a record of an attempt that no longer describes it. Read
+        # after the missing case so an absent artifact keeps its own reason;
+        # the two are indistinguishable to a reader of the run directory
+        # afterwards, which is what let one ship unnoticed. Escalation is
+        # provisional: this is a mechanical failure the retry-routing story
+        # will send back to the stage itself, and _escalate leaves
+        # retry_count alone, so no attempt number is consumed here.
+        stale = stale_artifacts(run_dir, required, artifacts_before)
+        if stale:
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} left required artifacts unwritten; these are a "
+                f"previous attempt's, not this one's: {', '.join(stale)}",
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
+        violation = _schema_violation(run_dir, stage)
+        if violation:
+            return _escalate(
+                run_dir,
+                state,
+                f"{name} wrote an invalid artifact: {violation}",
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
+        record_name = stage.get("changed_files")
+        if record_name:
+            violation = _blocked_violation(run_dir, record_name, rules.get("blocked_paths", []))
+            if violation:
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"{name} modified blocked path: {violation}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
+
+            # Stage output ownership, read from the workflow definition the
+            # way blocked paths are read from the rules. A story may lift a
+            # declared prefix for one stage; the grant is recorded so the
+            # routing stays reconstructable from events.log.
+            enforced = list(stage.get("may_not_create", []))
+            for granted in _granted_prefixes(reading.parsed, name):
+                if granted in enforced:
+                    enforced.remove(granted)
+                    append_event(
+                        run_dir,
+                        f"stage exception applied: {name} may create {granted}",
+                        kind="stage-exception-applied",
+                        stage=name,
+                    )
+            ownership = _ownership_violation(run_dir, record_name, enforced)
+            if ownership:
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"{name} created {ownership.path}, which it declared it "
+                    f"must not create under {ownership.prefix}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
+
+            # The revert check, on the same record and the same enforced
+            # prefixes the ownership check just used — the one record whose
+            # edits under those prefixes are known to be this stage's alone.
+            # The artifact name comes off the loaded workflow definition, so
+            # removing that declaration disables the check with no change here.
+            # It is the same declaration the baseline was captured under, read
+            # here for the other name it carries.
+            revert_artifact = declaration.get("result")
+            edits = (
+                governed_edits(run_dir, record_name, enforced)
+                if revert_artifact
+                else GovernedEdits((), ())
+            )
+            if edits.paths:
+                prefixes = ", ".join(edits.prefixes)
+                listed = ", ".join(edits.paths)
+                decided = revert_check(
+                    run_dir,
+                    target_root,
+                    config,
+                    revert_artifact,
+                    edits.paths,
+                    baseline_dir,
+                )
+                if not decided.result.ran:
+                    return _escalate(
+                        run_dir,
+                        state,
+                        f"the revert check on {name}'s edits ({listed}) under "
+                        f"{prefixes} could not run: {decided.result.reason}",
+                        target_root=target_root,
+                        harness_root=harness_root,
+                        duration_seconds=elapsed(),
+                    )
+                if not decided.permitted:
+                    return _escalate(
+                        run_dir,
+                        state,
+                        f"{name} edited {listed} under {prefixes}, which it "
+                        f"declared it must not create under, and the suite "
+                        f"still passes with those edits reverted",
+                        target_root=target_root,
+                        harness_root=harness_root,
+                        duration_seconds=elapsed(),
+                    )
+                _revert_check_permitted(run_dir, name, revert_artifact, edits)
+
+        if name == "verifier":
+            verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))
+            state.verification_iterations += 1
+            archive = run_dir / "verification" / f"iteration-{state.verification_iterations}.json"
+            archive.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+            # The artifacts an entry names come off the stage's declared
+            # outputs in the loaded workflow, never a list written here.
+            outputs = stage.get("outputs", [])
+            if verdict.get("status") == "passed":
+                append_event(
+                    run_dir,
+                    "verification passed",
+                    kind="verification-passed",
+                    stage=name,
+                    artifacts=outputs,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict["status"],
+                )
+
+                # The suite passed where the verifier stood; run it once more
+                # where the code ships. The artifact name comes off the loaded
+                # workflow definition, so removing that declaration disables
+                # the check with no change here.
+                artifact = stage.get("clean_clone")
+                if artifact:
+                    clean = clean_clone_check(run_dir, target_root, config, artifact)
+                    if not clean.ran:
+                        return _escalate(
+                            run_dir,
+                            state,
+                            f"the clean-clone check could not run: {clean.reason}",
+                            target_root=target_root,
+                            harness_root=harness_root,
+                            duration_seconds=elapsed(),
+                        )
+                    if clean.exit_code != 0:
+                        failures = _clean_clone_failures(clean.output_tail or "")
+                        if state.retry_count >= rules["max_retries"]:
+                            return _escalate(
+                                run_dir,
+                                state,
+                                f"the clean-clone check failed and retries are "
+                                f"exhausted: {failures}",
+                                target_root=target_root,
+                                harness_root=harness_root,
+                                duration_seconds=elapsed(),
+                                retry_decision="escalate",
+                                retry_reason=(
+                                    f"the retry ceiling of {rules['max_retries']} "
+                                    f"was reached"
+                                ),
+                            )
+                        # The same retry path a failed verification takes:
+                        # archive above the increment, so the attempt number
+                        # names the attempt that just ended.
+                        archive_attempt(
+                            run_dir, archivable_artifacts(stages), state.retry_count + 1
+                        )
+                        append_retry_record(
+                            run_dir,
+                            state.retry_count + 1,
+                            stage["on_failure"]["retry_stage"],
+                            verdict,
+                            artifacts_written_since(
+                                run_dir, conditional, artifacts_before
+                            ),
+                        )
+                        state.retry_count += 1
+                        save_state(run_dir, state)
+                        _clean_clone_failed(
+                            run_dir,
+                            stage,
+                            artifact,
+                            state.retry_count,
+                            rules["max_retries"],
+                            elapsed(),
+                        )
+                        index = stage_names.index(stage["on_failure"]["retry_stage"])
+                        continue
+                    _clean_clone_passed(run_dir, name, artifact)
+            elif verdict.get("retry_recommended") and state.retry_count < rules["max_retries"]:
+                # Archive before the retry begins, while the root artifacts
+                # still describe the attempt that just failed. The attempt
+                # number is the one the rendered prompts already use, so
+                # prompt-implementer-attempt-1.md and attempts/attempt-1/
+                # describe one attempt.
+                archive_attempt(
+                    run_dir, archivable_artifacts(stages), state.retry_count + 1
+                )
+                # The backward-looking record of the attempt that just failed,
+                # appended on the path that actually reroutes and on neither
+                # escalation path, which take no retry. Above the increment for
+                # the same reason the archive is: state.retry_count + 1 names
+                # the attempt that ended, matching attempts/attempt-N/.
+                append_retry_record(
+                    run_dir,
+                    state.retry_count + 1,
+                    stage["on_failure"]["retry_stage"],
+                    verdict,
+                    artifacts_written_since(run_dir, conditional, artifacts_before),
+                )
+                state.retry_count += 1
+                save_state(run_dir, state)
+                append_event(
+                    run_dir,
+                    f"verification failed; retry {state.retry_count} of "
+                    f"{rules['max_retries']} rerouted to {stage['on_failure']['retry_stage']}",
+                    kind="verification-failed",
+                    stage=name,
+                    artifacts=outputs,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="retry",
+                    retry_reason=(
+                        "the verifier recommended a retry and the retry ceiling "
+                        "was not reached"
+                    ),
+                )
+                index = stage_names.index(stage["on_failure"]["retry_stage"])
+                continue
+            elif verdict.get("retry_recommended"):
+                return _escalate(
+                    run_dir,
+                    state,
+                    "verification failed and retries are exhausted",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason=f"the retry ceiling of {rules['max_retries']} was reached",
+                )
+            else:
+                return _escalate(
+                    run_dir,
+                    state,
+                    "verification failed and the verifier did not recommend a retry",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                    verifier_outcome=verdict.get("status"),
+                    retry_decision="escalate",
+                    retry_reason="the verifier did not recommend a retry",
+                )
+        else:
+            append_event(
+                run_dir,
+                f"{name} stage completed",
+                kind="stage-completed",
+                stage=name,
+                artifacts=stage.get("outputs", []),
+                duration_seconds=elapsed(),
+            )
+
+        index += 1
+
+    return _complete(run_dir, state, reading.parsed, target_root)

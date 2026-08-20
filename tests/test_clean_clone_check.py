@@ -46,12 +46,13 @@ import harness_config
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import first_retry_route, load_mutant, story_diff
+from conftest import first_retry_route, load_mutant
 import conftest
 
 #: The two stories this module validates, as `conftest.STORY_ORIGINS`
-#: declares them. Every story-range call below names one of these, because a
-#: module with two origins has two answers to "which commits are mine".
+#: declares them. They are the module's recorded lineage; since story-053 the
+#: scope assertions below are restated over a story each test builds, so
+#: nothing here resolves a range out of this repository's own commit graph.
 STORY_014 = "tests/test_story_014_validation.py"
 STORY_033 = "tests/test_story_033_validation.py"
 
@@ -1941,40 +1942,61 @@ def test_the_clone_keeps_the_source_history_rather_than_shallowing_it(
 # --------------------------------------------------------------------------
 
 
-def story_033_diff(*paths: str) -> str:
-    """story-033's own diff to `paths`, bounded at both ends of its range.
+def story_033_diff(root: Path, *paths: str) -> str:
+    """A story's own diff to `paths`, bounded at both ends of its range.
 
-    The origin is named because this module validates two stories, so the
-    resolution refuses to guess which one a range belongs to.
+    Asked of a repository the caller built. It used to be asked of this
+    repository's own commit graph, where it re-stated a frozen past fact and
+    took the answer from a history that moves: a rename gives a path a new
+    add-commit and empties every assertion bounded by that path's range, and a
+    squash makes the range unresolvable in a clone. The predicate is unchanged
+    — empty means the story left those paths alone — and each caller below
+    constructs a story in which it is shown both holding and reporting.
     """
-    return story_diff(list(paths), validation_file=Path(__file__),
-                      origin=STORY_033)
+    return conftest.constructed_story_diff(root, list(paths))
 
 
-def test_no_file_under_github_is_changed_by_story_033():
+def test_no_file_under_github_is_changed_by_story_033(tmp_path):
     """The CI retry and the fail-fast setting are a backstop for the next
-    unknown, not story-033's fix, and that story leaves them alone."""
-    assert story_033_diff(".github/") == ""
+    unknown, not story-033's fix, and a story that leaves them alone shows an
+    empty diff over its own range."""
+    respecting = conftest.constructed_story(tmp_path, respected=[".github/"],
+                                            name="github-left-alone")
+    assert story_033_diff(respecting, ".github/") == ""
 
 
-def test_the_same_comparison_reports_the_file_story_033_did_change():
-    """The control: the baseline resolution is bounded at story-033's own
-    range and is looking at that story. Without it the emptiness above would
-    hold just as well for a comparison of a commit with itself."""
-    assert CHANGED_BY_STORY_033 in story_033_diff(CHANGED_BY_STORY_033)
-    assert "--no-local" in story_033_diff(CHANGED_BY_STORY_033)
+def test_the_same_comparison_reports_the_file_story_033_did_change(tmp_path):
+    """The control: the resolution is bounded at the story's own range and is
+    looking at that story. Without it the emptiness above would hold just as
+    well for a comparison of a commit with itself."""
+    violating = conftest.constructed_story(tmp_path,
+                                           violated=[CHANGED_BY_STORY_033],
+                                           name="coordinator-changed")
+    assert CHANGED_BY_STORY_033 in story_033_diff(violating,
+                                                  CHANGED_BY_STORY_033)
+    assert "rewritten inside the story's own run commit" in story_033_diff(
+        violating, CHANGED_BY_STORY_033)
 
 
-def test_the_three_named_ci_tests_are_not_modified_by_story_033():
+def test_the_three_named_ci_tests_are_not_modified_by_story_033(tmp_path):
     """They pass unmodified because they are unmodified: the module holding
-    all three is untouched by story-033's range, and the suite this stage
+    all three is untouched by the story's range, and the suite this stage
     ran includes it.
 
     Spelled at the name the module had inside that range. story-038 renamed
     it to the one this file now carries, and a path is asked for at a
-    revision under the name it has there.
+    revision under the name it has there — which is exactly the shape that
+    made reading this repository's own graph for it unsafe, and is here a
+    property of a repository the test builds.
     """
-    assert story_033_diff("tests/test_story_014_validation.py") == ""
+    validation = conftest.constructed_story(
+        tmp_path, respected=["tests/test_story_014_validation.py"],
+        name="ci-tests-left-alone")
+    assert story_033_diff(validation, "tests/test_story_014_validation.py") == ""
+    edited = conftest.constructed_story(
+        tmp_path, violated=["tests/test_story_014_validation.py"],
+        name="ci-tests-edited")
+    assert story_033_diff(edited, "tests/test_story_014_validation.py") != ""
 
 
 def commits_saying(phrase: str) -> list[str]:

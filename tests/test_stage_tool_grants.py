@@ -51,8 +51,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, HARNESS_ROOT, load_mutant,
-                      repository_file_at)
+from conftest import HARNESS_ROOT, load_mutant
 import conftest
 
 import agent_runner
@@ -609,12 +608,21 @@ def _signature_names(source: str) -> list[str]:
 
 
 def test_run_agent_signature_is_unchanged_by_this_story(tmp_path):
-    """AC11, bounded at this story's own range through conftest rather than
-    against a bare HEAD, so the answer survives the run's own commit."""
-    before = repository_file_at("orchestration/agent_runner.py",
-                                validation_file=VALIDATION_FILE, bound=BASELINE)
+    """AC11, against this story's own baseline rather than a bare HEAD, so the
+    answer survives the run's own commit.
+
+    The baseline text is carried as a committed fixture since story-053: it is
+    an input — an earlier version of a module — and resolving an input out of
+    this repository's commit graph made the comparison move whenever something
+    was committed, renamed, squashed or rebased."""
+    before = conftest.history_fixture(
+        "agent_runner.at-story-035-baseline.py.txt")
     today = (HARNESS_ROOT / "orchestration" / "agent_runner.py").read_text(
         encoding="utf-8")
+    # The carried baseline is a *past* text: this story changed the module, so
+    # a fixture equal to today's file would be answering the wrong question and
+    # the equality below would hold for that reason instead.
+    assert before != today
     assert _signature_names(today) == _signature_names(before)
 
     # The control: a signature that did gain a parameter is reported by the
@@ -922,13 +930,20 @@ def test_the_config_grants_each_added_read_only_prefix(command):
 
 
 def test_no_existing_entry_was_removed_or_altered():
-    """AC2, bounded at this story's own range: every entry the config carried
-    before is still there, unaltered and in its original order."""
-    before = allowed_tools_in(repository_file_at(
-        CONFIG_REL, validation_file=VALIDATION_FILE, bound=BASELINE))
+    """AC2, against this story's own baseline: every entry the config carried
+    before is still there, unaltered and in its original order.
+
+    The baseline config is carried as a committed fixture since story-053, for
+    the reason the signature comparison above records."""
+    before = allowed_tools_in(conftest.history_fixture(
+        "harness-config.at-story-035-baseline.yaml.txt"))
     today = allowed_tools_in((HARNESS_ROOT / CONFIG_REL).read_text(
         encoding="utf-8"))
     assert before, "the baseline config declares no grants, so this asserts nothing"
+    # The carried baseline is a *past* config: this story added grants, so a
+    # fixture equal to today's file would make the prefix comparison hold for
+    # the wrong reason.
+    assert before != today
     assert today[:len(before)] == before
 
     # The control: an entry dropped from the middle is reported by the same
@@ -938,14 +953,18 @@ def test_no_existing_entry_was_removed_or_altered():
 
 
 def test_permission_mode_is_still_accept_edits():
-    """AC2, at both ends of this story's range."""
+    """AC2, against this story's own baseline and today's config.
+
+    The baseline text is the committed fixture; the other half is the config
+    this repository ships, which is where the mode has to still be what it
+    was."""
     def mode(text: str) -> str:
         return next(line.split(":", 1)[1].strip()
                     for line in text.splitlines()
                     if line.startswith("permission_mode:"))
 
-    before = repository_file_at(CONFIG_REL, validation_file=VALIDATION_FILE,
-                                bound=BASELINE)
+    before = conftest.history_fixture(
+        "harness-config.at-story-035-baseline.yaml.txt")
     today = (HARNESS_ROOT / CONFIG_REL).read_text(encoding="utf-8")
     assert mode(today) == "acceptEdits"
     assert mode(today) == mode(before)

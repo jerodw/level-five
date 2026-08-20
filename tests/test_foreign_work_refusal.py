@@ -47,9 +47,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, ENDPOINT, function_source_at,
-                      repository_file_at,
-                      story_commit_range)
+from conftest import BASELINE, ENDPOINT
+import conftest
 
 import story_coordinator
 from agent_runner import AgentResult
@@ -363,32 +362,6 @@ def crashed_run(target_root: Path, stage: str = "tester") -> None:
 COORDINATOR_REL = "orchestration/story_coordinator.py"
 
 
-def pre_story(path: str) -> str:
-    """A repository file as it stood before this story's own run.
-
-    Through `conftest.repository_file_at` since story-029, which folded the
-    eleven private copies of this reader into one. Subject and strictness
-    unchanged; only where the text comes from moved.
-    """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=BASELINE, repo=REPO_ROOT)
-
-
-def at_story_endpoint(path: str) -> str:
-    """A repository file as *this* story's own run left it.
-
-    The counterpart of `pre_story`, and the upper bound a "this story did not
-    change X" comparison needs. Against today's working tree it asks what the
-    file looks like *now*, which a later story changes without this story
-    having done anything — the HEAD-baseline trap the architecture document
-    records. story-024 is where it bit: it moved the escalation summary's
-    construction out of `_escalate`, which story-021 left exactly as it found
-    it.
-    """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=ENDPOINT, repo=REPO_ROOT)
-
-
 def coordinator_function(name: str, bound: str) -> str:
     """One coordinator function's source text at one end of this story's range.
 
@@ -397,9 +370,19 @@ def coordinator_function(name: str, bound: str) -> str:
     workflow, schemas and config, and stops running as soon as any of them
     legitimately changes. A comparison that only ever read a function's text
     never needed a running module, so it reads the text.
+
+    story-053 moved where the text comes from. Both ends of this story's range
+    are frozen past texts, and resolving them out of this repository's commit
+    graph made the comparison depend on facts about the graph rather than about
+    the code: a squash makes the range unresolvable in a clone, and a rename
+    gives a path a new add-commit and empties the range silently. Both bounds
+    are carried as committed fixtures, lifted from exactly the bounds this used
+    to resolve — the same evidence, in the tree, and unable to move under an
+    assertion that has nothing to say about it.
     """
-    return function_source_at(COORDINATOR_REL, name, validation_file=Path(__file__),
-                              bound=bound, repo=REPO_ROOT)
+    assert bound in (BASELINE, ENDPOINT), bound
+    return conftest.history_fixture(
+        f"story_coordinator.{name}.at-story-021-{bound}.py.txt")
 
 
 # --------------------------------------------------------------------------
