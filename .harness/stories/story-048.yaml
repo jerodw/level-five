@@ -75,6 +75,8 @@ tasks:
   - Give the widened detection a negative control that plants a helper-route read and observes it reported, and a control that a module reading only a workflow it built is not reported.
   - Demonstrate the property the story exists for -- a change to the shipped workflow moves no mechanism module -- by mutating a built harness root and observing the configuration module report the change while the converted modules stay green.
   - Measure the suite's wall-clock runtime before and after the conversion and report both.
+  - Convert every input reader this story classifies, in this run. An earlier attempt at this story converted 5 of them, declared the remaining 14 in a list named for awaiting conversion, and escalated; that run is preserved at .harness/runs-archive/story-048-escalated/ and its branch was discarded. Do not reproduce that shape: this story does not end with a declared set of modules still to convert.
+  - Reuse the workflow builder already in tests/conftest.py rather than writing a second one. build_workflow, materialize_workflow, StageRef and workflow_stage were salvaged from that attempt and are already verified: the builder resolves nothing this repository ships, and a definition it produces drives a real run to completion. The configured_workflow fixture is the seam a converted module overrides to point the shared target fixture at a workflow it built.
 
 acceptance_criteria:
   - tests/conftest.py carries a builder that returns a workflow definition assembled from its arguments, and that builder resolves no file this repository ships, demonstrated rather than asserted of its source.
@@ -90,6 +92,8 @@ acceptance_criteria:
   - Every converted assertion still fails when the behaviour it names is violated, shown by mutation or by an existing negative control rather than by its continuing to pass.
   - No test is removed by the conversion without the story stating which assertion took over what it checked.
   - The full test suite passes, and its wall-clock runtime before and after the conversion is reported.
+  - Every module classified an input reader is converted in this run, and no list of modules still awaiting conversion exists at completion. A module leaves the input-reader set by being converted, never by being reclassified a subject reader to avoid converting it.
+  - The builder assertions are made against the salvaged tests/conftest.py rather than a second builder written beside it, and any argument the conversion needs is added to that builder.
 
 technical_plan:
   implementation_steps:
@@ -237,3 +241,5 @@ constraints:
   - The scan's stated limits stay accurate after the widening, including that it still follows nothing across a module boundary and still cannot tell a subject from an input.
   - The five rules already in tests/test_baseline_honesty.py keep their present behaviour and their present controls.
   - Nothing this repository ships changes: the shipped workflow, the rules, the prompts, the schemas and the configuration are the same at the end of this story as at the start, and the conversion is proven against them unchanged.
+  - Partial conversion is not an acceptable outcome of this run and must not be recorded as one. Declaring the modules not reached, disclosing them in a reason, or deferring them to a later story does not satisfy any task or criterion here. If the work cannot be completed, the run says so plainly rather than converting some modules and recording the rest as debt.
+  - Two modules import helpers from modules this story converts -- tests/test_defective_retry_guidance.py and tests/test_unfinishable_retry_verdict.py both import from tests/test_retry_routing.py, and the first also from tests/test_self_routing_retry.py. Converting a module whose helpers another module borrows changes what those helpers produce, so the borrowers are in scope and are repaired in the same run. The live-artifact scan cannot see this: its stated limit is that it does not follow a read across a module boundary.
