@@ -1,0 +1,21 @@
+{
+  "current_focus": [
+    "Convert tests/test_self_routing_retry.py and tests/test_retry_routing.py to workflows they build through conftest.build_workflow and conftest.materialize_workflow. These are the two modules the story's own evidence names, and both currently take the shipped definition at module scope and mutate a deep copy of it, which is the input use the story defines.",
+    "Work down the remaining modules technical_plan.likely_file_changes assigns to the tester, converting each input reader one module at a time and keeping every assertion's subject and strength unchanged.",
+    "For any module kept on PERMITTED_LIVE_ARTIFACT_READERS, make the stated reason name the specific read that keeps it there and check it against the module's actual reads. Reasons that describe reads the module does not have, or that would equally justify keeping every module, do not classify anything.",
+    "Move each configuration assertion displaced by a conversion into tests/test_shipped_workflow_is_valid.py as its module is converted, so no assertion is in flight without a home -- notably the stage-ownership statement currently justifying tests/test_stage_output_ownership.py's place on the list.",
+    "Reduce PERMITTED_LIVE_ARTIFACT_READERS to the modules that remain subject readers after the conversion, keeping the both-directions equality assertion intact.",
+    "Measure the suite's wall-clock runtime after the conversion and record it beside the before figure (474.49 s / 7:54.84 wall at dcda75d), so the comparison is two measurements."
+  ],
+  "preserve_behavior": [
+    "The builder, StageRef, workflow_stage, build_workflow, materialize_workflow and the configured_workflow fixture seam in tests/conftest.py, which verify as sound: they resolve nothing shipped, omit every key not asked for, and produce a definition a real coordinator loads and runs to completion.",
+    "The widened live-artifact scan in tests/test_baseline_honesty.py, its helper route, its planted-helper-route control, its builder-only negative control and the both-directions equality assertion.",
+    "tests/test_shipped_workflow_is_valid.py, including its three validator checks, the negative control per validator, and the deployment-change demonstration.",
+    "The conversion already landed in tests/test_story_coordinator.py, which derives every stage, artifact and category name from the definition it builds.",
+    "The five rules already in tests/test_baseline_honesty.py, their present behaviour and their present controls.",
+    "Everything this repository ships: workflows/, rules/, prompts/, schemas/, orchestration/, scripts/, .harness/config.yaml and .harness/stories/ are unchanged and stay unchanged."
+  ],
+  "retry_scope": [
+    "tests/"
+  ]
+}

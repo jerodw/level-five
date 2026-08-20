@@ -1,0 +1,29 @@
+{
+  "status": "failed",
+  "retry_recommended": true,
+  "retry_target": "validation",
+  "blocking_issues": [
+    {
+      "severity": "high",
+      "issue": "The conversion the story exists for was not performed. The story's task list requires each input reader to be converted to a workflow it builds for itself, and the technical plan names roughly twenty-five modules under tests/ for the tester, starting explicitly with tests/test_self_routing_retry.py and tests/test_retry_routing.py -- 'the two the evidence names'. Exactly one module was converted: tests/test_story_coordinator.py (the only test module besides conftest.py, test_baseline_honesty.py and the new configuration module that `git diff --stat` shows touched, and one of only two non-infrastructure modules that references build_workflow). tests/test_self_routing_retry.py:108 and tests/test_retry_routing.py:73 still read `conftest.shipped_workflow(REPO_ROOT, \"story-workflow\")` at module scope and are unmodified in this run's diff, so the coupling the story's measured evidence names -- a max_self_routes grant reddening four assertions in a module with nothing to say about it -- is still present in exactly the module where it was measured.",
+      "location": "tests/test_self_routing_retry.py:108, tests/test_retry_routing.py:73, and the ~23 further modules named in technical_plan.likely_file_changes with stage: tester",
+      "required_behavior": "Each module the plan classifies as an input reader is converted to a workflow it builds through conftest.build_workflow / materialize_workflow, keeping every assertion's subject and strength, or -- where a module genuinely is a subject reader -- the classification is stated against the specific read that keeps it there and reconciled with the plan's contrary reason for that module."
+    },
+    {
+      "severity": "high",
+      "issue": "The stated reasons on PERMITTED_LIVE_ARTIFACT_READERS do not hold against the reads they justify, so the classification is not verifiable by reading the reason against the module -- which verification_requirements names as the check. For test_self_routing_retry.py the reason is 'reads the shipped self-route schema, the shipped rules and the shipped prompts a self-routed stage is rendered from' and for test_retry_routing.py 'reads the shipped rules, the shipped verifier prompt ... and the shipped schema a verdict must satisfy'. Neither mentions the module-scope shipped-workflow read each actually carries, and in both modules that read is used as a mutable base (`json.loads(json.dumps(WORKFLOW))` at test_retry_routing.py:275,782,786 and test_self_routing_retry.py:326) -- the textbook input use the story defines. The same applies to test_stage_output_ownership.py, whose reason ('which stage of this deployment is restricted from creating what, and that only one is') describes a configuration assertion the plan says belongs in the configuration module, while the module keeps six shipped-workflow reads (lines 44, 140, 235, 357, 382, 472) driving ownership enforcement. As written, the reasons would justify keeping every module on the list, which makes the classification unfalsifiable.",
+      "location": "tests/test_baseline_honesty.py:2170-2260",
+      "required_behavior": "Each reason names the specific read that keeps its module on the list and is true of that module's actual reads; a module whose shipped-workflow read is used as an input is converted rather than justified, and a configuration assertion that survives in such a module moves to tests/test_shipped_workflow_is_valid.py."
+    },
+    {
+      "severity": "medium",
+      "issue": "The 'after' wall-clock runtime was not measured, so the story's final acceptance criterion is unmet. The 'before' figure is on the record (2449 tests, 474.49 s / 7:54.84 wall at dcda75d, implementation-summary.md). test-results.json records 2479 passing tests and no duration, and no other run artifact in .harness/runs/story-048/ carries one. The documentation report states the gap rather than concealing it, which is the honest handling, but the criterion asks for two measurements and only one exists.",
+      "location": ".harness/runs/story-048/test-results.json",
+      "required_behavior": "The tester runs the full suite and records the measured wall-clock time after the conversion alongside the before figure, so the comparison is a measurement rather than an estimate."
+    }
+  ],
+  "unverified": [
+    "Whether the full 2479-test suite passes on the current tree was not independently re-run in full; test-results.json reports 2479 passed / 0 failed, and a targeted run of tests/test_baseline_honesty.py, tests/test_shipped_workflow_is_valid.py and tests/test_story_coordinator.py passed (175 passed in 22.65 s), which covers every module this run changed except the two whose only edits are comment-level.",
+    "The claim that no assertion was dropped without a stated successor could not be checked by collected-test-count comparison, because the before-run's per-module test names are not recorded in this run's artifacts; the count moved 2449 -> 2479, consistent with additions only."
+  ]
+}

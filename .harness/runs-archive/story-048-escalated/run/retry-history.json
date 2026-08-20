@@ -1,0 +1,94 @@
+[
+  {
+    "attempt": 1,
+    "blocking_issues": [
+      {
+        "severity": "high",
+        "issue": "The conversion the story exists for was not performed. The story's task list requires each input reader to be converted to a workflow it builds for itself, and the technical plan names roughly twenty-five modules under tests/ for the tester, starting explicitly with tests/test_self_routing_retry.py and tests/test_retry_routing.py -- 'the two the evidence names'. Exactly one module was converted: tests/test_story_coordinator.py (the only test module besides conftest.py, test_baseline_honesty.py and the new configuration module that `git diff --stat` shows touched, and one of only two non-infrastructure modules that references build_workflow). tests/test_self_routing_retry.py:108 and tests/test_retry_routing.py:73 still read `conftest.shipped_workflow(REPO_ROOT, \"story-workflow\")` at module scope and are unmodified in this run's diff, so the coupling the story's measured evidence names -- a max_self_routes grant reddening four assertions in a module with nothing to say about it -- is still present in exactly the module where it was measured.",
+        "location": "tests/test_self_routing_retry.py:108, tests/test_retry_routing.py:73, and the ~23 further modules named in technical_plan.likely_file_changes with stage: tester",
+        "required_behavior": "Each module the plan classifies as an input reader is converted to a workflow it builds through conftest.build_workflow / materialize_workflow, keeping every assertion's subject and strength, or -- where a module genuinely is a subject reader -- the classification is stated against the specific read that keeps it there and reconciled with the plan's contrary reason for that module."
+      },
+      {
+        "severity": "high",
+        "issue": "The stated reasons on PERMITTED_LIVE_ARTIFACT_READERS do not hold against the reads they justify, so the classification is not verifiable by reading the reason against the module -- which verification_requirements names as the check. For test_self_routing_retry.py the reason is 'reads the shipped self-route schema, the shipped rules and the shipped prompts a self-routed stage is rendered from' and for test_retry_routing.py 'reads the shipped rules, the shipped verifier prompt ... and the shipped schema a verdict must satisfy'. Neither mentions the module-scope shipped-workflow read each actually carries, and in both modules that read is used as a mutable base (`json.loads(json.dumps(WORKFLOW))` at test_retry_routing.py:275,782,786 and test_self_routing_retry.py:326) -- the textbook input use the story defines. The same applies to test_stage_output_ownership.py, whose reason ('which stage of this deployment is restricted from creating what, and that only one is') describes a configuration assertion the plan says belongs in the configuration module, while the module keeps six shipped-workflow reads (lines 44, 140, 235, 357, 382, 472) driving ownership enforcement. As written, the reasons would justify keeping every module on the list, which makes the classification unfalsifiable.",
+        "location": "tests/test_baseline_honesty.py:2170-2260",
+        "required_behavior": "Each reason names the specific read that keeps its module on the list and is true of that module's actual reads; a module whose shipped-workflow read is used as an input is converted rather than justified, and a configuration assertion that survives in such a module moves to tests/test_shipped_workflow_is_valid.py."
+      },
+      {
+        "severity": "medium",
+        "issue": "The 'after' wall-clock runtime was not measured, so the story's final acceptance criterion is unmet. The 'before' figure is on the record (2449 tests, 474.49 s / 7:54.84 wall at dcda75d, implementation-summary.md). test-results.json records 2479 passing tests and no duration, and no other run artifact in .harness/runs/story-048/ carries one. The documentation report states the gap rather than concealing it, which is the honest handling, but the criterion asks for two measurements and only one exists.",
+        "location": ".harness/runs/story-048/test-results.json",
+        "required_behavior": "The tester runs the full suite and records the measured wall-clock time after the conversion alongside the before figure, so the comparison is a measurement rather than an estimate."
+      }
+    ],
+    "retry_stage": "tester",
+    "archive_directory": "attempts/attempt-1",
+    "guidance": {
+      "current_focus": [
+        "Convert tests/test_self_routing_retry.py and tests/test_retry_routing.py to workflows they build through conftest.build_workflow and conftest.materialize_workflow. These are the two modules the story's own evidence names, and both currently take the shipped definition at module scope and mutate a deep copy of it, which is the input use the story defines.",
+        "Work down the remaining modules technical_plan.likely_file_changes assigns to the tester, converting each input reader one module at a time and keeping every assertion's subject and strength unchanged.",
+        "For any module kept on PERMITTED_LIVE_ARTIFACT_READERS, make the stated reason name the specific read that keeps it there and check it against the module's actual reads. Reasons that describe reads the module does not have, or that would equally justify keeping every module, do not classify anything.",
+        "Move each configuration assertion displaced by a conversion into tests/test_shipped_workflow_is_valid.py as its module is converted, so no assertion is in flight without a home -- notably the stage-ownership statement currently justifying tests/test_stage_output_ownership.py's place on the list.",
+        "Reduce PERMITTED_LIVE_ARTIFACT_READERS to the modules that remain subject readers after the conversion, keeping the both-directions equality assertion intact.",
+        "Measure the suite's wall-clock runtime after the conversion and record it beside the before figure (474.49 s / 7:54.84 wall at dcda75d), so the comparison is two measurements."
+      ],
+      "preserve_behavior": [
+        "The builder, StageRef, workflow_stage, build_workflow, materialize_workflow and the configured_workflow fixture seam in tests/conftest.py, which verify as sound: they resolve nothing shipped, omit every key not asked for, and produce a definition a real coordinator loads and runs to completion.",
+        "The widened live-artifact scan in tests/test_baseline_honesty.py, its helper route, its planted-helper-route control, its builder-only negative control and the both-directions equality assertion.",
+        "tests/test_shipped_workflow_is_valid.py, including its three validator checks, the negative control per validator, and the deployment-change demonstration.",
+        "The conversion already landed in tests/test_story_coordinator.py, which derives every stage, artifact and category name from the definition it builds.",
+        "The five rules already in tests/test_baseline_honesty.py, their present behaviour and their present controls.",
+        "Everything this repository ships: workflows/, rules/, prompts/, schemas/, orchestration/, scripts/, .harness/config.yaml and .harness/stories/ are unchanged and stay unchanged."
+      ],
+      "retry_scope": [
+        "tests/"
+      ]
+    }
+  },
+  {
+    "attempt": 2,
+    "blocking_issues": [
+      {
+        "severity": "high",
+        "issue": "The conversion is still incomplete: 3 modules converted, 17 declared as unconverted input readers. The retry converted the two modules the previous finding named -- tests/test_self_routing_retry.py (WORKFLOW = conftest.build_workflow(...) at line 140, four stages assembled from arguments, every name derived from it) and tests/test_retry_routing.py (build_workflow at line 98) -- and both now drive real runs against conftest.materialize_workflow roots. That part is done and verified. But the story's task 'Convert each input reader to a workflow it builds for itself' and technical_plan.likely_file_changes name roughly twenty-four tester modules, and the remaining seventeen were not converted; they were instead recorded in a new set WORKFLOW_INPUT_READERS_AWAITING_CONVERSION (tests/test_baseline_honesty.py:2335-2353), which the module's own comment calls 'the remaining work'. Declaring the debt is honest and the both-directions equality assertion (test_the_modules_reading_the_shipped_workflow_are_exactly_the_classified_ones) makes it survive, but it is not the conversion, and it leaves acceptance criterion 7 unsatisfiable: PERMITTED_LIVE_ARTIFACT_READERS still carries seventeen modules whose shipped-workflow read the suite itself classifies as an input.",
+        "location": "tests/test_baseline_honesty.py:2335-2353 and the seventeen modules it names",
+        "required_behavior": "Each module in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION is converted to a workflow it builds through conftest.build_workflow / materialize_workflow, keeping every assertion's subject and strength, with each displaced configuration assertion moved into tests/test_shipped_workflow_is_valid.py -- so the set empties and PERMITTED_LIVE_ARTIFACT_READERS names only modules whose reads are subjects."
+      },
+      {
+        "severity": "high",
+        "issue": "Eight stated reasons on PERMITTED_LIVE_ARTIFACT_READERS assert that the shipped workflow IS the subject of a module's assertions, while WORKFLOW_INPUT_READERS_AWAITING_CONVERSION in the same file declares that same module's workflow read an input. The two structures contradict each other and nothing asserts they agree. Verified by printing both structures: test_attempt_archiving.py ('the stage list it archives per attempt is the deployed one'), test_documenter_before_verification.py ('its subject is the shipped stage order'), test_escalation_resume.py ('what --stage accepts is a claim about this deployment's stage list'), test_execution_history.py ('the event record ... for the stages it deploys'), test_required_output_freshness.py ('the outputs this deployment declares its stages must produce'), test_resume_guard.py ('the stage list this deployment defines'), test_shared_baseline_resolution.py ('the workflow it drives a run under is this repository's'), test_stage_baseline.py ('the baseline captured before each deployed stage'). Exactly one of the seventeen -- test_stage_output_ownership.py -- had its reason rewritten to disclose the awaiting-conversion status, which shows the correction was understood and then applied to one module rather than to the family. This is the unfalsifiability the previous finding named, now split across two structures that disagree: reading the reason against the module (the check verification_requirements names) yields the opposite answer to reading the classification.",
+        "location": "tests/test_baseline_honesty.py:2176-2274",
+        "required_behavior": "Either the module is converted, or its reason stops claiming the workflow as a subject and names only the non-workflow read that keeps it on the list, in the form test_stage_output_ownership.py already uses. Additionally, an assertion should hold the two structures to agreement, so a reason claiming workflow-subjecthood for a module in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION fails rather than sitting unnoticed."
+      },
+      {
+        "severity": "low",
+        "issue": "The story's 'after' wall-clock runtime is still absent from every run artifact after a retry that named the gap explicitly. test-results.json records 2488 passed / 0 failed and no duration; no other artifact in .harness/runs/story-048/ carries one. The documentation report states the gap rather than concealing it. Severity is low rather than medium only because this verification supplies the measurement: the verifier ran `.venv/bin/python -m pytest tests/ -q` under `time` on the current tree and observed 2488 passed in 474.10s, 7:54.33 total wall clock -- against the before figure of 2449 tests, 474.49s / 7:54.84 wall at dcda75d. The conversion recovered no measurable runtime, which is now on the record here.",
+        "location": ".harness/runs/story-048/test-results.json",
+        "required_behavior": "The after figure is recorded in a run artifact a later reader finds, beside the before figure, so the story's final criterion is met by the run rather than by the verifier."
+      }
+    ],
+    "retry_stage": "tester",
+    "archive_directory": "attempts/attempt-2",
+    "guidance": {
+      "current_focus": [
+        "Empty WORKFLOW_INPUT_READERS_AWAITING_CONVERSION by converting the seventeen modules it names to workflows they build through conftest.build_workflow and conftest.materialize_workflow, one module at a time, keeping every assertion's subject and strength unchanged. The two hardest cases are already done and are the pattern to follow: tests/test_self_routing_retry.py and tests/test_retry_routing.py.",
+        "As each module is converted, move the configuration assertions it displaces into tests/test_shipped_workflow_is_valid.py rather than deleting them, and remove the module's name from WORKFLOW_INPUT_READERS_AWAITING_CONVERSION -- and from PERMITTED_LIVE_ARTIFACT_READERS when it no longer reads any live artifact of any family.",
+        "For any module that cannot be converted within this retry, rewrite its PERMITTED_LIVE_ARTIFACT_READERS reason so it names only the non-workflow read that keeps it on the list and discloses that its workflow read is an input awaiting conversion -- the exact form test_stage_output_ownership.py already uses. The eight reasons currently claiming workflow-subjecthood while the module sits in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION are: test_attempt_archiving.py, test_documenter_before_verification.py, test_escalation_resume.py, test_execution_history.py, test_required_output_freshness.py, test_resume_guard.py, test_shared_baseline_resolution.py, test_stage_baseline.py.",
+        "Add an assertion holding the two structures to agreement, so a PERMITTED_LIVE_ARTIFACT_READERS reason that claims the workflow as a subject for a module listed in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION fails. Give it a control that plants such a contradiction and observes it reported.",
+        "Record the measured after runtime in a run artifact beside the before figure. The verifier measured it on the current tree: 2488 passed in 474.10s, 7:54.33 total wall clock, against 2449 tests / 474.49s / 7:54.84 wall at dcda75d. Re-measure after the further conversions and record the new number rather than copying this one."
+      ],
+      "preserve_behavior": [
+        "The builder and its seam in tests/conftest.py -- VERIFYING_STAGE, StageRef, workflow_stage, build_workflow, materialize_workflow, BUILT_PROMPT_FIELDS, built_stage_prompt -- which verify as sound: they resolve nothing shipped, omit every key not asked for, and produce a definition a real coordinator loads and runs to completion.",
+        "The conversions already landed in tests/test_story_coordinator.py, tests/test_self_routing_retry.py and tests/test_retry_routing.py, including their vacuity guards (a budgeted stage and a budget-less stage both asserted to exist) and their materialized-root fixtures.",
+        "The widened live-artifact scan in tests/test_baseline_honesty.py, LIVE_ARTIFACT_HELPERS, the planted-helper-route controls, the builder-only negative control, and both both-directions equality assertions.",
+        "tests/test_shipped_workflow_is_valid.py in full: its three validator checks, its per-validator negative controls, the assertions displaced into it from the three converted modules, deployment_changes(), and test_a_built_harness_root_drives_a_run_the_way_a_deployed_one_does.",
+        "The narrowing in tests/test_git_history_loading_retired.py to the mapping-literal marker and the control that constructs the frozen form.",
+        "The five rules already in tests/test_baseline_honesty.py, their present behaviour and their present controls.",
+        "Everything this repository ships: workflows/, rules/, prompts/, schemas/, orchestration/, scripts/, .harness/config.yaml and .harness/stories/ are unchanged and stay unchanged."
+      ],
+      "retry_scope": [
+        "tests/"
+      ]
+    }
+  }
+]

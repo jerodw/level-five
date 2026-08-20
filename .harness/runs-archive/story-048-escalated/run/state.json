@@ -1,0 +1,13 @@
+{
+  "story_id": "story-048",
+  "branch": "story/story-048",
+  "status": "escalated",
+  "current_stage": "verifier",
+  "retry_count": 2,
+  "verification_iterations": 3,
+  "artifacts": [],
+  "story_digest": "2f09792f1c687019a6bcfcb232f9247ab9dd3a2e2f4d2bbc0ab37ddf7dd36e5b",
+  "escalation_commit": "390b6be96100148cfcd49703212b890ebbefc938",
+  "harness_revision": "dcda75de9820955e3fb041c963f2cc67f9423e6c",
+  "self_route_count": 0
+}

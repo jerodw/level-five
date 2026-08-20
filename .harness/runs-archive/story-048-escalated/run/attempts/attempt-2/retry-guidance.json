@@ -1,0 +1,21 @@
+{
+  "current_focus": [
+    "Empty WORKFLOW_INPUT_READERS_AWAITING_CONVERSION by converting the seventeen modules it names to workflows they build through conftest.build_workflow and conftest.materialize_workflow, one module at a time, keeping every assertion's subject and strength unchanged. The two hardest cases are already done and are the pattern to follow: tests/test_self_routing_retry.py and tests/test_retry_routing.py.",
+    "As each module is converted, move the configuration assertions it displaces into tests/test_shipped_workflow_is_valid.py rather than deleting them, and remove the module's name from WORKFLOW_INPUT_READERS_AWAITING_CONVERSION -- and from PERMITTED_LIVE_ARTIFACT_READERS when it no longer reads any live artifact of any family.",
+    "For any module that cannot be converted within this retry, rewrite its PERMITTED_LIVE_ARTIFACT_READERS reason so it names only the non-workflow read that keeps it on the list and discloses that its workflow read is an input awaiting conversion -- the exact form test_stage_output_ownership.py already uses. The eight reasons currently claiming workflow-subjecthood while the module sits in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION are: test_attempt_archiving.py, test_documenter_before_verification.py, test_escalation_resume.py, test_execution_history.py, test_required_output_freshness.py, test_resume_guard.py, test_shared_baseline_resolution.py, test_stage_baseline.py.",
+    "Add an assertion holding the two structures to agreement, so a PERMITTED_LIVE_ARTIFACT_READERS reason that claims the workflow as a subject for a module listed in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION fails. Give it a control that plants such a contradiction and observes it reported.",
+    "Record the measured after runtime in a run artifact beside the before figure. The verifier measured it on the current tree: 2488 passed in 474.10s, 7:54.33 total wall clock, against 2449 tests / 474.49s / 7:54.84 wall at dcda75d. Re-measure after the further conversions and record the new number rather than copying this one."
+  ],
+  "preserve_behavior": [
+    "The builder and its seam in tests/conftest.py -- VERIFYING_STAGE, StageRef, workflow_stage, build_workflow, materialize_workflow, BUILT_PROMPT_FIELDS, built_stage_prompt -- which verify as sound: they resolve nothing shipped, omit every key not asked for, and produce a definition a real coordinator loads and runs to completion.",
+    "The conversions already landed in tests/test_story_coordinator.py, tests/test_self_routing_retry.py and tests/test_retry_routing.py, including their vacuity guards (a budgeted stage and a budget-less stage both asserted to exist) and their materialized-root fixtures.",
+    "The widened live-artifact scan in tests/test_baseline_honesty.py, LIVE_ARTIFACT_HELPERS, the planted-helper-route controls, the builder-only negative control, and both both-directions equality assertions.",
+    "tests/test_shipped_workflow_is_valid.py in full: its three validator checks, its per-validator negative controls, the assertions displaced into it from the three converted modules, deployment_changes(), and test_a_built_harness_root_drives_a_run_the_way_a_deployed_one_does.",
+    "The narrowing in tests/test_git_history_loading_retired.py to the mapping-literal marker and the control that constructs the frozen form.",
+    "The five rules already in tests/test_baseline_honesty.py, their present behaviour and their present controls.",
+    "Everything this repository ships: workflows/, rules/, prompts/, schemas/, orchestration/, scripts/, .harness/config.yaml and .harness/stories/ are unchanged and stay unchanged."
+  ],
+  "retry_scope": [
+    "tests/"
+  ]
+}

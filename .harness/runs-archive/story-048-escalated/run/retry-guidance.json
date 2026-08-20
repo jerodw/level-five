@@ -1,0 +1,23 @@
+{
+  "current_focus": [
+    "Empty WORKFLOW_INPUT_READERS_AWAITING_CONVERSION. Convert all fourteen remaining modules to definitions they build through conftest.build_workflow and materialize through conftest.materialize_workflow, keeping every assertion's subject and strength. Prioritise the six whose only shipped read is the workflow -- test_attempt_archiving.py, test_escalation_resume.py, test_execution_history.py, test_required_output_freshness.py, test_resume_guard.py, test_single_story_reader.py -- because each of those leaves PERMITTED_LIVE_ARTIFACT_READERS entirely once converted, which is what acceptance criterion 7 needs.",
+    "Then convert the remaining eight -- test_clean_clone_check.py, test_documenter_before_verification.py, test_escalation_summary.py, test_retry_history.py, test_revert_baseline.py, test_revert_check.py, test_stage_baseline.py, test_stage_output_ownership.py -- and rewrite each one's PERMITTED_LIVE_ARTIFACT_READERS reason to name only the non-workflow shipped read (the schema or the rules file) that keeps it on the list, with the awaiting-conversion clause removed.",
+    "Move every configuration assertion displaced by these conversions into tests/test_shipped_workflow_is_valid.py, stating in the story record which assertion took over what each removed one checked, so the collected count does not fall silently.",
+    "Batch the work rather than converting two modules per attempt: three verifications have now named this same gap and the per-attempt rate is what is failing, not the approach.",
+    "Re-measure the after wall-clock runtime once the conversion completes and update .harness/runs/story-048/suite-runtime.md, since the recorded after figure (454.72 s) predates these conversions."
+  ],
+  "preserve_behavior": [
+    "conftest.build_workflow and conftest.materialize_workflow as they stand: the builder assembles from arguments, resolves nothing this repository ships, and its output drives a real run (verified at tests/test_shipped_workflow_is_valid.py:652-683).",
+    "The widened live-artifact scan, its helper-route detection, its two controls, and its stated limits.",
+    "contradictory_reasons, AWAITING_CONVERSION_MARKER and their control (tests/test_baseline_honesty.py:2389-2437) -- the agreement check is correct and its planted-contradiction control works; keep the mechanism even as the awaiting set empties, so a future regression is caught.",
+    "The both-directions equality assertions: test_the_modules_reading_the_shipped_workflow_are_exactly_the_classified_ones and test_the_modules_reading_a_live_artifact_are_exactly_the_permitted_ones, including their non-vacuity guards.",
+    "WORKFLOW_SUBJECT_READERS and the eight classifications on it, including test_planner_injection.py's move into it.",
+    "Every assertion in tests/test_shipped_workflow_is_valid.py, including the ten already displaced there and their non-vacuity guards (assert checked, assert routes).",
+    "The five modules already converted -- test_story_coordinator.py, test_self_routing_retry.py, test_retry_routing.py, test_coordinator_contract.py, test_shared_baseline_resolution.py.",
+    "The five original rules in tests/test_baseline_honesty.py and their controls.",
+    "Nothing this repository ships changes: orchestration/, workflows/, prompts/, schemas/, scripts/, .harness/config.yaml and .harness/stories/ stay as they are."
+  ],
+  "retry_scope": [
+    "tests/"
+  ]
+}

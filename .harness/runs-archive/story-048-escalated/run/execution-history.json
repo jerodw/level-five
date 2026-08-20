@@ -1,0 +1,205 @@
+[
+  {
+    "sequence": 1,
+    "timestamp": "2026-08-19 07:00:22",
+    "event": "workflow-started",
+    "message": "workflow started for story-048"
+  },
+  {
+    "sequence": 2,
+    "timestamp": "2026-08-19 07:00:22",
+    "event": "stage-started",
+    "message": "implementer stage started",
+    "stage": "implementer"
+  },
+  {
+    "sequence": 3,
+    "timestamp": "2026-08-19 07:08:54",
+    "event": "stage-completed",
+    "message": "implementer stage completed",
+    "stage": "implementer",
+    "artifacts": [
+      "changed-files.json",
+      "implementation-summary.md"
+    ],
+    "duration_seconds": 512.204
+  },
+  {
+    "sequence": 4,
+    "timestamp": "2026-08-19 07:08:54",
+    "event": "stage-started",
+    "message": "tester stage started",
+    "stage": "tester"
+  },
+  {
+    "sequence": 5,
+    "timestamp": "2026-08-19 07:43:03",
+    "event": "stage-completed",
+    "message": "tester stage completed",
+    "stage": "tester",
+    "artifacts": [
+      "test-results.json",
+      "tester-changed-files.json"
+    ],
+    "duration_seconds": 2049.482
+  },
+  {
+    "sequence": 6,
+    "timestamp": "2026-08-19 07:43:03",
+    "event": "stage-started",
+    "message": "documenter stage started",
+    "stage": "documenter"
+  },
+  {
+    "sequence": 7,
+    "timestamp": "2026-08-19 07:46:31",
+    "event": "stage-completed",
+    "message": "documenter stage completed",
+    "stage": "documenter",
+    "artifacts": [
+      "documentation-report.md",
+      "documenter-changed-files.json"
+    ],
+    "duration_seconds": 207.376
+  },
+  {
+    "sequence": 8,
+    "timestamp": "2026-08-19 07:46:31",
+    "event": "stage-started",
+    "message": "verifier stage started",
+    "stage": "verifier"
+  },
+  {
+    "sequence": 9,
+    "timestamp": "2026-08-19 07:48:48",
+    "event": "verification-failed",
+    "message": "verification failed; retry 1 of 2 rerouted to tester for validation",
+    "stage": "verifier",
+    "artifacts": [
+      "verification-result.json"
+    ],
+    "duration_seconds": 136.872,
+    "verifier_outcome": "failed",
+    "retry_decision": "retry",
+    "retry_reason": "the verifier recommended a retry and the retry ceiling was not reached",
+    "retry_category": "validation",
+    "retry_stage": "tester"
+  },
+  {
+    "sequence": 10,
+    "timestamp": "2026-08-19 07:48:48",
+    "event": "stage-started",
+    "message": "tester stage started",
+    "stage": "tester"
+  },
+  {
+    "sequence": 11,
+    "timestamp": "2026-08-19 08:17:26",
+    "event": "stage-completed",
+    "message": "tester stage completed",
+    "stage": "tester",
+    "artifacts": [
+      "test-results.json",
+      "tester-changed-files.json"
+    ],
+    "duration_seconds": 1718.34
+  },
+  {
+    "sequence": 12,
+    "timestamp": "2026-08-19 08:17:26",
+    "event": "stage-started",
+    "message": "documenter stage started",
+    "stage": "documenter"
+  },
+  {
+    "sequence": 13,
+    "timestamp": "2026-08-19 08:21:31",
+    "event": "stage-completed",
+    "message": "documenter stage completed",
+    "stage": "documenter",
+    "artifacts": [
+      "documentation-report.md",
+      "documenter-changed-files.json"
+    ],
+    "duration_seconds": 245.069
+  },
+  {
+    "sequence": 14,
+    "timestamp": "2026-08-19 08:21:31",
+    "event": "stage-started",
+    "message": "verifier stage started",
+    "stage": "verifier"
+  },
+  {
+    "sequence": 15,
+    "timestamp": "2026-08-19 08:32:39",
+    "event": "verification-failed",
+    "message": "verification failed; retry 2 of 2 rerouted to tester for validation",
+    "stage": "verifier",
+    "artifacts": [
+      "verification-result.json"
+    ],
+    "duration_seconds": 667.779,
+    "verifier_outcome": "failed",
+    "retry_decision": "retry",
+    "retry_reason": "the verifier recommended a retry and the retry ceiling was not reached",
+    "retry_category": "validation",
+    "retry_stage": "tester"
+  },
+  {
+    "sequence": 16,
+    "timestamp": "2026-08-19 08:32:39",
+    "event": "stage-started",
+    "message": "tester stage started",
+    "stage": "tester"
+  },
+  {
+    "sequence": 17,
+    "timestamp": "2026-08-19 08:50:47",
+    "event": "stage-completed",
+    "message": "tester stage completed",
+    "stage": "tester",
+    "artifacts": [
+      "test-results.json",
+      "tester-changed-files.json"
+    ],
+    "duration_seconds": 1088.393
+  },
+  {
+    "sequence": 18,
+    "timestamp": "2026-08-19 08:50:47",
+    "event": "stage-started",
+    "message": "documenter stage started",
+    "stage": "documenter"
+  },
+  {
+    "sequence": 19,
+    "timestamp": "2026-08-19 08:53:32",
+    "event": "stage-completed",
+    "message": "documenter stage completed",
+    "stage": "documenter",
+    "artifacts": [
+      "documentation-report.md",
+      "documenter-changed-files.json"
+    ],
+    "duration_seconds": 165.018
+  },
+  {
+    "sequence": 20,
+    "timestamp": "2026-08-19 08:53:32",
+    "event": "stage-started",
+    "message": "verifier stage started",
+    "stage": "verifier"
+  },
+  {
+    "sequence": 21,
+    "timestamp": "2026-08-19 08:56:02",
+    "event": "escalated",
+    "message": "escalated: verification failed and retries are exhausted",
+    "stage": "verifier",
+    "duration_seconds": 149.344,
+    "verifier_outcome": "failed",
+    "retry_decision": "escalate",
+    "retry_reason": "the retry ceiling of 2 was reached"
+  }
+]

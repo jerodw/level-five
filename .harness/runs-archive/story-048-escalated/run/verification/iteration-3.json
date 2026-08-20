@@ -1,0 +1,24 @@
+{
+  "status": "failed",
+  "retry_recommended": true,
+  "retry_target": "validation",
+  "blocking_issues": [
+    {
+      "severity": "high",
+      "issue": "The conversion the story is named for is still substantially undone. Verified by running the suite's own classification: tests/test_baseline_honesty.workflow_reading_modules() reports 22 modules resolving the shipped workflow; 8 are classified WORKFLOW_SUBJECT_READERS and 14 remain in WORKFLOW_INPUT_READERS_AWAITING_CONVERSION (tests/test_baseline_honesty.py:2366-2381). Confirmed against the tree: tests/test_execution_history.py:42, tests/test_resume_guard.py:66, tests/test_required_output_freshness.py:58 and tests/test_attempt_archiving.py:32,265 still bind WORKFLOW = conftest.shipped_workflow(...). This retry converted two more modules (tests/test_coordinator_contract.py, tests/test_shared_baseline_resolution.py) and reclassified tests/test_planner_injection.py as a subject reader, bringing the total converted to five; the story's task 'Convert each input reader to a workflow it builds for itself' and the twenty-four tester entries in technical_plan.likely_file_changes name the rest. Three verifications have now named this same gap, and the rate of the last retry (two modules) does not close it.",
+      "location": "tests/test_baseline_honesty.py:2366-2381 and the fourteen modules it names",
+      "required_behavior": "WORKFLOW_INPUT_READERS_AWAITING_CONVERSION is empty: each module on it drives its run from a definition built through conftest.build_workflow and materialized through conftest.materialize_workflow, every assertion keeping its subject and its strength, and each displaced configuration assertion moved into tests/test_shipped_workflow_is_valid.py rather than dropped."
+    },
+    {
+      "severity": "high",
+      "issue": "Acceptance criterion 7 -- 'Every module on the declared list carries a stated reason saying why the shipped artifact is the subject of its assertions rather than an input to them' -- is not met, and cannot be while the awaiting set is non-empty. Verified by reading each reason on PERMITTED_LIVE_ARTIFACT_READERS: six entries state that the workflow is the only live artifact the module resolves AND that the read is an input awaiting conversion -- test_attempt_archiving.py, test_escalation_resume.py, test_execution_history.py, test_required_output_freshness.py, test_resume_guard.py, test_single_story_reader.py. Each therefore sits on the declared list of permitted live-artifact readers carrying a reason that explicitly disclaims subjecthood and names no other subject read. Eight further entries disclose an awaiting workflow read but do name a non-workflow subject (a shipped schema or the shipped rules), which is the honest form; the six above have nothing keeping them on the list. The disclosure itself is a real improvement -- the previous finding's contradiction is genuinely fixed, and contradictory_reasons/AWAITING_CONVERSION_MARKER (tests/test_baseline_honesty.py:2389-2437) now hold the two structures to agreement with a working control that plants a subject-claiming reason and observes it reported -- but honest bookkeeping of an unmet criterion is not the criterion.",
+      "location": "tests/test_baseline_honesty.py:2176-2293",
+      "required_behavior": "Every name remaining on PERMITTED_LIVE_ARTIFACT_READERS carries a reason naming a shipped artifact that is the subject of that module's assertions. A module whose only shipped read is a workflow used as an input is converted and leaves the list rather than remaining on it with a disclosure."
+    }
+  ],
+  "unverified": [
+    "The full suite was not re-run by this verification; the memory-recorded practice is to read the run's evidence rather than re-run. Evidence relied on: test-results.json records 2490 run / 2490 passed / 0 failed, corroborated independently by .harness/runs/story-048/suite-runtime.md recording 2490 passed in 454.72 s. tests/test_baseline_honesty.py and tests/test_shipped_workflow_is_valid.py were run directly here: 171 passed in 18.56 s.",
+    "Mutation-sensitivity was not exercised assertion by assertion across the five converted modules. Evidence relied on instead: the converted modules drive real coordinator runs against materialized roots rather than inspecting definitions, and tests/test_shipped_workflow_is_valid.py:652-683 drives a built definition through story_coordinator.run_story to a zero exit under each of the three deployment changes.",
+    "That no assertion was dropped in the conversion was checked by collected count only (2449 -> 2490, +41 with 41 tests written), not by diffing test names before and after."
+  ]
+}

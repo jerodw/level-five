@@ -1,0 +1,15 @@
+{
+  "modified": [
+    "tests/conftest.py",
+    "tests/test_baseline_honesty.py",
+    "tests/test_git_history_loading_retired.py",
+    "tests/test_retry_routing.py",
+    "tests/test_self_routing_retry.py",
+    "tests/test_story_coordinator.py",
+    "tests/test_tester_prompt_fixture_guidance.py"
+  ],
+  "created": [
+    "tests/test_shipped_workflow_is_valid.py"
+  ],
+  "deleted": []
+}
