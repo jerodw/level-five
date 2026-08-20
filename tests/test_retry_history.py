@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import first_retry_route, load_mutant, story_diff
+from conftest import first_retry_route, load_mutant
 import conftest
 
 import context_assembler
@@ -574,32 +574,44 @@ def test_the_schema_catches_an_attempt_that_is_not_a_number():
 # --------------------------------------------------------------------------
 
 
-def _left_alone_by_this_story(rel: str) -> bool:
-    """Whether *this story's own change* left `rel` alone.
+def _left_alone_by_this_story(rel: str, repo: Path) -> bool:
+    """Whether a story's own run commit left `rel` alone, in `repo`.
 
-    Resolved through the shared baseline in tests/conftest.py — this story's
-    run commit against its parent — rather than as the working tree against
-    HEAD, which goes vacuously green the moment the coordinator commits.
+    Resolved through the shared baseline in tests/conftest.py — the story's run
+    commit against its parent — rather than as the working tree against HEAD,
+    which goes vacuously green the moment the coordinator commits.
+
+    Since story-053 the repository is one the caller built rather than this
+    one. Bounded at this repository's own graph the question had a fixed
+    answer, and the *evidence* for it moved every time something was committed,
+    renamed, squashed or rebased. The predicate did not change; where it is
+    pointed did.
     """
-    return story_diff([rel], validation_file=Path(__file__)).strip() == ""
+    return conftest.constructed_story_diff(repo, [rel]).strip() == ""
 
 
-def test_the_retry_guidance_schema_is_unchanged():
-    assert _left_alone_by_this_story("schemas/retry-guidance.schema.json")
+def test_the_retry_guidance_schema_is_unchanged(tmp_path):
+    rel = "schemas/retry-guidance.schema.json"
+    assert _left_alone_by_this_story(
+        rel, conftest.constructed_story(tmp_path, respected=[rel]))
 
 
-def test_the_reader_that_injects_the_guidance_is_unchanged():
-    assert _left_alone_by_this_story("orchestration/context_assembler.py")
+def test_the_reader_that_injects_the_guidance_is_unchanged(tmp_path):
+    rel = "orchestration/context_assembler.py"
+    assert _left_alone_by_this_story(
+        rel, conftest.constructed_story(tmp_path, respected=[rel]))
 
 
-def test_the_unchanged_assertions_above_can_fail():
-    """The control for the two absences: the same resolution, over a path this
+def test_the_unchanged_assertions_above_can_fail(tmp_path):
+    """The control for the two absences: the same resolution, over a path the
     story did change, reports the change.
 
     Without this, both assertions above would read identically if the baseline
     had silently resolved to something with nothing on either side of it.
     """
-    assert not _left_alone_by_this_story("orchestration/story_coordinator.py")
+    rel = "orchestration/story_coordinator.py"
+    assert not _left_alone_by_this_story(
+        rel, conftest.constructed_story(tmp_path, violated=[rel]))
 
 
 def test_the_guidance_is_still_written_by_the_verifier_in_the_same_place(

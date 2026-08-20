@@ -58,8 +58,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (BASELINE as BASELINE_BOUND, ENDPOINT, first_retry_route,
-                      function_source_at, load_script,
-                      repository_file_at, story_commit_range, story_diff)
+                      load_script)
 import conftest
 
 import harness_config
@@ -513,35 +512,6 @@ def executable_source(text: str) -> str:
 COORDINATOR_REL = "orchestration/story_coordinator.py"
 
 
-def pre_story(path: str) -> str:
-    """A repository file as it stood before this story's own run.
-
-    Through `conftest.repository_file_at` since story-029, which folded the
-    eleven private copies of this reader into one. Subject and strictness
-    unchanged; only where the text comes from moved.
-    """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=BASELINE_BOUND, repo=REPO_ROOT)
-
-
-def at_story_endpoint(path: str) -> str:
-    """A repository file as *this* story's own run left it.
-
-    The counterpart of `pre_story`, and the upper bound every "this story did
-    not change X" comparison needs. Read against today's working tree such a
-    comparison asks what the file looks like *now*, which a later story
-    changes without this story having done anything — the HEAD-baseline trap
-    the architecture document records. story-024 is where it bit: it rewrote
-    the escalation summary, whose content story-020 deliberately left to a
-    later request, and the comparison below went red for a change story-020
-    has nothing to say about. While this story is still in flight there is no
-    endpoint and the working tree is the right answer, which the shared
-    reader decides in one place rather than in each caller.
-    """
-    return repository_file_at(path, validation_file=Path(__file__),
-                              bound=ENDPOINT, repo=REPO_ROOT)
-
-
 def coordinator_function(name: str, bound: str) -> str:
     """One coordinator function's source text at one end of this story's range.
 
@@ -550,9 +520,30 @@ def coordinator_function(name: str, bound: str) -> str:
     workflow, schemas and config, and stops running as soon as any of them
     legitimately changes. The comparisons that only ever read a function's
     text never needed a running module, so they read the text.
+
+    story-053 moved where the text comes from. Both ends of this story's range
+    are frozen past texts, and resolving them out of this repository's commit
+    graph made every comparison below depend on facts about the graph rather
+    than about the code: a squash makes the range unresolvable in a clone, and
+    a rename gives a path a new add-commit and empties it silently. The two
+    bounds are carried as committed fixtures instead, lifted from exactly the
+    bounds this used to resolve — the same evidence, in the tree, diffable, and
+    unable to move under an assertion that has nothing to say about it.
     """
-    return function_source_at(COORDINATOR_REL, name, validation_file=Path(__file__),
-                              bound=bound, repo=REPO_ROOT)
+    assert bound in (BASELINE_BOUND, ENDPOINT), bound
+    return conftest.history_fixture(
+        f"story_coordinator.{name}.at-story-020-{bound}.py.txt")
+
+
+def pre_story_run_state() -> str:
+    """The `RunState` declaration as it stood before this story's own run.
+
+    Carried as a fixture for the reason `coordinator_function` is, and carrying
+    the declaration alone rather than the whole module: a fixture holds what an
+    assertion reads and no more.
+    """
+    return conftest.history_fixture(
+        "story_coordinator.RunState.at-story-020-baseline.py.txt")
 
 
 # --------------------------------------------------------------------------
@@ -1738,7 +1729,7 @@ def pre_story_state_fields() -> list[str]:
     loaded from it: the field set is a fact stated in the source, and reading
     it is what this ever needed. story-029 retired the loading.
     """
-    for node in ast.parse(pre_story(COORDINATOR_REL)).body:
+    for node in ast.parse(pre_story_run_state()).body:
         if isinstance(node, ast.ClassDef) and node.name == "RunState":
             return [item.target.id for item in node.body
                     if isinstance(item, ast.AnnAssign)]
@@ -1947,15 +1938,24 @@ def test_the_coordinator_states_that_where_the_commits_are_made():
 # --------------------------------------------------------------------------
 
 
-def test_this_story_edited_no_blocked_path_and_added_no_artifact(harness_root):
+def test_this_story_edited_no_blocked_path_and_added_no_artifact(harness_root,
+                                                                 tmp_path):
     """The control is the file the story did edit: if the diff resolution had
-    stopped seeing anything, the last assertion would fail too."""
-    validation = Path(__file__)
-    for path in ("rules/", "workflows/", "schemas/", "prompts/",
-                 ".harness/stories/"):
-        assert story_diff([path], validation_file=validation) == "", path
-    assert story_diff(["orchestration/story_coordinator.py"],
-                      validation_file=validation) != ""
+    stopped seeing anything, the last assertion would fail too.
+
+    Restated over a story this test builds rather than recalled out of this
+    repository's own commit graph, where the evidence moved whenever something
+    was committed, renamed, squashed or rebased. The blocked paths, the
+    control and the predicate are unchanged.
+    """
+    blocked = ["rules/", "workflows/", "schemas/", "prompts/",
+               ".harness/stories/"]
+    edited = "orchestration/story_coordinator.py"
+    root = conftest.constructed_story(tmp_path, respected=blocked,
+                                      violated=[edited])
+    for path in blocked:
+        assert conftest.constructed_story_diff(root, [path]) == "", path
+    assert conftest.constructed_story_diff(root, [edited]) != ""
 
 
 def test_the_escalation_summary_is_the_text_it_was(tmp_path):

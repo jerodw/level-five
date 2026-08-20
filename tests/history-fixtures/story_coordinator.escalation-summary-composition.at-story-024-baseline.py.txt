@@ -1,0 +1,51 @@
+@_commits_the_tree_it_ends_on
+def _escalate(
+    run_dir: Path,
+    state: RunState,
+    reason: str,
+    *,
+    target_root: Path,
+    harness_root: Path,
+    **event_fields,
+) -> int:
+    """End the run, recording the escalation in both renderings.
+
+    A run that failed must be as reconstructable as one that passed, so the
+    history ends with this entry. Callers forward whatever structured fields
+    the escalation has — the stage's elapsed time, the verifier's outcome,
+    the decision that routed here — through event_fields.
+
+    The run's record of the escalation is committed here, and the sha of that
+    commit is written into state.json for the commit that follows to carry —
+    the wrapper above commits the tree once this has written everything, so
+    that the escalation's own evidence is inside the commit and the tree it
+    leaves is clean. The harness revision is recorded here too, for the same
+    reader: a resume can then tell whether the harness itself has changed
+    since.
+    """
+    state.harness_revision = _revision(harness_root)
+    state.status = "escalated"
+    save_state(run_dir, state)
+    append_event(
+        run_dir,
+        f"escalated: {reason}",
+        kind="escalated",
+        stage=state.current_stage or None,
+        **event_fields,
+    )
+    state.escalation_commit = commit_escalated_work(
+        target_root, state, reason, run_dir=run_dir
+    )
+    if state.escalation_commit:
+        save_state(run_dir, state)
+    summary = (
+        f"# {state.story_id} Escalation Summary\n\n"
+        f"## Status\nEscalated\n\n"
+        f"## Reason\n{reason}\n\n"
+        f"## Where Execution Stopped\nStage: {state.current_stage}, "
+        f"retry count: {state.retry_count}\n\n"
+        f"## Where to Look\nSee events.log for the run history and the "
+        f"verification/ directory for verifier findings.\n"
+    )
+    (run_dir / "escalation-summary.md").write_text(summary, encoding="utf-8")
+    return 2

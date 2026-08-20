@@ -67,7 +67,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import BASELINE, load_mutant, repository_file_at
+from conftest import load_mutant
 import conftest
 
 # The suite target — a real module under a real pytest suite — and the helpers
@@ -777,14 +777,15 @@ def test_the_reasons_a_budgetless_stage_escalates_with_are_the_pre_story_ones(
     """The observed reasons, tied to the text the coordinator carried before
     this story rather than to literals written here.
 
-    Read out of the pre-story coordinator through the shared resolution, so
-    the comparison survives the commit this run makes. If a reason had been
-    reworded while converting its site into a self-route, the phrase would no
-    longer be found in both.
+    Read out of the pre-story coordinator, carried as a committed fixture since
+    story-053. If a reason had been reworded while converting its site into a
+    self-route, the phrase would no longer be found in both. The text is the
+    same text, lifted from exactly the baseline this used to resolve; what it
+    no longer does is move whenever this repository is committed to, renamed,
+    squashed or rebased, none of which is a property of the reasons.
     """
-    pre_story = repository_file_at(
-        "orchestration/story_coordinator.py",
-        validation_file=Path(__file__), bound=BASELINE)
+    pre_story = conftest.history_fixture(
+        "story_coordinator.at-story-036-baseline.py.txt")
 
     # A stage a retry brings back, so all three failures are reachable at one
     # stage and the three reasons are read off one stage's behaviour.
@@ -1543,9 +1544,8 @@ def test_the_pre_story_history_schema_rejects_that_same_history(
     same history for the very reason it was widened."""
     target_root = make_target("history-schema-control")
     assert drive(target_root, harness_root, **crash_plan(BUDGETED, 1))[0] == 0
-    pre_story = json.loads(repository_file_at(
-        "schemas/execution-history.schema.json",
-        validation_file=Path(__file__), bound=BASELINE))
+    pre_story = json.loads(conftest.history_fixture(
+        "execution-history.schema.at-story-036-baseline.json"))
     errors = schema_validator.validate(history_of(target_root), pre_story)
     assert errors
     assert any("self-routed" in error for error in errors)

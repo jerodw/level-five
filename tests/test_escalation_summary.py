@@ -49,8 +49,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, ENDPOINT, first_retry_route, function_source_at,
-                      story_diff, story_commit_range)
+from conftest import BASELINE, ENDPOINT, first_retry_route, function_source
 import conftest
 
 import harness_config
@@ -762,6 +761,7 @@ UNCHANGED_SECTIONS = ["Status", "Reason", "Where Execution Stopped",
 
 
 COORDINATOR_REL = "orchestration/story_coordinator.py"
+COORDINATOR_PATH = REPO_ROOT / COORDINATOR_REL
 
 #: The escalation this section is about: three failing verdicts, so the run
 #: retries to its ceiling and escalates at the verifier with a verdict, a
@@ -806,12 +806,24 @@ def summary_composition(bound: str) -> str:
     extracted `escalation_summary`, which is the whole of what the story did
     to the composition — so the function to read is whichever of the two
     exists at that bound.
+
+    story-053 moved where that text comes from. The baseline of this story's
+    range is a frozen past text, and resolving it out of this repository's
+    commit graph made the assertion depend on the graph rather than on the
+    code: a squash makes the range unresolvable in a clone, and a rename gives
+    a path a new add-commit and empties the range silently. The baseline text
+    is carried as a committed fixture, lifted from exactly the bound this used
+    to resolve. The endpoint is the working tree, which is where the
+    composition lives and is read from below.
     """
+    if bound == BASELINE:
+        return conftest.history_fixture(
+            "story_coordinator.escalation-summary-composition"
+            ".at-story-024-baseline.py.txt")
     for name in ("escalation_summary", "_escalate"):
         try:
-            return function_source_at(COORDINATOR_REL, name,
-                                      validation_file=Path(__file__),
-                                      bound=bound, repo=REPO_ROOT)
+            return function_source(COORDINATOR_PATH.read_text(encoding="utf-8"),
+                                   name)
         except AssertionError:
             continue
     raise AssertionError(f"no source at {bound} composes the summary")
@@ -957,14 +969,20 @@ def test_an_escalation_writes_no_new_file_to_the_run_directory(
             and not path.name.startswith(RENDERED_PROMPT)} != present
 
 
-def test_this_story_added_no_schema():
+def test_this_story_added_no_schema(tmp_path):
     """The control is the file this story did change, compared the same way:
     if the diff resolution had stopped seeing anything, it would report
-    nothing either."""
-    validation = Path(__file__)
-    assert story_diff(["schemas/"], validation_file=validation) == ""
-    assert story_diff(["orchestration/story_coordinator.py"],
-                      validation_file=validation) != ""
+    nothing either.
+
+    Restated over a story this test builds rather than recalled out of this
+    repository's own commit graph, whose answers moved whenever something was
+    committed, renamed, squashed or rebased. The pair of claims is unchanged.
+    """
+    edited = "orchestration/story_coordinator.py"
+    root = conftest.constructed_story(tmp_path, respected=["schemas/"],
+                                      violated=[edited])
+    assert conftest.constructed_story_diff(root, ["schemas/"]) == ""
+    assert conftest.constructed_story_diff(root, [edited]) != ""
 
 
 # --------------------------------------------------------------------------

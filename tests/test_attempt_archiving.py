@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import commit_setup, first_retry_route, story_diff
+from conftest import commit_setup, first_retry_route
 import conftest
 
 import context_assembler
@@ -517,31 +517,43 @@ def test_archive_attempt_creates_nothing_it_was_not_asked_for(tmp_path: Path):
 # --------------------------------------------------------------------------
 
 
-def _unchanged_by_this_story(rel: str) -> bool:
-    """Whether *this story's own change* left `rel` alone.
+def _unchanged_by_this_story(rel: str, repo: Path) -> bool:
+    """Whether a story's own change left `rel` alone, in `repo`.
 
     Not `git diff HEAD`. That asks whether the working tree is dirty here,
     which is a question about whoever is working right now: it goes vacuously
     green the moment anything is committed, and red for every later story that
     legitimately edits one of these paths. Bound the comparison at both ends
-    instead — this story's own run commit against its parent.
+    instead — the story's own run commit against its parent.
 
     Since story-015 the resolution lives once in `tests/conftest.py` rather
-    than being restated here, and it keys on this validation file's own
-    adding commit rather than on a marker planted in the story's source: the
-    commit that added `tests/test_story_010_validation.py` *is* story-010's
-    run commit.
+    than being restated here, and since story-053 the history it is pointed at
+    is one the caller built. The predicate is unchanged; what moved is that
+    the story is constructed rather than recalled out of this repository's own
+    commit graph, where the evidence moved whenever something was committed,
+    renamed, squashed or rebased.
     """
-    return story_diff([rel], validation_file=Path(__file__)).strip() == ""
+    return conftest.constructed_story_diff(repo, [rel]).strip() == ""
 
 
-def test_context_assembler_is_unchanged():
-    assert _unchanged_by_this_story("orchestration/context_assembler.py")
+def test_context_assembler_is_unchanged(tmp_path):
+    rel = "orchestration/context_assembler.py"
+    assert _unchanged_by_this_story(
+        rel, conftest.constructed_story(tmp_path, respected=[rel],
+                                        name="assembler-left-alone"))
+    assert not _unchanged_by_this_story(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        name="assembler-edited"))
 
 
 @pytest.mark.parametrize("rel", ["workflows/", "schemas/", "rules/", "prompts/"])
-def test_the_definitions_this_story_reads_are_unchanged(rel):
-    assert _unchanged_by_this_story(rel)
+def test_the_definitions_this_story_reads_are_unchanged(rel, tmp_path):
+    assert _unchanged_by_this_story(
+        rel, conftest.constructed_story(tmp_path, respected=[rel],
+                                        name="definitions-left-alone"))
+    assert not _unchanged_by_this_story(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        name="definitions-edited"))
 
 
 def test_no_reader_was_pointed_at_the_archive():

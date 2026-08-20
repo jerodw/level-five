@@ -443,46 +443,33 @@ def committed_story(tmp_path: Path, validation_rel: str, guarded: str, *,
     return root
 
 
-def redirect(monkeypatch, module, root: Path, validation_rel: str) -> None:
-    """Point one module's assertions at a synthetic repository.
-
-    The module's own test body runs unmodified — only the repository it asks
-    about moves. That is what makes the failure below a property of the
-    rewritten assertion rather than of a reimplementation of it.
-    """
-    real = conftest.story_diff
-
-    def patched(paths, *, validation_file=None, repo=None, **kwargs):
-        return real(paths, validation_file=root / validation_rel, repo=root,
-                    **kwargs)
-
-    monkeypatch.setattr(module, "story_diff", patched)
-
-
 @pytest.mark.parametrize("guarded", GUARDED)
 def test_the_rewritten_assertion_passes_when_its_story_respects_its_subject(
-    monkeypatch, tmp_path, guarded,
+    tmp_path, guarded,
 ):
     """Attribution: the failure in the next test is the violation, not the
-    redirect."""
-    root = committed_story(tmp_path, STORY_011_REL, guarded,
-                           name=f"clean-{guarded.strip('/')}")
-    redirect(monkeypatch, story011, root, STORY_011_REL)
-    assert story011.test_no_prompt_template_was_changed_by_this_story() is None
+    repository the assertion is pointed at.
+
+    The module's own predicate runs unmodified — only the repository it asks
+    about moves. story-053 made that the predicate's own parameter rather than
+    a monkeypatch over the name it imported, which is a stronger statement of
+    the same thing: nothing here reaches inside the module under test.
+    """
+    root = conftest.constructed_story(tmp_path, respected=[guarded],
+                                      name=f"clean-{guarded.strip('/')}")
+    assert story011._templates_unchanged_by_this_story(root, [guarded])
 
 
 @pytest.mark.parametrize("guarded", GUARDED)
 def test_the_rewritten_assertion_fails_when_its_story_violates_its_subject(
-    monkeypatch, tmp_path, guarded,
+    tmp_path, guarded,
 ):
     """The guarantee this story has to keep. Not that the assertion passes —
     it passed before the fold and it passes after — but that a story's own run
     commit touching one of the three paths it guards still turns it red."""
-    root = committed_story(tmp_path, STORY_011_REL, guarded, violate=True,
-                           name=f"violating-{guarded.strip('/')}")
-    redirect(monkeypatch, story011, root, STORY_011_REL)
-    with pytest.raises(AssertionError):
-        story011.test_no_prompt_template_was_changed_by_this_story()
+    root = conftest.constructed_story(tmp_path, violated=[guarded],
+                                      name=f"violating-{guarded.strip('/')}")
+    assert not story011._templates_unchanged_by_this_story(root, [guarded])
 
 
 @pytest.mark.parametrize("guarded", GUARDED)

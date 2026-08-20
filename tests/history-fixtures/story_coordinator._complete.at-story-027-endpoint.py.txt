@@ -1,0 +1,28 @@
+def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) -> int:
+    state.status = "completed"
+    state.current_stage = ""
+    save_state(run_dir, state)
+    # The schema marks title required and the run cannot reach here without
+    # having passed validation, so a missing title is a loud failure rather
+    # than a silently empty report.
+    title = story["story"]["title"]
+    report = (
+        f"# {state.story_id} Completion Report\n\n"
+        f"## Story\n{title}\n\n"
+        f"## Outcome\nCompleted on branch {state.branch} after "
+        f"{state.retry_count} retr{'y' if state.retry_count == 1 else 'ies'}.\n\n"
+        f"## Evidence\n"
+        f"- test-results.json\n"
+        f"- verification/iteration-{state.verification_iterations}.json (passed)\n"
+        f"- documentation-report.md\n\n"
+        f"## Next Step\nReview the branch and merge it when you accept the story.\n"
+    )
+    (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
+    _git(target_root, "add", "-A")
+    _git(target_root, "commit", "-m", completion_commit_message(state, title))
+    append_event(
+        run_dir,
+        f"story completed on branch {state.branch}",
+        kind="story-completed",
+    )
+    return 0

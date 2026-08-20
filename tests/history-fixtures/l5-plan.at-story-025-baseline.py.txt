@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Plan a story interactively with the planner agent.
+
+Usage: l5-plan "<story request>"
+Starts an interactive Claude Code session carrying the planner prompt.
+The planner interviews you, iterates on the plan, and writes the approved
+story artifact to .harness/stories/. When the session ends, this script
+commits the artifact it caused to appear and pushes it, so committing is a
+mechanism rather than something an agent is asked to remember.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import context_assembler  # noqa: E402
+import harness_config  # noqa: E402
+import plan_commit  # noqa: E402
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        sys.exit(__doc__.strip())
+    request = " ".join(sys.argv[1:])
+    target_root = harness_config.find_target_root(Path.cwd())
+    config = harness_config.load_config(target_root)
+    workflow = harness_config.load_workflow(
+        HARNESS_ROOT, config.get("workflow", "story-workflow")
+    )
+    rules = harness_config.load_rules(HARNESS_ROOT)
+    # The planner is not a workflow stage, so no coordinator renders its
+    # template. Render it here against the same schema and workflow context
+    # the coordinator builds from, so the story contract and the workflow's
+    # stage rules reach the planner as the enforced files themselves rather
+    # than as copies of them that can drift.
+    template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
+    context = context_assembler.schema_context(HARNESS_ROOT)
+    context.update(context_assembler.workflow_context(workflow, rules))
+    planner_prompt = context_assembler.render(template, context)
+    stories_dir = target_root / config.get("stories_dir", ".harness/stories")
+    # The session runs as a child rather than through os.execvp, so this
+    # script outlives it and can commit what it wrote. The argument list is
+    # what the exec passed, unchanged, and stdin, stdout and stderr are
+    # inherited, so the developer's terminal is the session's terminal.
+    before = plan_commit.snapshot(stories_dir)
+    try:
+        status = subprocess.run(
+            [
+                "claude",
+                "--permission-mode",
+                "acceptEdits",
+                "--append-system-prompt",
+                planner_prompt,
+                f"Story request: {request}",
+            ]
+        ).returncode
+    except KeyboardInterrupt:
+        # An interrupted session ends like any other end: whatever it already
+        # wrote is committed, and the exit status is the shell's own 130.
+        status = 130
+    if status < 0:
+        # A session killed by a signal reports it as a negative return code;
+        # a shell reports the same end as 128 + the signal, and an interrupt
+        # is 130 either way.
+        status = 128 - status
+    # Committing happens whatever the session's status was, so it is done
+    # before the status is consulted at all. The session's own status then
+    # wins; the commit's is what is left to say when the session ended
+    # cleanly and the push did not.
+    committing = report(target_root, stories_dir, before)
+    sys.exit(status or committing)
+
+
+def report(target_root: Path, stories_dir: Path, before) -> int:
+    """Say what plan_commit did with the artifacts the session added.
+
+    plan_commit returns what happened rather than printing it, so this is
+    where the wording lives. The status it returns is only ever this script's
+    own, and it is never allowed to unwind anything plan_commit did.
+    """
+    artifacts = plan_commit.new_artifacts(stories_dir, before)
+    if not artifacts:
+        print("l5-plan: the session added no story artifact; committed nothing.")
+        return 0
+    commit = plan_commit.commit_artifacts(target_root, artifacts, HARNESS_ROOT)
+    if not commit.committed:
+        print(f"l5-plan: could not commit {', '.join(commit.paths)}: {commit.detail}")
+        return 1
+    print(f"l5-plan: committed {', '.join(commit.paths)} as {commit.subject}")
+    push = plan_commit.push_commit(target_root)
+    if not push.pushed:
+        print(
+            f"l5-plan: could not push {push.branch} to "
+            f"{push.remote or '<no remote>'}: {push.detail}\n"
+            f"l5-plan: the commit is intact on {push.branch}; push it yourself."
+        )
+        return 1
+    print(f"l5-plan: pushed {push.branch} to {push.remote}")
+    return 0
+
+
+if __name__ == "__main__":
+    main()

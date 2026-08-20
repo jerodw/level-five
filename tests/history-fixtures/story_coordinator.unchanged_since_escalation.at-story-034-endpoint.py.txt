@@ -1,0 +1,78 @@
+def unchanged_since_escalation(
+    state: RunState, story_text: str, target_root: Path, harness_root: Path
+) -> list[str]:
+    """Evidence that resuming would reach the same point the same way.
+
+    Three comparisons, each of which must be *establishable* before it can say
+    anything: the story artifact against the digest recorded at run start, the
+    branch against the escalation commit the harness made, and the harness
+    against the revision recorded when the run escalated.
+
+    Returns the evidence only when all three are establishable and identical,
+    and an empty list otherwise. Anything the guard cannot establish counts as
+    not-the-same, so an absent digest, an escalation that committed nothing, a
+    target whose HEAD cannot be read, or a harness root that is not a git
+    repository produces no refusal rather than a false one.
+
+    The third comparison has two forms, decided by whether the harness and the
+    target are one checkout. When they are separate — the deployment the guard
+    was written for — it is the recorded-revision comparison, unchanged. When
+    they are one tree, deferring to the branch comparison is what is sound:
+    leg two has already established that the branch is exactly the escalation
+    commit with nothing uncommitted, and under one tree that covers every
+    change to the harness source, so the recorded revision would answer a
+    question already answered. It could not answer it anyway — the revision is
+    recorded as the first act of `_escalate`, before the two escalation commits
+    move HEAD, so a shared-root comparison of it always differs and the guard
+    can never refuse.
+
+    A tree hash over the harness's own source directories was considered and
+    not taken. It is a second definition of "has the harness changed" living
+    beside the branch comparison that already answers it, and it would have to
+    choose which directories count — a choice nothing else in the harness
+    makes.
+    """
+    if not state.story_digest or state.story_digest != story_digest(story_text):
+        return []
+    evidence = [
+        "the story artifact is byte for byte the one the escalated run read"
+    ]
+
+    # The escalation commit is the branch tip's parent, not the tip: the record
+    # of its sha is committed on top of it, because a commit cannot carry its
+    # own sha. A branch a developer has committed on since therefore fails this
+    # comparison, which is what it is for.
+    if (
+        not state.escalation_commit
+        or _revision(target_root, "HEAD~1") != state.escalation_commit
+    ):
+        return []
+    porcelain = _git(target_root, "status", "--porcelain")
+    if porcelain.returncode != 0 or porcelain.stdout.strip():
+        return []
+    evidence.append(
+        f"branch {state.branch} is exactly the escalation commit "
+        f"{state.escalation_commit[:12]}, with nothing uncommitted"
+    )
+
+    # Under one checkout the branch comparison above is the harness comparison:
+    # it established that the branch is exactly the escalation commit with
+    # nothing uncommitted, which covers every change to the harness source. The
+    # recorded revision cannot serve here — it is recorded before the escalation
+    # commits move HEAD, so it always differs — and a tree hash over the
+    # harness's source directories was rejected rather than reached for: it is a
+    # second definition of "has the harness changed" beside the one already
+    # answering it, and it would have to choose which directories count.
+    if same_repository(target_root, harness_root):
+        evidence.append(
+            "the harness is the same checkout as the target, so it is covered "
+            "by the branch comparison above"
+        )
+        return evidence
+
+    if not state.harness_revision or _revision(harness_root) != state.harness_revision:
+        return []
+    evidence.append(
+        f"the harness is still at revision {state.harness_revision[:12]}"
+    )
+    return evidence

@@ -494,7 +494,17 @@ RANGE_CONSUMERS = ("story_commit_range", "story_diff", "repository_file_at",
 
 
 def unqualified_range_calls(source: str) -> list[int]:
-    """The lines of every story-range call in one module naming no origin."""
+    """The lines of every story-range call in one module naming no origin.
+
+    A call naming its own `repo` is not one of them, and story-053 is why: a
+    merged module now builds the repository it asks about, and a constructed
+    repository holds exactly one story. There is no lineage to disambiguate
+    there — naming an origin the constructed file never declared would make the
+    resolution *raise* rather than answer — so requiring one would be requiring
+    the wrong thing. The rule is unchanged where it bites: a call resolving a
+    range out of the repository the helpers default to still has two possible
+    answers in a merged module, and still has to say which one it means.
+    """
     lines = []
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
@@ -505,6 +515,8 @@ def unqualified_range_calls(source: str) -> list[int]:
         if name not in RANGE_CONSUMERS:
             continue
         keywords = {keyword.arg for keyword in node.keywords}
+        if "repo" in keywords:
+            continue
         resolves_a_story = name in ("story_commit_range", "story_diff") \
             or "validation_file" in keywords
         if resolves_a_story and "origin" not in keywords:
@@ -520,13 +532,37 @@ def range_calls(source: str) -> int:
                      else node.func.id) in RANGE_CONSUMERS])
 
 
+#: A story-range call written the way a merged module has to write one when it
+#: resolves this repository: qualified by the origin naming which of the
+#: module's two stories the range belongs to.
+#:
+#: Written here rather than found in a merged module, because story-053
+#: converted every such call out of both of them — each now builds the
+#: repository it asks about, where there is one story and no lineage to
+#: disambiguate. That is the stronger form of this rule's own claim, and it
+#: leaves the rule with nothing of its own to point at, so the companion and
+#: the control below point at this instead: appended to each merged module's
+#: real source, so what is scanned is still that module.
+QUALIFIED_RANGE_CALL = (
+    "\n\ndef _probe_range_call():\n"
+    "    return story_diff(['orchestration/'],\n"
+    "                      validation_file=Path(__file__),\n"
+    "                      origin=A_DECLARED_ORIGIN)\n"
+)
+
+
 @pytest.mark.parametrize("name", ["test_planner_injection.py",
                                   "test_clean_clone_check.py"])
 def test_every_story_range_call_in_a_merged_module_names_its_origin(name: str):
     source = (TESTS_DIR / name).read_text(encoding="utf-8")
     assert unqualified_range_calls(source) == []
-    # The companion the absence needs: there are calls to qualify.
-    assert range_calls(source) >= 1, name
+    # The companion the absence needs. Every call in these modules now names
+    # the repository it built, so the call the rule is about is added to the
+    # same source: the scan counts it as a range call and leaves it unreported,
+    # which is what "names its origin" means.
+    probed = source + QUALIFIED_RANGE_CALL
+    assert range_calls(probed) == range_calls(source) + 1, name
+    assert unqualified_range_calls(probed) == [], name
 
 
 @pytest.mark.parametrize("name", ["test_planner_injection.py",
@@ -535,10 +571,39 @@ def test_the_scan_reports_the_same_module_with_the_qualification_removed(
         name: str):
     """The negative control, on the real source: strip the origin keyword and
     the same scan reports every call it was on."""
-    source = (TESTS_DIR / name).read_text(encoding="utf-8")
+    source = (TESTS_DIR / name).read_text(encoding="utf-8") + QUALIFIED_RANGE_CALL
     stripped = re.sub(r",?\s*origin=[A-Za-z_][A-Za-z_0-9]*", "", source)
     assert stripped != source
     assert unqualified_range_calls(stripped), name
+
+
+def test_a_call_naming_its_own_repository_is_not_this_rules_business(tmp_path):
+    """The exclusion above, shown to be an exclusion rather than a hole.
+
+    The same call, once against a repository the test built and once against
+    the one the helpers default to: reported in the second case and not in the
+    first. A constructed repository holds one story, and naming an origin it
+    never declared makes the resolution raise rather than answer — which is
+    asserted here rather than argued.
+    """
+    built = ("def probe(root):\n"
+             "    return story_diff(['orchestration/'],\n"
+             "                      validation_file=root / 'tests/x.py',\n"
+             "                      repo=root)\n")
+    defaulted = ("def probe():\n"
+                 "    return story_diff(['orchestration/'],\n"
+                 "                      validation_file=Path(__file__))\n")
+    assert unqualified_range_calls(built) == []
+    assert unqualified_range_calls(defaulted)
+
+    # And the raise the exclusion exists for: a constructed file declares no
+    # origin, so naming one is refused rather than resolved. Asked of a
+    # repository this test owns, because the refusal is about the declaration
+    # and not about any commit graph — including this repository's.
+    with pytest.raises(NothingToCompareAgainst):
+        story_commit_range(
+            tmp_path / conftest.CONSTRUCTED_VALIDATION_REL, tmp_path,
+            origin="tests/test_story_008_validation.py")
 
 
 @pytest.mark.parametrize("name", ["test_planner_injection.py",

@@ -1,0 +1,119 @@
+def _build_clone(
+    target_root: Path,
+    clone: Path,
+    *,
+    revert: list[str] | tuple[str, ...] = (),
+    baseline: Path | None = None,
+) -> None:
+    """Clone the target locally and commit its working tree into the clone.
+
+    A clone, not a tree copy: the point of the check is that the story is
+    present as a *commit*, which is the state a test resolving a baseline out
+    of git history actually sees. The source is a filesystem path, so no
+    network access is possible by construction.
+
+    The clone is built over git's normal transport (`--no-local`): git
+    negotiates a pack over a pipe rather than walking the source's
+    `.git/objects` as a directory tree. It replaces `--no-hardlinks`, which
+    carried exactly one property — the clone's object files are its own copies
+    rather than hardlinks into the source, so nothing the source later does to
+    its objects can reach the clone. The normal transport gives that property
+    inherently: a packed object stream never references the source's object
+    files at all, so there is nothing left to unlink from.
+
+    What `--no-hardlinks` did *not* give is why it is gone. A directory copy
+    enumerates the source's object store and then copies what it enumerated,
+    and any file that disappears in between is a hard failure. Three CI runs
+    failed exactly that way; one of the files git could not copy was
+    `.git/objects/pack/multi-pack-index.lock`, which exists only while
+    something is writing a multi-pack index in the source. The transport was
+    chosen over disabling that writer because it makes the failure impossible
+    rather than unlikely: the copy path is fragile against *any* concurrent
+    writer, not only the one that was observed, and the normal transport never
+    reads the source's object files whatever is writing them. It costs
+    wall-clock on every clean-clone and revert check; the measurement is
+    recorded in `.harness/docs/ARCHITECTURE.md`.
+
+    Files .gitignore excludes reach the clone by neither route — the clone
+    carries committed files and the two applications below carry tracked edits
+    and untracked-but-not-ignored files — so the clone holds the same set of
+    files _complete's `git add -A` would commit. The target repository is only
+    read: every write happens inside the clone.
+
+    `revert` names repository-relative paths to restore from `baseline`
+    *inside the clone*, after the working tree has been applied and before the
+    commit, so the clone holds every change the working tree carries except
+    those. It defaults to reverting nothing, which is the clean-clone check's
+    behavior and is unchanged by its existence.
+
+    The baseline is a directory of file copies taken before the stage ran, not
+    a revision: a path the baseline holds is restored to the content it held
+    then, and a governed path the baseline does not hold is *removed* from the
+    clone, because a path absent from the baseline did not exist when the
+    stage started. Nothing here reverts to HEAD — a file an earlier stage of
+    the same run created has no HEAD version, and its pre-stage state is
+    knowable all the same.
+    """
+    result = subprocess.run(
+        ["git", "clone", "--quiet", "--no-local", str(target_root), str(clone)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not clone {target_root}: {result.stderr.strip()}")
+
+    diff = _git(target_root, "diff", "--binary", "HEAD").stdout
+    if diff.strip():
+        applied = subprocess.run(
+            ["git", "-C", str(clone), "apply", "--whitespace=nowarn", "-"],
+            input=diff,
+            capture_output=True,
+            text=True,
+        )
+        if applied.returncode != 0:
+            raise RuntimeError(
+                f"Could not apply the working tree to {clone}: {applied.stderr.strip()}"
+            )
+
+    untracked = _git(
+        target_root, "ls-files", "--others", "--exclude-standard", "-z"
+    ).stdout.split("\0")
+    for rel in filter(None, untracked):
+        source = target_root / rel
+        if not source.is_file():
+            continue
+        destination = clone / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    if revert:
+        if baseline is None or not baseline.is_dir():
+            raise RuntimeError(
+                f"Could not revert {', '.join(revert)} in {clone}: no captured "
+                f"baseline to restore them from ({baseline})"
+            )
+        for rel in revert:
+            source, destination = baseline / rel, clone / rel
+            if source.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            elif destination.is_file():
+                destination.unlink()
+
+    _git(clone, "add", "-A")
+    commit = _git(
+        clone,
+        "-c",
+        "user.email=harness@l5.local",
+        "-c",
+        "user.name=l5 harness",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "the story's working tree, committed for the clean-clone check",
+    )
+    if commit.returncode != 0:
+        raise RuntimeError(
+            f"Could not commit the working tree in {clone}: {commit.stderr.strip()}"
+        )

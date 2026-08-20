@@ -56,7 +56,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (BASELINE as BASELINE_BOUND, ENDPOINT, function_source,
-                      function_source_at, load_mutant)
+                      load_mutant)
 import conftest
 
 import harness_config
@@ -66,6 +66,26 @@ from agent_runner import AgentResult
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_REL = "orchestration/story_coordinator.py"
 COORDINATOR_PATH = REPO_ROOT / COORDINATOR_REL
+
+
+def coordinator_function(name: str, bound: str) -> str:
+    """One coordinator function's source text at one end of this story's range.
+
+    Both ends are frozen past texts. They used to be resolved out of this
+    repository's own commit graph, which made every comparison below depend on
+    facts about the graph rather than about the code: a squash makes the range
+    unresolvable in a clone, a rename gives a path a new add-commit and empties
+    the range silently, and CI carried `fetch-depth: 0` for no other reason.
+    story-053 carried both bounds as committed fixtures instead, lifted from
+    exactly the bounds this used to resolve — the same evidence, in the tree,
+    diffable, and unable to move under an assertion with nothing to say about
+    it.
+    """
+    assert bound in (BASELINE_BOUND, ENDPOINT), bound
+    return conftest.history_fixture(
+        f"story_coordinator.{name}.at-story-034-{bound}.py.txt")
+
+
 #: The workflow these runs execute, assembled by the builder in
 #: `tests/conftest.py` rather than resolved out of what this repository
 #: deploys. story-048 made the change: the subject here is the *resume guard* —
@@ -731,12 +751,10 @@ def test_removing_the_shared_root_leg_reproduces_the_pre_story_guard(tmp_path):
     reconstructed = executable_source(
         function_source(Path(mutant.__file__).read_text(encoding="utf-8"),
                         "unchanged_since_escalation"))
-    before = executable_source(function_source_at(
-        COORDINATOR_REL, "unchanged_since_escalation",
-        validation_file=Path(__file__), bound=BASELINE_BOUND, repo=REPO_ROOT))
-    today = executable_source(function_source_at(
-        COORDINATOR_REL, "unchanged_since_escalation",
-        validation_file=Path(__file__), bound=ENDPOINT, repo=REPO_ROOT))
+    before = executable_source(
+        coordinator_function("unchanged_since_escalation", BASELINE_BOUND))
+    today = executable_source(
+        coordinator_function("unchanged_since_escalation", ENDPOINT))
 
     assert reconstructed == before
     assert today != before                                  # the control
@@ -751,17 +769,12 @@ def test_the_separate_root_leg_is_unchanged_character_for_character(tmp_path):
     of one unchanged file.
     """
     def tail(bound: str) -> str:
-        body = function_source_at(
-            COORDINATOR_REL, "unchanged_since_escalation",
-            validation_file=Path(__file__), bound=bound, repo=REPO_ROOT)
+        body = coordinator_function("unchanged_since_escalation", bound)
         return body[body.index("    if not state.harness_revision"):]
 
-    whole_before = function_source_at(
-        COORDINATOR_REL, "unchanged_since_escalation",
-        validation_file=Path(__file__), bound=BASELINE_BOUND, repo=REPO_ROOT)
-    whole_after = function_source_at(
-        COORDINATOR_REL, "unchanged_since_escalation",
-        validation_file=Path(__file__), bound=ENDPOINT, repo=REPO_ROOT)
+    whole_before = coordinator_function("unchanged_since_escalation",
+                                        BASELINE_BOUND)
+    whole_after = coordinator_function("unchanged_since_escalation", ENDPOINT)
 
     assert tail(ENDPOINT) == tail(BASELINE_BOUND)
     assert whole_after != whole_before                      # the control
@@ -900,20 +913,15 @@ def test_the_story_did_not_move_where_the_harness_revision_is_recorded():
     which did change.
     """
     def escalate_source(bound: str) -> str:
-        return function_source_at(COORDINATOR_REL, "_escalate",
-                                  validation_file=Path(__file__), bound=bound,
-                                  repo=REPO_ROOT)
+        return coordinator_function("_escalate", bound)
 
     assert escalate_source(ENDPOINT) == escalate_source(BASELINE_BOUND)
     assert "state.harness_revision = _revision(harness_root)" \
         in escalate_source(ENDPOINT)
 
-    guard_before = function_source_at(
-        COORDINATOR_REL, "unchanged_since_escalation",
-        validation_file=Path(__file__), bound=BASELINE_BOUND, repo=REPO_ROOT)
-    guard_after = function_source_at(
-        COORDINATOR_REL, "unchanged_since_escalation",
-        validation_file=Path(__file__), bound=ENDPOINT, repo=REPO_ROOT)
+    guard_before = coordinator_function("unchanged_since_escalation",
+                                        BASELINE_BOUND)
+    guard_after = coordinator_function("unchanged_since_escalation", ENDPOINT)
     assert guard_after != guard_before                      # the control
 
 

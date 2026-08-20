@@ -57,8 +57,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, NothingToCompareAgainst, load_script,
-                      repository_file_at, story_commit_range)
+from conftest import NothingToCompareAgainst, load_script
 import conftest
 from test_plan_commit import (
     ARTIFACT,
@@ -186,19 +185,35 @@ def planning(tmp_path: Path) -> Planning:
     return planning
 
 
-def baseline() -> str:
-    return story_commit_range(VALIDATION_FILE).baseline
+#: The pre-story texts this module runs, carried as committed fixtures rather
+#: than resolved out of this repository's commit graph. Every one of them is an
+#: *input* — an earlier version of a script or a template, run below to show
+#: what it did not do — and resolving an input out of a commit graph made the
+#: comparison move whenever something was committed, renamed, squashed or
+#: rebased, none of which is a property of the code under test.
+PRE_STORY_FIXTURES = {
+    "orchestration/story_coordinator.py":
+        "story_coordinator.at-story-025-baseline.py.txt",
+    "scripts/l5-plan": "l5-plan.at-story-025-baseline.py.txt",
+    "scripts/l5-run": "l5-run.at-story-025-baseline.py.txt",
+    "prompts/planner.md": "prompts-planner.at-story-025-baseline.md.txt",
+}
 
 
 def show(path: str) -> str:
     """One file as it was before this story.
 
     story-029 folded this module's private `git show` into
-    `conftest.repository_file_at`, which resolves the same baseline this
-    already resolved for itself. Subject and strictness unchanged.
+    `conftest.repository_file_at`, which resolved the same baseline this
+    already resolved for itself; story-053 replaced the resolution with the
+    committed fixture holding the same text. Subject and strictness unchanged.
+
+    A path with no fixture answers empty, which is what a path that did not
+    exist at the baseline answered before — the caller below relies on it to
+    say that a file the story added carried no caller of the parser.
     """
-    return repository_file_at(path, validation_file=VALIDATION_FILE,
-                              bound=BASELINE, repo=HARNESS_ROOT)
+    name = PRE_STORY_FIXTURES.get(path)
+    return conftest.history_fixture(name) if name else ""
 
 
 def pre_story_harness(tmp_path: Path) -> Path:

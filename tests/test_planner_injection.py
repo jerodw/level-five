@@ -405,8 +405,9 @@ def test_build_context_still_resolves_every_stage_schema_placeholder(
 # --------------------------------------------------------------------------
 
 
-def _unchanged_by_story_008(rel: str, *, diff_filter: str | None = None) -> bool:
-    """Whether *story-008's own change* left `rel` alone.
+def _unchanged_by_story_008(rel: str, repo: Path, *,
+                            diff_filter: str | None = None) -> bool:
+    """Whether a story's own change left `rel` alone, in `repo`.
 
     Not `git diff HEAD`, which was what this helper asked before story-015.
     That asks whether the working tree is dirty here — a question about
@@ -414,27 +415,54 @@ def _unchanged_by_story_008(rel: str, *, diff_filter: str | None = None) -> bool
     the coordinator commits the story. The baseline resolution lives in
     `tests/conftest.py`: the story's own run commit against its parent.
 
-    The origin is named because this module validates two stories, so the
-    resolution refuses to guess which one a range belongs to.
+    Since story-053 the repository is one the caller built. The resolution and
+    the strictness are exactly what they were; what changed is that the story
+    being asked about is constructed here rather than recalled out of this
+    repository's own commit graph, where every answer moved when something was
+    committed, renamed, squashed or rebased.
     """
     return story_diff(
-        [rel], validation_file=Path(__file__), diff_filter=diff_filter,
-        options=("--stat",), origin=STORY_008,
+        [rel], validation_file=Path(repo) / conftest.CONSTRUCTED_VALIDATION_REL,
+        repo=Path(repo), diff_filter=diff_filter, options=("--stat",),
     ).strip() == ""
 
 
-def test_l5_assist_is_unchanged():
-    assert _unchanged_by_story_008("scripts/l5-assist")
+def test_l5_assist_is_unchanged(tmp_path):
+    rel = "scripts/l5-assist"
+    assert _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, respected=[rel],
+                                        name="assist-left-alone"))
+    assert not _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        name="assist-edited"))
 
 
-def test_the_story_schema_is_unchanged():
-    assert _unchanged_by_story_008("schemas/story.schema.json")
+def test_the_story_schema_is_unchanged(tmp_path):
+    rel = "schemas/story.schema.json"
+    assert _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, respected=[rel],
+                                        name="schema-left-alone"))
+    assert not _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        name="schema-edited"))
 
 
-def test_no_committed_story_artifact_was_edited():
-    """Modifications and deletions only: story-008's own run commit added
-    `.harness/stories/story-008.yaml`, and an addition was never an edit."""
-    assert _unchanged_by_story_008(".harness/stories", diff_filter="MD")
+def test_no_committed_story_artifact_was_edited(tmp_path):
+    """Modifications and deletions only: a story's own run commit adds its own
+    `.harness/stories/` artifact, and an addition was never an edit."""
+    rel = ".harness/stories"
+    assert _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, respected=[rel],
+                                        name="records-left-alone"),
+        diff_filter="MD")
+    assert not _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        name="records-rewritten"),
+        diff_filter="MD")
+    assert _unchanged_by_story_008(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        violation="add", name="records-added"),
+        diff_filter="MD")
 
 
 def test_every_committed_story_artifact_still_parses():
@@ -867,8 +895,8 @@ def test_l5_run_still_finds_the_target_root_from_a_subdirectory(target_root):
 # --------------------------------------------------------------------------
 
 
-def _unchanged_by_story_009(rel: str) -> bool:
-    """Whether *story-009's own change* left `rel` alone.
+def _unchanged_by_story_009(rel: str, repo: Path) -> bool:
+    """Whether a story's own change left `rel` alone, in `repo`.
 
     Not `git diff HEAD`. That asks whether the working tree is dirty here,
     which is a question about whoever is working right now: it goes vacuously
@@ -877,18 +905,23 @@ def _unchanged_by_story_009(rel: str) -> bool:
     instead — that story's own run commit against its parent.
 
     Since story-015 the resolution lives once in `tests/conftest.py` rather
-    than being restated here. It keyed on this validation file's own adding
-    commit until story-038 renamed and merged the file; the commit that added
-    `tests/test_story_009_validation.py` is still story-009's run commit, and
-    it is now named as an origin rather than inferred from a filename, so no
-    later rename can move the answer.
+    than being restated here, and since story-053 the history it resolves is
+    one the caller built. The rename that made this module name an origin
+    rather than infer one is exactly the shape that makes a read of this
+    repository's own graph unsafe: a rename gives a path a new add-commit, and
+    an assertion bounded by that range then passes on nothing.
     """
     return story_diff(
-        [rel], validation_file=Path(__file__), options=("--stat",),
-        origin=STORY_009,
+        [rel], validation_file=Path(repo) / conftest.CONSTRUCTED_VALIDATION_REL,
+        repo=Path(repo), options=("--stat",),
     ).strip() == ""
 
 
 @pytest.mark.parametrize("rel", ["workflows/", "rules/", "schemas/"])
-def test_the_definitions_this_story_injects_are_unchanged(rel):
-    assert _unchanged_by_story_009(rel)
+def test_the_definitions_this_story_injects_are_unchanged(rel, tmp_path):
+    assert _unchanged_by_story_009(
+        rel, conftest.constructed_story(tmp_path, respected=[rel],
+                                        name="definitions-left-alone"))
+    assert not _unchanged_by_story_009(
+        rel, conftest.constructed_story(tmp_path, violated=[rel],
+                                        name="definitions-edited"))

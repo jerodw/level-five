@@ -1,0 +1,10 @@
+def stage_baseline_dir(run_dir: Path, baseline: str, stage_name: str) -> Path:
+    """Where one stage's pre-stage content is kept.
+
+    The directory name comes off the loaded workflow declaration; only the
+    keying is written here, and it is by stage alone because the baseline is
+    what that stage first found. An attempt-keyed directory made the second
+    attempt of a stage decide against the first attempt's own edits, which is
+    not the question the revert check asks.
+    """
+    return run_dir / baseline / stage_name

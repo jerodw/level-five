@@ -34,8 +34,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (NothingToCompareAgainst, repository_file_at,
-                      story_commit_range)
+from conftest import NothingToCompareAgainst, repository_file_at
+import conftest
 
 import story_coordinator
 
@@ -369,24 +369,11 @@ def functions_of(source: str) -> dict[str, str]:
     }
 
 
-def story_011_file_at(revision: str) -> str:
-    """The story-011 validation file's text at one revision.
+def resolved_baseline_in(root: Path) -> str:
+    """The pre-story text of the story-011 file, resolved out of `root`.
 
-    Through `conftest.repository_file_at` since story-029, which folded the
-    eleven private copies of this call into one shared reader. Subject and
-    strictness unchanged; only where the text comes from moved.
-    """
-    return repository_file_at(STORY_011_IN_HISTORY, revision=revision,
-                              repo=REPO_ROOT)
-
-
-@functools.lru_cache(maxsize=None)
-def story_011_before_this_story() -> str:
-    """The file as it stood before this story edited it.
-
-    Not `HEAD`. The coordinator commits the working tree at the end of a
-    successful run, so a `HEAD` baseline becomes *this* story's own file the
-    moment the story commits — the comparisons below would then compare the
+    Not `HEAD`. A repository's newest commit of that file is the *post*-story
+    one once the story commits — the comparisons below would then compare the
     file against itself, `gone` would be empty, and the diff assertions would
     pass while proving nothing. That is not hypothetical: this story's first
     attempt resolved the baseline as `HEAD`, passed in the working tree, and
@@ -394,34 +381,56 @@ def story_011_before_this_story() -> str:
 
     So walk the file's own history newest-first and take the first revision
     whose blob still carries the comparison tests this story removed, which
-    is the newest revision predating this story's edit — a search that
-    survives a rebase or a squash merge, which a pinned SHA would not.
+    is the newest revision predating that edit — a search that survives a
+    rebase or a squash merge, which a pinned SHA would not.
 
     A revision in which the historical path carries no blob is skipped rather
     than read. `git log -- <path>` reports the commit that *removed* a path as
-    well as the ones that wrote it, and since story-038 renamed this module the
-    newest such commit is the rename — which carries none of the removed tests
-    and has nothing there to read. Skipping it is the same test the loop
-    already applies, asked of a revision where the file does not exist at all;
-    reading it raises before any assertion runs.
+    well as the ones that wrote it, and a rename is exactly such a commit — it
+    carries none of the removed tests and has nothing there to read. Skipping
+    it is the same test the loop already applies, asked of a revision where
+    the file does not exist at all; reading it raises before any assertion
+    runs.
+
+    Since story-053 it is asked only of repositories a test builds. Asked of
+    this repository it was resolving an *input* — the text of a file before a
+    change — out of a commit graph that moves under it, which is the whole
+    reason the search had to be a search in the first place. The text itself is
+    carried as a committed fixture below; what survives here is the resolution,
+    and the synthetic histories that prove it.
     """
     revisions = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "log", "--format=%H", "--",
+        ["git", "-C", str(root), "log", "--format=%H", "--",
          STORY_011_IN_HISTORY],
         capture_output=True, text=True, check=True,
     ).stdout.split()
     for revision in revisions:
         try:
-            source = story_011_file_at(revision)
+            source = story_011_file_at_in(root, revision)
         except NothingToCompareAgainst:
             continue
         if all(name in source for name in REMOVED_TESTS):
             return source
     raise AssertionError(
-        f"no committed revision of {STORY_011_IN_HISTORY} still "
+        f"no committed revision of {STORY_011_IN_HISTORY} in {root} still "
         "carries the comparison tests this story removed; the diff assertions "
         "have nothing to compare against"
     )
+
+
+def story_011_before_this_story() -> str:
+    """The file as it stood before this story edited it.
+
+    Carried as a committed fixture under `tests/history-fixtures/`, lifted from
+    exactly the revision `resolved_baseline_in` above used to find in this
+    repository. It is an *input* to the comparisons below — the text of a file
+    before a change — and resolving an input out of this repository's own
+    commit graph made every comparison move when something was committed,
+    renamed, squashed or rebased. The search that found it is still proven,
+    against the synthetic histories below.
+    """
+    return conftest.history_fixture(
+        "test_story_011_validation.at-story-016-baseline.py.txt")
 
 
 def synthetic_history(root: Path, revisions: list[str]) -> Path:
@@ -452,19 +461,14 @@ WITHOUT_COMPARISONS = "def test_no_prompt_template_was_changed_by_this_story():\
 
 
 @pytest.fixture
-def resolution_against(monkeypatch):
-    """Point the baseline resolution at a synthetic history and call it."""
-    def resolve(root: Path) -> str:
-        monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", root)
-        monkeypatch.setattr(sys.modules[__name__], "STORY_011_FILE",
-                            root / STORY_011_IN_HISTORY)
-        story_011_before_this_story.cache_clear()
-        try:
-            return story_011_before_this_story()
-        finally:
-            story_011_before_this_story.cache_clear()
-    yield resolve
-    story_011_before_this_story.cache_clear()
+def resolution_against():
+    """Point the baseline resolution at a synthetic history and call it.
+
+    Since story-053 the resolution takes the repository as an argument, so
+    there is nothing to monkeypatch: what runs here is the same function, on a
+    history the test built.
+    """
+    return resolved_baseline_in
 
 
 def test_the_baseline_walks_past_this_storys_own_commit(tmp_path,
@@ -556,13 +560,16 @@ def story_011_at_this_storys_endpoint() -> str:
     the `HEAD`-baseline bullets. story-021 is where it bit: it edited one
     function in that file so a probe workflow's config change is committed
     before the run, and this comparison went red for a change story-016 has
-    nothing to say about. While this story is still in flight there is no
-    endpoint and the working tree is the right answer.
+    nothing to say about.
+
+    Carried as a committed fixture since story-053, lifted from exactly that
+    endpoint. Like its counterpart it is an input — the text of a file after a
+    change — and resolving an input out of this repository's commit graph made
+    the comparison move whenever something was committed, renamed, squashed or
+    rebased.
     """
-    endpoint = story_commit_range(Path(__file__)).endpoint
-    if endpoint is None:
-        return STORY_011_FILE.read_text(encoding="utf-8")
-    return story_011_file_at(endpoint)
+    return conftest.history_fixture(
+        "test_story_011_validation.at-story-016-endpoint.py.txt")
 
 
 def test_every_surviving_assertion_in_story_011_is_unchanged():

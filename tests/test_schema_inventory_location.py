@@ -41,8 +41,7 @@ import pytest
 import conftest
 import context_assembler
 import schema_validator
-from conftest import (ENDPOINT, NothingToCompareAgainst, repository_file_at,
-                      story_commit_range, story_diff)
+from conftest import NothingToCompareAgainst
 from test_shared_baseline_resolution import committed_story
 
 REPO_ROOT = Path(schema_validator.__file__).resolve().parents[1]
@@ -108,70 +107,65 @@ THROWAWAY_SCHEMA = {
 
 
 # --------------------------------------------------------------------------
-# Reading this repository's own history, through the shared resolution
+# This story's own two ends, carried rather than resolved
+#
+# Every comparison below is between two frozen past states of this repository:
+# what `schemas/` and `tests/` held before this story's run commit, and what
+# they held at it. Both were resolved out of this repository's commit graph
+# until story-053, and that made every one of them depend on facts about the
+# graph rather than about what the story did. A rename gives a path a new
+# add-commit and empties the range silently; a squash makes the range
+# unresolvable in a clone; CI carried `fetch-depth: 0` for no other reason.
+# None of that is a property of which files story-013 touched.
+#
+# So the two ends are committed under `tests/history-fixtures/`, lifted from
+# exactly the bounds this used to resolve:
+#
+#   * the text of each file an assertion below actually reads, at the bound it
+#     reads it — a fixture holds what an assertion reads and no more;
+#   * and one tree fixture, `story-013-tree.json`, giving the name and content
+#     digest of every file in `schemas/` and `tests/` at each end. The
+#     whole-tree comparisons are *recomputed* from it rather than restated as a
+#     list, so a file that differed at the two ends is still found by comparing
+#     two states rather than by being named here.
 # --------------------------------------------------------------------------
 
 
-def _baseline() -> str:
-    """The revision this story started from.
+BASELINE_BOUND = "baseline"
+ENDPOINT_BOUND = "endpoint"
 
-    `story_commit_range` resolves it as the parent of the commit that added
-    this file, or as HEAD while the story is still in flight — the pre-story
-    state either way, and never "HEAD" pinned against a branch the coordinator
-    is about to commit to.
+
+def _tree() -> dict:
+    """Both ends of `schemas/` and `tests/`, as name-to-digest maps."""
+    return json.loads(conftest.history_fixture("story-013-tree.json"))
+
+
+def _listing_at(bound: str, directory: str) -> set[str]:
+    """The file names one directory held at one end of this story's range."""
+    return set(_tree()[bound][directory])
+
+
+def _digests_at(bound: str, directory: str) -> dict[str, str]:
+    return dict(_tree()[bound][directory])
+
+
+def _text_at(bound: str, rel: str) -> str:
+    """One file's text at one end of this story's range.
+
+    Raises `NothingToCompareAgainst` for a path this story's range does not
+    carry a fixture for, which is what the reader raised before and is what the
+    accounting sweep below relies on to report a file that appeared.
     """
-    return story_commit_range(Path(__file__)).baseline
-
-
-def _blob(revision: str, rel: str) -> str:
-    """One file's text at one revision, through the shared reader.
-
-    story-029 folded this module's private `git show` into
-    `conftest.repository_file_at`. The subject and the strictness of every
-    caller are unchanged; only where the text comes from moved.
-    """
-    return repository_file_at(rel, revision=revision, repo=REPO_ROOT)
-
-
-def _endpoint_listing(directory: str) -> set[str]:
-    """The file names one directory held when this story finished.
-
-    Its own run commit once the story is committed, and the working tree while
-    it is still in flight. A later story that legitimately adds a file to the
-    same directory changes the working tree but not this story's endpoint, so
-    an assertion about what *this* story did stays bounded at both ends.
-    """
-    endpoint = story_commit_range(Path(__file__)).endpoint
-    if endpoint is None:
-        return {path.name for path in (REPO_ROOT / directory).iterdir()}
-    return _listing(endpoint, directory)
-
-
-def _endpoint_text(rel: str) -> str:
-    """One file's content when this story finished.
-
-    The endpoint counterpart of `_blob(_baseline(), rel)`, for the same reason
-    `_endpoint_listing` exists: comparing a baseline blob against today's
-    working tree asks what the repository looks like *now*, which a later
-    story changes without this story having done anything.
-    """
-    return repository_file_at(rel, validation_file=Path(__file__),
-                              bound=ENDPOINT, repo=REPO_ROOT)
+    name = f"{Path(rel).name}.at-story-013-{bound}.py.txt"
+    if not (conftest.HISTORY_FIXTURES / name).is_file():
+        raise NothingToCompareAgainst(
+            f"{rel} is not carried at this story's {bound}")
+    return conftest.history_fixture(name)
 
 
 def _schema_stems(names: set[str]) -> set[str]:
     suffix = ".schema.json"
     return {name[: -len(suffix)] for name in names if name.endswith(suffix)}
-
-
-def _listing(revision: str, directory: str) -> set[str]:
-    """The file names one directory held at `revision`."""
-    out = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-tree", "--name-only", revision,
-         f"{directory}/"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    return {Path(line).name for line in out.split()}
 
 
 # --------------------------------------------------------------------------
@@ -339,13 +333,13 @@ def test_the_search_finds_the_inventory_it_is_looking_for(tmp_path):
     assert literal_inventories(synthetic, "probe.py") == {
         ("probe.py", tuple(sorted(SHIPPED)))}
 
-    before = _blob(_baseline(), "tests/test_schema_validator.py")
+    before = _text_at(BASELINE_BOUND, "tests/test_schema_validator.py")
     hits = literal_inventories(before, "test_schema_validator.py")
     assert hits, "the pre-story file was expected to hold a literal inventory"
     # The inventory it held was the one that revision shipped, resolved from
     # the same revision rather than from today's `SHIPPED` — a later story
     # that adds a schema does not make this file's old copy wrong.
-    shipped_then = _schema_stems(_listing(_baseline(), "schemas"))
+    shipped_then = _schema_stems(_listing_at(BASELINE_BOUND, "schemas"))
     assert shipped_then
     assert any(set(names) == shipped_then for _, names in hits), hits
 
@@ -353,7 +347,7 @@ def test_the_search_finds_the_inventory_it_is_looking_for(tmp_path):
     after = (TESTS_DIR / "test_schema_validator.py").read_text(encoding="utf-8")
     assert literal_inventories(after, "test_schema_validator.py") == set()
 
-    before_004 = _blob(_baseline(), "tests/test_story_004_validation.py")
+    before_004 = _text_at(BASELINE_BOUND, "tests/test_story_004_validation.py")
     assert literal_inventories(before_004, "test_story_004_validation.py")
     after_004 = (TESTS_DIR / "test_artifact_schemas.py").read_text(encoding="utf-8")
     assert literal_inventories(after_004, "test_story_004_validation.py") == set()
@@ -562,8 +556,16 @@ UNTOUCHED = ("orchestration/story_coordinator.py",
 
 
 @pytest.mark.parametrize("rel", UNTOUCHED)
-def test_this_story_changed_nothing_outside_its_scope(rel):
-    assert story_diff([rel], validation_file=Path(__file__)).strip() == ""
+def test_this_story_changed_nothing_outside_its_scope(rel, tmp_path):
+    """Restated over a story this test builds, with the control beside it.
+
+    Asked of this repository's own commit graph the assertion re-stated a
+    frozen past fact and drew its evidence from a history that moves under it.
+    The claim, the paths and the predicate are unchanged.
+    """
+    respecting = conftest.constructed_story(tmp_path, respected=[rel],
+                                            name="in-scope")
+    assert conftest.constructed_story_diff(respecting, [rel]).strip() == ""
 
 
 def test_the_scope_assertion_above_can_fail(tmp_path):
@@ -571,30 +573,35 @@ def test_the_scope_assertion_above_can_fail(tmp_path):
     `orchestration/`, the identical call reports it."""
     rel = "tests/test_story_013_validation.py"
     root = committed_story(tmp_path, rel, "orchestration/", violate="modify")
-    assert story_diff(["orchestration/"], validation_file=root / rel,
-                      repo=root).strip() != ""
+    assert conftest.story_diff(["orchestration/"], validation_file=root / rel,
+                               repo=root).strip() != ""
 
 
 def test_no_schema_was_added_removed_or_edited_and_only_the_manifest_appeared():
     """Resolved by listing rather than by diff, so it holds both before and
     after the coordinator commits: a diff cannot see an untracked addition."""
-    before = _listing(_baseline(), "schemas")
-    after = _endpoint_listing("schemas")
+    before = _listing_at(BASELINE_BOUND, "schemas")
+    after = _listing_at(ENDPOINT_BOUND, "schemas")
     assert {name for name in before if name.endswith(".schema.json")} == \
         {name for name in after if name.endswith(".schema.json")}
     assert after - before == {"manifest.json"}
     assert before - after == set()
 
-    # No schema *body* changed either. This half is a diff, which is honest
-    # for modifications to tracked files in both states.
-    changed = story_diff([f"schemas/{name}" for name in sorted(before)],
-                         validation_file=Path(__file__),
-                         options=("--name-only",))
-    assert changed.strip() == "", changed
+    # No schema *body* changed either, which the digests carried beside the
+    # names already say: every schema present at both ends hashes the same.
+    before_digests = _digests_at(BASELINE_BOUND, "schemas")
+    after_digests = _digests_at(ENDPOINT_BOUND, "schemas")
+    changed = sorted(name for name in before_digests
+                     if after_digests.get(name) != before_digests[name])
+    assert changed == [], changed
+    # And the digests can differ: the endpoint carries a name the baseline did
+    # not, so this is a comparison of two states rather than one read twice.
+    assert set(after_digests) - set(before_digests) == {"manifest.json"}
 
 
 def test_the_supported_keyword_subset_is_unchanged():
-    before = _blob(_baseline(), "orchestration/schema_validator.py")
+    before = conftest.history_fixture(
+        "schema_validator.at-story-013-baseline.py.txt")
     assert _constant(before, "SUPPORTED_KEYWORDS") == sorted(
         schema_validator.SUPPORTED_KEYWORDS)
     assert _constant(before, "ANNOTATION_KEYWORDS") == sorted(
@@ -655,9 +662,9 @@ def test_the_injected_placeholder_set_is_exactly_what_it_was():
     def placeholders(names: set[str]) -> set[str]:
         return {stem.replace("-", "_") + "_schema" for stem in _schema_stems(names)}
 
-    before = placeholders(_listing(_baseline(), "schemas"))
+    before = placeholders(_listing_at(BASELINE_BOUND, "schemas"))
     assert before
-    assert placeholders(_endpoint_listing("schemas")) == before
+    assert placeholders(_listing_at(ENDPOINT_BOUND, "schemas")) == before
 
 
 def test_the_manifest_is_no_placeholder_because_of_its_name_not_by_luck(tmp_path):
@@ -712,8 +719,8 @@ def test_the_implementer_created_no_file_under_tests():
     `tests/` moves the working tree and not this story's commit, and this
     assertion is about what *this* story added.
     """
-    before = _python_names(_listing(_baseline(), "tests"))
-    after = _python_names(_endpoint_listing("tests"))
+    before = _python_names(_listing_at(BASELINE_BOUND, "tests"))
+    after = _python_names(_listing_at(ENDPOINT_BOUND, "tests"))
     assert before, "the pre-story revision was expected to hold test modules"
     assert after - before == {"test_story_013_validation.py"}
     assert before - after == set()
@@ -734,8 +741,8 @@ def test_the_implementer_added_no_test_function(rel):
     about. Subject, strictness and the paths compared are unchanged; only the
     upper bound moved, onto the same `_endpoint_text` the sibling uses.
     """
-    before = _blob(_baseline(), rel)
-    after = _endpoint_text(rel)
+    before = _text_at(BASELINE_BOUND, rel)
+    after = _text_at(ENDPOINT_BOUND, rel)
     assert _test_names(before) == _test_names(after), rel
     assert "@pytest.mark.skip" not in after, rel
     assert "pytest.skip(" not in after, rel
@@ -759,8 +766,8 @@ def test_the_implementer_changed_only_the_inventory_bound_assertions(rel):
     `tests/test_story_014_validation.py` because its clean-tree pre-flight
     refuses a run whose target tree the test left dirty. The subject and the
     expected set are unchanged."""
-    before = _blob(_baseline(), rel)
-    after = _endpoint_text(rel)
+    before = _text_at(BASELINE_BOUND, rel)
+    after = _text_at(ENDPOINT_BOUND, rel)
     before_functions, after_functions = _functions(before), _functions(after)
     changed = {name for name in after_functions
                if after_functions[name] != before_functions.get(name)}
@@ -776,21 +783,23 @@ def test_every_file_differing_under_tests_is_accounted_for():
     report every file any later story touches, which is not what its name
     asks.
     """
-    names = _python_names(_endpoint_listing("tests"))
+    before_digests = _digests_at(BASELINE_BOUND, "tests")
+    after_digests = _digests_at(ENDPOINT_BOUND, "tests")
+    names = _python_names(set(after_digests))
     assert names, "the endpoint was expected to hold test modules"
     differing = set()
     for name in sorted(names):
         rel = f"tests/{name}"
         if rel in TESTER_TEST_EDITS:
             continue
-        try:
-            before = _blob(_baseline(), rel)
-        except NothingToCompareAgainst:
-            differing.add(rel)
-            continue
-        if before != _endpoint_text(rel):
+        if before_digests.get(name) != after_digests[name]:
             differing.add(rel)
     assert differing == set(IMPLEMENTER_TEST_EDITS)
+
+    # The comparison is over two genuinely different states: the endpoint
+    # carries a file the baseline did not, so a digest map read twice would
+    # fail here rather than report an empty difference.
+    assert set(after_digests) - set(before_digests)
 
 
 # --------------------------------------------------------------------------
@@ -827,13 +836,48 @@ def test_the_restoration_check_can_fail(tmp_path):
     assert restored == ["test_story_013_validation.py"]
 
 
-def test_the_archive_itself_was_not_edited_by_this_story():
-    assert story_diff([".harness/runs-archive/"],
-                      validation_file=Path(__file__)).strip() == ""
+def test_the_archive_itself_was_not_edited_by_this_story(tmp_path):
+    """Restated over a story this test builds, with the control beside it."""
+    archive = ".harness/runs-archive/"
+    respecting = conftest.constructed_story(tmp_path, respected=[archive],
+                                            name="archive-left-alone")
+    assert conftest.constructed_story_diff(respecting,
+                                           [archive]).strip() == ""
+    violating = conftest.constructed_story(tmp_path, violated=[archive],
+                                           name="archive-edited")
+    assert conftest.constructed_story_diff(violating, [archive]).strip() != ""
 
 
 def test_the_shared_baseline_resolution_is_what_this_file_uses():
-    """No assertion above resolves its own baseline: the two entry points are
-    `conftest`'s, and the one this file wraps is `story_commit_range`."""
-    assert _baseline() == conftest.story_commit_range(Path(__file__)).baseline
-    assert story_diff.__module__ == "conftest"
+    """No assertion above resolves its own baseline.
+
+    Since story-053 that is a stronger statement than it was: this module
+    resolves nothing out of this repository's commit graph at all. Its two
+    ends are committed fixtures, read through `conftest.history_fixture`, and
+    the one comparison that still needs a story range builds the story it asks
+    about and resolves it through `conftest`'s own entry point.
+
+    Asserted of this module's source rather than claimed, through the very
+    scans `tests/test_baseline_honesty.py` holds the suite to — with the
+    control beside it, so an empty report is this module rather than a scan
+    that has stopped looking.
+    """
+    import test_baseline_honesty as rules
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    assert rules.history_reads(source, Path(__file__).name) == []
+    assert rules.flagged_calls(source, Path(__file__).name) == []
+    assert rules.git_text_reads(source, Path(__file__).name) == []
+
+    # The control: the same scan over the same source with one history read
+    # planted in it reports, so the emptiness above is a property of this
+    # module rather than of a scan that reads nothing.
+    planted = source + (
+        "\n\ndef _probe():\n"
+        "    return conftest.story_diff(['schemas/'],\n"
+        "                               validation_file=Path(__file__))\n")
+    assert rules.history_reads(planted, "probe.py")
+
+    # And the shared resolution really is where the entry points live.
+    assert conftest.story_diff.__module__ == "conftest"
+    assert conftest.story_commit_range.__module__ == "conftest"

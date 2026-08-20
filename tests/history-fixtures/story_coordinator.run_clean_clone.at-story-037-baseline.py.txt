@@ -1,0 +1,58 @@
+def run_clean_clone(
+    target_root: Path,
+    test_command: str,
+    clean_clone_python: str | None,
+    destination: Path,
+    revert: list[str] | tuple[str, ...] = (),
+    baseline: Path | None = None,
+) -> CleanCloneResult:
+    """Run the configured test command in a fresh clone with the story committed.
+
+    The command is the target repository's own `test_command`; nothing about
+    it is written here. Only its interpreter is substituted, and only when the
+    configuration names a `clean_clone_python`, so the check can exercise the
+    oldest supported Python rather than whichever one the developer works in.
+    The caller owns `destination` and removes it whatever the result.
+
+    This is the single build-a-clone-and-run-the-suite path. `revert` and the
+    `baseline` it is restored from are passed through to the clone builder and
+    default to reverting nothing, so the clean-clone check runs exactly as it
+    did; the revert check is this same operation with the governed paths
+    restored to the state the stage found them in rather than applied.
+    """
+    argv = shlex.split(test_command)
+    interpreter = clean_clone_python or argv[0]
+    command = shlex.join([interpreter, *argv[1:]])
+
+    resolved = _resolve_interpreter(target_root, interpreter)
+    if clean_clone_python and resolved is None:
+        return CleanCloneResult(
+            ran=False,
+            command=command,
+            python=interpreter,
+            reason=(
+                f"clean_clone_python names {clean_clone_python}, which is not an "
+                f"interpreter that exists under {target_root}"
+            ),
+        )
+
+    clone = destination / "clone"
+    _build_clone(target_root, clone, revert=revert, baseline=baseline)
+    _link_interpreter_roots(target_root, clone, [argv[0], interpreter])
+
+    result = subprocess.run(
+        [interpreter, *argv[1:]],
+        cwd=clone,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    return CleanCloneResult(
+        ran=True,
+        command=command,
+        python=interpreter,
+        python_version=_interpreter_version(resolved) if resolved else None,
+        clone_path=str(clone),
+        exit_code=result.returncode,
+        output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
+    )

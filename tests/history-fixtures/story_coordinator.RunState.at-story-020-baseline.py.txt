@@ -1,0 +1,9 @@
+@dataclass
+class RunState:
+    story_id: str
+    branch: str
+    status: str = "running"
+    current_stage: str = ""
+    retry_count: int = 0
+    verification_iterations: int = 0
+    artifacts: list[str] = field(default_factory=list)

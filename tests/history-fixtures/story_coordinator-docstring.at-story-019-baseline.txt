@@ -1,0 +1,16 @@
+The Story Coordinator: deterministic execution of the story workflow.
+
+The workflow definition says what should happen. The coordinator makes it
+happen: it assembles context, invokes stage agents, saves state, and
+routes execution from structured artifacts. It never reasons; every
+decision here is a rule applied to a recorded fact.
+
+The revert check defined below decides at one granularity, and it is worth
+knowing before reading its verdict as more than it is: it reverts the whole
+set of governed paths in a single run of the suite and decides on that one
+result. So a set containing one forced repair is permitted *in full*, added
+coverage in the other files of that set included, and a single file mixing a
+forced repair with added coverage is not caught at all. The record names the
+paths that were reverted, so a reader can see exactly what the decision
+covered. Reading the diff remains the verifier's job; this check bounds a
+class of edit, it does not audit one.

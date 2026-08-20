@@ -67,8 +67,7 @@ import harness_config
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import (BASELINE, ENDPOINT, repository_file_at,
-                      revision_carrying)
+from conftest import BASELINE, ENDPOINT
 import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -156,12 +155,22 @@ MAX_RETRIES = RULES["max_retries"]
 #: a record or a rendered prompt is finding content that travelled there.
 PLANTED = "PLANTED_BY_THE_DOCUMENTER"
 
-#: The story this repository's own story-049 wrote an unsupportable figure
-#: about, and the figure itself. Used only to locate the sentence in the
-#: history below — the sentence is read, never retyped.
-STORY_049_FIGURE = "converted 8 of 22 modules"
-STORY_049_SUBJECT = "story-048"
-CORRECTED_DOC = ".harness/docs/ARCHITECTURE.md"
+#: The paragraph a run adds to the document under test. Written here rather
+#: than recovered out of this repository's history, and written with the
+#: messiness of prose somebody wrote for a reader: several sentences, an
+#: em-dashed aside, a parenthesis, a backticked path, a colon, and the claim
+#: itself finishing on a line of its own. The unsupportable claim it carries —
+#: a quantity attributed to a story whose work is not merged — is the shape
+#: story-049 wrote into `.harness/docs/ARCHITECTURE.md` and the shape this
+#: check exists to report.
+ADDED_CLAIM = f"""\
+{PLANTED}: the conversion has been under way for some time now, and it is
+worth saying where it stands — the mechanical part (the scan, its
+classification vocabulary, and the ceiling in `tests/test_baseline_honesty.py`)
+landed first, and the modules followed. As of this writing story-048
+converted 5 of 22 modules; the rest are on the work list, in no particular
+order, and none of them is hard.
+"""
 
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
@@ -557,9 +566,24 @@ def test_the_schema_requires_the_field_that_says_whether_the_check_ran():
 
 def test_an_added_claim_about_a_story_with_no_merged_work_is_reported(tmp_path):
     """The report names the document, the story with no merged work, and the
-    added text the report is about."""
+    added text the report is about.
+
+    The added text is a paragraph rather than a one-liner, and deliberately as
+    messy as the prose a documenter actually writes: several sentences, an
+    em-dashed aside, a parenthesis, a backticked path, a colon and a trailing
+    clause on a line of its own. A synthetic one-liner would pass against a
+    check that only ever matched a whole line, and this is what the real
+    documents look like.
+
+    It replaced a test that recovered one of this repository's own sentences
+    out of the commit graph to make the same point. That test asserted less
+    than this one and cost story-051 its entire retry budget: a pinned revision
+    rebased away by a squash merge, then a content search that collided with
+    the document's own description of this very check. The messiness was its
+    one genuine contribution, and it is written here instead.
+    """
     root = build_target(tmp_path / "reported")
-    add_to_document(root, f"{PLANTED}: story-048 converted 5 of 22 modules.")
+    add_to_document(root, ADDED_CLAIM)
 
     result, record = check(root)
 
@@ -572,42 +596,12 @@ def test_an_added_claim_about_a_story_with_no_merged_work_is_reported(tmp_path):
     assert report["document"] == PRIMARY_DOC
     assert report["stories"] == ["story-048"]
     assert PLANTED in report["text"] and "converted 5 of 22" in report["text"]
+    # Every line of the added paragraph reaches the report, so what is reported
+    # is the added text rather than the one line the quantity happened to sit on.
+    for line in ADDED_CLAIM.splitlines():
+        assert line in report["text"], line
     assert schema_validator.validate(record, SCHEMA) == []
     assert result.ran is True
-
-
-def test_story_049s_own_sentence_is_reported_when_a_run_adds_it(tmp_path):
-    """The case this story exists for, read out of this repository's history
-    rather than retyped: the sentence as `.harness/docs/ARCHITECTURE.md`
-    carried it before the commit that corrected the figure — located by
-    searching the document's history for the figure rather than by a pinned
-    sha, which a rebase leaves unreachable in a clean clone.
-
-    The figure and its subject are searched for *together on one line*, which
-    is what makes the sentence rather than the phrase the thing found: the
-    document now describes this very check and quotes the figure while writing
-    about other stories, so a search for the figure alone answers with today's
-    revision and a sentence this test is not about.
-    """
-    revision = revision_carrying(CORRECTED_DOC, STORY_049_FIGURE,
-                                 STORY_049_SUBJECT, repo=REPO_ROOT)
-    document = repository_file_at(CORRECTED_DOC, revision=revision,
-                                  repo=REPO_ROOT)
-    sentences = [line for line in document.splitlines()
-                 if STORY_049_FIGURE in line and STORY_049_SUBJECT in line]
-    assert len(sentences) == 1, "the figure this story is about moved"
-    sentence = sentences[0]
-
-    root = build_target(tmp_path / "story-049")
-    add_to_document(root, sentence)
-
-    reports = reports_of(root)
-
-    assert len(reports) == 1
-    assert reports[0]["document"] == PRIMARY_DOC
-    assert STORY_049_SUBJECT in reports[0]["stories"]
-    assert STORY_049_FIGURE in reports[0]["text"]
-    assert sentence in reports[0]["text"]
 
 
 def test_a_forward_reference_naming_no_story_is_not_reported(tmp_path):
@@ -1177,12 +1171,23 @@ def shipped_context(tmp_path, harness_root):
 def shipped_template(name: str, *, bound: str) -> str:
     """One shipped prompt template, at one end of this story's own range.
 
-    Resolved through the shared baseline resolution rather than against HEAD:
-    the coordinator commits the working tree at the end of a successful run, so
-    a HEAD comparison would go vacuously green the moment this story commits.
+    The endpoint is the template this repository ships, read from the tree.
+    That is the subject of every assertion below: what a stage's rendered
+    prompt says *here* is the claim, and asserting it at a frozen past endpoint
+    would say nothing about whether the criteria are still in the file an agent
+    is handed today.
+
+    The baseline is a frozen past text and is carried as a committed fixture.
+    Resolving it through the range made a control depend on this repository's
+    commit graph rather than on the template: a squash makes the range
+    unresolvable in a clone, and a rename empties it silently. The text is the
+    same text, lifted from exactly that baseline.
     """
-    return repository_file_at(f"prompts/{name}", validation_file=Path(__file__),
-                              bound=bound, repo=REPO_ROOT)
+    if bound == BASELINE:
+        return conftest.history_fixture(
+            f"prompts-{name.removesuffix('.md')}.at-this-storys-baseline.md.txt")
+    assert bound == ENDPOINT, bound
+    return (REPO_ROOT / "prompts" / name).read_text(encoding="utf-8")
 
 
 def rendered(name: str, context: dict, *, bound: str = ENDPOINT) -> str:

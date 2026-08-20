@@ -1,0 +1,34 @@
+# Target-repository harness configuration
+project: level-five
+workflow: story-workflow
+branch_prefix: story/
+# The branch a story's branch is cut from, and the branch l5-plan expects to
+# commit a plan artifact onto. Leave unset and it is the repository's own
+# default branch, read from refs/remotes/origin/HEAD, which is what this
+# repository uses. Set it only where the base is not the git default:
+# base_branch: develop
+permission_mode: acceptEdits
+# model: leave unset to use the developer's default Claude Code model
+stories_dir: .harness/stories
+runs_dir: .harness/runs
+logs_dir: .harness/logs
+standards_dir: .harness/standards
+architecture_docs:
+  - .harness/docs/ARCHITECTURE.md
+test_command: .venv/bin/python -m pytest tests/ -q
+# The interpreter the clean-clone check runs the suite under. Deliberately
+# the oldest Python CI tests (3.10), not the one the harness runs in (3.14),
+# so a version incompatibility is found before CI rather than by it. Absent,
+# the check falls back to test_command's own interpreter.
+clean_clone_python: .venv310/bin/python
+# Bash commands stage agents may run without prompting. Everything else
+# is denied in headless mode, so grant exactly what the stages need.
+allowed_tools:
+  - "Bash(.venv/bin/python:*)"
+  - "Bash(python3:*)"
+  - "Bash(chmod:*)"
+  - "Bash(ls:*)"
+  - "Bash(cat:*)"
+  - "Bash(git status:*)"
+  - "Bash(git diff:*)"
+  - "Bash(git log:*)"

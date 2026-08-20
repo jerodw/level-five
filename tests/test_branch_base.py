@@ -58,7 +58,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import BASELINE, ENDPOINT, function_source_at
+from conftest import BASELINE, ENDPOINT, function_source
+import conftest
 
 from test_foreign_work_refusal import (
     CONFIG,
@@ -897,10 +898,13 @@ def test_orchestration_holds_exactly_one_literal_branch_name():
     assert everything == ["main"], found
     assert found[COORDINATOR_REL] == ["main"]
 
-    # And it is resolve_base's, not somewhere else's.
+    # And it is resolve_base's, not somewhere else's. Read out of the same
+    # working-tree text the count above is taken from: the claim is about where
+    # the one literal lives *here*, and reading it at a past story's endpoint
+    # made a present-tense claim depend on this repository's commit graph.
     assert literal_branch_names(
-        function_source_at(COORDINATOR_REL, "resolve_base",
-                           validation_file=VALIDATION_FILE, bound=ENDPOINT)
+        function_source(COORDINATOR_PATH.read_text(encoding="utf-8"),
+                        "resolve_base")
     ) == ["main"]
 
 
@@ -939,8 +943,21 @@ RETIRING = ("used to read", "revis")
 
 
 def story_branch_source(bound: str) -> str:
-    return function_source_at(COORDINATOR_REL, "story_branch",
-                              validation_file=VALIDATION_FILE, bound=bound)
+    """`story_branch`'s own text at one end of this story's range.
+
+    The baseline is a frozen past text and is carried as a committed fixture
+    since story-053; resolving it out of this repository's commit graph made
+    the control below depend on the graph rather than on the docstring. The
+    endpoint is read from the working tree, which is where the promise's
+    absence has to hold: asserted at a past endpoint it said nothing about
+    whether the promise has since come back.
+    """
+    if bound == BASELINE:
+        return conftest.history_fixture(
+            "story_coordinator.story_branch.at-story-030-baseline.py.txt")
+    assert bound == ENDPOINT, bound
+    return function_source(COORDINATOR_PATH.read_text(encoding="utf-8"),
+                           "story_branch")
 
 
 def promising_paragraphs(bound: str) -> list[str]:

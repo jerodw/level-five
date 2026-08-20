@@ -1,0 +1,58 @@
+def capture_stage_baseline(
+    run_dir: Path,
+    target_root: Path,
+    baseline: str,
+    stage_name: str,
+    prefixes: list[str],
+) -> Path:
+    """Record what the tree held under a stage's governed prefixes before it ran.
+
+    The file set is `git ls-files --cached --others --exclude-standard` under
+    each prefix — the same tracked-plus-untracked set `_build_clone` carries
+    into a clone — so a file an earlier stage of this run created and never
+    committed is captured. Tracked files alone would miss exactly that file,
+    which is the whole reason this exists.
+
+    First seen wins, per path rather than per directory: a path the baseline
+    already holds keeps the content it was first captured with, and a path new
+    since the last capture is added at its current content. So a re-entered
+    stage is decided against what it originally found rather than against its
+    own completed edits.
+
+    The merge is per path because reusing the earlier capture's directory whole
+    would get the second half wrong. A governed path that first appears between
+    two invocations of this stage — a test file another stage created in the
+    meantime — would be absent from the baseline, and a path absent from the
+    baseline is deleted in the clone rather than restored, because absent means
+    it did not exist when the stage started.
+
+    The directory is created even when it captures nothing, so its existence
+    answers "was a baseline taken" and its absence is a distinct, reportable
+    condition rather than an empty capture.
+
+    It names no stage and no prefix: both come from the loaded workflow. The
+    result is evidence — nothing routes on it, and it is not in state.json.
+    """
+    directory = stage_baseline_dir(run_dir, baseline, stage_name)
+    directory.mkdir(parents=True, exist_ok=True)
+    for prefix in prefixes:
+        listed = _git(
+            target_root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            prefix,
+        ).stdout
+        for rel in filter(None, listed.split("\0")):
+            source = target_root / rel
+            if not source.is_file():
+                continue
+            destination = directory / rel
+            if destination.exists():
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+    return directory

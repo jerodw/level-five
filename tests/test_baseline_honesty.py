@@ -2784,11 +2784,15 @@ PENDING = "pending conversion"
 #: asserted equal to what the scan reports in both directions, so it cannot
 #: grow silently and cannot keep a name whose module was converted.
 #:
-#: The reasons live here rather than in thirty module docstrings: this story
-#: lands the mechanism and converts nothing, and writing a paragraph into a
-#: module it is not converting would be an edit with no assertion behind it.
+#: The reasons live here rather than in the modules' docstrings: story-052
+#: landed the mechanism and converted nothing, and writing a paragraph into a
+#: module it was not converting would have been an edit with no assertion
+#: behind it. story-053 then converted every pending entry, so what is left is
+#: four subject readers and their reasons — and `PENDING` stays, because the
+#: class it names is where the next module to take a history dependency lands.
+#: An empty pending class is a state this list can be in, not a state it has
+#: retired into.
 DECLARED_HISTORY_READERS = {
-    "test_attempt_archiving.py": PENDING,
     "test_baseline_honesty.py":
         "its regression set is committed evidence rather than a constructed "
         "fixture: the five known vacuous assertions are recovered from this "
@@ -2801,37 +2805,12 @@ DECLARED_HISTORY_READERS = {
         "did carry the marker into the coordinator — a claim about where a "
         "declaration lives here and when it moved, which no constructed "
         "repository can answer",
-    "test_branch_base.py": PENDING,
-    "test_clean_clone_check.py": PENDING,
-    "test_config_keys_are_obeyed.py": PENDING,
-    "test_contract_assertions_bite.py": PENDING,
-    "test_documented_claim_support.py": PENDING,
-    "test_documenter_before_verification.py": PENDING,
-    "test_escalation_resume.py": PENDING,
-    "test_escalation_summary.py": PENDING,
-    "test_execution_history.py": PENDING,
-    "test_foreign_work_refusal.py": PENDING,
     "test_git_history_loading_retired.py":
         "its subject is that a practice this repository retired is gone from "
         "it and stayed gone: the marker is asserted present at the endpoint of "
         "the story that removed it and absent at that story's baseline, and "
         "the archived copy is asserted still to hold what it held. That is a "
         "claim about this repository's own history of the defect",
-    "test_mutation_controls.py": PENDING,
-    "test_plan_commit.py": PENDING,
-    "test_plan_time_validation.py": PENDING,
-    "test_planner_injection.py": PENDING,
-    "test_rerun_refusal.py": PENDING,
-    "test_resume_guard.py": PENDING,
-    "test_retry_history.py": PENDING,
-    "test_revert_baseline.py": PENDING,
-    "test_revert_check.py": PENDING,
-    "test_schema_inventory_location.py": PENDING,
-    "test_self_routing_retry.py": PENDING,
-    "test_shared_baseline_resolution.py": PENDING,
-    "test_stage_baseline.py": PENDING,
-    "test_stage_output_ownership.py": PENDING,
-    "test_stage_tool_grants.py": PENDING,
     "test_validation_module_naming.py":
         "its subject is this repository's own module names and the origins "
         "declared for them: that every declared origin resolves to a commit in "
@@ -2848,7 +2827,14 @@ DECLARED_HISTORY_READERS = {
 #: against a length — it resolves nothing out of this repository's history,
 #: which is asserted of the code that performs the comparison rather than
 #: claimed here.
-PENDING_CEILING = 26
+#:
+#: story-053 took it from twenty-six to zero: every module the scan reported as
+#: pending was converted, none of them by being reclassified a subject reader.
+#: Zero is a real ceiling and not a retirement — the class, the classification
+#: vocabulary and this constant all survive, so the next module to take a
+#: history dependency is reported by the scan, absent from the declared list,
+#: and red here.
+PENDING_CEILING = 0
 
 
 def pending_entries() -> list[str]:
@@ -2951,21 +2937,42 @@ def test_every_entry_is_classified_and_every_subject_states_its_reason():
         assert (TESTS_DIR / name).is_file(), name
         assert DECLARED_HISTORY_READERS[name] is PENDING, name
 
-    assert subject_entries() and pending_entries()
+    # Every listed module is a subject reader as of story-053, which converted
+    # all twenty-six pending entries. An empty pending class is the success
+    # this rule was built to reach, so it is asserted as such rather than as a
+    # non-emptiness that would now be false — while the subject class is still
+    # required to be non-empty, because a scan reporting nothing at all would
+    # satisfy the equality above for the wrong reason.
+    assert subject_entries()
+    assert pending_entries() == []
 
 
 def test_the_read_story_051_spent_its_retry_budget_on_is_listed_as_pending():
-    """The case this rule exists to have caught, named.
+    """The case this rule exists to have caught, named — and now converted.
 
     story-051 wrote a history read into a module created that day, for one
     sentence, and burned its whole retry budget on it while nothing in the
-    suite had anything to say. That module is on the list, and it is pending —
-    which is the statement that its read is the conversion story's work rather
-    than a decided subject read.
+    suite had anything to say. It was listed here as pending, which said the
+    read was the conversion story's work rather than a decided subject read.
+
+    story-053 did that work, so the statement inverts into the stronger one:
+    the module is not reported by the scan at all, and is therefore not on the
+    list in either class. Its assertion is unchanged — the same sentence is
+    still reported when a run adds it — and what it reads is a constant written
+    in the test rather than a revision searched for in this repository, which
+    is what a whole retry budget bought the knowledge of.
     """
-    assert DECLARED_HISTORY_READERS["test_documented_claim_support.py"] \
-        is PENDING
-    assert "test_documented_claim_support.py" in history_reading_modules()
+    module = "test_documented_claim_support.py"
+    assert module not in history_reading_modules()
+    assert module not in DECLARED_HISTORY_READERS
+    assert (TESTS_DIR / module).is_file()
+
+    # The control: the scan has not stopped reporting. Applied to the same
+    # module's source with one history read planted in it, it reports.
+    planted = (TESTS_DIR / module).read_text(encoding="utf-8") + (
+        "\n\ndef _probe():\n"
+        "    return conftest.revision_carrying('docs/x.md', 'a', 'b')\n")
+    assert history_reads(planted, module)
 
 
 def test_the_pending_list_is_within_the_declared_ceiling():
