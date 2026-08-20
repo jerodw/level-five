@@ -11,12 +11,16 @@ second.
 Almost nothing here is asserted from prose. Two fixtures are built under
 tmp_path and driven with a fake agent runner:
 
-  * `shared_root` — one git checkout carrying both a target project and a copy
-    of the harness's `workflows/`, `rules/`, `prompts/` and `schemas/`, handed
-    to `run_story` as both `harness_root` and `target_root`. This is the shape
-    the harness is developed under and the one the story is about.
-  * `separate_root` — a target repository and the real harness checkout, the
+  * `shared_root` — one git checkout carrying both a target project and a
+    harness root materialized from the workflow this module builds, handed to
+    `run_story` as both `harness_root` and `target_root`. This is the shape the
+    harness is developed under and the one the story is about.
+  * `separate_root` — a target repository and a harness checkout beside it, the
     deployment the guard was written for, which this story must leave alone.
+
+Since story-048 the workflow both roots carry is one this module builds rather
+than the one this repository deploys: the guard's subject is what a resume may
+establish, and the stage list is an input to that.
 
 Every absence asserted here carries a demonstration that the same check can
 report the violation it exists to catch:
@@ -46,7 +50,6 @@ Nothing here invokes a model: every run goes through a fake agent runner.
 """
 import ast
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -63,15 +66,52 @@ from agent_runner import AgentResult
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_REL = "orchestration/story_coordinator.py"
 COORDINATOR_PATH = REPO_ROOT / COORDINATOR_REL
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is the *resume guard* —
+#: whether a run that escalated may be resumed, and what evidence the refusal
+#: names — and the stage list is an input to that question. Any workflow that
+#: escalates on a failed verdict drives this guard identically, so deriving the
+#: names from the deployed definition made how many stages this deployment
+#: happens to ship into something these assertions moved on.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="resume-guard-workflow",
+)
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
+
+#: The workflow file the built definition is written to, named off the built
+#: definition rather than spelled out, so the harness-edit test below edits the
+#: workflow this run actually reads.
+WORKFLOW_REL = Path("workflows") / f"{WORKFLOW['name']}.json"
 
 STORY_ID = "story-001"
 DEFAULT_BRANCH = "main"
 STORY_BRANCH = f"story/{STORY_ID}"
-
-#: The directories a checkout has to carry to serve as a harness root.
-HARNESS_DIRS = ("workflows", "rules", "prompts", "schemas")
 
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
@@ -115,8 +155,8 @@ constraints:
   - preserve existing behavior
 """
 
-CONFIG = """\
-workflow: story-workflow
+CONFIG = f"""\
+workflow: {WORKFLOW['name']}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -172,8 +212,7 @@ def build_target(root: Path, *, harness_inside: bool,
     if gitignore:
         write(root / ".gitignore", gitignore)
     if harness_inside:
-        for sub in HARNESS_DIRS:
-            shutil.copytree(REPO_ROOT / sub, root / sub)
+        conftest.materialize_workflow(WORKFLOW, root)
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=root,
                    check=True)
@@ -182,6 +221,34 @@ def build_target(root: Path, *, harness_inside: bool,
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
     subprocess.run(["git", "branch", "-M", DEFAULT_BRANCH], cwd=root, check=True)
     return root
+
+
+def build_harness(root: Path, *, as_repository: bool = True) -> Path:
+    """A harness root outside the target, carrying the built workflow.
+
+    A separate-root deployment is the one the third comparison reads a
+    *recorded revision* off, so the root has to be a git repository with a
+    HEAD for the guard to have that evidence at all — which is the whole
+    reason this used to be this repository's own checkout. `as_repository`
+    is False for the one test whose subject is a harness root git cannot
+    resolve.
+    """
+    conftest.materialize_workflow(WORKFLOW, root)
+    if as_repository:
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.com"],
+                       cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=root, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "the harness"], cwd=root,
+                       check=True)
+    return root
+
+
+@pytest.fixture
+def separate_harness(tmp_path: Path) -> Path:
+    """The harness checkout a separate-root deployment points at."""
+    return build_harness(tmp_path / "harness")
 
 
 @pytest.fixture
@@ -216,26 +283,28 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None):
         self.calls.append(stage)
-        if stage == "implementer":
+        if stage == WRITING:
             record = {"modified": [], "created": [], "deleted": []}
             if self.edit:
                 write(self.target_root / "src" / "app.py",
                       APP_AT_HEAD + "print('implemented')\n")
                 record["modified"] = ["src/app.py"]
-            write_json(self.run_dir / "changed-files.json", record)
-            write(self.run_dir / "implementation-summary.md", "Implemented.\n")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+            write_json(self.run_dir / conftest.CHANGED_FILES, record)
+            write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY,
+                  "Implemented.\n")
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json",
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
-        elif stage == "verifier":
-            write_json(self.run_dir / "verification-result.json", self.verdict)
-        elif stage == "documenter":
-            write(self.run_dir / "documentation-report.md", "Nothing.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+        elif stage == VERIFYING:
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT,
+                       conftest.answering_guidance(self.verdict, self.run_dir))
+        elif stage == DOCUMENTING:
+            write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -410,7 +479,7 @@ def test_the_shared_root_refusal_names_its_three_pieces_of_evidence(
 
 
 def test_the_separate_root_refusal_still_names_the_recorded_revision(
-    separate_root,
+    separate_root, separate_harness,
 ):
     """The control for the assertion above, and the leg this story left alone.
 
@@ -418,9 +487,9 @@ def test_the_separate_root_refusal_still_names_the_recorded_revision(
     third line is the recorded harness revision, which is what a separate-root
     reader must still see.
     """
-    escalate(separate_root, REPO_ROOT)
+    escalate(separate_root, separate_harness)
 
-    evidence = guard(separate_root, REPO_ROOT)
+    evidence = guard(separate_root, separate_harness)
 
     assert len(evidence) == 3
     assert "still at revision" in evidence[2]
@@ -486,7 +555,7 @@ def test_an_edit_to_the_harness_source_alone_resumes_a_shared_root_run(
     escalate(shared_root, shared_root)
     assert guard(shared_root, shared_root) != []            # the control
 
-    workflow_path = shared_root / "workflows" / "story-workflow.json"
+    workflow_path = shared_root / WORKFLOW_REL
     workflow = json.loads(workflow_path.read_text())
     workflow["description"] = "an edited harness"
     write_json(workflow_path, workflow)
@@ -502,7 +571,7 @@ def test_an_edit_to_the_harness_source_alone_resumes_a_shared_root_run(
 
 
 def test_an_escalation_that_committed_nothing_refuses_in_neither_fixture(
-    tmp_path,
+    tmp_path, separate_harness,
 ):
     """The fifth acceptance criterion: the clean-tree escalation shape.
 
@@ -518,7 +587,7 @@ def test_an_escalation_that_committed_nothing_refuses_in_neither_fixture(
                                  ("quiet-separate", False)):
         root = build_target(tmp_path / name, harness_inside=harness_inside,
                             gitignore=".harness/runs/\n")
-        harness = root if harness_inside else REPO_ROOT
+        harness = root if harness_inside else separate_harness
         escalate(root, harness, edit=False)
 
         assert state_of(root)["escalation_commit"] == ""
@@ -529,14 +598,14 @@ def test_an_escalation_that_committed_nothing_refuses_in_neither_fixture(
         loud = build_target(tmp_path / f"{name}-edited",
                             harness_inside=harness_inside,
                             gitignore=".harness/runs/\n")
-        loud_harness = loud if harness_inside else REPO_ROOT
+        loud_harness = loud if harness_inside else separate_harness
         escalate(loud, loud_harness, edit=True)
         assert state_of(loud)["escalation_commit"] != ""
         assert guard(loud, loud_harness) != [], name
 
 
 def test_each_recorded_fact_alone_clears_the_guard_in_both_fixtures(
-    shared_root, separate_root,
+    shared_root, separate_root, separate_harness,
 ):
     """The three comparisons, one at a time, so no single input can be the
     only one carrying the decision.
@@ -553,11 +622,12 @@ def test_each_recorded_fact_alone_clears_the_guard_in_both_fixtures(
     would hold whatever the field said.
     """
     escalate(shared_root, shared_root)
-    escalate(separate_root, REPO_ROOT)
+    escalate(separate_root, separate_harness)
     assert len(guard(shared_root, shared_root)) == 3
-    assert len(guard(separate_root, REPO_ROOT)) == 3
+    assert len(guard(separate_root, separate_harness)) == 3
 
-    for root, harness in ((shared_root, shared_root), (separate_root, REPO_ROOT)):
+    for root, harness in ((shared_root, shared_root),
+                          (separate_root, separate_harness)):
         for field in ("story_digest", "escalation_commit"):
             assert guard(root, harness, changes={field: ""}) == [], \
                 (root.name, field)
@@ -566,9 +636,10 @@ def test_each_recorded_fact_alone_clears_the_guard_in_both_fixtures(
         story_text = story_path_of(root).read_text()
         assert guard(root, harness, story_text + "\n# amended\n") == []
 
-    assert guard(separate_root, REPO_ROOT,
+    assert guard(separate_root, separate_harness,
                  changes={"harness_revision": "0" * 40}) == []
-    assert guard(separate_root, REPO_ROOT, changes={"harness_revision": ""}) == []
+    assert guard(separate_root, separate_harness,
+                 changes={"harness_revision": ""}) == []
 
     # The shared root does not read the field at all, which is the story.
     assert guard(shared_root, shared_root,
@@ -578,7 +649,7 @@ def test_each_recorded_fact_alone_clears_the_guard_in_both_fixtures(
 
 
 def test_same_repository_answers_only_what_git_can_establish(
-    shared_root, separate_root, tmp_path,
+    shared_root, separate_root, tmp_path, separate_harness,
 ):
     """The seventh acceptance criterion, at the helper.
 
@@ -598,7 +669,7 @@ def test_same_repository_answers_only_what_git_can_establish(
     assert story_coordinator.same_repository(shared_root, inside) is True
     assert story_coordinator.same_repository(inside, shared_root) is True
 
-    assert story_coordinator.same_repository(separate_root, REPO_ROOT) is False
+    assert story_coordinator.same_repository(separate_root, separate_harness) is False
     assert story_coordinator.same_repository(shared_root, separate_root) is False
     assert story_coordinator.same_repository(shared_root, not_a_repository) is False
     assert story_coordinator.same_repository(not_a_repository, shared_root) is False
@@ -607,7 +678,7 @@ def test_same_repository_answers_only_what_git_can_establish(
 
 
 def test_an_unestablishable_root_falls_through_to_the_revision_comparison(
-    tmp_path,
+    tmp_path, separate_harness,
 ):
     """The rest of the seventh criterion, at the guard.
 
@@ -621,9 +692,7 @@ def test_an_unestablishable_root_falls_through_to_the_revision_comparison(
     """
     target = build_target(tmp_path / "fallthrough", harness_inside=False,
                           gitignore=".harness/runs/\n")
-    fake = tmp_path / "harness-not-a-repo"
-    for sub in HARNESS_DIRS:
-        shutil.copytree(REPO_ROOT / sub, fake / sub)
+    fake = build_harness(tmp_path / "harness-not-a-repo", as_repository=False)
     assert story_coordinator._revision(fake) == ""
     assert story_coordinator.same_repository(target, fake) is False
 
@@ -637,8 +706,8 @@ def test_an_unestablishable_root_falls_through_to_the_revision_comparison(
 
     control = build_target(tmp_path / "fallthrough-control",
                            harness_inside=False, gitignore=".harness/runs/\n")
-    escalate(control, REPO_ROOT)
-    assert guard(control, REPO_ROOT) != []                  # the control
+    escalate(control, separate_harness)
+    assert guard(control, separate_harness) != []           # the control
 
 
 # --------------------------------------------------------------------------
@@ -699,7 +768,7 @@ def test_the_separate_root_leg_is_unchanged_character_for_character(tmp_path):
 
 
 def test_a_separate_root_deployment_behaves_at_both_ends_as_it_did(
-    separate_root, tmp_path,
+    separate_root, separate_harness, tmp_path,
 ):
     """The sixth acceptance criterion, driven rather than reasoned about.
 
@@ -713,7 +782,7 @@ def test_a_separate_root_deployment_behaves_at_both_ends_as_it_did(
     fact about separate roots rather than about two identical modules.
     """
     before = pre_story_coordinator(tmp_path)
-    escalate(separate_root, REPO_ROOT)
+    escalate(separate_root, separate_harness)
     story_text = story_path_of(separate_root).read_text()
 
     def both(root: Path, harness: Path, text: str | None = None,
@@ -722,19 +791,20 @@ def test_a_separate_root_deployment_behaves_at_both_ends_as_it_did(
                 guard(root, harness, text, module=story_coordinator,
                       changes=changes))
 
-    was, now = both(separate_root, REPO_ROOT)
+    was, now = both(separate_root, separate_harness)
     assert was == now != []
     assert len(now) == 3
 
-    was, now = both(separate_root, REPO_ROOT, story_text + "\n# amended\n")
+    was, now = both(separate_root, separate_harness,
+                    story_text + "\n# amended\n")
     assert was == now == []
 
     for field in ("story_digest", "escalation_commit", "harness_revision"):
-        was, now = both(separate_root, REPO_ROOT, changes={field: ""})
+        was, now = both(separate_root, separate_harness, changes={field: ""})
         assert was == now == [], field
 
     commit_on_the_branch(separate_root)
-    was, now = both(separate_root, REPO_ROOT)
+    was, now = both(separate_root, separate_harness)
     assert was == now == []
 
     # The control: one checkout as both roots, where the pre-story guard can
@@ -752,7 +822,7 @@ def test_a_separate_root_deployment_behaves_at_both_ends_as_it_did(
 
 
 def test_the_guard_still_makes_exactly_three_comparisons(
-    shared_root, separate_root, tmp_path,
+    shared_root, separate_root, separate_harness, tmp_path,
 ):
     """The eighth acceptance criterion. Neither form of the third comparison
     returns more or fewer than three pieces of evidence.
@@ -762,10 +832,10 @@ def test_the_guard_still_makes_exactly_three_comparisons(
     than about the assertion being unable to see a fourth.
     """
     escalate(shared_root, shared_root)
-    escalate(separate_root, REPO_ROOT)
+    escalate(separate_root, separate_harness)
 
     assert len(guard(shared_root, shared_root)) == 3
-    assert len(guard(separate_root, REPO_ROOT)) == 3
+    assert len(guard(separate_root, separate_harness)) == 3
 
     four_legged = load_mutant(
         COORDINATOR_PATH,
@@ -775,7 +845,8 @@ def test_the_guard_still_makes_exactly_three_comparisons(
           '{state.harness_revision[:12]}"\n    )\n'
           '    evidence.append("a fourth comparison nothing makes")\n')],
         name="coordinator_with_a_fourth_leg", tmp_path=tmp_path)
-    assert len(guard(separate_root, REPO_ROOT, module=four_legged)) == 4
+    assert len(guard(separate_root, separate_harness,
+                     module=four_legged)) == 4
 
 
 def test_no_flag_environment_variable_or_configuration_key_bypasses_the_guard():

@@ -81,7 +81,7 @@ from test_retry_routing import (COORDINATOR_PATH, OMITTED, PASS, PLACEHOLDER,
                                 no_model,  # noqa: F401 - autouse guard
                                 probe_harness, retry_records_of,
                                 routed_retries, run_dir_of, state_of,
-                                summary_of, write_json)
+                                summary_of, verifier_stage_of, write_json)
 from test_self_routing_retry import FAILURE_IDS as MECHANICAL_FAILURES
 
 #: The name the probe workflow is built under. This repository ships no
@@ -244,11 +244,18 @@ def fixture(tmp_path: Path) -> Fixture:
     """A harness root carrying a workflow this repository does not ship, and a
     factory for target repositories pointed at it.
 
-    Derived from the shipped definition by renaming it and nothing else, so the
-    runs below exercise the coordinator's real routing while the names the
-    assertions use come from a definition this module owns.
+    Derived from the definition tests/test_retry_routing.py builds, with the one
+    declaration this module's subject requires added to it: a self-route budget
+    on the verifying stage, which is what a defective-guidance finding spends.
+    Stated here rather than inherited, because a module whose subject is "a
+    self-route the verifier takes on its own declared budget" must not depend on
+    some other definition happening to grant one.
     """
-    harness = probe_harness(tmp_path, PROBE_WORKFLOW, lambda workflow: None)
+    def grant_the_verifying_stage_a_budget(workflow: dict) -> None:
+        verifier_stage_of(workflow)["max_self_routes"] = 1
+
+    harness = probe_harness(tmp_path, PROBE_WORKFLOW,
+                            grant_the_verifying_stage_a_budget)
 
     def build(label: str, **kwargs) -> Path:
         return build_target(tmp_path / f"target-{label}",
@@ -262,17 +269,22 @@ def fixture(tmp_path: Path) -> Fixture:
     )
 
 
-def test_the_workflow_these_runs_are_driven_against_still_has_a_subject():
-    """Every derivation above, stated so a workflow change reddens here first.
+def test_the_workflow_these_runs_are_driven_against_still_has_a_subject(fixture):
+    """Every derivation above, stated so a fixture change reddens here first.
 
     A module whose subject is "a self-route the verifier takes on its own
     declared budget" is worth nothing if the verifier declares no budget, and
     the runs below would then quietly assert an escalation rather than a
     self-route. The ceiling has to be above one too, or "the budget was
     genuinely available" cannot be shown at all.
+
+    Asked of the definition these runs are actually driven against — the probe
+    this module builds — rather than of the one this repository deploys. That
+    is the whole of story-048's point: the deployment is free to grant or
+    withdraw a budget without moving this module, and the declaration this
+    module *depends* on is stated where it is depended on.
     """
-    workflow = conftest.shipped_workflow(conftest.HARNESS_ROOT, "story-workflow")
-    verifier = next(s for s in workflow["stages"] if "on_failure" in s)
+    verifier = verifier_stage_of(fixture.workflow)
 
     assert verifier.get("max_self_routes", 0) >= 1, (
         "the verifier declares no self-route budget, so the defective-guidance "
@@ -280,7 +292,7 @@ def test_the_workflow_these_runs_are_driven_against_still_has_a_subject():
     assert story_coordinator.conditional_artifacts(verifier), (
         "the verifier declares no conditional artifact, so there is no "
         "guidance for a verdict to be in force for")
-    assert harness_config.load_rules(conftest.HARNESS_ROOT)["max_retries"] >= 2, (
+    assert fixture.ceiling >= 2, (
         "the retry ceiling leaves no room to show a self-route left budget "
         "unspent after a legitimate retry")
 
@@ -1482,8 +1494,13 @@ def rendered_verifier_prompt(tmp_path: Path, harness_root: Path):
     stage receives it: rendered by a real run and read back out of the run
     directory, which is stronger than reading the template.
     """
-    target = build_target(tmp_path / "target-shipped")
     workflow = conftest.shipped_workflow(harness_root)
+    # Named explicitly, because story-048 converted `build_target`'s home
+    # module to a workflow it builds for itself and its default follows that
+    # definition. This section's subject is the *shipped* verifier prompt, so
+    # this one target configures the shipped definition on purpose.
+    target = build_target(tmp_path / "target-shipped",
+                          workflow=workflow["name"])
     verifier = next(s for s in workflow["stages"] if "on_failure" in s)
     runner = Runner(
         target,

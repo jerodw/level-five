@@ -512,10 +512,17 @@ def shipped_run(tmp_path: Path, harness_root: Path):
     stage receives it: rendered by a real run and read back out of the run
     directory, which is stronger than reading the template.
     """
-    target = build_target(tmp_path / "target-shipped")
     workflow = conftest.shipped_workflow(harness_root)
+    # Named explicitly, because story-048 converted `build_target`'s home
+    # module to a workflow it builds for itself and its default follows that
+    # definition. This section's subject is the *shipped* verifier prompt, so
+    # this one target configures the shipped definition on purpose.
+    target = build_target(tmp_path / "target-shipped",
+                          workflow=workflow["name"])
+    shipped_stages = [stage["name"] for stage in workflow["stages"]]
     assert story_coordinator.run_story(
-        STORY_ID, harness_root, target, Runner(target, [PASS])) == 0
+        STORY_ID, harness_root, target,
+        Runner(target, [PASS], stage_names=shipped_stages)) == 0
     verifier = next(s for s in workflow["stages"] if "on_failure" in s)
     return prompt_of(target, verifier["name"], 1), verifier
 

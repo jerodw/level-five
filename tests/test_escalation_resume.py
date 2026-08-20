@@ -67,8 +67,54 @@ import story_coordinator
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+
+#: The tests directory the target below configures, and the one the writing
+#: stage declares it may not create. Written once so the config and the
+#: declaration cannot drift apart, and written *resolved* rather than as the
+#: `{{tests_dir}}` token the shipped definition carries: one case here calls
+#: `capture_stage_baseline` with this declaration directly, outside the load
+#: that expands tokens, and a token reaching it would capture nothing.
+TESTS_DIR = "tests/"
+
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is what an *escalated
+#: run* leaves behind and what a resume of it does — where it re-enters, what
+#: it archives, what the guard refuses — and the stage list is an input to that
+#: question rather than its subject. A definition with a writing stage carrying
+#: a revert check, a validating stage, a documenting stage and a judging stage
+#: that routes a retry drives every case below identically.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"},
+        may_not_create=(TESTS_DIR,),
+        revert_check={"result": "revert-check-result.json",
+                      "baseline": "stage-baseline"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="escalation-resume-workflow",
+)
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
 #: Since story-028 the route is a category-keyed table rather than a constant,
 #: so the category a failing verdict names and the stage it routes to are read
@@ -151,8 +197,8 @@ constraints:
   - preserve existing behavior
 """
 
-CONFIG = """\
-workflow: story-workflow
+CONFIG = f"""\
+workflow: {WORKFLOW['name']}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -162,7 +208,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
-tests_dir: tests/
+tests_dir: {TESTS_DIR}
 """
 
 APP_AT_HEAD = "print('hello')\n"
@@ -227,8 +273,20 @@ def quiet_target(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def harness_root() -> Path:
-    return REPO_ROOT
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying the definition built above.
+
+    A real directory a real coordinator loads a real file out of, so a
+    converted case exercises the same code path the shipped-workflow case did.
+
+    Committed as a git repository because the escalation records the harness's
+    revision and the guard's third comparison reads it back: a harness root git
+    cannot resolve records "" and clears the guard, which is a different case
+    and has a test of its own below.
+    """
+    root = conftest.materialize_workflow(WORKFLOW, tmp_path / "resume-harness")
+    init_repo(root)
+    return root
 
 
 # --------------------------------------------------------------------------
@@ -287,25 +345,26 @@ class Runner:
         )
         attempt = max(1, self.calls.count(RETRY_STAGE))
 
-        if stage == "implementer":
-            write_json(self.run_dir / "changed-files.json", self._edit(stage, attempt))
-            write(self.run_dir / "implementation-summary.md",
+        if stage == WRITING:
+            write_json(self.run_dir / conftest.CHANGED_FILES,
+                       self._edit(stage, attempt))
+            write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY,
                   f"Implemented on attempt {attempt}.\n")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json",
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
                        self._edit(stage, attempt))
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             seen = self.calls.count(stage) - 1
             verdict = self._nth(self.verdicts, seen)
             self.verdicts_written.append(verdict)
-            write_json(self.run_dir / "verification-result.json", verdict)
-        elif stage == "documenter":
-            write(self.run_dir / "documentation-report.md", "Nothing.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
+        elif stage == DOCUMENTING:
+            write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -350,7 +409,7 @@ def restore_state(target_root: Path, original: dict) -> None:
         json.dumps(original, indent=2) + "\n", encoding="utf-8")
 
 
-def run(target_root: Path, harness: Path = REPO_ROOT, edits: dict | None = None,
+def run(target_root: Path, harness: Path, edits: dict | None = None,
         verdicts: list | None = None, runner: Runner | None = None,
         start_stage: str | None = None) -> tuple[int, Runner]:
     runner = runner or Runner(target_root, edits, verdicts)
@@ -360,14 +419,14 @@ def run(target_root: Path, harness: Path = REPO_ROOT, edits: dict | None = None,
 
 
 #: The run shape that escalates at the verifier with no retry taken.
-AT_ONCE = ([FAIL_AT_ONCE], {"implementer": [edits_the_module]})
+AT_ONCE = ([FAIL_AT_ONCE], {WRITING: [edits_the_module]})
 #: The run shape that retries once and then escalates, so the resumed run has
 #: a non-zero retry count and a second verification iteration to carry.
 AFTER_A_RETRY = ([FAIL_RETRY, FAIL_FINAL],
-                 {"implementer": [creates_a_module, creates_a_module]})
+                 {WRITING: [creates_a_module, creates_a_module]})
 
 
-def escalate(target_root: Path, harness: Path = REPO_ROOT,
+def escalate(target_root: Path, harness: Path,
              shape: tuple = AT_ONCE) -> Runner:
     verdicts, edits = shape
     code, runner = run(target_root, harness, edits, verdicts)
@@ -611,7 +670,7 @@ def test_the_escalation_commit_is_recorded_on_state_and_is_on_the_branch(
                f"story/{STORY_ID}", check=False).returncode == 0
     assert git(target, "rev-parse", "HEAD~1").stdout.strip() == commit
     assert state["harness_revision"] == git(
-        REPO_ROOT, "rev-parse", "HEAD").stdout.strip()
+        harness_root, "rev-parse", "HEAD").stdout.strip()
     assert state["story_digest"] == story_coordinator.story_digest(
         (target / ".harness" / "stories" / f"{STORY_ID}.yaml").read_text())
 
@@ -656,7 +715,7 @@ def test_the_escalation_adds_exactly_the_commits_its_undo_command_names(
         assert not COMPLETION_SUBJECT.match(subject)
 
     completed = build_target(target.parent / "completed-for-count")
-    code, _ = run(completed, harness_root, {"implementer": [edits_the_module]})
+    code, _ = run(completed, harness_root, {WRITING: [edits_the_module]})
     assert code == 0
     assert COMPLETION_SUBJECT.match(subject_of(completed))         # the control
 
@@ -685,7 +744,7 @@ def test_the_escalation_subject_cannot_be_read_as_a_completion(
     assert VERIFIER_STAGE["name"] in escalation      # where execution stopped
 
     completed = build_target(target.parent / "completed-target")
-    code, _ = run(completed, harness_root, {"implementer": [edits_the_module]})
+    code, _ = run(completed, harness_root, {WRITING: [edits_the_module]})
     assert code == 0
     assert COMPLETION_SUBJECT.match(subject_of(completed))    # the control
 
@@ -778,7 +837,7 @@ def test_commit_escalated_work_returns_empty_on_a_clean_tree(target, tmp_path):
     read against a direct call. The control is the identical call one edit
     later."""
     state = story_coordinator.RunState(
-        story_id=STORY_ID, branch=f"story/{STORY_ID}", current_stage="verifier")
+        story_id=STORY_ID, branch=f"story/{STORY_ID}", current_stage=VERIFYING)
     head = git(target, "rev-parse", "HEAD").stdout.strip()
 
     assert story_coordinator.commit_escalated_work(target, state, "nothing") == ""
@@ -819,7 +878,7 @@ def test_a_successful_run_still_commits_its_work_under_the_completion_subject(
     """The behavioral half: a run that never escalates makes exactly one
     commit, in the completion form, carrying the story's work."""
     head_before = git(target, "rev-parse", "HEAD").stdout.strip()
-    code, _ = run(target, harness_root, {"implementer": [edits_the_module]})
+    code, _ = run(target, harness_root, {WRITING: [edits_the_module]})
     assert code == 0
 
     assert COMPLETION_SUBJECT.match(subject_of(target))
@@ -867,7 +926,7 @@ def test_a_completed_run_still_refuses_with_the_message_it_always_had(
     the message being untouched rather than two readings of one unchanged
     file.
     """
-    code, _ = run(target, harness_root, {"implementer": [edits_the_module]})
+    code, _ = run(target, harness_root, {WRITING: [edits_the_module]})
     assert code == 0
     capsys.readouterr()
 
@@ -963,18 +1022,18 @@ def test_a_crashed_run_still_resumes_exactly_as_it_did(target, harness_root):
     """The status this story did not touch. A run left `running` resumes with
     no guard and no archive — the archive belongs to the escalation path, and
     a crashed run's interrupted attempt is its own unfinished work."""
-    crashed = Runner(target, {"implementer": [edits_the_module]})
+    crashed = Runner(target, {WRITING: [edits_the_module]})
     run_dir_of(target).mkdir(parents=True, exist_ok=True)
     story_coordinator.save_state(
         run_dir_of(target),
         story_coordinator.RunState(story_id=STORY_ID, branch=f"story/{STORY_ID}",
-                                   status="running", current_stage="tester"),
+                                   status="running", current_stage=VALIDATING),
     )
 
     code, _ = run(target, harness_root, runner=crashed, verdicts=[PASS])
 
     assert code == 0
-    assert crashed.calls[0] == "tester"
+    assert crashed.calls[0] == VALIDATING
     assert not (run_dir_of(target) / "attempts").exists()
 
 
@@ -1143,7 +1202,7 @@ def test_a_stage_argument_overrides_the_recorded_stage(target, harness_root):
     ready_to_resume(target)
 
     code, overridden = run(target, harness_root, verdicts=[PASS],
-                           edits={"implementer": [edits_the_module]},
+                           edits={WRITING: [edits_the_module]},
                            start_stage=RETRY_STAGE)
 
     assert code == 0
@@ -1176,7 +1235,7 @@ def test_a_stage_the_workflow_does_not_define_refuses_and_creates_nothing(
     for name in STAGE_NAMES:
         assert name in message
     # The control: the same call naming a stage the workflow does define runs.
-    accepted = Runner(target, {"implementer": [edits_the_module]})
+    accepted = Runner(target, {WRITING: [edits_the_module]})
     assert story_coordinator.run_story(
         STORY_ID, harness_root, target, accepted, start_stage=STAGE_NAMES[0]) == 0
     assert accepted.calls != []
@@ -1260,7 +1319,7 @@ def test_l5_run_still_refuses_an_argument_list_it_cannot_read(target, monkeypatc
 # --------------------------------------------------------------------------
 
 
-def guard(target_root: Path, harness: Path = REPO_ROOT,
+def guard(target_root: Path, harness: Path,
           story_text: str | None = None) -> list[str]:
     state = story_coordinator.load_state(run_dir_of(target_root))
     if story_text is None:
@@ -1355,7 +1414,8 @@ def test_each_input_alone_clears_the_guard(quiet_target, harness_root):
     assert guard(target, harness_root) != []
     write_state(target, harness_revision="0" * 40)
     assert guard(target, harness_root) == []
-    write_state(target, harness_revision=git(REPO_ROOT, "rev-parse", "HEAD").stdout.strip())
+    write_state(target, harness_revision=git(
+        harness_root, "rev-parse", "HEAD").stdout.strip())
     assert guard(target, harness_root) != []
 
     # The tree, dirtied without moving HEAD.
@@ -1410,7 +1470,7 @@ def test_the_guard_refuses_only_on_evidence_it_can_establish(
 
 
 def test_a_harness_root_that_is_not_a_repository_produces_no_false_refusal(
-    quiet_target, tmp_path,
+    quiet_target, harness_root, tmp_path,
 ):
     """The escalation records "" for a harness it cannot resolve, and the
     guard reads that as not-established rather than as a value to compare.
@@ -1419,14 +1479,10 @@ def test_a_harness_root_that_is_not_a_repository_produces_no_false_refusal(
     refuse — so what differs is the establishability of the harness revision.
     """
     target = quiet_target
-    fake = tmp_path / "harness-not-a-repo"
-    (fake / "workflows").mkdir(parents=True)
-    for shared in ("prompts", "schemas", "rules"):
-        (fake / shared).symlink_to(REPO_ROOT / shared)
-    write(fake / "workflows" / "story-workflow.json",
-          json.dumps(WORKFLOW, indent=2))
+    fake = conftest.materialize_workflow(WORKFLOW,
+                                         tmp_path / "harness-not-a-repo")
     assert story_coordinator._revision(fake) == ""
-    assert story_coordinator._revision(REPO_ROOT) != ""
+    assert story_coordinator._revision(harness_root) != ""
 
     escalate(target, fake)
     assert state_of(target)["harness_revision"] == ""
@@ -1438,8 +1494,8 @@ def test_a_harness_root_that_is_not_a_repository_produces_no_false_refusal(
 
     elsewhere = build_target(target.parent / "real-harness",
                              gitignore=".harness/runs/\n")
-    escalate(elsewhere, REPO_ROOT)
-    assert guard(elsewhere, REPO_ROOT) != []           # the control
+    escalate(elsewhere, harness_root)
+    assert guard(elsewhere, harness_root) != []        # the control
 
 
 def test_the_digest_neither_authorizes_nor_triggers_a_resume(
@@ -1493,13 +1549,13 @@ def test_the_resumed_stage_comes_from_state_json(target, harness_root):
     escalate(target, harness_root)
     assert state_of(target)["current_stage"] == VERIFIER_STAGE["name"]
     change_the_code(target)
-    write_state(target, current_stage="documenter")
+    write_state(target, current_stage=DOCUMENTING)
     ready_to_resume(target)
 
     code, resumed = run(target, harness_root)
 
     assert code == 0
-    assert resumed.calls == stages_from("documenter")
+    assert resumed.calls == stages_from(DOCUMENTING)
 
 
 def test_nothing_routes_on_the_summary_the_archive_or_the_baseline(
@@ -1594,7 +1650,7 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
     change_the_code(target)
     ready_to_resume(target)
     code, _ = run(target, harness_root, verdicts=[PASS],
-                  edits={"implementer": [edits_the_module]})
+                  edits={WRITING: [edits_the_module]})
     assert code == 0
 
     assert (captured / "tests" / "test_existing.py").read_text() == TEST_AT_HEAD
@@ -1758,7 +1814,7 @@ def test_the_new_fields_are_written_by_every_run_and_default_to_empty(
     """A fresh run records the digest at the start and leaves the other two
     empty until it ends. The control is the escalated run, where all three are
     populated."""
-    code, _ = run(target, harness_root, {"implementer": [edits_the_module]})
+    code, _ = run(target, harness_root, {WRITING: [edits_the_module]})
     assert code == 0
     completed = state_of(target)
     assert NEW_FIELDS <= set(completed)
@@ -1846,7 +1902,7 @@ def test_the_completion_commit_stages_the_same_way(target, harness_root):
     git(target, "add", "--", STRAY)
     git(target, "commit", "-q", "-m", "the developer's own file")
 
-    code, _ = run(target, harness_root, {"implementer": [edits_the_module]})
+    code, _ = run(target, harness_root, {WRITING: [edits_the_module]})
 
     assert code == 0
     assert "src/app.py" in files_in(target)
@@ -1860,13 +1916,13 @@ def test_the_completion_commit_stages_the_same_way(target, harness_root):
         run_dir_of(crashed),
         story_coordinator.RunState(story_id=STORY_ID,
                                    branch=f"story/{STORY_ID}",
-                                   status="running", current_stage="tester"),
+                                   status="running", current_stage=VALIDATING),
     )
     write(crashed / STRAY, "the crashed run's own unfinished work\n")
 
-    resumed = Runner(crashed, {"implementer": [edits_the_module]})
+    resumed = Runner(crashed, {WRITING: [edits_the_module]})
     assert run(crashed, harness_root, runner=resumed, verdicts=[PASS])[0] == 0
-    assert resumed.calls[0] == "tester"
+    assert resumed.calls[0] == VALIDATING
     assert STRAY in files_in(crashed)
 
 

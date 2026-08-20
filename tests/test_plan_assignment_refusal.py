@@ -88,6 +88,13 @@ import pytest
 from conftest import load_mutant, load_script
 import conftest
 
+# story-048 converted tests/test_revert_check.py to a workflow it builds for
+# itself, so the stage the borrowed `run` drives is that definition's rather
+# than the shipped one. The runs below name it through this import; the
+# *shipped* restriction those runs are checked against stays read off the
+# deployed workflow, which is this module's own subject.
+from test_revert_check import WRITING as WRITING_STAGE  # noqa: F401
+from test_revert_check import STAGE_NAMES as RUN_STAGE_NAMES  # noqa: F401
 from test_revert_check import (  # noqa: F401 - fixtures used by name
     APP_ADDITIVE,
     TEST_APP_AT_HEAD,
@@ -794,10 +801,16 @@ def test_the_three_paths_this_section_uses_are_what_it_assumes():
 
 
 def grant(target_root: Path, *creates: str) -> None:
-    """Append one stage_exceptions entry per granted value to the story."""
+    """Append one stage_exceptions entry per granted value to the story.
+
+    The stage named is the one of the definition these runs actually execute —
+    the workflow tests/test_revert_check.py builds, whose fixtures this module
+    borrows. A grant naming a stage the loaded workflow does not define is
+    refused at pre-flight, which is exactly the check story-032 added.
+    """
     block = "\nstage_exceptions:\n"
     for create in creates:
-        block += (f"  - stage: {RESTRICTED_STAGE}\n"
+        block += (f"  - stage: {WRITING_STAGE}\n"
                   f"    create: {create}\n"
                   "    reason: this story's own deliverable needs it\n")
     append_to_story(target_root, block)
@@ -854,7 +867,7 @@ def test_a_path_level_grant_exempts_that_path_from_the_revert_check(
     """
     grant(target, GRANTED_FILE)
 
-    code, _ = run(target, harness_root, {"implementer":
+    code, _ = run(target, harness_root, {WRITING_STAGE:
                                          unforced_edit_to_the_granted_file})
 
     assert code == 0
@@ -864,7 +877,7 @@ def test_a_path_level_grant_exempts_that_path_from_the_revert_check(
 def test_the_same_edit_without_the_grant_escalates_on_the_revert_check(
         target: Path, harness_root: Path, clone_calls):
     """The control for the exemption above."""
-    code, _ = run(target, harness_root, {"implementer":
+    code, _ = run(target, harness_root, {WRITING_STAGE:
                                          unforced_edit_to_the_granted_file})
 
     assert code != 0
@@ -883,7 +896,7 @@ def test_a_second_file_created_beneath_the_same_prefix_still_escalates(
     """
     grant(target, GRANTED_FILE)
 
-    code, _ = run(target, harness_root, {"implementer": creates_a_second_file})
+    code, _ = run(target, harness_root, {WRITING_STAGE: creates_a_second_file})
 
     assert code != 0
     reason = escalation_reason(target)
@@ -899,7 +912,7 @@ def test_a_second_file_edited_beneath_the_same_prefix_is_still_reverted(
     """The revert check still governs everything the grant does not name."""
     grant(target, GRANTED_FILE)
 
-    code, _ = run(target, harness_root, {"implementer":
+    code, _ = run(target, harness_root, {WRITING_STAGE:
                                          unforced_edits_to_both_files})
 
     assert code != 0
@@ -925,7 +938,7 @@ def test_a_whole_prefix_grant_behaves_exactly_as_it_does_today(
         record["created"] = [NEW_FILE]
         return record
 
-    code, _ = run(target, harness_root, {"implementer": everything})
+    code, _ = run(target, harness_root, {WRITING_STAGE: everything})
 
     assert code == 0
     assert reverted_paths(clone_calls) & {GRANTED_FILE, SECOND_FILE, NEW_FILE} \
@@ -942,20 +955,20 @@ def test_one_stage_exception_applied_event_per_grant_naming_the_granted_value(
     """Two grants of different granularity, two lines, each naming its value."""
     grant(target, GRANTED_FILE, RESTRICTED_PREFIX)
 
-    run(target, harness_root, {"implementer": unforced_edit_to_the_granted_file})
+    run(target, harness_root, {WRITING_STAGE: unforced_edit_to_the_granted_file})
 
     lines = stage_exception_events(target)
     assert len(lines) == 2, lines
-    assert any(line.endswith(f"{RESTRICTED_STAGE} may create {GRANTED_FILE}")
+    assert any(line.endswith(f"{WRITING_STAGE} may create {GRANTED_FILE}")
                for line in lines), lines
-    assert any(line.endswith(f"{RESTRICTED_STAGE} may create {RESTRICTED_PREFIX}")
+    assert any(line.endswith(f"{WRITING_STAGE} may create {RESTRICTED_PREFIX}")
                for line in lines), lines
 
 
 def test_a_run_with_no_grant_writes_no_such_event(target: Path,
                                                   harness_root: Path):
     """The control for the count above."""
-    run(target, harness_root, {"implementer": unforced_edit_to_the_granted_file})
+    run(target, harness_root, {WRITING_STAGE: unforced_edit_to_the_granted_file})
     assert stage_exception_events(target) == []
 
 
@@ -981,7 +994,7 @@ def test_the_enforced_list_reaches_both_checks_unshortened(
         monkeypatch.setattr(story_coordinator, name, spy)
 
     grant(target, RESTRICTED_PREFIX)
-    code, _ = run(target, harness_root, {"implementer":
+    code, _ = run(target, harness_root, {WRITING_STAGE:
                                          unforced_edit_to_the_granted_file})
 
     assert code == 0
@@ -1655,7 +1668,7 @@ def test_no_run_calls_either_plan_time_function(target: Path, harness_root: Path
     code, runner = run(target, harness_root, {})
 
     assert code == 0
-    assert runner.calls == STAGE_NAMES
+    assert runner.calls == RUN_STAGE_NAMES
     assert calls == []
     # Control one: the artifact this run carried is one the check does report,
     # so the silence above is the coordinator's and not the artifact's.

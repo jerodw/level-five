@@ -58,8 +58,71 @@ STORY_033 = "tests/test_story_033_validation.py"
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_PATH = Path(story_coordinator.__file__)
 COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
-WORKFLOW = conftest.shipped_workflow()
-VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *the clean-clone
+#: check* — that the coordinator runs the suite in a fresh clone of the
+#: committed tree, writes what it found, and routes a failure back to the stage
+#: the declaration names — and the stage list is an input to that question. The
+#: declaration is what the check turns on, and a built workflow states it as
+#: exactly as a deployed one does.
+#:
+#: Three assertions further down keep the shipped harness root, because their
+#: subject really is what this repository ships: that its implementer template
+#: carries the placeholder, and that every template it ships renders without a
+#: leftover. They take `shipped_harness_root` rather than `harness_root`.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        clean_clone={"result": conftest.CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="clean-clone-workflow",
+)
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "clean_clone" in s)
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition, so a converted case drives a
+    real coordinator loading a real file."""
+    return conftest.materialize_workflow(WORKFLOW,
+                                         tmp_path / "clean-clone-harness")
+
+
+@pytest.fixture
+def shipped_harness_root() -> Path:
+    """This repository, for the three assertions whose subject is what it
+    ships rather than what a run happens to be driven by."""
+    return REPO_ROOT
 #: Since story-028 the clean-clone declaration names both artifacts of the
 #: check — the result it writes and the stage a failure routes to — so the
 #: result name is read off `result` rather than off the bare declaration.
@@ -229,35 +292,35 @@ class Runner:
         self.calls.append(stage)
         self.prompts = getattr(self, "prompts", {})
         self.prompts.setdefault(stage, []).append(prompt)
-        if stage == "implementer":
+        if stage == WRITING:
             (self.target_root / "src" / "app.py").write_text(
                 f"print('hello')\n# {MARKER}\n", encoding="utf-8")
             (self.target_root / "probe.txt").write_text("probe\n", encoding="utf-8")
             (self.target_root / "ignored").mkdir(exist_ok=True)
             (self.target_root / "ignored" / "secret.txt").write_text(
                 "secret\n", encoding="utf-8")
-            write_json(self.run_dir / "changed-files.json", {
+            write_json(self.run_dir / conftest.CHANGED_FILES, {
                 "modified": ["src/app.py"], "created": ["probe.txt"], "deleted": [],
             })
-            (self.run_dir / "implementation-summary.md").write_text(
+            (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 2, "tests_run": 5,
                 "tests_passed": 5, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json", {
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES, {
                 "modified": [], "created": ["tests/test_app.py"], "deleted": [],
             })
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             # A failed verdict accounts for the guidance in force for the
             # attempt it judges, reporting every entry unmet — the ordinary
             # under-delivery case, which routes as it always has.
             verdict = conftest.answering_guidance(
                 self.verdicts.pop(0), self.run_dir)
-            write_json(self.run_dir / "verification-result.json", verdict)
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
             if verdict["status"] == "failed":
-                write_json(self.run_dir / "retry-guidance.json", {
+                write_json(self.run_dir / conftest.RETRY_GUIDANCE, {
                     "current_focus": [{
                         "focus": "fix the sample behavior",
                         "satisfied_when": "the sample behavior exists",
@@ -265,10 +328,10 @@ class Runner:
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })
-        elif stage == "documenter":
-            (self.run_dir / "documentation-report.md").write_text(
+        elif stage == DOCUMENTING:
+            (self.run_dir / conftest.DOCUMENTATION_REPORT).write_text(
                 "No changes needed.\n", encoding="utf-8")
-            write_json(self.run_dir / "documenter-changed-files.json",
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -822,7 +885,7 @@ def test_a_story_that_fails_only_once_committed_never_completes(
 def test_the_same_story_with_its_baseline_corrected_advances(green_run):
     code, runner, run_dir = green_run
     assert code == 0
-    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
+    assert runner.calls == STAGE_NAMES
     assert read_state(run_dir)["status"] == "completed"
 
 
@@ -862,10 +925,10 @@ def test_the_check_runs_after_the_documenter_stage_completes(green_run):
     passed = events.index("clean-clone-passed")
     documenter = next(
         index for index, entry in enumerate(history_of(run_dir))
-        if entry["event"] == "stage-completed" and entry["stage"] == "documenter")
+        if entry["event"] == "stage-completed" and entry["stage"] == DOCUMENTING)
     assert documenter < events.index("verification-passed") < passed
     assert passed < events.index("story-completed")
-    assert stages[passed] == "verifier"
+    assert stages[passed] == VERIFYING
 
 
 def test_a_green_run_advances_with_its_retry_count_and_artifacts_unchanged(
@@ -890,11 +953,7 @@ def test_a_clean_clone_failure_reroutes_to_the_workflows_declared_retry_stage(
 ):
     _, runner, _ = committed_failure_run
     retry_stage = VERIFIER_STAGE["clean_clone"]["retry_stage"]
-    assert runner.calls == [
-        "implementer", "tester", "documenter", "verifier",
-        "implementer", "tester", "documenter", "verifier",
-        "implementer", "tester", "documenter", "verifier",
-    ]
+    assert runner.calls == [*STAGE_NAMES, *STAGE_NAMES, *STAGE_NAMES]
     assert runner.calls[4] == retry_stage
 
 
@@ -916,8 +975,8 @@ def test_the_superseded_attempt_is_archived_under_the_number_its_prompts_use(
         archive = run_dir / "attempts" / f"attempt-{attempt}"
         assert (archive / "changed-files.json").is_file()
         assert (archive / "verification-result.json").is_file()
-        assert (run_dir / f"prompt-implementer-attempt-{attempt}.md").is_file()
-    assert (run_dir / "prompt-implementer-attempt-3.md").is_file()
+        assert (run_dir / f"prompt-{WRITING}-attempt-{attempt}.md").is_file()
+    assert (run_dir / f"prompt-{WRITING}-attempt-3.md").is_file()
 
 
 def test_the_ceiling_escalates_naming_the_check_and_the_failing_tests(
@@ -995,10 +1054,7 @@ def test_a_failed_verification_still_retries_exactly_as_before(
         "story-001", harness_root, story_target, runner) == 0
 
     run_dir = run_dir_of(story_target)
-    assert runner.calls == [
-        "implementer", "tester", "documenter",
-        "verifier", "implementer", "tester", "documenter", "verifier",
-    ]
+    assert runner.calls == [*STAGE_NAMES, *STAGE_NAMES]
     assert read_state(run_dir)["retry_count"] == 1
     entry = next(e for e in history_of(run_dir) if e["event"] == "verification-failed")
     assert entry["retry_decision"] == "retry"
@@ -1038,19 +1094,19 @@ def test_the_check_does_not_run_when_the_verifier_never_passes(
 
 
 def probe_harness(tmp_path: Path, name: str, mutate) -> Path:
-    """A harness root carrying a workflow this repository does not ship."""
-    root = tmp_path / name
-    root.mkdir()
-    for directory in ("prompts", "rules", "schemas"):
-        shutil.copytree(REPO_ROOT / directory, root / directory)
+    """A harness root carrying the built definition with one key mutated.
+
+    Since story-048 the definition it starts from is the one this module
+    builds rather than the one this repository deploys, and the templates it
+    carries come from the materializer rather than from a copy of `prompts/`,
+    which the built stage names would not have matched anyway.
+    """
     workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
-        if stage["name"] == "verifier":
+        if stage["name"] == VERIFYING:
             mutate(stage)
     workflow["name"] = name
-    (root / "workflows").mkdir()
-    write_json(root / "workflows" / f"{name}.json", workflow)
-    return root
+    return conftest.materialize_workflow(workflow, tmp_path / name)
 
 
 def test_a_workflow_that_omits_the_declaration_does_not_run_the_check(
@@ -1066,7 +1122,7 @@ def test_a_workflow_that_omits_the_declaration_does_not_run_the_check(
         "story-001", harness, story_target, runner) == 0
 
     run_dir = run_dir_of(story_target)
-    assert "documenter" in runner.calls
+    assert DOCUMENTING in runner.calls
     assert not (run_dir / ARTIFACT).exists()
     assert not any(
         e["event"].startswith("clean-clone") for e in history_of(run_dir))
@@ -1146,7 +1202,7 @@ def test_each_new_event_appears_in_both_renderings(committed_failure_run):
     for entry in history_of(run_dir):
         if entry["event"].startswith("clean-clone"):
             assert f"[{entry['timestamp']}] {entry['message']}" in lines
-            assert entry["stage"] == "verifier"
+            assert entry["stage"] == VERIFYING
             assert entry["artifacts"] == [ARTIFACT]
 
 
@@ -1207,7 +1263,7 @@ def test_the_retried_implementer_receives_the_clean_clone_evidence(
     committed_failure_run,
 ):
     _, runner, run_dir = committed_failure_run
-    prompt = (run_dir / "prompt-implementer-attempt-2.md").read_text(encoding="utf-8")
+    prompt = (run_dir / f"prompt-{WRITING}-attempt-2.md").read_text(encoding="utf-8")
     record = record_of(run_dir)
     assert "{{" not in prompt
     assert record["command"] in prompt
@@ -1215,8 +1271,11 @@ def test_the_retried_implementer_receives_the_clean_clone_evidence(
 
 
 def test_the_placeholder_exists_in_the_prompt_and_in_the_context(
-    story_target, harness_root,
+    story_target, shipped_harness_root,
 ):
+    """A subject read: the claim is about the template *this repository ships*,
+    so it keeps reading what this repository ships."""
+    harness_root = shipped_harness_root
     template = context_assembler.load_template(harness_root, "implementer.md")
     assert "{{clean_clone_result}}" in template
 
@@ -1229,8 +1288,10 @@ def test_the_placeholder_exists_in_the_prompt_and_in_the_context(
 
 
 def test_the_placeholder_renders_when_the_check_has_not_run(
-    story_target, harness_root,
+    story_target, shipped_harness_root,
 ):
+    """Same subject: the shipped template, rendered."""
+    harness_root = shipped_harness_root
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
     context = build_context_for(story_target, harness_root, run_dir)
@@ -1239,8 +1300,11 @@ def test_the_placeholder_renders_when_the_check_has_not_run(
 
 
 def test_every_prompt_still_renders_with_no_leftover_placeholder(
-    story_target, harness_root,
+    story_target, shipped_harness_root,
 ):
+    """Every template *this repository ships*, which only the shipped root
+    holds — a built harness carries the fixture's own templates instead."""
+    harness_root = shipped_harness_root
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
     context = build_context_for(story_target, harness_root, run_dir)
@@ -1318,7 +1382,7 @@ def test_a_coordinator_that_skips_the_check_is_caught(
     configure(story_target, test_command=BUGGY_TEST_COMMAND)
     runner = Runner(story_target, [PASS])
     assert module.run_story("story-001", harness_root, story_target, runner) == 0
-    assert "documenter" in runner.calls
+    assert DOCUMENTING in runner.calls
     assert not (run_dir_of(story_target) / ARTIFACT).exists()
 
 
@@ -1331,7 +1395,7 @@ def test_a_clone_without_the_story_committed_is_caught(
     configure(story_target, test_command=BUGGY_TEST_COMMAND)
     runner = Runner(story_target, [PASS])
     assert module.run_story("story-001", harness_root, story_target, runner) == 0
-    assert "documenter" in runner.calls
+    assert DOCUMENTING in runner.calls
 
 
 def test_an_ignored_verification_runner_is_caught(story_target, tmp_path):
@@ -1415,14 +1479,22 @@ def test_the_new_schema_ships_and_both_inventories_still_assert_equality():
 # than shadowing them.
 from test_revert_baseline import (  # noqa: E402, F401
     TEST_COMMAND,
+    WRITING as REVERT_WRITING,
     added_coverage,
     capture,
     fixture_and_a_test_that_needs_it,
     forced_repair,
-    harness_root,
     run,
     target,
     write,
+)
+#: Aliased rather than imported under its own name. Since story-048 that module
+#: drives its runs against a workflow it builds for itself, and so does this
+#: one; importing its `harness_root` unaliased would rebind this module's own
+#: fixture and point every run above at the other module's definition, whose
+#: name this module's target does not configure.
+from test_revert_baseline import (  # noqa: E402
+    harness_root as revert_harness_root,
 )
 from test_revert_baseline import (  # noqa: E402
     TESTS_CONFTEST_AT_HEAD,
@@ -1764,9 +1836,11 @@ def test_the_target_repository_is_only_read(dirty_transport_target, tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_a_forced_edit_still_reaches_the_permitted_verdict(target, harness_root):
+def test_a_forced_edit_still_reaches_the_permitted_verdict(
+    target, revert_harness_root,
+):
     """End to end: a rename the pre-existing test cannot survive."""
-    code, _ = run(target, harness_root, {"implementer": [forced_repair]})
+    code, _ = run(target, revert_harness_root, {REVERT_WRITING: [forced_repair]})
 
     assert code == 0
     record = revert_record_of(target)
@@ -1775,11 +1849,13 @@ def test_a_forced_edit_still_reaches_the_permitted_verdict(target, harness_root)
     assert record["paths"] == ["tests/test_app.py"]
 
 
-def test_an_unforced_edit_still_reaches_the_refused_verdict(target, harness_root):
+def test_an_unforced_edit_still_reaches_the_refused_verdict(
+    target, revert_harness_root,
+):
     """The control for the verdict above: the same run, an edit nothing forced,
     and the opposite decision. A check that permitted everything would be no
     check."""
-    code, _ = run(target, harness_root, {"implementer": [added_coverage]})
+    code, _ = run(target, revert_harness_root, {REVERT_WRITING: [added_coverage]})
 
     assert code == 2
     record = revert_record_of(target)

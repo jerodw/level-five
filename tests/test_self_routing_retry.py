@@ -79,9 +79,8 @@ from test_revert_check import (  # noqa: F401 - fixtures used by name
     ADDED_COVERAGE,
     append_to_story,
     configure,
-    harness_root,
 )
-from test_revert_check import target as suite_target  # noqa: F401
+from test_revert_check import target as _suite_repository  # noqa: F401
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
@@ -105,12 +104,68 @@ DEFAULT_BRANCH = "main"
 # Everything about the workflow is read off the workflow
 # --------------------------------------------------------------------------
 
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
-STAGES = WORKFLOW["stages"]
-STAGE_NAMES = [stage["name"] for stage in STAGES]
-
 #: The key this story introduced, named once so every read below agrees.
 BUDGET_KEY = "max_self_routes"
+BUDGET_REASON_KEY = f"{BUDGET_KEY}_reason"
+
+#: The prefix the writing stage is restricted from creating under. The same
+#: value tests/test_revert_check.py's target repository puts its suite in,
+#: because the runs below reuse that target.
+GOVERNED_PREFIX = "tests/"
+
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change, and this module is the one that made the
+#: case for it: story-047 granted the tester a `max_self_routes` budget — a
+#: correct one-line deployment change — and reddened four assertions here, in a
+#: module with nothing to say about whether that grant was right. How many
+#: stages this deployment budgets had become a fact this file enforced.
+#:
+#: What the file actually needs it states for itself, below: a budgeted stage
+#: the verifier's first retry route reaches, a stage budgeted more deeply than
+#: the common one, a stage budgeted not at all, a revert-check declaration and a
+#: clean-clone declaration. Every name is still derived rather than written.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        may_not_create=(GOVERNED_PREFIX,),
+        max_self_routes=1,
+        revert_check={"result": "revert-check-result.json",
+                      "baseline": "stage-baseline"},
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        max_self_routes=2,
+        max_self_routes_reason=(
+            "Two, where the other budgets here are one. A stage asked to "
+            "produce something it has not produced before fails mechanically "
+            "on a first attempt and again while correcting itself."),
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        max_self_routes=1,
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        clean_clone={"result": conftest.CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="self-routing-workflow",
+)
+
+STAGES = WORKFLOW["stages"]
+STAGE_NAMES = [stage["name"] for stage in STAGES]
 
 BUDGETED_DECLARATIONS = [s for s in STAGES if BUDGET_KEY in s]
 BUDGETLESS_DECLARATIONS = [s for s in STAGES if BUDGET_KEY not in s]
@@ -286,7 +341,7 @@ def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
                           capture_output=True, text=True, check=check)
 
 
-def build_target(root: Path, *, workflow: str = "story-workflow",
+def build_target(root: Path, *, workflow: str = WORKFLOW["name"],
                  test_command: str = "echo tests-ok") -> Path:
     for sub in (".harness/standards", ".harness/stories", ".harness/runs",
                 ".harness/logs", ".harness/docs"):
@@ -315,23 +370,43 @@ def make_target(tmp_path: Path):
     return make
 
 
-def probe_harness(tmp_path: Path, name: str, mutate) -> Path:
-    """A harness root carrying a workflow this repository does not ship.
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying the workflow built above.
 
-    Everything but the workflow is the shipped harness — the same prompts, the
-    same schemas, the same rules — so a run against it differs from a run
-    against this repository in exactly the declaration under test.
+    Its own, rather than tests/test_revert_check.py's: that module's definition
+    declares the revert check this one also needs and budgets nothing, and the
+    budgets are this module's whole subject.
     """
-    root = tmp_path / name
-    root.mkdir(parents=True, exist_ok=True)
-    for directory in ("prompts", "rules", "schemas"):
-        (root / directory).symlink_to(REPO_ROOT / directory)
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "self-routing-harness")
+
+
+@pytest.fixture
+def suite_target(_suite_repository: Path) -> Path:
+    """tests/test_revert_check.py's target — a real module under a real pytest
+    suite — reconfigured to run the workflow built above.
+
+    Reused rather than copied so a regression in the suite-target machinery
+    reddens both files; repointed because the two modules now build two
+    different definitions, and a target names the one it runs.
+    """
+    configure(_suite_repository, workflow=WORKFLOW["name"])
+    return _suite_repository
+
+
+def probe_harness(tmp_path: Path, name: str, mutate) -> Path:
+    """A harness root carrying a variant of the workflow built above.
+
+    Everything but the workflow is what `harness_root` carries — the same
+    generated prompt templates, the same schemas, the same rules — so a run
+    against it differs from a run against `harness_root` in exactly the
+    declaration under test.
+    """
     workflow = json.loads(json.dumps(WORKFLOW))
     workflow["name"] = name
     mutate(workflow)
-    (root / "workflows").mkdir()
-    write_json(root / "workflows" / f"{name}.json", workflow)
-    return root
+    return conftest.materialize_workflow(workflow, tmp_path / name)
 
 
 def without_budget(stage_name: str):
@@ -893,10 +968,10 @@ def test_one_failure_past_a_budget_above_one_escalates_naming_that_budget(
 # --------------------------------------------------------------------------
 
 
-#: The key recording the judgement behind a budget. A sibling of the budget
-#: rather than a comment, because JSON has none. Nothing in the coordinator
-#: reads it; it exists where a reader of the definition meets the number.
-BUDGET_REASON_KEY = f"{BUDGET_KEY}_reason"
+#: The key recording the judgement behind a budget is named beside the budget
+#: itself, at the top of this file. A sibling of the budget rather than a
+#: comment, because JSON has none. Nothing in the coordinator reads it; it
+#: exists where a reader of the definition meets the number.
 
 
 def outliers_missing_a_reason(stages: list[dict]) -> list[str]:
@@ -917,7 +992,15 @@ def outliers_missing_a_reason(stages: list[dict]) -> list[str]:
 
 
 def test_every_budget_that_is_not_the_common_one_records_why():
-    """The rule over the shipped definition, whose budgets are its own subject."""
+    """The rule over the definition these runs execute.
+
+    That *this repository's deployed* budgets satisfy the same rule is a
+    question about what it ships, and story-048 moved it to
+    tests/test_shipped_workflow_is_valid.py along with the assertion that a
+    recorded reason states the number it is explaining. Asking it here, of a
+    definition this module wrote, would have made the rule enforce its own
+    fixture.
+    """
     assert outliers_missing_a_reason(STAGES) == []
 
 
@@ -938,23 +1021,10 @@ def test_the_same_check_reports_an_outlier_with_its_reason_removed():
     assert outliers_missing_a_reason(probe) == []
 
 
-def test_a_recorded_reason_states_the_number_it_is_explaining():
-    """A reason that never mentions the budget it justifies would satisfy the
-    check above while explaining nothing, so the shipped reasons are read.
-
-    Digits or the English word, because a sentence about a budget of two reads
-    better as "two" and either spelling states the number.
-    """
-    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
-    declared = [s for s in STAGES if BUDGET_KEY in s]
-    common = min(s[BUDGET_KEY] for s in declared)
-    for stage in declared:
-        if stage[BUDGET_KEY] == common:
-            continue
-        reason = stage[BUDGET_REASON_KEY].lower()
-        budget = stage[BUDGET_KEY]
-        assert str(budget) in reason or words.get(budget, "\0") in reason, \
-            stage["name"]
+#: Moved by story-048 to tests/test_shipped_workflow_is_valid.py, where its
+#: subject lives: "a recorded reason states the number it is explaining" is a
+#: statement about the reasons *this repository deploys*, and asking it of a
+#: definition this module wrote would have checked this file's own prose.
 
 
 # --------------------------------------------------------------------------
@@ -1333,14 +1403,14 @@ PLACEHOLDER = "{{self_route_result}}"
 STATEMENT_PHRASE = "exited without completing"
 
 
-def rendered_placeholder(prompt: str, prompt_file: str) -> str:
+def rendered_placeholder(prompt: str, prompt_file: str, root: Path) -> str:
     """What the self-route placeholder rendered to in one prompt.
 
     The anchors come out of the template itself rather than being written
     here, so a reworded section moves both at once and this keeps reading the
     right span.
     """
-    template = context_assembler.load_template(REPO_ROOT, prompt_file)
+    template = context_assembler.load_template(root, prompt_file)
     before, after = template.split(PLACEHOLDER)
     lead = before.rstrip("\n").splitlines()[-1]
     trail = next((line for line in after.splitlines() if line.strip()), None)
@@ -1349,9 +1419,11 @@ def rendered_placeholder(prompt: str, prompt_file: str) -> str:
     return span.strip("\n")
 
 
-def test_every_workflow_stage_template_carries_the_placeholder_once():
+def test_every_workflow_stage_template_carries_the_placeholder_once(harness_root):
+    """Over the templates these runs render, under the harness root the built
+    definition was materialized into."""
     for stage in STAGES:
-        template = context_assembler.load_template(REPO_ROOT, stage["prompt"])
+        template = context_assembler.load_template(harness_root, stage["prompt"])
         assert template.count(PLACEHOLDER) == 1, stage["name"]
 
 
@@ -1371,16 +1443,16 @@ def prompted(make_target, harness_root):
     target_root = make_target("prompted")
     code, runner = drive(target_root, harness_root, **crash_plan(BUDGETED, 1))
     assert code == 0
-    return target_root, runner
+    return target_root, runner, harness_root
 
 
 def test_the_re_run_prompt_carries_the_coordinators_own_evidence(prompted):
     """The prompt the re-run was given holds the artifact the run directory
     holds — one thing, said in two places, not two derivations."""
-    target_root, runner = prompted
+    target_root, runner, harness_root = prompted
     prompt_file = declaration_of(BUDGETED)["prompt"]
     stage_prompts = [p for stage, p in runner.prompts if stage == BUDGETED]
-    rendered = rendered_placeholder(stage_prompts[1], prompt_file)
+    rendered = rendered_placeholder(stage_prompts[1], prompt_file, harness_root)
     _, record = self_route_records(target_root)[0]
     assert json.loads(rendered) == record
     assert json.loads(rendered)["statement"] == record["statement"]
@@ -1390,10 +1462,11 @@ def test_the_re_run_prompt_carries_the_coordinators_own_evidence(prompted):
 def test_the_first_invocations_prompt_carries_none(prompted):
     """The control that the reader above is looking at the right span: the
     same stage's first prompt, in the same run, renders None there."""
-    _, runner = prompted
+    _, runner, harness_root = prompted
     prompt_file = declaration_of(BUDGETED)["prompt"]
     stage_prompts = [p for stage, p in runner.prompts if stage == BUDGETED]
-    assert rendered_placeholder(stage_prompts[0], prompt_file) == "None"
+    assert rendered_placeholder(stage_prompts[0], prompt_file,
+                                harness_root) == "None"
 
 
 def test_no_later_stage_renders_evidence_for_a_self_route_it_did_not_take(
@@ -1401,13 +1474,14 @@ def test_no_later_stage_renders_evidence_for_a_self_route_it_did_not_take(
 ):
     """Every stage that ran after the budgeted one self-routed earlier in the
     same run renders None, so the evidence does not leak forward."""
-    _, runner = prompted
+    _, runner, harness_root = prompted
     seen_after = [(stage, prompt) for stage, prompt in runner.prompts
                   if stage != BUDGETED]
     assert seen_after, "no other stage ran, so this would be vacuous"
     for stage, prompt in seen_after:
         prompt_file = declaration_of(stage)["prompt"]
-        assert rendered_placeholder(prompt, prompt_file) == "None", stage
+        assert rendered_placeholder(prompt, prompt_file,
+                                    harness_root) == "None", stage
 
 
 def test_the_prompt_the_evidence_reaches_is_the_try_suffixed_file_on_disk(
@@ -1415,7 +1489,7 @@ def test_the_prompt_the_evidence_reaches_is_the_try_suffixed_file_on_disk(
 ):
     """The prompt filename and the evidence filename agree, and both name the
     same try — so a reader of the run directory can put them together."""
-    target_root, _ = prompted
+    target_root, _, _ = prompted
     name, record = self_route_records(target_root)[0]
     assert name == (f"self-route-{BUDGETED}-attempt-{record['attempt']}"
                     f"-try-{record['try']}.json")

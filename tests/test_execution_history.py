@@ -39,8 +39,55 @@ from conftest import commit_setup, first_retry_route, load_mutant, story_diff
 import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = conftest.shipped_workflow()
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *what the run
+#: records* — one event per write, in one order, naming the artifacts the stage
+#: that produced them declared — and the stage list is an input to that
+#: question rather than its subject.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="execution-history-workflow",
+)
+
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(WORKFLOW, tmp_path / "history-harness")
+
+
 #: Since story-028 a recommended retry must name a category the workflow's
 #: retry_routing table defines, or the coordinator escalates rather than
 #: routing it. Read off the loaded workflow, so this file still names no
@@ -89,31 +136,31 @@ class HistoryRunner:
             history = self.run_dir / "execution-history.json"
             if history.is_file():
                 history.unlink()
-        if stage == "implementer":
-            write_json(self.run_dir / "changed-files.json", {
+        if stage == WRITING:
+            write_json(self.run_dir / conftest.CHANGED_FILES, {
                 "modified": ["src/app.py"], "created": [], "deleted": [],
             })
-            (self.run_dir / "implementation-summary.md").write_text(
+            (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
             for name in self.extra_outputs:
                 (self.run_dir / name).write_text("extra output\n", encoding="utf-8")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 2, "tests_run": 5,
                 "tests_passed": 5, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json", {
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES, {
                 "modified": [], "created": ["tests/test_app.py"], "deleted": [],
             })
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             # A failed verdict accounts for the guidance in force for the
             # attempt it judges, reporting every entry unmet — the ordinary
             # under-delivery case, which routes as it always has.
             verdict = conftest.answering_guidance(
                 self.verdicts.pop(0), self.run_dir)
-            write_json(self.run_dir / "verification-result.json", verdict)
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
             if verdict["status"] == "failed":
-                write_json(self.run_dir / "retry-guidance.json", {
+                write_json(self.run_dir / conftest.RETRY_GUIDANCE, {
                     "current_focus": [{
                         "focus": "fix the sample behavior",
                         "satisfied_when": "the sample behavior exists",
@@ -121,10 +168,10 @@ class HistoryRunner:
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })
-        elif stage == "documenter":
-            (self.run_dir / "documentation-report.md").write_text(
+        elif stage == DOCUMENTING:
+            (self.run_dir / conftest.DOCUMENTATION_REPORT).write_text(
                 "No changes needed.\n", encoding="utf-8")
-            write_json(self.run_dir / "documenter-changed-files.json",
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -221,8 +268,7 @@ def test_the_retried_run_records_both_attempts_in_one_stream(retry_then_pass):
     started = [e["stage"] for e in history if e["event"] == "stage-started"]
     assert started == runner.calls
     assert started == [
-        "implementer", "tester", "documenter",
-        "verifier", "implementer", "tester", "documenter", "verifier",
+        *STAGE_NAMES, *STAGE_NAMES,
     ]
     assert [e["sequence"] for e in history] == list(range(1, len(history) + 1))
     # Not a stage output, so the retry archive neither copies nor overwrites it.
@@ -315,7 +361,7 @@ def test_a_failed_verification_entry_carries_the_verifier_outcome(retry_then_pas
     failed = [e for e in history_of(run_dir) if e["event"] == "verification-failed"]
     assert len(failed) == 1
     assert failed[0]["verifier_outcome"] == "failed"
-    assert failed[0]["stage"] == "verifier"
+    assert failed[0]["stage"] == VERIFYING
 
 
 def test_a_rerouted_retry_entry_carries_the_decision_and_its_reason(retry_then_pass):
@@ -372,13 +418,13 @@ def test_a_resumed_run_continues_the_one_stream_it_left_behind(
     run_dir.mkdir(parents=True)
     (run_dir / "verification").mkdir()
     story_coordinator.save_state(run_dir, story_coordinator.RunState(
-        story_id="story-001", branch="story/story-001", current_stage="tester"))
+        story_id="story-001", branch="story/story-001", current_stage=VALIDATING))
     story_coordinator.append_event(
         run_dir, "implementer stage started", kind="stage-started",
-        stage="implementer")
+        stage=WRITING)
     story_coordinator.append_event(
         run_dir, "implementer stage completed", kind="stage-completed",
-        stage="implementer", artifacts=["changed-files.json"], duration_seconds=0.5)
+        stage=WRITING, artifacts=[conftest.CHANGED_FILES], duration_seconds=0.5)
     before = len(history_of(run_dir))
 
     runner = HistoryRunner(target_root, [PASS])
@@ -394,7 +440,7 @@ def test_a_resumed_run_continues_the_one_stream_it_left_behind(
 
     resumed = history[before]
     assert resumed["event"] == "resumed"
-    assert resumed["stage"] == "tester"
+    assert resumed["stage"] == VALIDATING
     assert resumed["sequence"] == before + 1
     assert schema_validator.validate(history, HISTORY_SCHEMA) == []
 
@@ -414,7 +460,7 @@ def test_an_escalation_before_the_verifier_still_writes_its_entry(
         "story-001", harness_root, target_root, runner) == 2
     history = history_of(run_dir_of(target_root))
     assert history[-1]["event"] == "escalated"
-    assert history[-1]["stage"] == "implementer"
+    assert history[-1]["stage"] == WRITING
     assert "verifier_outcome" not in history[-1]
     assert log_lines(run_dir_of(target_root))[-1].endswith(history[-1]["message"])
 
@@ -436,7 +482,7 @@ def test_a_stage_completion_names_that_stages_declared_outputs(retry_then_pass):
 def test_the_verifier_entries_name_the_verifiers_declared_outputs(retry_then_pass):
     _, run_dir = retry_then_pass
     declared = next(
-        s for s in WORKFLOW["stages"] if s["name"] == "verifier")["outputs"]
+        s for s in WORKFLOW["stages"] if s["name"] == VERIFYING)["outputs"]
     for entry in history_of(run_dir):
         if entry["event"] in ("verification-passed", "verification-failed"):
             assert entry["artifacts"] == declared
@@ -444,20 +490,14 @@ def test_the_verifier_entries_name_the_verifiers_declared_outputs(retry_then_pas
 
 @pytest.fixture
 def probe_harness_root(tmp_path: Path) -> Path:
-    """A harness root carrying a workflow this repository does not ship, whose
-    implementer declares one extra output."""
-    root = tmp_path / "probe-harness"
-    root.mkdir()
-    for directory in ("prompts", "rules", "schemas"):
-        shutil.copytree(REPO_ROOT / directory, root / directory)
+    """A harness root carrying a variant of the workflow built above, whose
+    writing stage declares one extra output."""
     workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
-        if stage["name"] == "implementer":
+        if stage["name"] == WRITING:
             stage["outputs"] = [*stage["outputs"], "design-notes.md"]
     workflow["name"] = "history-probe-workflow"
-    (root / "workflows").mkdir()
-    write_json(root / "workflows" / "history-probe-workflow.json", workflow)
-    return root
+    return conftest.materialize_workflow(workflow, tmp_path / "probe-harness")
 
 
 def test_an_artifact_list_no_orchestration_code_knows_about_reaches_the_entry(
@@ -468,7 +508,7 @@ def test_an_artifact_list_no_orchestration_code_knows_about_reaches_the_entry(
     config = target_root / ".harness" / "config.yaml"
     config.write_text(
         config.read_text(encoding="utf-8").replace(
-            "workflow: story-workflow", "workflow: history-probe-workflow"),
+            f"workflow: {WORKFLOW['name']}", "workflow: history-probe-workflow"),
         encoding="utf-8",
     )
     commit_setup(target_root, "run the history probe workflow")
@@ -481,10 +521,11 @@ def test_an_artifact_list_no_orchestration_code_knows_about_reaches_the_entry(
 
     entry = next(
         e for e in history_of(run_dir_of(target_root))
-        if e["event"] == "stage-completed" and e["stage"] == "implementer"
+        if e["event"] == "stage-completed" and e["stage"] == WRITING
     )
     assert entry["artifacts"] == [
-        "changed-files.json", "implementation-summary.md", "design-notes.md"]
+        conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY,
+        "design-notes.md"]
 
 
 def _function_body(name: str) -> str:
@@ -547,7 +588,7 @@ def test_append_event_is_the_only_writer_of_the_history_file():
 def test_the_log_line_and_the_entry_are_written_by_the_same_call(tmp_path: Path):
     story_coordinator.append_event(tmp_path, "a bare note")
     story_coordinator.append_event(
-        tmp_path, "a structured note", kind="stage-completed", stage="tester",
+        tmp_path, "a structured note", kind="stage-completed", stage=VALIDATING,
         artifacts=["test-results.json"], duration_seconds=1.5,
     )
     lines = log_lines(tmp_path)
@@ -569,7 +610,7 @@ def test_a_call_with_nothing_extra_to_say_is_unchanged(tmp_path: Path):
 
 def test_optional_values_are_omitted_rather_than_written_as_null(tmp_path: Path):
     story_coordinator.append_event(
-        tmp_path, "partial", kind="verification-failed", stage="verifier",
+        tmp_path, "partial", kind="verification-failed", stage=VERIFYING,
         verifier_outcome="failed",
     )
     entry = history_of(tmp_path)[0]
@@ -717,7 +758,7 @@ def test_the_retry_ceiling_and_its_counters_are_untouched(escalated):
     assert state["status"] == "escalated"
     assert state["retry_count"] == 2
     assert state["verification_iterations"] == 3
-    assert runner.calls.count("implementer") == 3
+    assert runner.calls.count(WRITING) == 3
     # The run did not finish. Stated as the completion report's
     # absence rather than as the documenter never running: since
     # story-045 the documenter runs before the verifier, so an
@@ -870,9 +911,9 @@ def test_a_history_that_restarts_on_resume_is_caught(
     run_dir.mkdir(parents=True)
     (run_dir / "verification").mkdir()
     module.save_state(run_dir, module.RunState(
-        story_id="story-001", branch="story/story-001", current_stage="tester"))
+        story_id="story-001", branch="story/story-001", current_stage=VALIDATING))
     module.append_event(run_dir, "implementer stage started", kind="stage-started",
-                        stage="implementer")
+                        stage=WRITING)
 
     runner = HistoryRunner(target_root, [PASS])
     assert module.run_story("story-001", harness_root, target_root, runner) == 0

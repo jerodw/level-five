@@ -35,6 +35,7 @@ Nothing here invokes a model: every run goes through a fake agent runner and
 every clone source is a local filesystem path.
 """
 import ast
+import copy
 import inspect
 import json
 import re
@@ -58,8 +59,57 @@ from agent_runner import AgentResult
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = REPO_ROOT / "orchestration"
 
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
-IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "implementer")
+#: The tests directory the target below configures, and the prefix the writing
+#: stage declares it may not create. Written once so the config and the
+#: declaration cannot drift apart, and written resolved rather than as a
+#: `{{tests_dir}}` token, because several cases here hand the declaration to
+#: `capture_stage_baseline` directly, outside the load that expands tokens.
+TESTS_DIR = "tests/"
+
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *the revert check
+#: and the baseline it decides against* — that one declaration switches both on
+#: together, that the baseline is keyed by the stage that declared it, that
+#: removing the key disables both — and the stage list is an input to that.
+#: Every one of those is a statement about what a workflow declares, which is
+#: exactly what a built workflow can state, and the two cases below that need a
+#: definition the coordinator has never seen now build one instead of mutating
+#: a copy of the deployed file.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"},
+        may_not_create=(TESTS_DIR,),
+        revert_check={"result": "revert-check-result.json",
+                      "baseline": "stage-baseline"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        clean_clone={"result": conftest.CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="revert-baseline-workflow",
+)
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+IMPLEMENTER_STAGE = WORKFLOW["stages"][0]
 
 #: Both names are read off the declaration, never spelled here, for the same
 #: reason the coordinator may not spell them: this story's point is that one
@@ -93,7 +143,7 @@ TEST_COMMAND = shlex.join([sys.executable, "-m", "pytest", "tests", "-q",
                            "-p", "no:cacheprovider"])
 
 CONFIG = f"""\
-workflow: story-workflow
+workflow: {WORKFLOW['name']}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -103,7 +153,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {TEST_COMMAND}
-tests_dir: tests/
+tests_dir: {TESTS_DIR}
 """
 
 # --------------------------------------------------------------------------
@@ -247,8 +297,10 @@ def target(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def harness_root() -> Path:
-    return REPO_ROOT
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying the definition built above, so a converted case
+    drives a real coordinator loading a real file."""
+    return conftest.materialize_workflow(WORKFLOW, tmp_path / "revert-harness")
 
 
 # --------------------------------------------------------------------------
@@ -375,23 +427,24 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None):
         self.calls.append(stage)
-        if stage == "implementer":
-            write_json(self.run_dir / "changed-files.json", self._record(stage))
-            write(self.run_dir / "implementation-summary.md", "Did it.\n")
-        elif stage == "tester":
+        if stage == WRITING:
+            write_json(self.run_dir / conftest.CHANGED_FILES,
+                       self._record(stage))
+            write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
+        elif stage == VALIDATING:
             record = self._record(stage)
-            write_json(self.run_dir / "test-results.json", {
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 2,
                 "tests_passed": 2, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json", record)
-        elif stage == "verifier":
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES, record)
+        elif stage == VERIFYING:
             seen = self.calls.count(stage) - 1
-            write_json(self.run_dir / "verification-result.json",
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT,
                        self._nth(self.verdicts, seen))
-        elif stage == "documenter":
-            write(self.run_dir / "documentation-report.md", "Nothing.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+        elif stage == DOCUMENTING:
+            write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         if self.interrupt == (stage, self.calls.count(stage)):
             raise KeyboardInterrupt(f"{stage} interrupted")
@@ -446,17 +499,23 @@ def suite_in(directory: Path) -> int:
 
 
 def mirror_harness(tmp_path: Path, workflow: dict) -> Path:
-    """A harness root identical to the real one but for its workflow file."""
-    fake = tmp_path / "harness"
-    (fake / "workflows").mkdir(parents=True)
-    for shared in ("prompts", "schemas", "rules"):
-        (fake / shared).symlink_to(REPO_ROOT / shared)
-    write_json(fake / "workflows" / "story-workflow.json", workflow)
-    return fake
+    """A harness root carrying a definition derived from the one built above.
+
+    The two callers each mutate the single declaration their case is about and
+    hand the result here, so the coordinator loads a workflow it has never seen
+    — which is the point of both cases. Since story-048 what they mutate is a
+    copy of the *built* definition rather than of the deployed one.
+    """
+    return conftest.materialize_workflow(workflow, tmp_path / "harness")
 
 
-def loaded_workflow() -> dict:
-    return conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+def probe_workflow() -> dict:
+    """A fresh copy of the built definition for a caller to mutate.
+
+    Keeps the built name, so the target's configuration — which names it —
+    still finds it in whichever harness root the caller materializes it into.
+    """
+    return copy.deepcopy(WORKFLOW)
 
 
 def executable_source(text: str) -> str:
@@ -604,8 +663,8 @@ def test_the_function_appended_to_the_run_created_file_needed_no_change(tmp_path
 # story-018's run shape, decided
 # --------------------------------------------------------------------------
 
-RETRY_SHAPE = {"implementer": [module_only, repairs_the_new_test],
-               "tester": [creates_the_broken_new_test, unchanged]}
+RETRY_SHAPE = {WRITING: [module_only, repairs_the_new_test],
+               VALIDATING: [creates_the_broken_new_test, unchanged]}
 
 
 def test_a_forced_edit_to_a_file_created_earlier_in_the_run_is_permitted(
@@ -617,15 +676,14 @@ def test_a_forced_edit_to_a_file_created_earlier_in_the_run_is_permitted(
     code, runner = run(target, harness_root, RETRY_SHAPE, [FAIL, PASS])
     assert code == 0
     assert state_of(target)["status"] == "completed"
-    assert runner.calls == ["implementer", "tester", "documenter",
-                            "verifier", "implementer", "tester", "documenter", "verifier"]
+    assert runner.calls == [*STAGE_NAMES, *STAGE_NAMES]
 
     record = record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is True
     assert record["exit_code"] != 0
     assert record["paths"] == ["tests/test_new.py"]
-    assert record["baseline"].endswith("implementer")
+    assert record["baseline"].endswith(WRITING)
 
 
 def test_the_run_records_which_run_created_path_was_reverted_and_why(
@@ -636,7 +694,7 @@ def test_the_run_records_which_run_created_path_was_reverted_and_why(
     events = (run_dir_of(target) / "events.log").read_text()
     permitting = [line for line in events.splitlines() if "permitted" in line]
     assert len(permitting) == 1
-    assert "implementer" in permitting[0]
+    assert WRITING in permitting[0]
     assert PREFIX in permitting[0]
     assert "tests/test_new.py" in permitting[0]
     assert record_of(target)["output_tail"]
@@ -649,14 +707,13 @@ def test_an_additive_edit_to_a_file_created_earlier_in_the_run_is_escalated(
     the implementer did to the tester's file differs."""
     code, runner = run(
         target, harness_root,
-        {"implementer": [module_only, adds_to_the_new_test],
-         "tester": [creates_the_passing_new_test, unchanged]},
+        {WRITING: [module_only, adds_to_the_new_test],
+         VALIDATING: [creates_the_passing_new_test, unchanged]},
         [FAIL, PASS],
     )
     assert code == 2
     assert state_of(target)["status"] == "escalated"
-    assert runner.calls == ["implementer", "tester", "documenter",
-                            "verifier", "implementer"]
+    assert runner.calls == [*STAGE_NAMES, WRITING]
 
     record = record_of(target)
     assert record["ran"] is True
@@ -666,7 +723,7 @@ def test_an_additive_edit_to_a_file_created_earlier_in_the_run_is_escalated(
 
     events, summary = evidence(target)
     for text in (events, summary):
-        assert "implementer" in text
+        assert WRITING in text
         assert PREFIX in text
         assert "tests/test_new.py" in text
 
@@ -688,7 +745,7 @@ def test_the_baseline_of_the_retry_holds_the_file_the_tester_left(
     is the condition the check had to survive.
     """
     assert run(target, harness_root, RETRY_SHAPE, [FAIL, PASS])[0] == 0
-    captured = baseline_at(target, "implementer") / "tests" / "test_new.py"
+    captured = baseline_at(target, WRITING) / "tests" / "test_new.py"
     assert captured.read_text() == TEST_NEW_BROKEN
 
     tracked = git(target, "ls-tree", "-r", "--name-only", "HEAD^", "--",
@@ -705,7 +762,7 @@ def test_the_baseline_of_the_retry_holds_the_file_the_tester_left(
 def test_a_forced_edit_to_a_pre_existing_governed_path_is_still_permitted(
     target, harness_root,
 ):
-    code, _ = run(target, harness_root, {"implementer": [forced_repair]})
+    code, _ = run(target, harness_root, {WRITING: [forced_repair]})
     assert code == 0
     record = record_of(target)
     assert record["permitted"] is True
@@ -715,7 +772,7 @@ def test_a_forced_edit_to_a_pre_existing_governed_path_is_still_permitted(
 def test_an_additive_edit_to_a_pre_existing_governed_path_is_still_escalated(
     target, harness_root,
 ):
-    code, _ = run(target, harness_root, {"implementer": [added_coverage]})
+    code, _ = run(target, harness_root, {WRITING: [added_coverage]})
     assert code == 2
     record = record_of(target)
     assert record["permitted"] is False
@@ -780,7 +837,7 @@ def test_the_decision_that_deletion_reaches_is_a_real_one(target, harness_root):
     modification so the ownership check lets it through, is decided: nothing
     forced either edit, and the run escalates."""
     code, _ = run(target, harness_root,
-                  {"implementer": [fixture_and_a_test_that_needs_it]})
+                  {WRITING: [fixture_and_a_test_that_needs_it]})
     assert code == 2
     record = record_of(target)
     assert record["ran"] is True
@@ -887,7 +944,7 @@ def test_a_stage_declaring_the_check_with_no_baseline_escalates_naming_it(
     target, harness_root,
 ):
     code, _ = run(target, harness_root,
-                  {"implementer": [repair_then_discard_the_baseline]})
+                  {WRITING: [repair_then_discard_the_baseline]})
     assert code == 2
     assert state_of(target)["status"] == "escalated"
 
@@ -906,7 +963,7 @@ def test_the_same_run_with_its_baseline_intact_decides(target, harness_root):
     """The control for the refusal above: the identical edit, the identical
     record, and the only difference is that the baseline is still there. A
     check that refused everything could not pass both."""
-    code, _ = run(target, harness_root, {"implementer": [forced_repair]})
+    code, _ = run(target, harness_root, {WRITING: [forced_repair]})
     assert code == 0
     record = record_of(target)
     assert record["ran"] is True
@@ -920,7 +977,7 @@ def test_a_missing_baseline_falls_back_to_nothing(target, harness_root):
     the working tree passes — so a run that refuses instead is evidence that
     neither fallback exists."""
     assert run(target, harness_root,
-               {"implementer": [repair_then_discard_the_baseline]})[0] == 2
+               {WRITING: [repair_then_discard_the_baseline]})[0] == 2
     assert record_of(target)["ran"] is False
 
 
@@ -954,7 +1011,7 @@ def test_a_clone_that_cannot_be_built_still_escalates_naming_why(
         raise RuntimeError("the clone could not be built")
 
     monkeypatch.setattr(story_coordinator, "_build_clone", unbuildable)
-    code, _ = run(target, harness_root, {"implementer": [forced_repair]})
+    code, _ = run(target, harness_root, {WRITING: [forced_repair]})
     assert code == 2
     record = record_of(target)
     assert record["ran"] is False
@@ -973,11 +1030,11 @@ def test_a_second_capture_for_the_same_stage_does_not_overwrite(
     target, tmp_path,
 ):
     scratch = tmp_path / "run"
-    first = capture(target, scratch, stage="implementer")
+    first = capture(target, scratch, stage=WRITING)
     assert (first / "tests" / "test_app.py").read_text() == TEST_APP_AT_HEAD
 
     forced_repair(target, run_dir_of(target))
-    again = capture(target, scratch, stage="implementer")
+    again = capture(target, scratch, stage=WRITING)
 
     assert again == first
     assert (again / "tests" / "test_app.py").read_text() == TEST_APP_AT_HEAD
@@ -986,7 +1043,7 @@ def test_a_second_capture_for_the_same_stage_does_not_overwrite(
     # rule, not a capture that has stopped reading the tree. Since story-037
     # the directory is keyed by stage alone, so a fresh run directory is what
     # distinguishes it rather than a different attempt number.
-    later = capture(target, tmp_path / "fresh", stage="implementer")
+    later = capture(target, tmp_path / "fresh", stage=WRITING)
     assert (later / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
 
 
@@ -1009,22 +1066,22 @@ def test_a_re_entered_stage_is_decided_against_the_baseline_it_first_found(
     """A run interrupted inside the implementer and resumed there. The stage
     is re-entered at the same attempt with its edits already in the tree, and
     the reused baseline is what makes the decision honest."""
-    interrupted = Runner(target, {"implementer": [forced_repair]},
-                         interrupt=("implementer", 1))
+    interrupted = Runner(target, {WRITING: [forced_repair]},
+                         interrupt=(WRITING, 1))
     with pytest.raises(KeyboardInterrupt):
         story_coordinator.run_story("story-001", harness_root, target, interrupted)
     assert state_of(target)["status"] == "running"
     assert (target / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
 
-    code, resumed = run(target, harness_root, {"implementer": [forced_repair]})
+    code, resumed = run(target, harness_root, {WRITING: [forced_repair]})
     assert code == 0
-    assert resumed.calls[0] == "implementer"
+    assert resumed.calls[0] == WRITING
     record = record_of(target)
     assert record["permitted"] is True
-    assert record["baseline"].endswith("implementer")
+    assert record["baseline"].endswith(WRITING)
     # The baseline it decided against is the one taken before the first
     # invocation, not the state the interrupted stage left behind.
-    captured = baseline_at(target, "implementer") / "tests" / "test_app.py"
+    captured = baseline_at(target, WRITING) / "tests" / "test_app.py"
     assert captured.read_text() == TEST_APP_AT_HEAD
 
 
@@ -1055,12 +1112,12 @@ def test_removing_the_declaration_disables_the_capture_and_the_check(
     """One key, both mechanisms, no code change: the record that escalates
     against the shipped workflow completes against the same workflow with
     `revert_check` removed, and no baseline is taken at all."""
-    workflow = loaded_workflow()
+    workflow = probe_workflow()
     for stage in workflow["stages"]:
         stage.pop("revert_check", None)
     fake_root = mirror_harness(tmp_path / "no-declaration", workflow)
 
-    code, _ = run(target, fake_root, {"implementer": [added_coverage]})
+    code, _ = run(target, fake_root, {WRITING: [added_coverage]})
     assert code == 0
     run_dir = run_dir_of(target)
     assert not (run_dir / ARTIFACT).exists()
@@ -1071,11 +1128,11 @@ def test_with_the_declaration_the_same_run_captures_and_escalates(
     target, harness_root,
 ):
     """The control for the removal above."""
-    code, _ = run(target, harness_root, {"implementer": [added_coverage]})
+    code, _ = run(target, harness_root, {WRITING: [added_coverage]})
     assert code == 2
     run_dir = run_dir_of(target)
     assert (run_dir / ARTIFACT).exists()
-    assert (run_dir / BASELINE / "implementer").is_dir()
+    assert (run_dir / BASELINE / WRITING).is_dir()
 
 
 def test_moving_the_declaration_moves_the_capture_and_the_check(
@@ -1084,39 +1141,49 @@ def test_moving_the_declaration_moves_the_capture_and_the_check(
     """A workflow the coordinator has never seen, governing a different
     prefix on a different stage. The baseline follows the declaration, keyed
     by the stage that declared it."""
-    workflow = loaded_workflow()
+    workflow = probe_workflow()
     for stage in workflow["stages"]:
         stage.pop("may_not_create", None)
         stage.pop("revert_check", None)
-        if stage["name"] == "tester":
+        if stage["name"] == VALIDATING:
             stage["may_not_create"] = ["src/"]
             stage["revert_check"] = DECLARATION
     fake_root = mirror_harness(tmp_path / "moved", workflow)
 
-    code, _ = run(target, fake_root, {"implementer": [added_coverage],
-                                      "tester": [module_only]})
+    code, _ = run(target, fake_root, {WRITING: [added_coverage],
+                                      VALIDATING: [module_only]})
     assert code == 2
     run_dir = run_dir_of(target)
-    assert (run_dir / BASELINE / "tester").is_dir()
-    assert not (run_dir / BASELINE / "implementer").exists()
-    assert (run_dir / BASELINE / "tester" / "src" / "app.py").is_file()
+    assert (run_dir / BASELINE / VALIDATING).is_dir()
+    assert not (run_dir / BASELINE / WRITING).exists()
+    assert (run_dir / BASELINE / VALIDATING / "src" / "app.py").is_file()
     assert record_of(target)["paths"] == ["src/app.py"]
 
 
-def test_no_stage_name_no_prefix_and_neither_declared_name_is_in_the_code():
+def test_no_prefix_and_neither_declared_name_is_in_the_code():
     """Docstrings and comments are stripped first: prose may name what code
-    may not. The control is the name that legitimately does appear."""
+    may not. The control is the name that legitimately does appear.
+
+    The stage-name half moved to tests/test_shipped_workflow_is_valid.py when
+    story-048 converted this module: asked of the workflow built above it would
+    be vacuous, because the builder's names are its own and no source contains
+    them. It is asked there of the names this repository deploys, under
+    `test_the_coordinator_source_names_no_stage_this_deployment_declares`.
+    """
     body = executable_source(
         (ORCHESTRATION / "story_coordinator.py").read_text(encoding="utf-8"))
     assert PREFIX not in body
     assert ARTIFACT not in body
     assert BASELINE not in body
-    for stage in WORKFLOW["stages"]:
-        if stage["name"] == "verifier":
-            continue      # the verifier routing branch predates this story
-        assert stage["name"] not in body, stage["name"]
     assert "clean-clone-result.json" not in body       # read off the workflow too
     assert "state.json" in body                        # a name the code owns
+    # The negative control for the four absences: the same scan over a source
+    # that does name each one reports it.
+    planted = executable_source(
+        f"A = {PREFIX!r}\nB = {ARTIFACT!r}\nC = {BASELINE!r}\n"
+        "D = 'clean-clone-result.json'\n")
+    for name in (PREFIX, ARTIFACT, BASELINE, "clean-clone-result.json"):
+        assert name in planted, name
 
 
 def test_the_capture_names_no_stage_and_no_prefix():
@@ -1155,7 +1222,7 @@ def test_state_json_gains_no_field_and_never_names_the_baseline(
     # The control: the run this state describes did capture a baseline, so
     # the absence above is about state.json rather than about a run that
     # never took one.
-    assert (run_dir_of(target) / BASELINE / "implementer").is_dir()
+    assert (run_dir_of(target) / BASELINE / WRITING).is_dir()
 
 
 def test_nothing_in_run_story_routes_on_the_baseline():
@@ -1260,8 +1327,8 @@ def test_both_clone_entry_points_still_default_to_reverting_nothing():
 def test_the_clean_clone_check_still_writes_its_record_and_event_and_routes(
     target, harness_root,
 ):
-    verifier = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
-    assert run(target, harness_root, {"implementer": [forced_repair]})[0] == 0
+    verifier = next(s for s in WORKFLOW["stages"] if "clean_clone" in s)
+    assert run(target, harness_root, {WRITING: [forced_repair]})[0] == 0
     run_dir = run_dir_of(target)
     clean = json.loads((run_dir / verifier["clean_clone"]["result"]).read_text())
     events = (run_dir / "events.log").read_text()
@@ -1287,7 +1354,7 @@ def test_the_clean_clone_check_asks_for_no_revert_and_no_baseline(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(story_coordinator, "run_clean_clone", spy)
-    assert run(target, harness_root, {"implementer": [forced_repair]})[0] == 0
+    assert run(target, harness_root, {WRITING: [forced_repair]})[0] == 0
 
     assert ((), None) in calls                       # the clean-clone check
     with_baseline = [call for call in calls if call[1] is not None]

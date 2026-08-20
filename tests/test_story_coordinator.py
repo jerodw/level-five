@@ -1,24 +1,97 @@
+"""The coordinator's own behaviour, driven against a workflow built here.
+
+The subject is what the coordinator *does* — run the stages a definition
+declares, in the order it declares them, escalate on a blocked path, refuse a
+malformed story, validate an artifact before routing on it. None of that is a
+question about the workflow this repository deploys, so story-048 stopped
+reaching for it: the definition below is assembled by the builder in
+`tests/conftest.py` and materialized into a harness root this module owns.
+
+Every stage name and every artifact name is still derived rather than written,
+exactly as it was when the definition came off `workflows/story-workflow.json`.
+What changed is which definition they are derived from. Adding a stage to this
+repository's deployment, granting one a budget, or renaming one of its routes
+now leaves this module alone; `tests/test_shipped_workflow_is_valid.py` is where
+those changes are supposed to be noticed.
+"""
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import context_assembler
 import harness_config
 import story_coordinator
 from agent_runner import AgentResult
-from conftest import first_retry_route
+from conftest import StageRef, first_retry_route, workflow_stage
 import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 
-#: The retry category a failing verdict names, read off the loaded
-#: workflow. Since story-028 a recommended retry must name a category
-#: the workflow's retry_routing table defines, or the coordinator
-#: escalates rather than routing it, so every failing verdict below
-#: carries one.
-RETRY_CATEGORY, RETRY_STAGE = first_retry_route(
-    conftest.shipped_workflow(REPO_ROOT, "story-workflow"))
+#: The workflow these runs execute. Four stages because the coordinator's
+#: ordering, its per-stage artifact validation and its retry routing are all
+#: easier to see with a writer, a validator, a documenter and a verifier — not
+#: because this repository happens to deploy four. The last stage carries the
+#: name the coordinator keys its verdict handling on, taken from the fixture
+#: rather than spelled here.
+WORKFLOW = conftest.build_workflow(
+    workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT, conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"the-code": {"stage": StageRef(0),
+                                    "when": "the behaviour is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="coordinator-mechanism-workflow",
+)
+
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = [
+    stage["name"] for stage in WORKFLOW["stages"]]
+STAGE_ORDER = [WRITING, VALIDATING, DOCUMENTING, VERIFYING]
+
+#: The retry category a failing verdict names, read off the built workflow.
+#: Since story-028 a recommended retry must name a category the workflow's
+#: retry_routing table defines, or the coordinator escalates rather than
+#: routing it, so every failing verdict below carries one.
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path) -> Path:
+    """A harness root carrying that definition, and nothing this repository
+    deploys except the rules and schemas, which are the harness's rather than
+    the workflow's. `scripts/` and `orchestration/` are copied because one test
+    below drives a run through the entry point, which resolves its own harness
+    root from its own location."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "coordinator-harness",
+        copy=("orchestration", "scripts"))
+
+
+def stage_named(name: str) -> dict:
+    return next(stage for stage in WORKFLOW["stages"] if stage["name"] == name)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -44,24 +117,26 @@ class FakeRunner:
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
                  allowed_tools=None):
         self.calls.append(stage)
-        if stage == "implementer":
-            write_json(self.run_dir / "changed-files.json", self.changed_files)
-            (self.run_dir / "implementation-summary.md").write_text("Did the work.\n")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        if stage == WRITING:
+            write_json(self.run_dir / conftest.CHANGED_FILES, self.changed_files)
+            (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
+                "Did the work.\n")
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 2, "tests_run": 5,
                 "tests_passed": 5, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json", self.tester_changed_files)
-        elif stage == "verifier":
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
+                       self.tester_changed_files)
+        elif stage == VERIFYING:
             # A failed verdict accounts for the guidance in force for the
             # attempt it judges, reporting every entry unmet — the ordinary
             # under-delivery case, which routes as it always has.
             verdict = conftest.answering_guidance(
                 self.verifier_verdicts.pop(0), self.run_dir)
-            write_json(self.run_dir / "verification-result.json", verdict)
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
             if verdict["status"] == "failed":
-                write_json(self.run_dir / "retry-guidance.json", {
+                write_json(self.run_dir / conftest.RETRY_GUIDANCE, {
                     "current_focus": [{
                         "focus": "fix the sample behavior",
                         "satisfied_when": "the sample behavior exists",
@@ -69,9 +144,10 @@ class FakeRunner:
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })
-        elif stage == "documenter":
-            (self.run_dir / "documentation-report.md").write_text("No changes needed.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+        elif stage == DOCUMENTING:
+            (self.run_dir / conftest.DOCUMENTATION_REPORT).write_text(
+                "No changes needed.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -96,7 +172,7 @@ def test_happy_path_completes(target_root, harness_root):
     state = read_state(target_root)
     assert state["status"] == "completed"
     assert state["retry_count"] == 0
-    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
+    assert runner.calls == STAGE_ORDER
     run_dir = target_root / ".harness" / "runs" / "story-001"
     assert (run_dir / "completion-report.md").is_file()
     assert (run_dir / "verification" / "iteration-1.json").is_file()
@@ -111,23 +187,22 @@ def test_verification_failure_retries_then_completes(target_root, harness_root):
     state = read_state(target_root)
     assert state["status"] == "completed"
     assert state["retry_count"] == 1
-    assert runner.calls == [
-        "implementer", "tester", "documenter",
-        "verifier", "implementer", "tester", "documenter", "verifier",
-    ]
+    assert runner.calls == STAGE_ORDER + STAGE_ORDER
     run_dir = target_root / ".harness" / "runs" / "story-001"
     assert (run_dir / "verification" / "iteration-2.json").is_file()
-    assert "retry 1 of 2" in (run_dir / "events.log").read_text()
+    ceiling = harness_config.load_rules(harness_root)["max_retries"]
+    assert f"retry 1 of {ceiling}" in (run_dir / "events.log").read_text()
 
 
 def test_exhausted_retries_escalate(target_root, harness_root):
-    runner = FakeRunner(target_root, "story-001", [FAIL, FAIL, FAIL])
+    ceiling = harness_config.load_rules(harness_root)["max_retries"]
+    runner = FakeRunner(target_root, "story-001", [FAIL] * (ceiling + 1))
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     state = read_state(target_root)
     assert state["status"] == "escalated"
-    assert state["retry_count"] == 2
-    assert runner.calls.count("implementer") == 3
+    assert state["retry_count"] == ceiling
+    assert runner.calls.count(WRITING) == ceiling + 1
     run_dir = target_root / ".harness" / "runs" / "story-001"
     summary = (run_dir / "escalation-summary.md").read_text()
     assert "retries are exhausted" in summary
@@ -154,15 +229,15 @@ def test_tester_blocked_path_modification_escalates(target_root, harness_root):
     assert code == 2
     assert read_state(target_root)["status"] == "escalated"
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
-    assert "tester modified blocked path" in summary
+    assert f"{VALIDATING} modified blocked path" in summary
 
 
 def test_missing_tester_changed_files_escalates(target_root, harness_root):
     class NoTesterRecordRunner(FakeRunner):
         def __call__(self, prompt, *, stage, **kwargs):
             result = super().__call__(prompt, stage=stage, **kwargs)
-            if stage == "tester":
-                (self.run_dir / "tester-changed-files.json").unlink()
+            if stage == VALIDATING:
+                (self.run_dir / conftest.TESTER_CHANGED_FILES).unlink()
             return result
 
     runner = NoTesterRecordRunner(target_root, "story-001", [PASS])
@@ -170,7 +245,7 @@ def test_missing_tester_changed_files_escalates(target_root, harness_root):
     assert code == 2
     assert read_state(target_root)["status"] == "escalated"
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
-    assert "tester-changed-files.json" in summary
+    assert conftest.TESTER_CHANGED_FILES in summary
 
 
 def test_missing_artifact_escalates(target_root, harness_root):
@@ -183,7 +258,7 @@ def test_missing_artifact_escalates(target_root, harness_root):
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
-    assert "changed-files.json" in summary
+    assert conftest.CHANGED_FILES in summary
 
 
 def test_completed_story_refuses_rerun(target_root, harness_root):
@@ -272,10 +347,10 @@ def test_pre_flight_reads_the_schema_file_rather_than_a_constant(tmp_path):
     assert problems == ["$.sentinel_section: expected a required property, found it missing"]
 
 
-def test_l5_run_exits_1_on_a_rejected_story_without_invoking_an_agent(target_root):
+def test_l5_run_exits_1_on_a_rejected_story_without_invoking_an_agent(
+        target_root, harness_root):
     """End to end through the entry point: no agent can run, because the
     refusal happens before the coordinator reaches agent invocation."""
-    harness_root = Path(story_coordinator.__file__).resolve().parents[1]
     rewrite_story(target_root, "verification_requirements:", "checks:")
     result = subprocess.run(
         [sys.executable, str(harness_root / "scripts" / "l5-run"), "story-001"],
@@ -335,8 +410,8 @@ class InvalidArtifactRunner(FakeRunner):
 def test_schema_invalid_artifact_escalates_immediately(target_root, harness_root):
     runner = InvalidArtifactRunner(
         target_root, "story-001", [PASS],
-        corrupt_stage="implementer",
-        artifact="changed-files.json",
+        corrupt_stage=WRITING,
+        artifact=conftest.CHANGED_FILES,
         payload={"modified": ["src/app.py"], "created": []},   # no "deleted"
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
@@ -344,13 +419,13 @@ def test_schema_invalid_artifact_escalates_immediately(target_root, harness_root
     state = read_state(target_root)
     assert state["status"] == "escalated"
     assert state["retry_count"] == 0
-    assert runner.calls == ["implementer"]
+    assert runner.calls == [WRITING]
 
     run_dir = target_root / ".harness" / "runs" / "story-001"
     events = (run_dir / "events.log").read_text()
     summary = (run_dir / "escalation-summary.md").read_text()
     for text in (events, summary):
-        assert "changed-files.json" in text
+        assert conftest.CHANGED_FILES in text
         assert "$.deleted" in text
         assert "required" in text
         assert "missing" in text
@@ -361,8 +436,8 @@ def test_schema_validation_runs_before_the_blocked_paths_check(target_root, harn
     a validation error, not as an exception out of that check."""
     runner = InvalidArtifactRunner(
         target_root, "story-001", [PASS],
-        corrupt_stage="implementer",
-        artifact="changed-files.json",
+        corrupt_stage=WRITING,
+        artifact=conftest.CHANGED_FILES,
         payload={"modified": "rules/execution-rules.json", "created": [], "deleted": []},
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
@@ -376,31 +451,31 @@ def test_schema_validation_runs_before_the_blocked_paths_check(target_root, harn
 def test_unparseable_artifact_escalates_with_the_decode_error(target_root, harness_root):
     runner = InvalidArtifactRunner(
         target_root, "story-001", [PASS],
-        corrupt_stage="tester",
-        artifact="test-results.json",
+        corrupt_stage=VALIDATING,
+        artifact=conftest.TEST_RESULTS,
         payload="{ this is not json",
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["retry_count"] == 0
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
-    assert "test-results.json" in summary
+    assert conftest.TEST_RESULTS in summary
     assert "not parseable as JSON" in summary
 
 
 def test_invalid_verifier_artifact_escalates_without_a_retry(target_root, harness_root):
     runner = InvalidArtifactRunner(
         target_root, "story-001", [FAIL, PASS],
-        corrupt_stage="verifier",
-        artifact="retry-guidance.json",
+        corrupt_stage=VERIFYING,
+        artifact=conftest.RETRY_GUIDANCE,
         payload={"current_focus": ["fix it"], "preserve_behavior": []},  # no retry_scope
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["retry_count"] == 0
-    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
+    assert runner.calls == STAGE_ORDER
     summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
-    assert "retry-guidance.json" in summary
+    assert conftest.RETRY_GUIDANCE in summary
     assert "$.retry_scope" in summary
 
 
@@ -410,15 +485,15 @@ def test_absent_retry_guidance_is_not_a_validation_failure(target_root, harness_
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 0
     run_dir = target_root / ".harness" / "runs" / "story-001"
-    assert not (run_dir / "retry-guidance.json").exists()
+    assert not (run_dir / conftest.RETRY_GUIDANCE).exists()
     assert read_state(target_root)["status"] == "completed"
 
 
 def test_valid_artifacts_leave_routing_unchanged(tmp_path):
     """_schema_violation is silent for artifacts that satisfy their schemas."""
-    write_json(tmp_path / "changed-files.json",
+    write_json(tmp_path / conftest.CHANGED_FILES,
                {"modified": ["src/app.py"], "created": [], "deleted": [],
                 "note": "an extra key is tolerated"})
-    stage = {"schemas": {"changed-files.json": "changed-files",
-                         "retry-guidance.json": "retry-guidance"}}
+    stage = {"schemas": {**stage_named(WRITING)["schemas"],
+                         **stage_named(VERIFYING)["schemas"]}}
     assert story_coordinator._schema_violation(tmp_path, stage) is None
