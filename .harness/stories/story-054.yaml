@@ -1,0 +1,125 @@
+story:
+  id: story-054
+  title: A spelled-out quantity is still a quantity
+  description: |
+    story-051 shipped a claim-support check whose quantity test is one regex,
+    `QUANTITY = re.compile(r"\d")` — a digit, and nothing cleverer. Three stale
+    numerals motivated that story and one of them cannot be seen by what
+    shipped: story-047's was "a fourth standing rule" and "the three standing
+    rules already", against a module that carried five. Spelled out, and
+    therefore invisible to the check built to catch it.
+
+    This story widens the quantity test to a deliberately bounded set of
+    number words. The set is cardinals two through nineteen, the tens twenty
+    through ninety, hundred, thousand, million and dozen, and the matching
+    ordinals second through nineteenth and the -ieth forms. The words `one`,
+    `a`, `an` and `first` are excluded on purpose: they appear in ordinary
+    prose constantly and carry no enumeration.
+
+    Widening is cheap because the check reports and never routes — a run whose
+    record reports a claim is routed exactly as the same run with an empty
+    record — so a false report costs the verifier a moment's judgement rather
+    than a retry. The conservatism the digit-only limit defends was buying very
+    little against a case it demonstrably missed.
+
+    The stated-limit discipline is kept. The digits-only limit is written
+    honestly in three places today — the `QUANTITY` comment in
+    orchestration/story_coordinator.py, the schema description in
+    schemas/claim-support-result.schema.json, and the scope-limits paragraph in
+    .harness/docs/ARCHITECTURE.md. Whatever the new boundary is, it gets the
+    same treatment in the same three places rather than the limit quietly
+    disappearing.
+
+    The request that produced this story also asked that
+    tests/test_documented_claim_support.py end with one test of the
+    report-a-claim behaviour rather than two, carrying realistic prose.
+    story-053 already did that: it deleted the test that recovered story-049's
+    sentence out of this repository's commit graph and replaced the surviving
+    test's one-liner with a multi-clause paragraph. That half is not work this
+    story repeats; it is carried below as regression guards, because this story
+    edits that module and the state must not come back.
+
+tasks:
+  - Widen the quantity test in orchestration/story_coordinator.py so a spelled-out number counts as a quantity, as a second alternative inside the existing carries_a_quantity rather than a new decision point, so the reference-stripping and the block granularity are shared by construction and no caller changes.
+  - Bound the word set deliberately - cardinals two through nineteen, the tens twenty through ninety, hundred, thousand, million and dozen, and the ordinals second through nineteenth plus the -ieth forms - and exclude one, a, an and first, with the exclusion reasoned in a comment beside the set rather than left to be rediscovered.
+  - Match the words case-insensitively, on non-letter boundaries rather than on a word boundary, with the alternation longest-token-first, so often does not match ten and seventeen claims its own match rather than being read as seven followed by teen.
+  - Restate the new boundary in the QUANTITY comment in orchestration/story_coordinator.py.
+  - Restate the new boundary in the schema description in schemas/claim-support-result.schema.json, which today says the decision is whether a digit appears outside the reference itself.
+  - Restate the new boundary in the scope-limits paragraph of .harness/docs/ARCHITECTURE.md, which today says in as many words that "eight of twenty-two" is a quantity the check does not see.
+  - Add tests to tests/test_documented_claim_support.py covering the widened cases, the excluded words, the within-a-word non-matches, and the unchanged digit behaviour, each with the control the module's existing tests carry.
+
+acceptance_criteria:
+  - A block naming a story with no completion commit reachable from the base and saying "a fourth standing rule" produces a report, and the same block produced none before this story.
+  - A block naming such a story and saying "the three standing rules already" produces a report.
+  - A block naming such a story and saying "converted eight of twenty-two modules" produces a report - the case .harness/docs/ARCHITECTURE.md names today as one the check cannot see.
+  - The digit cases the module already covers report identically to how they reported before this story - the same documents, the same stories, the same text - so widening added a case rather than changed one.
+  - A block naming such a story whose only number words are among the excluded ones - one, a, an, first - is not reported, and a control block differing only in carrying an included word is reported.
+  - A number word appearing inside a longer word is not a quantity - "often" does not match "ten", "someone" does not match "one" - with a control carrying the bare word, which is matched.
+  - The story reference itself is still not a quantity - a block whose only numbers are the digits of "story-048" and "story-049" is not reported, exactly as before.
+  - Matching is case-insensitive - a block saying "Three" at the start of a sentence is reported.
+  - A hyphenated compound is reported without a rule of its own - "twenty-two" reports on the strength of the bounded set alone.
+  - The check still reports and never routes - a run whose record reports a spelled-out claim has the same exit code, the same stages invoked, the same event stream and the same retry count as the same run reporting nothing.
+  - The word set is written once and the exclusion of one, a, an and first is reasoned beside it, so a reader can tell an omission from a decision.
+  - tests/test_documented_claim_support.py holds exactly one test of the report-a-claim behaviour and it carries multi-clause prose - the state story-053 left, unchanged by this story.
+  - No test in tests/test_documented_claim_support.py resolves anything out of this repository's git history to obtain a fixture.
+  - The QUANTITY comment in orchestration/story_coordinator.py states the new boundary accurately, naming what is matched and what is deliberately not.
+  - The schema description in schemas/claim-support-result.schema.json states the new boundary accurately, replacing the sentence that says the decision is whether a digit appears outside the reference.
+  - The scope-limits paragraph in .harness/docs/ARCHITECTURE.md states the new boundary accurately, and no longer says that "eight of twenty-two" is a quantity the check does not see.
+
+technical_plan:
+  implementation_steps:
+    - Read orchestration/story_coordinator.py around the STORY_REFERENCE and QUANTITY definitions and carries_a_quantity, so the widening lands inside the existing seam rather than beside it.
+    - Add the bounded word set as a module-level pattern next to QUANTITY, built from an explicit list of words so the set is readable as a list rather than as a regex, with the alternation sorted longest-token-first and the boundaries written as non-letter lookarounds.
+    - Make carries_a_quantity answer true when either the digit pattern or the word pattern matches the reference-stripped text, leaving its signature, its callers and the reference stripping untouched.
+    - Rewrite the QUANTITY comment to state the new boundary - what the set holds, that one, a, an and first are excluded, and why the exclusion is a decision.
+    - Update the schema description sentence in schemas/claim-support-result.schema.json that today says the decision is the reference shape, the completion commit and whether a digit appears outside the reference.
+    - Update the scope-limits paragraph in .harness/docs/ARCHITECTURE.md, which today offers "eight of twenty-two" as the worked example of what the check misses, and say what the new limit is instead.
+    - Add the tests to tests/test_documented_claim_support.py in the section headed "What the check reports - the reference, the quantity, and the base", following the module's established shape - a target built by build_target under tmp_path, text added by add_to_document, and every absence asserted beside a control that shows the same call reporting.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The QUANTITY pattern and carries_a_quantity live here, and the comment stating the limit sits beside them.
+    - file: schemas/claim-support-result.schema.json
+      stage: implementer
+      reason: The description states the digits-only limit and must state the new one.
+    - file: tests/test_documented_claim_support.py
+      stage: tester
+      reason: The validation module for this check - the widened cases, the exclusions and the within-a-word non-matches are asserted here, and the file already exists.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The scope-limits paragraph names "eight of twenty-two" as a case the check cannot see, which this story makes untrue.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/claim-support-result.schema.json
+    - tests/test_documented_claim_support.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - prompts/
+    - orchestration/context_assembler.py
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm story-047's actual wording is reported - a block naming an unmerged story and saying "a fourth standing rule" produces a report where the shipped check produced none. That is the case this story exists for.
+  - Confirm the second half of story-047's wording, "the three standing rules already", is reported the same way.
+  - Confirm "converted eight of twenty-two modules" is reported, since that is the example .harness/docs/ARCHITECTURE.md used for what the check could not see.
+  - Confirm the digit cases story-051 already covers still report identically, so widening added a case rather than changing one.
+  - Confirm the excluded words are excluded on purpose, with a test naming one and showing it unreported beside a control carrying an included word.
+  - Confirm a number word inside a longer word does not match, with a control carrying the bare word.
+  - Confirm the check still routes nothing - a run reporting a spelled-out claim and a run reporting nothing agree on exit code, stages invoked, event stream and retry count.
+  - Confirm tests/test_documented_claim_support.py ends with exactly one test of the report-a-claim behaviour, and that it carries realistic multi-clause prose.
+  - Confirm no test in tests/test_documented_claim_support.py resolves anything out of this repository's git history to obtain a fixture.
+  - Confirm the stated limit is accurate in all three places it is written - the QUANTITY comment, the schema description, and the .harness/docs/ARCHITECTURE.md scope-limits paragraph - and that no one of the three still asserts the digits-only limit.
+  - Confirm the new tests are shown to fail against the code as it stood before this story, so the widening is demonstrated rather than asserted.
+
+constraints:
+  - The check reports and never routes. Nothing in this story may make a report route, escalate, consume a retry, or change an exit code.
+  - The story reference is still subtracted before the quantity is looked for, so the digits of "story-048" remain part of a name rather than a count.
+  - The block granularity is unchanged - a reference and a quantity in one paragraph are one claim, and the same two in paragraphs apart are not.
+  - carries_a_quantity keeps its signature and its callers, so the widening is one decision widened rather than a second decision added.
+  - Nothing reads the added text as language. The widened test stays a bounded vocabulary match, decidable without parsing prose.
+  - The claim-support record's schema shape is unchanged - only the description sentence stating the limit changes.
+  - The git-history dependency as a general problem, the story-0NN placeholder matching the reference story-0, the workflow declaration, and the verifier and documenter prompt text are all out of scope.
+  - No test in this story may resolve a fixture out of this repository's own commit graph.
