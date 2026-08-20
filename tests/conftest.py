@@ -692,6 +692,27 @@ def harness_root() -> Path:
 #: `tests/test_shipped_workflow_is_valid.py` holds the coordinator to it.
 VERIFYING_STAGE = "verifier"
 
+#: The artifact names the *harness* writes down, as distinct from the ones a
+#: workflow declares. `context_assembler.build_context` reads each of these off
+#: the run directory by a fixed name to fill a prompt placeholder, and
+#: `story_coordinator` reads the verdict by a fixed name to route on it, so a
+#: built workflow whose run must reach those code paths has to call its
+#: artifacts these. They are facts about the harness rather than about what this
+#: repository deploys — changing the shipped workflow does not change one of
+#: them — and they are written here, once, for the reason `VERIFYING_STAGE` is:
+#: a module that needs one derives it from the fixture rather than spelling it
+#: at a call site. `tests/test_shipped_workflow_is_valid.py` holds the harness
+#: to them.
+CHANGED_FILES = "changed-files.json"
+TESTER_CHANGED_FILES = "tester-changed-files.json"
+DOCUMENTER_CHANGED_FILES = "documenter-changed-files.json"
+IMPLEMENTATION_SUMMARY = "implementation-summary.md"
+TEST_RESULTS = "test-results.json"
+DOCUMENTATION_REPORT = "documentation-report.md"
+VERIFICATION_RESULT = "verification-result.json"
+RETRY_GUIDANCE = "retry-guidance.json"
+CLEAN_CLONE_RESULT = "clean-clone-result.json"
+
 
 class StageRef:
     """A reference to a stage of the workflow being built, by position.
@@ -850,9 +871,19 @@ def built_stage_prompt(stage_name: str) -> str:
     reached a stage can find the span by the label it derived from
     `BUILT_PROMPT_FIELDS` -- and so a multi-line value renders as a block the
     way it does in the shipped templates rather than trailing off a label.
+
+    The verifying stage's template omits the retry-guidance field, mirroring
+    the division the harness itself draws: guidance is *written by* the stage
+    that judges an attempt and *read by* the stage the retry is routed to, so
+    rendering it back into the judge's own prompt would make the two renderings
+    of one attempt indistinguishable. A fixture-level fact, stated here once,
+    rather than a template a module has to compose for itself.
     """
+    omitted = {"retry_guidance"} if stage_name == VERIFYING_STAGE else set()
     lines = [f"# {stage_name}", "", "{{harness_layer}}", ""]
     for field in BUILT_PROMPT_FIELDS:
+        if field in omitted:
+            continue
         lines += [f"{field}:", f"{{{{{field}}}}}", ""]
     return "\n".join(lines)
 

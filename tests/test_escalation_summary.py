@@ -58,8 +58,44 @@ import story_coordinator
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *what the escalation
+#: summary says* — which sections it carries, which attempt each renders, what
+#: it tells a developer to do next — and the stage list is an input to that
+#: question rather than its subject. The retry ceiling below is a different
+#: matter and still reads what this repository declares, because a summary
+#: written *at the ceiling* is a summary about that number.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        clean_clone={"result": conftest.CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="escalation-summary-workflow",
+)
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
 VERIFIER_STAGE = next(s for s in WORKFLOW["stages"] if "on_failure" in s)
 #: Since story-028 the route is a category-keyed table rather than a constant,
 #: so the category a failing verdict names and the stage it routes to are read
@@ -132,8 +168,8 @@ constraints:
   - preserve existing behavior
 """
 
-CONFIG = """\
-workflow: story-workflow
+CONFIG = f"""\
+workflow: {WORKFLOW['name']}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -200,8 +236,10 @@ def target(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def harness_root() -> Path:
-    return REPO_ROOT
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying the definition built above, so a converted case
+    drives a real coordinator loading a real file."""
+    return conftest.materialize_workflow(WORKFLOW, tmp_path / "summary-harness")
 
 
 class Runner:
@@ -228,30 +266,30 @@ class Runner:
             return AgentResult(ok=True, result_text=f"{stage} wrote nothing")
         attempt = max(1, self.calls.count(RETRY_STAGE))
 
-        if stage == "implementer":
+        if stage == WRITING:
             if self.edit:
                 write(self.target_root / "src" / "app.py",
                       APP_AT_HEAD + f"print('attempt {attempt}')\n")
-            write_json(self.run_dir / "changed-files.json", {
+            write_json(self.run_dir / conftest.CHANGED_FILES, {
                 "modified": ["src/app.py"] if self.edit else [],
                 "created": [], "deleted": [],
             })
-            write(self.run_dir / "implementation-summary.md",
+            write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY,
                   f"Implemented on attempt {attempt}.\n")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json",
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             seen = self.calls.count(stage) - 1
             verdict = self.verdicts[min(seen, len(self.verdicts) - 1)]
-            write_json(self.run_dir / "verification-result.json", verdict)
-        elif stage == "documenter":
-            write(self.run_dir / "documentation-report.md", "Nothing.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
+        elif stage == DOCUMENTING:
+            write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -366,7 +404,7 @@ def escalated_at_once(target, harness_root) -> Path:
 @pytest.fixture
 def escalated_with_no_verdict(target, harness_root) -> Path:
     """The implementer writes nothing, so the run never reaches the verifier."""
-    escalate(target, harness_root, silent=("implementer",))
+    escalate(target, harness_root, silent=(WRITING,))
     assert not (run_dir_of(target) / "verification-result.json").exists()
     return target
 
@@ -671,7 +709,7 @@ def test_the_summary_is_composable_against_a_hand_built_run_directory(tmp_path):
     }])
     state = story_coordinator.RunState(
         story_id=STORY_ID, branch=f"story/{STORY_ID}", status="escalated",
-        current_stage="verifier", retry_count=1, verification_iterations=2,
+        current_stage=VERIFYING, retry_count=1, verification_iterations=2,
         escalation_commit="abc123",
     )
 

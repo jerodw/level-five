@@ -70,7 +70,60 @@ REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_PATH = REPO_ROOT / "orchestration" / "story_coordinator.py"
 ASSEMBLER_PATH = REPO_ROOT / "orchestration" / "context_assembler.py"
 
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *how a retry is
+#: routed*, and a route is an input to that question rather than its subject.
+#: Deriving the categories from the deployed table made "how many categories
+#: this deployment defines" into something this module enforced, so shipping a
+#: third category reddened assertions with nothing to say about whether that
+#: category was right.
+#:
+#: Two categories routing to two different stages, because that is what the
+#: mechanism needs: one category cannot show that the category decides
+#: anything. Every name below is still derived rather than written, exactly as
+#: it was when the definition came off `workflows/story-workflow.json`.
+CLEAN_CLONE_RESULT = conftest.CLEAN_CLONE_RESULT
+
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        # Routed at a stage *earlier* than the one the first category names, so
+        # a retry routed on that category does not re-enter it. That separation
+        # is what lets an assertion distinguish the two reroutes: a coordinator
+        # sending both to one constant would be visible, and so would guidance
+        # left in force across a reroute that wrote none.
+        clean_clone={"result": CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={
+            "documentation-defect": {
+                "stage": conftest.StageRef(2),
+                "when": "the document describes behaviour the code lacks"},
+            "implementation-defect": {
+                "stage": conftest.StageRef(0),
+                "when": "the behaviour the story asked for is missing"},
+        }),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="retry-routing-workflow",
+)
+
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 
 #: The stage that declares the routing table, found by the declaration rather
@@ -84,8 +137,15 @@ DESTINATIONS = {category: ROUTES[category]["stage"] for category in CATEGORIES}
 #: The clean-clone declaration names both of its artifacts: the result it
 #: writes and the stage a failure routes to.
 CLEAN_CLONE = VERIFIER_STAGE["clean_clone"]
-CLEAN_CLONE_RESULT = CLEAN_CLONE["result"]
 CLEAN_CLONE_STAGE = CLEAN_CLONE["retry_stage"]
+
+#: The definition this repository deploys, read *only* by the two assertions
+#: below whose subject it genuinely is: the retry-ceiling search, which asks
+#: where this repository defines the ceiling, and the check that no shipped
+#: stage declares a ceiling or a default route of its own. Those are questions
+#: about what this repository ships and cannot be asked of a definition this
+#: module built. Every other assertion here reads `WORKFLOW` above.
+SHIPPED_WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
 
 RULES_PATH = REPO_ROOT / "rules" / "execution-rules.json"
 MAX_RETRIES = json.loads(RULES_PATH.read_text(encoding="utf-8"))["max_retries"]
@@ -210,7 +270,7 @@ def no_model(monkeypatch):
 def test_the_no_model_guard_fires_when_a_model_is_invoked(tmp_path):
     """The control for the guard every other test in this file runs under."""
     with pytest.raises(AssertionError, match="a model was invoked"):
-        agent_runner.run_agent("prompt", stage="implementer", cwd=tmp_path,
+        agent_runner.run_agent("prompt", stage=STAGE_NAMES[0], cwd=tmp_path,
                                log_path=tmp_path / "agent.log")
 
 
@@ -233,7 +293,7 @@ def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
                           capture_output=True, text=True, check=check)
 
 
-def build_target(root: Path, *, workflow: str = "story-workflow",
+def build_target(root: Path, *, workflow: str = WORKFLOW["name"],
                  test_command: str = "echo tests-ok") -> Path:
     for sub in (".harness/standards", ".harness/stories", ".harness/runs",
                 ".harness/logs", ".harness/docs"):
@@ -260,27 +320,29 @@ def target(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def harness_root() -> Path:
-    return REPO_ROOT
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying the workflow built above.
+
+    The rules and the schemas are the harness's rather than the workflow's, so
+    `materialize_workflow` links them at the shipped ones: converting away from
+    the shipped *workflow* is not building a second rule set.
+    """
+    return conftest.materialize_workflow(WORKFLOW, tmp_path / "routing-harness")
 
 
 def probe_harness(tmp_path: Path, name: str, mutate) -> Path:
-    """A harness root carrying a workflow this repository does not ship.
+    """A harness root carrying a variant of the workflow built above.
 
-    Everything but the workflow is the shipped harness — the same prompts,
-    the same schemas, the same rules — so a run against it differs from a
-    run against this repository in exactly the definition under test.
+    Everything but the workflow is what `harness_root` carries — the same
+    generated prompt templates, the same schemas, the same rules — so a run
+    against it differs from a run against `harness_root` in exactly the
+    declaration under test. Derived from the built definition rather than from
+    the shipped one, so a probe states its mutation and nothing else.
     """
-    root = tmp_path / name
-    root.mkdir()
-    for directory in ("prompts", "rules", "schemas"):
-        shutil.copytree(REPO_ROOT / directory, root / directory)
     workflow = json.loads(json.dumps(WORKFLOW))
     workflow["name"] = name
     mutate(workflow)
-    (root / "workflows").mkdir()
-    write_json(root / "workflows" / f"{name}.json", workflow)
-    return root
+    return conftest.materialize_workflow(workflow, tmp_path / name)
 
 
 def verifier_stage_of(workflow: dict) -> dict:
@@ -292,12 +354,23 @@ class Runner:
 
     The verdicts are consumed one per verifier call, the last repeating, so
     a run is driven into a shape by listing what the verifier says.
+
+    `stage_names` is the stage list of the workflow the run is driving, in
+    order, and the artifacts a call writes are chosen by that stage's position
+    in it. It defaults to the workflow this module built, which is what every
+    run here drives; a caller driving a run under a different definition —
+    tests/test_unfinishable_retry_verdict.py and
+    tests/test_defective_retry_guidance.py each render one prompt under the
+    shipped one — passes that definition's stage list instead. Position rather
+    than name, because the name is the caller's definition's to choose.
     """
 
-    def __init__(self, target_root: Path, verdicts: list | None = None):
+    def __init__(self, target_root: Path, verdicts: list | None = None, *,
+                 stage_names: list[str] | None = None):
         self.target_root = target_root
         self.run_dir = target_root / ".harness" / "runs" / STORY_ID
         self.verdicts = verdicts or [PASS]
+        self.stage_names = list(stage_names or STAGE_NAMES)
         self.calls: list[str] = []
         self.prompts: list[tuple[str, str]] = []
 
@@ -306,20 +379,21 @@ class Runner:
         self.calls.append(stage)
         self.prompts.append((stage, prompt))
         attempt = self.calls.count(stage)
+        names = self.stage_names
 
-        if stage == "implementer":
+        if stage == names[0]:
             write(self.target_root / "src" / "app.py",
                   f"print('attempt {attempt}')\n")
-            write_json(self.run_dir / "changed-files.json",
+            write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
-            write(self.run_dir / "implementation-summary.md",
+            write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY,
                   f"Implemented on attempt {attempt}.\n")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        elif stage == names[1]:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json",
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         elif stage == VERIFIER_NAME:
             seen = self.calls.count(stage) - 1
@@ -328,12 +402,12 @@ class Runner:
             # attempt it judges, reporting every entry unmet — the ordinary
             # under-delivery case, which routes as it always has.
             verdict = conftest.answering_guidance(verdict, self.run_dir)
-            write_json(self.run_dir / "verification-result.json", verdict)
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
             if verdict.get("retry_recommended"):
-                write_json(self.run_dir / "retry-guidance.json", GUIDANCE)
-        elif stage == "documenter":
-            write(self.run_dir / "documentation-report.md", "Nothing.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+                write_json(self.run_dir / conftest.RETRY_GUIDANCE, GUIDANCE)
+        elif stage == names[2]:
+            write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -862,7 +936,7 @@ def test_removing_the_clean_clone_declaration_disables_the_check(tmp_path):
     runner = Runner(root, [PASS])
 
     assert story_coordinator.run_story(STORY_ID, harness, root, runner) == 0
-    assert "documenter" in runner.calls
+    assert STAGE_NAMES[2] in runner.calls
     assert not (run_dir_of(root) / CLEAN_CLONE_RESULT).exists()
     assert not any(entry["event"].startswith("clean-clone")
                    for entry in history_of(root))
@@ -921,10 +995,10 @@ def test_the_rendered_verifier_prompt_carries_no_unresolved_placeholder(
     assert PLACEHOLDER.search(prompt_of(target, VERIFIER_NAME, 1)) is None
 
 
-def test_the_placeholder_check_sees_a_placeholder_when_there_is_one():
+def test_the_placeholder_check_sees_a_placeholder_when_there_is_one(harness_root):
     """The control for the absence above, against the same regex and the
     template the prompt was rendered from — which does carry them."""
-    template = (REPO_ROOT / "prompts" / f"{VERIFIER_NAME}.md").read_text(
+    template = (harness_root / "prompts" / f"{VERIFIER_NAME}.md").read_text(
         encoding="utf-8")
     assert PLACEHOLDER.search(template) is not None
     assert "{{retry_routes}}" in template
@@ -942,7 +1016,7 @@ def test_a_further_category_changes_the_prompt_with_no_edit_to_the_template(
     subject is the injection rather than any particular category.
     """
     added = "tooling"
-    assert added not in ROUTES, "pick a category the shipped workflow lacks"
+    assert added not in ROUTES, "pick a category the built workflow lacks"
     when = "the defect is in the harness tooling this story was to leave behind"
 
     def mutate(workflow: dict) -> None:
@@ -959,7 +1033,7 @@ def test_a_further_category_changes_the_prompt_with_no_edit_to_the_template(
     assert story_coordinator.run_story(
         STORY_ID, harness_root, target, Runner(target, [PASS])) == 0
 
-    template = (REPO_ROOT / "prompts" / f"{VERIFIER_NAME}.md").read_bytes()
+    template = (harness_root / "prompts" / f"{VERIFIER_NAME}.md").read_bytes()
     assert (harness / "prompts" / f"{VERIFIER_NAME}.md").read_bytes() == template
 
     with_three = prompt_of(root, VERIFIER_NAME, 1)
@@ -1019,10 +1093,16 @@ def test_the_first_attempt_is_told_it_is_not_on_a_retry(target, harness_root):
 def test_every_stage_that_can_receive_a_retry_declares_the_placeholders(
     harness_root,
 ):
-    """Read off the workflow: whatever a route names must be able to say so."""
+    """Read off the workflow: whatever a route names must be able to say so.
+
+    The templates are the ones this run renders, under the harness root the
+    built definition was materialized into. That *this repository's own*
+    templates satisfy the same rule is a question about what it ships, and is
+    asked in tests/test_shipped_workflow_is_valid.py.
+    """
     for category, route in ROUTES.items():
         stage = next(s for s in WORKFLOW["stages"] if s["name"] == route["stage"])
-        template = (REPO_ROOT / "prompts" / stage["prompt"]).read_text(
+        template = (harness_root / "prompts" / stage["prompt"]).read_text(
             encoding="utf-8")
         assert "{{retry_guidance}}" in template, category
         assert "{{retry_state}}" in template, category
@@ -1033,10 +1113,24 @@ def test_every_stage_that_can_receive_a_retry_declares_the_placeholders(
 # --------------------------------------------------------------------------
 
 
-#: Everything the workflow decides. `verifier` is deliberately not here: it
-#: is the stage whose verdict the coordinator reads, not a place any retry is
-#: routed to, and the coordinator has named it since long before this story.
-FORBIDDEN = set(CATEGORIES) | set(DESTINATIONS.values()) | {CLEAN_CLONE_STAGE}
+#: Everything the *shipped* workflow decides. A subject read, and the third
+#: reason this module still resolves what this repository deploys: the claim is
+#: that no name this deployment's routing table chooses is written into the
+#: orchestration source, and a name from a workflow this module invented would
+#: be absent from that source whatever the coordinator did. Only the deployed
+#: names can make the assertion bite.
+#:
+#: The verifying stage is deliberately not here: it is the stage whose verdict
+#: the coordinator reads, not a place any retry is routed to, and the
+#: coordinator has named it since long before this story.
+SHIPPED_VERIFIER_STAGE = next(stage for stage in SHIPPED_WORKFLOW["stages"]
+                              if "on_failure" in stage)
+SHIPPED_ROUTES = SHIPPED_VERIFIER_STAGE["on_failure"]["retry_routing"]
+SHIPPED_DESTINATIONS = {category: route["stage"]
+                        for category, route in SHIPPED_ROUTES.items()}
+FORBIDDEN = (set(SHIPPED_ROUTES)
+             | set(SHIPPED_DESTINATIONS.values())
+             | {SHIPPED_VERIFIER_STAGE["clean_clone"]["retry_stage"]})
 
 
 def hardcoded_names(source: str) -> set[str]:
@@ -1070,7 +1164,7 @@ def test_the_hardcoded_name_check_reports_a_name_written_back_in(path, anchor):
     destination it happens to produce today reports exactly that name — so a
     coordinator that stopped reading the workflow would not pass.
     """
-    planted = DESTINATIONS[CATEGORIES[0]]
+    planted = sorted(SHIPPED_DESTINATIONS.values())[0]
     source = path.read_text(encoding="utf-8")
     assert anchor in source, anchor
     mutated = source.replace(anchor, f'{anchor.split(" = ")[0]} = "{planted}"'
@@ -1184,8 +1278,13 @@ def test_the_single_definition_search_reports_a_second_one_reintroduced(tmp_path
 
 def test_the_workflow_declares_no_ceiling_of_its_own():
     """Stated directly as well as by search: no `on_failure` in the shipped
-    workflow carries a ceiling, and none carries a default route either."""
-    for stage in WORKFLOW["stages"]:
+    workflow carries a ceiling, and none carries a default route either.
+
+    A subject read, and one of the two reasons this module still resolves what
+    this repository deploys: the claim is about the shipped definition, so a
+    definition this module built could not carry it.
+    """
+    for stage in SHIPPED_WORKFLOW["stages"]:
         on_failure = stage.get("on_failure", {})
         assert "max_retries" not in on_failure, stage["name"]
         assert "retry_stage" not in on_failure, stage["name"]

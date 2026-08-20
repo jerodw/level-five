@@ -35,8 +35,55 @@ from conftest import first_retry_route
 import conftest
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = conftest.shipped_workflow()
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *the contract the
+#: coordinator's output keeps* — which files a run writes, what statuses it may
+#: record, what an escalation says — and a workflow is an input to that
+#: question rather than its subject. Any workflow states the contract; reading
+#: the deployed one made the contract's statement depend on the deployment.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="coordinator-contract-workflow",
+)
+
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "contract-harness")
 
 #: The retry category a failing verdict names, read off the loaded workflow.
 #: Since story-028 a recommended retry must name a category the workflow's
@@ -362,29 +409,29 @@ class FakeRunner:
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
                  allowed_tools=None):
         self.calls.append(stage)
-        if stage == "implementer":
-            self._write_json("changed-files.json", {
+        if stage == WRITING:
+            self._write_json(conftest.CHANGED_FILES, {
                 "modified": ["src/app.py"], "created": [], "deleted": [],
             })
-            (self.run_dir / "implementation-summary.md").write_text(
+            (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
-        elif stage == "tester":
-            self._write_json("test-results.json", {
+        elif stage == VALIDATING:
+            self._write_json(conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 2, "tests_run": 5,
                 "tests_passed": 5, "tests_failed": 0, "failures": [],
             })
-            self._write_json("tester-changed-files.json", {
+            self._write_json(conftest.TESTER_CHANGED_FILES, {
                 "modified": [], "created": ["tests/test_app.py"], "deleted": [],
             })
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             # A failed verdict accounts for the guidance in force for the
             # attempt it judges, reporting every entry unmet — the ordinary
             # under-delivery case, which routes as it always has.
             verdict = conftest.answering_guidance(
                 self.verdicts.pop(0), self.run_dir)
-            self._write_json("verification-result.json", verdict)
+            self._write_json(conftest.VERIFICATION_RESULT, verdict)
             if verdict["status"] == "failed":
-                self._write_json("retry-guidance.json", {
+                self._write_json(conftest.RETRY_GUIDANCE, {
                     "current_focus": [{
                         "focus": "fix the sample behavior",
                         "satisfied_when": "the sample behavior exists",
@@ -392,10 +439,10 @@ class FakeRunner:
                     "preserve_behavior": ["existing behavior"],
                     "retry_scope": ["src/app.py"],
                 })
-        elif stage == "documenter":
-            (self.run_dir / "documentation-report.md").write_text(
+        elif stage == DOCUMENTING:
+            (self.run_dir / conftest.DOCUMENTATION_REPORT).write_text(
                 "No changes needed.\n", encoding="utf-8")
-            self._write_json("documenter-changed-files.json", {
+            self._write_json(conftest.DOCUMENTER_CHANGED_FILES, {
                 "modified": [], "created": [], "deleted": [],
             })
         return AgentResult(ok=True, result_text=f"{stage} done")

@@ -74,7 +74,60 @@ EXPECTED_CRITERIA = [
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#:
+#: Assembled by the builder in `tests/conftest.py` rather than resolved out of
+#: what this repository deploys. story-048 made the change: the subject here is
+#: *that one reader reads the story artifact*, and the workflow the run happens
+#: to execute is incidental to that reading.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="single-story-reader-workflow",
+)
+
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+VERIFYING_TEMPLATE = next(stage["prompt"] for stage in WORKFLOW["stages"]
+                          if stage["name"] == VERIFYING)
+
+#: The label the fixture's templates render the acceptance criteria under,
+#: derived from the field the fixture declares rather than written here.
+CRITERIA_LABEL = "acceptance_criteria:\n"
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "single-reader-harness")
 
 
 def parse(story_text: str) -> dict:
@@ -117,21 +170,21 @@ class StageRunner:
     def __call__(self, prompt, *, stage, **kwargs):
         self.stages.append(stage)
         empty = {"modified": [], "created": [], "deleted": []}
-        if stage == "implementer":
+        if stage == WRITING:
             self._write("implementation-summary.md", "Did the work.\n")
             self._write("changed-files.json", empty)
-        elif stage == "tester":
+        elif stage == VALIDATING:
             self._write("test-results.json", {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
             self._write("tester-changed-files.json", empty)
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             self._write("verification-result.json", {
                 "status": "passed", "blocking_issues": [], "unverified": [],
                 "retry_recommended": False,
             })
-        elif stage == "documenter":
+        elif stage == DOCUMENTING:
             self._write("documentation-report.md", "Nothing to document.\n")
             self._write("documenter-changed-files.json",
                         {"modified": [], "created": [], "deleted": []})
@@ -152,13 +205,22 @@ def complete_run(target_root: Path, harness_root: Path) -> Path:
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, runner
     ) == 0
-    assert runner.stages == ["implementer", "tester", "documenter", "verifier"]
+    assert runner.stages == STAGE_NAMES
     return run_dir
 
 
 def criteria_block(prompt: str) -> list[str]:
-    """The lines the verifier prompt renders under 'Acceptance criteria:'."""
-    body = prompt.split("Acceptance criteria:\n", 1)[1]
+    """The lines the verifying stage's prompt renders under the criteria label.
+
+    The label is the one the fixture's template declares, derived rather than
+    written: story-048 pointed these runs at a workflow this module builds, and
+    a built template labels a field by its context key.
+    """
+    # The last occurrence, not the first: the same prompt injects the story
+    # artifact verbatim, and a story artifact carries that label itself. The
+    # criteria the verifier evaluates are the ones under the *template's*
+    # label, which the fixture renders after the story.
+    body = prompt.rsplit(CRITERIA_LABEL, 1)[1]
     return body.split("\n\n", 1)[0].splitlines()
 
 
@@ -391,9 +453,9 @@ def test_absent_acceptance_criteria_renders_as_none(target_root, harness_root):
     )
     assert context["acceptance_criteria"] is None
     rendered = context_assembler.render(
-        context_assembler.load_template(harness_root, "verifier.md"), context
+        context_assembler.load_template(harness_root, VERIFYING_TEMPLATE), context
     )
-    assert "Acceptance criteria:\nNone" in rendered
+    assert CRITERIA_LABEL + "None" in rendered
     assert "{{" not in rendered
 
 
@@ -451,8 +513,9 @@ def test_the_prompt_carries_the_story_file_byte_for_byte(target_root, harness_ro
     story_path = install(target_root, AWKWARD_STORY)
     run_dir = complete_run(target_root, harness_root)
     on_disk = story_path.read_text(encoding="utf-8")
-    for name in ("implementer", "tester", "documenter", "verifier"):
-        prompt = (run_dir / f"prompt-{name}-attempt-1.md").read_text(encoding="utf-8")
+    for name in STAGE_NAMES:
+        prompt = (run_dir / story_coordinator.prompt_file(name, 1)).read_text(
+            encoding="utf-8")
         assert on_disk in prompt, name
 
 
@@ -466,7 +529,8 @@ def test_no_criterion_of_any_committed_story_goes_missing(target_root, harness_r
         assert criteria, path.name
         context = context_for(target_root, harness_root, story_text)
         rendered = context_assembler.render(
-            context_assembler.load_template(harness_root, "verifier.md"), context
+            context_assembler.load_template(harness_root, VERIFYING_TEMPLATE),
+            context
         )
         assert criteria_block(rendered) == [f"- {c}" for c in criteria], path.name
         assert story_text in rendered, path.name
@@ -535,7 +599,7 @@ def test_no_module_in_orchestration_scans_story_text_by_line(harness_root):
         "startswith('acceptance_criteria:')",
         'startswith(f"{key}:")',
     )
-    for path in sorted((harness_root / "orchestration").glob("*.py")):
+    for path in sorted((REPO_ROOT / "orchestration").glob("*.py")):
         if path.name == "story_parser.py":      # the one reader
             continue
         source = path.read_text(encoding="utf-8")
@@ -545,7 +609,7 @@ def test_no_module_in_orchestration_scans_story_text_by_line(harness_root):
 
 def test_story_parser_parse_is_the_only_entry_point_into_a_story(harness_root):
     callers = []
-    for path in sorted((harness_root / "orchestration").glob("*.py")):
+    for path in sorted((REPO_ROOT / "orchestration").glob("*.py")):
         if path.name == "story_parser.py":
             continue
         if "story_parser.parse(" in path.read_text(encoding="utf-8"):
@@ -557,7 +621,7 @@ def test_story_parser_parse_is_the_only_entry_point_into_a_story(harness_root):
 
 def test_the_single_mechanism_test_was_retargeted_not_removed(harness_root):
     """The story requires the existing assertion to survive, retargeted."""
-    source = (harness_root / "tests" / "test_story_coordinator.py").read_text(
+    source = (REPO_ROOT / "tests" / "test_story_coordinator.py").read_text(
         encoding="utf-8"
     )
     marker = "def test_exactly_one_mechanism_reads_a_story_artifact("
@@ -571,7 +635,7 @@ def test_the_single_mechanism_test_was_retargeted_not_removed(harness_root):
 
 def test_no_conforming_yaml_library_reads_a_story(harness_root):
     """An *import* of a YAML library, not the word appearing in prose."""
-    for path in sorted((harness_root / "orchestration").glob("*.py")):
+    for path in sorted((REPO_ROOT / "orchestration").glob("*.py")):
         if path.name == "story_parser.py":      # its docstring names what it bans
             continue
         source = path.read_text(encoding="utf-8")

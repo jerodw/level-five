@@ -28,8 +28,57 @@ REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 #: the workflow's retry_routing table defines, or the coordinator
 #: escalates rather than routing it, so every failing verdict below
 #: carries one.
-RETRY_CATEGORY, RETRY_STAGE = first_retry_route(
-    conftest.shipped_workflow(REPO_ROOT, "story-workflow"))
+#:
+#: The workflow these runs execute is assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *what an attempt
+#: archives* — every artifact any stage declares, copied before the retry
+#: begins — and the stage list is an input to that question rather than its
+#: subject.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="attempt-archiving-workflow",
+)
+
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "attempt-archiving-harness")
 
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
@@ -81,7 +130,7 @@ class StampingRunner:
             stage,
             sorted(p.name for p in attempts.iterdir()) if attempts.is_dir() else [],
         ))
-        if stage == "implementer":
+        if stage == WRITING:
             write_json(self.run_dir / "changed-files.json", {
                 "modified": ["src/app.py"],
                 "created": [f"src/attempt_{self.attempt}.py"],
@@ -92,7 +141,7 @@ class StampingRunner:
             for name in self.extra_outputs:
                 (self.run_dir / name).write_text(
                     f"extra output from attempt {self.attempt}\n", encoding="utf-8")
-        elif stage == "tester":
+        elif stage == VALIDATING:
             write_json(self.run_dir / "test-results.json", {
                 "status": "passed", "tests_written": self.attempt,
                 "tests_run": 5, "tests_passed": 5, "tests_failed": 0,
@@ -103,7 +152,7 @@ class StampingRunner:
                 "created": [f"tests/test_attempt_{self.attempt}.py"],
                 "deleted": [],
             })
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             # A failed verdict accounts for the guidance in force for the
             # attempt it judges, reporting every entry unmet — the ordinary
             # under-delivery case, which routes as it always has.
@@ -120,7 +169,7 @@ class StampingRunner:
                     "retry_scope": ["src/app.py"],
                 })
                 self.attempt += 1
-        elif stage == "documenter":
+        elif stage == DOCUMENTING:
             (self.run_dir / "documentation-report.md").write_text(
                 f"Documented after attempt {self.attempt}.\n", encoding="utf-8")
             write_json(self.run_dir / "documenter-changed-files.json",
@@ -229,10 +278,9 @@ def test_the_documenters_artifacts_are_archived_with_the_attempt(retry_then_pass
     """
     _, run_dir = retry_then_pass
     archive = run_dir / "attempts" / "attempt-1"
-    archived = story_coordinator.archivable_artifacts(
-        json.loads((REPO_ROOT / "workflows" / "story-workflow.json").read_text())["stages"]
-    )
-    for name in ("documentation-report.md", "documenter-changed-files.json"):
+    archived = story_coordinator.archivable_artifacts(WORKFLOW["stages"])
+    for name in (conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES):
         assert name in archived, name
         assert (archive / name).is_file(), name
         assert (run_dir / name).is_file(), name
@@ -243,7 +291,7 @@ def test_the_archive_happens_before_the_retry_begins(retry_then_pass):
     and did not exist when attempt 1's did."""
     runner, _ = retry_then_pass
     implementer_entries = [
-        seen for stage, seen in runner.attempts_dirs_seen if stage == "implementer"
+        seen for stage, seen in runner.attempts_dirs_seen if stage == WRITING
     ]
     assert implementer_entries == [[], ["attempt-1"]]
 
@@ -252,9 +300,9 @@ def test_the_attempt_number_matches_the_rendered_prompt_of_the_same_attempt(
     retry_then_pass,
 ):
     _, run_dir = retry_then_pass
-    assert (run_dir / "prompt-implementer-attempt-1.md").is_file()
+    assert (run_dir / story_coordinator.prompt_file(WRITING, 1)).is_file()
     assert (run_dir / "attempts" / "attempt-1").is_dir()
-    assert (run_dir / "prompt-implementer-attempt-2.md").is_file()
+    assert (run_dir / story_coordinator.prompt_file(WRITING, 2)).is_file()
     # Attempt 2 succeeded, so it was never superseded and is not archived.
     assert not (run_dir / "attempts" / "attempt-2").exists()
 
@@ -269,8 +317,7 @@ def stage_attempt_directory(name: str) -> bool:
     attempt-keyed directory of a stage that exists and nothing else.
     """
     stem, sep, number = name.rpartition("-attempt-")
-    stages = {stage["name"] for stage
-              in conftest.shipped_workflow(REPO_ROOT, "story-workflow")["stages"]}
+    stages = {stage["name"] for stage in WORKFLOW["stages"]}
     return bool(sep) and stem in stages and number.isdigit()
 
 
@@ -302,8 +349,7 @@ def test_routing_is_unchanged_by_the_archive(retry_then_pass):
     assert state["status"] == "completed"
     assert state["retry_count"] == 1
     assert runner.calls == [
-        "implementer", "tester", "documenter",
-        "verifier", "implementer", "tester", "documenter", "verifier",
+        *STAGE_NAMES, *STAGE_NAMES,
     ]
     assert "retry 1 of 2" in (run_dir / "events.log").read_text()
 
@@ -389,8 +435,7 @@ def _archive_code_body(name: str) -> str:
 
 @pytest.mark.parametrize("function", ["archivable_artifacts", "archive_attempt"])
 def test_no_artifact_or_stage_name_is_written_into_the_archive_code(function):
-    workflow = json.loads(
-        (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+    workflow = WORKFLOW
     code = _archive_code_body(function)
     for stage in workflow["stages"]:
         assert stage["name"] not in code, stage["name"]
@@ -405,19 +450,12 @@ def probe_harness_root(tmp_path: Path) -> Path:
     Its implementer stage declares an extra artifact, design-notes.md, in a
     place the coordinator reads artifact names from. Nothing else differs.
     """
-    root = tmp_path / "probe-harness"
-    root.mkdir()
-    for directory in ("prompts", "rules", "schemas"):
-        shutil.copytree(REPO_ROOT / directory, root / directory)
-    workflow = json.loads(
-        (REPO_ROOT / "workflows" / "story-workflow.json").read_text(encoding="utf-8"))
+    workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
-        if stage["name"] == "implementer":
+        if stage["name"] == WRITING:
             stage["outputs"] = [*stage["outputs"], "design-notes.md"]
     workflow["name"] = "archive-probe-workflow"
-    (root / "workflows").mkdir()
-    write_json(root / "workflows" / "archive-probe-workflow.json", workflow)
-    return root
+    return conftest.materialize_workflow(workflow, tmp_path / "probe-harness")
 
 
 def test_a_workflow_the_repository_does_not_ship_gets_its_artifact_archived(
@@ -428,7 +466,7 @@ def test_a_workflow_the_repository_does_not_ship_gets_its_artifact_archived(
     config = target_root / ".harness" / "config.yaml"
     config.write_text(
         config.read_text(encoding="utf-8").replace(
-            "workflow: story-workflow", "workflow: archive-probe-workflow"),
+            f"workflow: {WORKFLOW['name']}", "workflow: archive-probe-workflow"),
         encoding="utf-8",
     )
     commit_setup(target_root, "run the archive probe workflow")

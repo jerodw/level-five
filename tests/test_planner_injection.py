@@ -83,10 +83,39 @@ and most do not.
 """
 
 
-#: The loaded workflow build_context has taken as a required argument
-#: since story-028, which injects the workflow's own facts — its stages,
-#: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#: The workflow whose facts get injected, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change, and it strengthens what the assertions
+#: below can claim: their subject is *the planner template* — that it carries
+#: the placeholders and that every stage name and create restriction the
+#: workflow declares reaches the rendered prompt — and the workflow is the
+#: input supplying those facts. Built names are ones the shipped template
+#: cannot contain by accident, so "the stage name reached the render" now means
+#: it was injected rather than that the word was already in the prose.
+#:
+#: The template itself, the schema directory and the story schema stay this
+#: repository's: those are the artifacts under test, not inputs to the test.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        may_not_create=("tests/",)),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        may_not_create=("src/",)),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    name="planner-injection-workflow",
+)
 
 
 def planner_template() -> str:
@@ -435,7 +464,8 @@ NO_CONFIG_MESSAGE = "No .harness/config.yaml found here or above. Run l5-init fi
 
 
 def workflow() -> dict:
-    return conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+    """The workflow whose facts the injection carries — the one built above."""
+    return WORKFLOW
 
 
 def rules() -> dict:
@@ -471,29 +501,44 @@ def rendered_prompt_with_workflow_facts() -> str:
     return context_assembler.render(planner_template(), full_context())
 
 
-def missing_stage_names(rendered: str) -> set[str]:
+def missing_stage_names(rendered: str, names: list[str] | None = None) -> set[str]:
+    """Stage names the rendered prompt does not carry.
+
+    `names` defaults to the built workflow's, which is what every assertion
+    rendering the template here injects. The one end-to-end case below drives
+    `l5-plan`, which resolves its own harness root and so injects the facts
+    *this repository deploys*; it passes those names in rather than being
+    handed a set the run never saw.
+    """
     return {
-        name for name in stage_names()
+        name for name in (stage_names() if names is None else names)
         if not re.search(rf"\b{name}\b", rendered)
     }
 
 
-def missing_restrictions(rendered: str) -> set[tuple[str, str]]:
+def missing_restrictions(
+    rendered: str, restrictions: list[tuple[str, str]] | None = None,
+) -> set[tuple[str, str]]:
     """(stage, prefix) pairs no single line of the rendered prompt states.
 
     Lines belonging verbatim to an injected schema file are not counted: a
     schema description that happens to mention a stage beside a prefix (the
     story schema's stage_exceptions prose does) is not the workflow stating
-    its restriction."""
+    its restriction.
+
+    `restrictions` defaults to the built workflow's, for the reason
+    `missing_stage_names` records.
+    """
     schema_lines = {
         line
         for path in (REPO_ROOT / "schemas").glob("*.schema.json")
         for line in path.read_text(encoding="utf-8").splitlines()
     }
     lines = [line for line in rendered.splitlines() if line not in schema_lines]
+    declared = declared_restrictions() if restrictions is None else restrictions
     return {
         (stage, prefix)
-        for stage, prefix in declared_restrictions()
+        for stage, prefix in declared
         if not any(stage in line and prefix in line for line in lines)
     }
 
@@ -516,11 +561,29 @@ def run_script(name: str, *args: str, cwd: Path, env: dict | None = None
 
 
 def test_the_workflow_defines_the_four_expected_stages():
-    """Anchor the data-driven assertions below to the stages the acceptance
-    criteria name, so an accidentally emptied workflow cannot vacuously pass."""
-    assert stage_names() == ["implementer", "tester", "documenter", "verifier"]
-    assert declared_restrictions() == [("implementer", "tests/")]
+    """Anchor the data-driven assertions below, so an accidentally emptied
+    workflow cannot vacuously pass.
+
+    Two anchors since story-048, because there are now two workflows in play.
+    The one this module *builds* is what the renders below inject, and what is
+    anchored of it is that it declares four distinct stages and a create
+    restriction on one of them. The one this repository *deploys* is what the
+    end-to-end `l5-plan` case injects, and its four stages and its one
+    restriction are named here as they always were — that half is a claim about
+    what is deployed, which is why this module stays a declared reader of it.
+    """
+    assert len(stage_names()) == 4
+    assert len(set(stage_names())) == len(stage_names())
+    assert declared_restrictions()
+    assert all(stage in stage_names() for stage, _ in declared_restrictions())
     assert rules()["blocked_paths"] == [".git/", ".harness/runs/", "rules/"]
+
+    deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+    assert [stage["name"] for stage in deployed["stages"]] == [
+        "implementer", "tester", "documenter", "verifier"]
+    assert [(stage["name"], prefix) for stage in deployed["stages"]
+            for prefix in stage.get("may_not_create", [])] == [
+        ("implementer", "tests/")]
 
 
 def test_the_template_names_no_workflow_stage_of_its_own():
@@ -702,8 +765,20 @@ def test_l5_plan_injects_the_workflow_facts_into_the_session_prompt(
     assert result.returncode == 0, result.stderr
     assert argv is not None
     prompt = argv[argv.index("--append-system-prompt") + 1]
-    assert missing_stage_names(prompt) == set()
-    assert missing_restrictions(prompt) == set()
+    # `l5-plan` resolves its own harness root, so the facts it injects are the
+    # ones this repository deploys rather than the ones built above. The
+    # expectation is read off that definition, so the assertion compares the
+    # render against what the run actually had to inject.
+    deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+    deployed_names = [stage["name"] for stage in deployed["stages"]]
+    deployed_restrictions = [
+        (stage["name"], prefix)
+        for stage in deployed["stages"]
+        for prefix in stage.get("may_not_create", [])
+    ]
+    assert deployed_names and deployed_restrictions      # the control
+    assert missing_stage_names(prompt, deployed_names) == set()
+    assert missing_restrictions(prompt, deployed_restrictions) == set()
     assert missing_blocked_paths(prompt) == set()
     assert PLACEHOLDER.search(prompt) is None
     schema_text = (REPO_ROOT / "schemas" / "story.schema.json").read_text(

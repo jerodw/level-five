@@ -41,7 +41,64 @@ EMPTY_RECORD = {"modified": [], "created": [], "deleted": []}
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#:
+#: Assembled by the builder in `tests/conftest.py` rather than resolved out of
+#: what this repository deploys. story-048 made the change: the subject here is
+#: *ownership enforcement* — a stage may not create under a prefix its own
+#: declaration names — and any stage list states that. Reading the deployed one
+#: made "which stage this deployment restricts" a fact this module enforced;
+#: that question moved to tests/test_shipped_workflow_is_valid.py.
+GOVERNED_PREFIX = "tests/"
+
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        may_not_create=(GOVERNED_PREFIX,),
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="stage-ownership-workflow",
+)
+
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "ownership-harness")
+
+
+def writing_template() -> str:
+    """The prompt template the writing stage declares, off the built definition."""
+    return next(stage["prompt"] for stage in WORKFLOW["stages"]
+                if stage["name"] == WRITING)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -71,19 +128,19 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None):
         self.calls.append(stage)
-        if stage == "implementer":
+        if stage == WRITING:
             write_json(self.run_dir / "changed-files.json", self._record(stage))
             if "implementation-summary.md" not in self.skip_outputs:
                 (self.run_dir / "implementation-summary.md").write_text("Did it.\n")
-        elif stage == "tester":
+        elif stage == VALIDATING:
             write_json(self.run_dir / "test-results.json", {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
             write_json(self.run_dir / "tester-changed-files.json", self._record(stage))
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             write_json(self.run_dir / "verification-result.json", self.verdicts.pop(0))
-        elif stage == "documenter":
+        elif stage == DOCUMENTING:
             (self.run_dir / "documentation-report.md").write_text("Nothing.\n")
             write_json(self.run_dir / "documenter-changed-files.json",
                        {"modified": [], "created": [], "deleted": []})
@@ -137,7 +194,8 @@ def exception_block(stage: str, create: str, reason: str = "the deliverable is t
 
 
 def workflow_stages(harness_root: Path) -> list[dict]:
-    return conftest.shipped_workflow(harness_root, "story-workflow")["stages"]
+    return harness_config.load_workflow(
+        harness_root, WORKFLOW["name"], conftest.repository_config())["stages"]
 
 
 def executable_source(text: str) -> str:
@@ -163,12 +221,16 @@ def executable_source(text: str) -> str:
 
 
 def test_only_the_implementer_stage_declares_paths_it_may_not_create(harness_root):
+    """Of the definition these runs execute. That *this repository* restricts
+    exactly its implementer, and under the configured tests directory, is a
+    question about what it deploys and is asked in
+    tests/test_shipped_workflow_is_valid.py."""
     declared = {
         stage["name"]: stage.get("may_not_create")
         for stage in workflow_stages(harness_root)
     }
-    assert declared["implementer"] == ["tests/"]
-    assert [name for name, value in declared.items() if value] == ["implementer"]
+    assert declared[WRITING] == [GOVERNED_PREFIX]
+    assert [name for name, value in declared.items() if value] == [WRITING]
 
 
 def test_the_declaring_stage_also_declares_the_record_the_check_reads(harness_root):
@@ -185,25 +247,25 @@ def test_the_declaring_stage_also_declares_the_record_the_check_reads(harness_ro
 
 def test_an_implementer_creating_a_test_file_escalates(target_root, harness_root):
     runner = Runner(target_root, records={
-        "implementer": {"modified": ["src/app.py"],
+        WRITING: {"modified": ["src/app.py"],
                         "created": ["tests/test_new.py"], "deleted": []},
     })
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert state_of(target_root)["status"] == "escalated"
-    assert runner.calls == ["implementer"]
+    assert runner.calls == [WRITING]
 
 
 def test_the_escalation_names_the_stage_the_path_and_the_prefix(target_root,
                                                                 harness_root):
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_new.py"],
+        WRITING: {"modified": [], "created": ["tests/test_new.py"],
                         "deleted": []},
     })
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 2
     events, summary = evidence(target_root)
     for text in (events, summary):
-        assert "implementer" in text
+        assert WRITING in text
         assert "tests/test_new.py" in text
         assert "tests/" in text
 
@@ -213,7 +275,7 @@ def test_an_ownership_escalation_does_not_increment_retry_count(target_root,
     """It escalates the way a blocked-path violation does, not the way a
     failed verification does."""
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_new.py"],
+        WRITING: {"modified": [], "created": ["tests/test_new.py"],
                         "deleted": []},
     })
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 2
@@ -232,7 +294,7 @@ def ownership_only(tmp_path: Path, harness_root: Path) -> Path:
     ownership does not escalate on a modification or a deletion. The revert
     check's own behavior on those records is story-017's to demonstrate.
     """
-    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
+    workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
         stage.pop("revert_check", None)
     return mirror_harness(tmp_path, harness_root, workflow)
@@ -243,7 +305,7 @@ def test_an_implementer_modifying_an_existing_test_does_not_escalate(target_root
                                                                      tmp_path):
     """A changed signature must be allowed to leave the suite compiling."""
     runner = Runner(target_root, records={
-        "implementer": {"modified": ["src/app.py", "tests/test_app.py"],
+        WRITING: {"modified": ["src/app.py", "tests/test_app.py"],
                         "created": [], "deleted": []},
     })
     fake_root = ownership_only(tmp_path, harness_root)
@@ -256,7 +318,7 @@ def test_an_implementer_deleting_under_the_prefix_does_not_escalate(target_root,
                                                                     harness_root,
                                                                     tmp_path):
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": [],
+        WRITING: {"modified": [], "created": [],
                         "deleted": ["tests/test_obsolete.py"]},
     })
     fake_root = ownership_only(tmp_path, harness_root)
@@ -267,7 +329,7 @@ def test_a_path_merely_containing_the_prefix_is_not_a_violation(target_root,
                                                                 harness_root):
     """The declaration is a path prefix, not a substring match."""
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["src/tests/helper.py"],
+        WRITING: {"modified": [], "created": ["src/tests/helper.py"],
                         "deleted": []},
     })
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 0
@@ -277,12 +339,12 @@ def test_a_stage_that_declares_nothing_may_create_under_the_prefix(target_root,
                                                                    harness_root):
     """The tester's whole job is creating files under tests/."""
     runner = Runner(target_root, records={
-        "tester": {"modified": [], "created": ["tests/test_story_001.py"],
+        VALIDATING: {"modified": [], "created": ["tests/test_story_001.py"],
                    "deleted": []},
     })
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 0
-    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
+    assert runner.calls == STAGE_NAMES
 
 
 # --------------------------------------------------------------------------
@@ -294,7 +356,7 @@ def test_a_missing_required_artifact_is_reported_before_ownership(target_root,
                                                                   harness_root):
     runner = Runner(
         target_root,
-        records={"implementer": {"modified": [], "created": ["tests/t.py"],
+        records={WRITING: {"modified": [], "created": ["tests/t.py"],
                                  "deleted": []}},
         skip_outputs=("implementation-summary.md",),
     )
@@ -309,7 +371,7 @@ def test_an_invalid_record_is_reported_before_ownership(target_root, harness_roo
     class InvalidRecordRunner(Runner):
         def __call__(self, prompt, *, stage, **kwargs):
             result = super().__call__(prompt, stage=stage, **kwargs)
-            if stage == "implementer":
+            if stage == WRITING:
                 write_json(self.run_dir / "changed-files.json",
                            {"modified": [], "created": ["tests/t.py"]})  # no deleted
             return result
@@ -325,7 +387,7 @@ def test_the_blocked_paths_check_runs_before_the_ownership_check(target_root,
                                                                  harness_root):
     """A record that violates both escalates as the blocked-path violation."""
     runner = Runner(target_root, records={
-        "implementer": {"modified": ["rules/execution-rules.json"],
+        WRITING: {"modified": ["rules/execution-rules.json"],
                         "created": ["tests/test_new.py"], "deleted": []},
     })
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 2
@@ -341,12 +403,8 @@ def test_the_blocked_paths_check_runs_before_the_ownership_check(target_root,
 
 def mirror_harness(tmp_path: Path, harness_root: Path, workflow: dict) -> Path:
     """A harness root identical to the real one but for its workflow file."""
-    fake = tmp_path / "harness"
-    (fake / "workflows").mkdir(parents=True)
-    for shared in ("prompts", "schemas", "rules"):
-        (fake / shared).symlink_to(harness_root / shared)
-    write_json(fake / "workflows" / "story-workflow.json", workflow)
-    return fake
+    workflow = {**workflow, "name": WORKFLOW["name"]}
+    return conftest.materialize_workflow(workflow, tmp_path / "harness")
 
 
 def test_moving_the_declaration_moves_the_enforcement(target_root, harness_root,
@@ -354,38 +412,38 @@ def test_moving_the_declaration_moves_the_enforcement(target_root, harness_root,
     """The strongest form of "no stage name and no prefix in the code": give
     the coordinator a workflow it has never seen, declaring a different prefix
     on a different stage, and the rule follows the declaration."""
-    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
+    workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
         stage.pop("may_not_create", None)
-        if stage["name"] == "tester":
+        if stage["name"] == VALIDATING:
             stage["may_not_create"] = ["src/"]
     fake_root = mirror_harness(tmp_path, harness_root, workflow)
 
     # The implementer creating under tests/ is now unrestricted; the tester
     # creating under src/ is the violation.
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_new.py"],
+        WRITING: {"modified": [], "created": ["tests/test_new.py"],
                         "deleted": []},
-        "tester": {"modified": [], "created": ["src/helper.py"], "deleted": []},
+        VALIDATING: {"modified": [], "created": ["src/helper.py"], "deleted": []},
     })
     assert story_coordinator.run_story("story-001", fake_root, target_root, runner) == 2
-    assert runner.calls == ["implementer", "tester"]
+    assert runner.calls == [WRITING, VALIDATING]
     events, summary = evidence(target_root)
     for text in (events, summary):
-        assert "tester" in text
+        assert VALIDATING in text
         assert "src/helper.py" in text
         assert "src/" in text
 
 
 def test_a_workflow_declaring_nothing_enforces_nothing(target_root, harness_root,
                                                         tmp_path):
-    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
+    workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
         stage.pop("may_not_create", None)
     fake_root = mirror_harness(tmp_path, harness_root, workflow)
 
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_new.py"],
+        WRITING: {"modified": [], "created": ["tests/test_new.py"],
                         "deleted": []},
     })
     assert story_coordinator.run_story("story-001", fake_root, target_root, runner) == 0
@@ -440,9 +498,9 @@ def test_the_ownership_check_names_no_stage(target_root, harness_root):
 
 def test_an_exception_lets_the_named_stage_create_under_the_prefix(target_root,
                                                                    harness_root):
-    append_to_story(target_root, exception_block("implementer", "tests/"))
+    append_to_story(target_root, exception_block(WRITING, GOVERNED_PREFIX))
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_regression.py"],
+        WRITING: {"modified": [], "created": ["tests/test_regression.py"],
                         "deleted": []},
     })
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
@@ -452,15 +510,15 @@ def test_an_exception_lets_the_named_stage_create_under_the_prefix(target_root,
 
 def test_the_applied_exception_is_recorded_in_the_event_log(target_root,
                                                             harness_root):
-    append_to_story(target_root, exception_block("implementer", "tests/"))
+    append_to_story(target_root, exception_block(WRITING, GOVERNED_PREFIX))
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_regression.py"],
+        WRITING: {"modified": [], "created": ["tests/test_regression.py"],
                         "deleted": []},
     })
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 0
     events = (run_dir_of(target_root) / "events.log").read_text()
     assert "exception" in events
-    assert "implementer" in events
+    assert WRITING in events
     assert "tests/" in events
 
 
@@ -469,19 +527,19 @@ def test_an_exception_does_not_lift_the_rule_for_another_stage(target_root,
                                                                 tmp_path):
     """The grant is per stage: a workflow restricting two stages and a story
     granting one leaves the other restricted."""
-    workflow = conftest.shipped_workflow(harness_root, "story-workflow")
+    workflow = json.loads(json.dumps(WORKFLOW))
     for stage in workflow["stages"]:
-        if stage["name"] in ("implementer", "tester"):
+        if stage["name"] in (WRITING, VALIDATING):
             stage["may_not_create"] = ["tests/"]
     fake_root = mirror_harness(tmp_path, harness_root, workflow)
-    append_to_story(target_root, exception_block("implementer", "tests/"))
+    append_to_story(target_root, exception_block(WRITING, GOVERNED_PREFIX))
 
     runner = Runner(target_root, records={
-        "implementer": {"modified": [], "created": ["tests/test_a.py"], "deleted": []},
-        "tester": {"modified": [], "created": ["tests/test_b.py"], "deleted": []},
+        WRITING: {"modified": [], "created": ["tests/test_a.py"], "deleted": []},
+        VALIDATING: {"modified": [], "created": ["tests/test_b.py"], "deleted": []},
     })
     assert story_coordinator.run_story("story-001", fake_root, target_root, runner) == 2
-    assert runner.calls == ["implementer", "tester"]
+    assert runner.calls == [WRITING, VALIDATING]
     _, summary = evidence(target_root)
     assert "tests/test_b.py" in summary
     assert "tests/test_a.py" not in summary
@@ -517,26 +575,31 @@ def test_an_exception_granting_an_unrestricted_path_is_refused(target_root,
                                                                 capsys):
     """An exception that grants nothing is a planning error, not a harmless
     one: the tester was never restricted from creating under tests/."""
-    append_to_story(target_root, exception_block("tester", "tests/"))
+    append_to_story(target_root, exception_block(VALIDATING, GOVERNED_PREFIX))
     assert_refused_leaving_no_trace(target_root, harness_root, Runner(target_root))
     err = capsys.readouterr().err
-    assert "tester" in err
+    assert VALIDATING in err
     assert "tests/" in err
 
 
 def test_a_grant_naming_a_prefix_the_stage_never_declared_is_refused(target_root,
                                                                      harness_root,
                                                                      capsys):
-    append_to_story(target_root, exception_block("implementer", "docs/"))
+    append_to_story(target_root, exception_block(WRITING, "docs/"))
     assert_refused_leaving_no_trace(target_root, harness_root, Runner(target_root))
     assert "docs/" in capsys.readouterr().err
 
 
-def test_the_refusal_reaches_the_entry_point_the_same_way(target_root):
+def test_the_refusal_reaches_the_entry_point_the_same_way(target_root, tmp_path):
     """End to end: no agent can run, because the refusal happens above run
     directory creation and branch checkout."""
-    harness_root = Path(story_coordinator.__file__).resolve().parents[1]
-    append_to_story(target_root, exception_block("reviewer", "tests/"))
+    # A harness root of its own, carrying the built definition *and* the entry
+    # point: a script under `scripts/` resolves its own harness root from its
+    # own location, so it is copied rather than reached for.
+    harness_root = conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "entry-point-harness",
+        copy=("orchestration", "scripts"))
+    append_to_story(target_root, exception_block("reviewer", GOVERNED_PREFIX))
     # The timeout is a guard, not a tolerance: a refusal returns immediately,
     # and anything slower means the entry point reached agent invocation.
     result = subprocess.run(
@@ -555,7 +618,7 @@ def test_the_cross_check_is_a_function_over_the_story_and_the_workflow(harness_r
     itself, so a caller can hold it to a workflow the code never loaded."""
     stages = workflow_stages(harness_root)
     story = {"stage_exceptions": [
-        {"stage": "implementer", "create": "tests/", "reason": "why"}]}
+        {"stage": WRITING, "create": GOVERNED_PREFIX, "reason": "why"}]}
     assert story_coordinator.stage_exception_problems(story, stages) == []
     assert story_coordinator.stage_exception_problems({}, stages) == []
 
@@ -566,10 +629,10 @@ def test_the_cross_check_is_a_function_over_the_story_and_the_workflow(harness_r
     assert "reviewer" in problems[0]
 
     ungranted = {"stage_exceptions": [
-        {"stage": "tester", "create": "tests/", "reason": "why"}]}
+        {"stage": VALIDATING, "create": GOVERNED_PREFIX, "reason": "why"}]}
     problems = story_coordinator.stage_exception_problems(ungranted, stages)
     assert len(problems) == 1
-    assert "tester" in problems[0]
+    assert VALIDATING in problems[0]
 
 
 def test_read_story_still_does_schema_conformance_only(target_root, harness_root):
@@ -620,7 +683,7 @@ def test_stage_exceptions_is_an_optional_top_level_property():
 
 @pytest.mark.parametrize("missing", ["stage", "create", "reason"])
 def test_an_exception_missing_any_required_field_fails_validation(missing):
-    entry = {"stage": "implementer", "create": "tests/", "reason": "why"}
+    entry = {"stage": WRITING, "create": GOVERNED_PREFIX, "reason": "why"}
     del entry[missing]
     story = {
         "story": {"id": "story-x", "title": "t", "description": "d"},
@@ -708,9 +771,9 @@ def test_a_stage_touching_a_file_the_plan_did_not_predict_does_not_escalate(
     )
     commit_setup(target_root, "the story artifact this test runs")
     runner = Runner(target_root, records={
-        "implementer": {"modified": ["src/unpredicted.py"], "created": [],
+        WRITING: {"modified": ["src/unpredicted.py"], "created": [],
                         "deleted": []},
-        "tester": {"modified": [], "created": ["tests/test_unpredicted.py"],
+        VALIDATING: {"modified": [], "created": ["tests/test_unpredicted.py"],
                    "deleted": []},
     })
     assert story_coordinator.run_story("story-001", harness_root, target_root, runner) == 0
@@ -860,13 +923,13 @@ def build(target_root: Path, harness_root: Path, story_text: str) -> dict:
 def test_stage_exceptions_render_as_one_dash_prefixed_line_each(target_root,
                                                                  harness_root):
     path = append_to_story(
-        target_root, exception_block("implementer", "tests/", "the suite is the story")
+        target_root, exception_block(WRITING, GOVERNED_PREFIX, "the suite is the story")
     )
     context = build(target_root, harness_root, path.read_text())
     lines = context["stage_exceptions"].splitlines()
     assert len(lines) == 1
     assert lines[0].startswith("- ")
-    assert "implementer" in lines[0]
+    assert WRITING in lines[0]
     assert "tests/" in lines[0]
     assert "the suite is the story" in lines[0]
 
@@ -874,7 +937,7 @@ def test_stage_exceptions_render_as_one_dash_prefixed_line_each(target_root,
 def test_two_exceptions_render_as_two_lines(target_root, harness_root):
     path = append_to_story(
         target_root,
-        exception_block("implementer", "tests/", "first reason")
+        exception_block(WRITING, GOVERNED_PREFIX, "first reason")
         + "  - stage: implementer\n    create: tests/\n    reason: second reason\n",
     )
     context = build(target_root, harness_root, path.read_text())
@@ -891,19 +954,24 @@ def test_stage_exceptions_render_as_none_when_the_story_declares_none(target_roo
     context = build(target_root, harness_root, story_text)
     assert context["stage_exceptions"] is None
     rendered = context_assembler.render(
-        context_assembler.load_template(harness_root, "implementer.md"), context
+        context_assembler.load_template(harness_root, writing_template()), context
     )
     assert "{{" not in rendered
     assert "None" in rendered
 
 
 def test_the_implementer_prompt_injects_the_exceptions(harness_root):
-    template = context_assembler.load_template(harness_root, "implementer.md")
+    template = context_assembler.load_template(harness_root, writing_template())
     assert "{{stage_exceptions}}" in template
 
 
-def test_the_implementer_prompt_states_the_create_modify_distinction(harness_root):
-    text = context_assembler.load_template(harness_root, "implementer.md").lower()
+def test_the_implementer_prompt_states_the_create_modify_distinction():
+    """The one assertion in this module whose subject is a *shipped* artifact:
+    the prose this repository's own implementer template carries. A template
+    the fixture generated could not carry it, so this reads what is deployed
+    and says why."""
+    shipped = Path(story_coordinator.__file__).resolve().parents[1]
+    text = context_assembler.load_template(shipped, "implementer.md").lower()
     do_not = text.split("do not:")[1].split("[workflow layer]")[0]
     assert "modify" in do_not
     assert "create" in do_not
@@ -917,11 +985,11 @@ def test_the_granted_exception_reaches_the_rendered_implementer_prompt(target_ro
     """Asserted against the rendered dash-line rather than the reason text,
     which also appears in the raw {{story}} the same prompt injects."""
     path = append_to_story(
-        target_root, exception_block("implementer", "tests/", "the suite is the story")
+        target_root, exception_block(WRITING, GOVERNED_PREFIX, "the suite is the story")
     )
     context = build(target_root, harness_root, path.read_text())
     rendered = context_assembler.render(
-        context_assembler.load_template(harness_root, "implementer.md"), context
+        context_assembler.load_template(harness_root, writing_template()), context
     )
     assert context["stage_exceptions"] in rendered
     assert "{{" not in rendered
@@ -930,7 +998,7 @@ def test_the_granted_exception_reaches_the_rendered_implementer_prompt(target_ro
 def test_every_stage_prompt_renders_with_no_leftover_placeholder(target_root,
                                                                   harness_root):
     stages = workflow_stages(harness_root)
-    for story_suffix in ("", exception_block("implementer", "tests/")):
+    for story_suffix in ("", exception_block(WRITING, GOVERNED_PREFIX)):
         path = target_root / ".harness" / "stories" / "story-001.yaml"
         story_text = path.read_text() + story_suffix
         context = build(target_root, harness_root, story_text)

@@ -1926,40 +1926,56 @@ def test_the_scan_leaves_the_two_modules_named_for_a_story_subject_alone():
 # with nothing to say about whether that grant was right. Adding a stage or
 # renaming an artifact does the same thing to a different set.
 #
-# **This rule reports rather than forbids, and the grandfathered list is why.**
-# Twenty modules read a live artifact this way at the moment the rule landed.
-# Converting them is not this rule's job and was not done here; recording them
-# is. The list is asserted *equal* to what the scan reports, in both directions,
-# so it can only shrink: a module that joins the set fails because it is not on
-# the list, and a module converted off the set fails because the list still
-# names it. A subset assertion either way would let one of those pass silently.
+# **This rule reports rather than forbids, and the declared list is why.**
+# The list records every module the scan reports, each with a stated reason
+# saying why the shipped artifact is that module's *subject* rather than an
+# input to it. It is asserted *equal* to what the scan reports, in both
+# directions: a module that joins the set fails because it is not on the list,
+# and a module converted off the set fails because the list still names it. A
+# subset assertion either way would let one of those pass silently.
 #
-# It matches on the **shape of the path**, never on a helper name — the same
-# reasoning the second and third rules use. A path built by joining onto one of
-# the module-level names that stand for this repository, reaching one of the
-# five artifact families. Both join idioms the suite writes are read, the `/`
-# operator and `.joinpath(...)`, because story-004 forces the second one in
+# It reads two routes to the same artifact.
+#
+# The first matches on the **shape of the path**, never on a helper name — the
+# same reasoning the second and third rules use. A path built by joining onto
+# one of the module-level names that stand for this repository, reaching one of
+# the five artifact families. Both join idioms the suite writes are read, the
+# `/` operator and `.joinpath(...)`, because story-004 forces the second one in
 # places and covering only the first would leave an unreported route to the
 # same read. Renaming the local that holds the result changes nothing.
 #
+# The second, added by story-048, matches the **workflow resolvers**:
+# `conftest.shipped_workflow` and `harness_config.load_workflow`, handed one of
+# those same repository-root names or handed nothing at all. Those two join the
+# path *inside* the helper, in a module the path-shape route is not reading
+# while it reads this one — so before the widening they were invisible, and the
+# idiom the suite actually writes was the invisible one. Widening it added
+# eleven modules to the report in a single commit.
+#
 # What it does not cover, stated here because this is where a reader meets it:
 #
-#   * **an equivalent read reached through a helper in another module.**
-#     `conftest.shipped_workflow(REPO_ROOT, "story-workflow")` and
-#     `harness_config.load_rules(REPO_ROOT)` resolve the same live artifacts and
-#     are not reported: the path is joined inside the helper, in a module this
-#     scan is not looking at while it reads this one. The scan reads what a
-#     module's own source states and follows nothing across a module boundary.
+#   * **an equivalent read of some other artifact reached through a
+#     helper in another module.** `harness_config.load_rules(REPO_ROOT)` and
+#     `context_assembler.load_template(REPO_ROOT, "implementer.md")` resolve
+#     live artifacts and are not reported: the path is joined inside the helper,
+#     in a module this scan is not looking at while it reads this one, and only
+#     the two *workflow* resolvers are named above. The scan reads what a
+#     module's own source states and follows nothing across a module boundary —
+#     including a helper one module borrows from another, which is why
+#     converting a module whose helpers another borrows puts the borrower in
+#     scope without the scan ever saying so.
 #   * **the difference between a subject and an input.** This is the rule's
 #     central limit and it is not a small one. The scan cannot tell an assertion
 #     *about* the shipped workflow — which must read it — from an assertion that
 #     merely needed *a* workflow and reached for the shipped one. Every report is
 #     a place to ask the question, not a verdict that the read is wrong, and the
-#     grandfathered list holds both kinds.
+#     reason recorded beside each listed module is a human answer to it rather
+#     than something the scan derived.
 #   * **a read resolved against a name this scan does not recognise.** A path
 #     built from a fixture parameter, an `os.environ` lookup, or a string
-#     concatenation rather than a `/` join is not seen. The scan does not
-#     evaluate expressions or track values.
+#     concatenation rather than a `/` join is not seen; nor is a resolver handed
+#     a root it computed, such as `Path(module.__file__).parents[1]`. The scan
+#     does not evaluate expressions or track values.
 #
 # And the same standing limit as everything mechanical here: it is not
 # tamper-proof. An edit deleting this check alongside a genuinely forced repair
@@ -2015,6 +2031,79 @@ def _is_path_join(node: ast.AST) -> bool:
             and node.func.attr == "joinpath")
 
 
+#: The two helpers that resolve a workflow definition out of a harness root.
+#: `conftest.shipped_workflow` wraps `harness_config.load_workflow`, and both
+#: reach `workflows/<name>.json` under the root they are handed. The join
+#: happens *inside* the helper, in a module the path-shape route above is not
+#: reading while it reads this one, which is why that route reports neither.
+#: story-048 widened the scan to them because they are the idiom the suite
+#: actually writes: the path-shape route saw seven modules and the helper route
+#: sees twenty more resolving the very same artifact.
+WORKFLOW_RESOLVERS = ("shipped_workflow", "load_workflow")
+
+
+def _callee_name(node: ast.Call) -> str | None:
+    """The called name, however it is qualified.
+
+    `conftest.shipped_workflow`, a bare `shipped_workflow` under a
+    `from conftest import ...`, and `harness_config.load_workflow` are the same
+    call. Matched on the name alone for the reason `_is_subprocess_call` gives:
+    requiring the module to be spelled a particular way makes the check
+    evadable by an import statement.
+    """
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def _is_a_repository_root_name(node: ast.AST) -> bool:
+    """Whether this argument *is* one of the names standing for this repository.
+
+    Narrower than `_names_the_repository_root`, deliberately, and not a second
+    copy of it: that one asks whether such a name occurs anywhere inside an
+    expression, which is the right question for a path join and the wrong one
+    for an argument — `Path(REPO_ROOT).parent / "elsewhere"` names the root and
+    does not resolve to it. Here the argument must *be* the name, written bare
+    or qualified by the module that holds it (`conftest.HARNESS_ROOT`).
+    """
+    if isinstance(node, ast.Name):
+        return node.id in REPOSITORY_ROOT_NAMES
+    return isinstance(node, ast.Attribute) and node.attr in REPOSITORY_ROOT_NAMES
+
+
+def _resolves_a_workflow_through_a_helper(node: ast.AST) -> bool:
+    """Whether this call loads a workflow out of *this* repository.
+
+    Two forms, and both are the same read:
+
+      * a root argument that is one of the module-level names standing for this
+        repository — `shipped_workflow(REPO_ROOT, ...)`,
+        `load_workflow(HARNESS_ROOT, name, config)`;
+      * no root argument at all — `conftest.shipped_workflow()`, whose default
+        root *is* this repository. A defaulted read reaches the same file as a
+        spelled one, so leaving it out would have made the widening evadable by
+        deleting an argument.
+
+    A root the test built for itself — a `tmp_path` harness, a fixture
+    parameter, a local — is not this rule's business, exactly as for the path
+    shape above.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    if _callee_name(node) not in WORKFLOW_RESOLVERS:
+        return False
+    root = next((keyword.value for keyword in node.keywords
+                 if keyword.arg == "root"), None)
+    if root is None and node.args:
+        root = node.args[0]
+    if root is None:
+        return True
+    return _is_a_repository_root_name(root)
+
+
 def live_artifact_reads(source: str, module: str) -> list[Flag]:
     """Every path in one module that resolves a live harness artifact.
 
@@ -2044,6 +2133,17 @@ def live_artifact_reads(source: str, module: str) -> list[Flag]:
 
     flags = []
     for node in ast.walk(tree):
+        if _resolves_a_workflow_through_a_helper(node):
+            flags.append(Flag(
+                module=module, line=node.lineno,
+                reason=(f"resolves the live harness artifact under "
+                        f"{LIVE_ARTIFACT_SEGMENTS[0]!r} through "
+                        f"{_callee_name(node)}; that is right when the shipped "
+                        f"artifact is what the assertion is about, and wrong "
+                        f"when the assertion merely needed one — build a "
+                        f"fixture for the second case"),
+            ))
+            continue
         if not _is_path_join(node) or id(node) in nested:
             continue
         if not _names_the_repository_root(node):
@@ -2076,36 +2176,112 @@ def live_artifact_reading_modules() -> list[str]:
     )
 
 
-#: The modules reading a live harness artifact when this rule landed, carried
-#: rather than converted. story-047 converts none of them: the two stories it
-#: precedes do that, and each conversion removes a name from here. The list is
-#: asserted equal to what the scan reports in both directions, so it cannot
-#: grow silently and cannot keep a name whose module was converted.
-GRANDFATHERED_LIVE_ARTIFACT_READERS = (
-    "test_attempt_archiving.py",
-    "test_clean_clone_check.py",
-    "test_config_keys_are_obeyed.py",
-    "test_configured_test_location.py",
-    "test_contract_assertions_bite.py",
-    "test_documenter_before_verification.py",
-    "test_escalation_summary.py",
-    "test_plan_assignment_refusal.py",
-    "test_plan_commit.py",
-    "test_plan_time_validation.py",
-    "test_planner_injection.py",
-    "test_retry_history.py",
-    "test_retry_routing.py",
-    "test_revert_baseline.py",
-    "test_revert_check.py",
-    "test_schema_inventory_location.py",
-    "test_self_routing_retry.py",
-    "test_stage_baseline.py",
-    "test_undeclared_config_keys.py",
-    "test_validation_module_naming.py",
-)
+#: Every module permitted to resolve a live harness artifact, and why. The
+#: reason is the answer to the question the scan cannot ask: is the shipped
+#: artifact the *subject* of this module's assertions, or an input to them? A
+#: module whose answer is "an input" does not belong here — it belongs on a
+#: workflow it builds for itself, which is what story-048 converted a dozen
+#: modules to.
+#:
+#: A mapping rather than a tuple, so a name cannot sit here without a reason.
+#: It is asserted equal to what the scan reports in both directions, so it
+#: cannot grow silently and cannot keep a name whose module was converted.
+DECLARED_LIVE_ARTIFACT_READERS = {
+    "test_clean_clone_check.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "schema this repository ships for the clean-clone record and the retry "
+        "ceiling it declares in rules/execution-rules.json, both of which are "
+        "shipped declarations rather than inputs",
+    "test_config_keys_are_obeyed.py":
+        "its subject is this repository's own configuration — whether every "
+        "key .harness/config.yaml declares is obeyed by the harness that reads "
+        "it",
+    "test_configured_test_location.py":
+        "its subject is the configured test location and the token the shipped "
+        "workflow carries for it, which only the shipped declaration states",
+    "test_contract_assertions_bite.py":
+        "its subject is whether this repository's own contract assertions fail "
+        "when violated, which is a claim about the artifacts it ships",
+    "test_documenter_before_verification.py":
+        "its runs were converted by story-048 to a workflow it builds; what "
+        "remains are four assertions whose subject is what is deployed. "
+        "test_the_verifier_declares_exactly_the_three_categories, "
+        "test_the_documentation_when_tells_the_document_from_the_code_it_"
+        "describes and test_the_two_existing_routes_are_preserved read this "
+        "deployment's own routing table, which is story-045's acceptance "
+        "criterion and which a built table would assert the builder's "
+        "arguments back to itself. test_the_template_restates_no_category_"
+        "destination_or_when, test_the_template_declares_both_placeholders "
+        "and test_the_role_layer_says_the_documenters_output_is_part_of_the_"
+        "subject read prompts/verifier.md, the template this repository ships",
+    "test_escalation_summary.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "retry ceiling this repository declares in rules/execution-rules.json, "
+        "which a summary written *at* the ceiling is a summary about",
+    "test_plan_assignment_refusal.py":
+        "the refusal is decided against this repository's own declarations: "
+        "which stage may create what, here, in this deployment",
+    "test_plan_commit.py":
+        "its subject is what a plan commit of *this* repository contains",
+    "test_plan_time_validation.py":
+        "it reads a real story against the real workflow, which is the pairing "
+        "the plan-time check exists to validate",
+    "test_planner_injection.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "planner template this repository ships, the story schema it injects "
+        "and the schema directory it is drawn from — the artifacts under test "
+        "rather than inputs to the test — together with the one end-to-end "
+        "case that drives l5-plan, which resolves this repository as its own "
+        "harness root and so can only be compared against what is deployed",
+    "test_retry_history.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "retry ceiling this repository declares in rules/execution-rules.json "
+        "and the schema it ships for the artifact under test, both of which "
+        "are shipped declarations rather than inputs",
+    "test_retry_routing.py":
+        "three of its assertions have the shipped definition as their subject: "
+        "the retry-ceiling search over this repository, the check that no "
+        "shipped stage declares a ceiling of its own, and the check that no "
+        "name this deployment's routing table chooses is written into the "
+        "orchestration source. Its mechanism half was converted to a workflow "
+        "it builds",
+    "test_revert_baseline.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "schema this repository ships for the record the check writes and the "
+        "inventory it is listed in, including the assertion that the baseline "
+        "directory carries no schema of its own",
+    "test_revert_check.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "schema this repository ships for the record the check writes, the "
+        "schema inventory it is listed in, and this repository's own stories",
+    "test_schema_inventory_location.py":
+        "its subject is the schema inventory this repository ships, against "
+        "schemas/manifest.json",
+    "test_self_routing_retry.py":
+        "its workflow reads were converted by story-048; what remains is the "
+        "schema this repository ships for the self-route record, the schema "
+        "inventory it is listed in, and the retry ceiling declared in "
+        "rules/execution-rules.json",
+    "test_shipped_workflow_is_valid.py":
+        "the shipped workflow is the whole of its subject: whether this "
+        "deployment's definition is well-formed and says what this project "
+        "intends of it",
+    "test_stage_baseline.py":
+        "its workflow reads were converted by story-048; what remains is this "
+        "repository's schema inventory and the assertion that the baseline "
+        "directory it names carries no schema of its own, both of which are "
+        "claims about what is shipped",
+    "test_stage_tool_grants.py":
+        "its subject is whether this deployment grants its stages the tools "
+        "they need, which is a fact about what it ships",
+    "test_undeclared_config_keys.py":
+        "its subject is this repository's own configuration keys",
+    "test_validation_module_naming.py":
+        "its subject is this repository's own module names",
+}
 
 
-def test_the_modules_reading_a_live_artifact_are_exactly_the_grandfathered_ones():
+def test_the_modules_reading_a_live_artifact_are_exactly_the_declared_ones():
     """The rule, run rather than inspected, and asserted in both directions.
 
     Set equality rather than either subset. A module that begins reading a live
@@ -2114,25 +2290,36 @@ def test_the_modules_reading_a_live_artifact_are_exactly_the_grandfathered_ones(
     differences so the failure says which of the two happened.
     """
     reported = set(live_artifact_reading_modules())
-    listed = set(GRANDFATHERED_LIVE_ARTIFACT_READERS)
+    listed = set(DECLARED_LIVE_ARTIFACT_READERS)
 
     joined = sorted(reported - listed)
     assert not joined, (
-        "these modules read a live harness artifact and are not grandfathered; "
-        "build a fixture instead of reading what this repository ships: "
-        + ", ".join(joined))
+        "these modules resolve a live harness artifact and are not declared "
+        "permitted to. Ask the question the scan cannot: is what this "
+        "repository ships the subject of the assertion, or an input to it? If "
+        "it is an input, build the workflow the test needs with "
+        "conftest.build_workflow; if it is the subject, declare it here with "
+        "the reason: " + ", ".join(joined))
 
     left = sorted(listed - reported)
     assert not left, (
-        "these modules no longer read a live harness artifact and must be "
-        "removed from the grandfathered list, which only shrinks: "
-        + ", ".join(left))
+        "these modules no longer resolve a live harness artifact and must be "
+        "removed from the declared list: " + ", ".join(left))
 
     assert reported == listed
     # The companion assertion the glob needs: a scan over zero files agrees
     # with an empty list for the wrong reason.
     assert len(all_modules()) >= 15
     assert reported
+
+
+def test_every_declared_reader_states_why_the_shipped_artifact_is_its_subject():
+    """A name with no reason is a name nobody asked the question about."""
+    for name, reason in DECLARED_LIVE_ARTIFACT_READERS.items():
+        assert (TESTS_DIR / name).is_file(), name
+        assert reason.strip(), name
+        assert len(reason.split()) >= 8, (name, reason)
+    assert DECLARED_LIVE_ARTIFACT_READERS
 
 
 @pytest.mark.parametrize("planted,segment", [
@@ -2196,6 +2383,58 @@ def test_the_live_artifact_scan_leaves_a_module_reading_its_own_fixture_alone():
     assert len(live_artifact_reads(rooted, "probe.py")) == 5
 
 
+@pytest.mark.parametrize("planted", [
+    pytest.param("W = conftest.shipped_workflow(REPO_ROOT, 'story-workflow')\n",
+                 id="the-conftest-helper-with-a-root-argument"),
+    pytest.param("W = conftest.shipped_workflow(conftest.HARNESS_ROOT)\n",
+                 id="the-same-helper-with-a-qualified-root-name"),
+    pytest.param("from conftest import shipped_workflow\n"
+                 "W = shipped_workflow(HARNESS_ROOT, 'story-workflow')\n",
+                 id="the-same-helper-imported-bare"),
+    pytest.param("W = conftest.shipped_workflow()\n",
+                 id="the-same-helper-with-the-root-defaulted"),
+    pytest.param("W = harness_config.load_workflow(REPO_ROOT, NAME, config)\n",
+                 id="the-loader-the-helper-wraps"),
+])
+def test_the_live_artifact_scan_reports_a_planted_helper_route_read(planted):
+    """The widening story-048 made, demonstrated rather than asserted.
+
+    Before it, every one of these resolved `workflows/<name>.json` under this
+    repository and none was reported: the join happens inside the helper. A
+    scan that had quietly lost the helper route would still pass the
+    path-shape controls above, so each spelling the suite writes is planted
+    here — qualified, bare, and defaulted.
+    """
+    flags = live_artifact_reads(planted, "probe.py")
+    assert len(flags) == 1, flags
+    assert "workflows" in flags[0].reason
+
+
+def test_the_live_artifact_scan_leaves_a_module_that_builds_its_workflow_alone():
+    """The other half of that control, and the one that makes the widening
+    usable: a module whose only workflow comes from the builder is not
+    reported, so "not reported" is a property of where the definition came
+    from rather than of the scan having stopped looking at helpers.
+
+    The two sources ask for the same thing and differ in exactly that.
+    """
+    built = (
+        "W = conftest.build_workflow(\n"
+        "    conftest.workflow_stage(outputs=('a.json',)),\n"
+        "    conftest.workflow_stage(name=conftest.VERIFYING_STAGE))\n"
+        "def harness(tmp_path):\n"
+        "    return conftest.materialize_workflow(W, tmp_path / 'harness')\n"
+        "def loaded(harness_root):\n"
+        "    return harness_config.load_workflow(harness_root, W['name'], {})\n"
+    )
+    assert live_artifact_reads(built, "probe.py") == []
+
+    reached_for = built.replace(
+        "harness_config.load_workflow(harness_root, W['name'], {})",
+        "harness_config.load_workflow(REPO_ROOT, W['name'], {})")
+    assert len(live_artifact_reads(reached_for, "probe.py")) == 1
+
+
 @pytest.mark.parametrize("benign", [
     pytest.param("P = REPO_ROOT / 'tests' / 'test_thing.py'\n",
                  id="a-path-outside-every-live-family"),
@@ -2206,8 +2445,10 @@ def test_the_live_artifact_scan_leaves_a_module_reading_its_own_fixture_alone():
     pytest.param("def probe(harness_root):\n"
                  "    return harness_root / 'prompts' / 'tester.md'\n",
                  id="a-fixture-parameter-which-is-a-stated-limit"),
-    pytest.param("W = conftest.shipped_workflow(REPO_ROOT, 'story-workflow')\n",
-                 id="a-helper-mediated-read-which-is-a-stated-limit"),
+    pytest.param("W = conftest.shipped_workflow(harness_root, NAME)\n",
+                 id="a-resolver-handed-a-root-the-test-owns"),
+    pytest.param("R = harness_config.load_rules(REPO_ROOT)\n",
+                 id="a-helper-mediated-read-of-another-artifact-a-stated-limit"),
 ])
 def test_the_live_artifact_scan_leaves_these_alone(benign):
     """What it must not report, including two of its own stated limits: a read
@@ -2231,10 +2472,11 @@ def test_the_live_artifact_rules_stated_limits_are_in_the_module_and_are_true():
     assert "evaluate expressions or track values" in limits
     assert "tamper-proof" in stated
 
-    # And the claims are true of the scan, not just written above it.
+    # And the claims are true of the scan, not just written above it. The
+    # helper-boundary limit is now about the artifacts the two *workflow*
+    # resolvers do not reach, which is what the prose above says.
     assert live_artifact_reads(
-        "W = conftest.shipped_workflow(REPO_ROOT, 'story-workflow')\n",
-        "probe.py") == []
+        "R = harness_config.load_rules(REPO_ROOT)\n", "probe.py") == []
     assert live_artifact_reads(
         "def probe(harness_root):\n"
         "    return harness_root / 'workflows' / 'story-workflow.json'\n",
@@ -2269,25 +2511,24 @@ def test_this_rule_draws_nothing_from_the_five_above():
             in source)
 
 
-def test_the_grandfathered_list_is_a_list_and_not_a_derivation():
+def test_the_declared_list_is_a_list_and_not_a_derivation():
     """It is written out, and it must be: a list derived from the scan would
     equal it by construction and the equality above would assert nothing.
 
     Read off this module's own source rather than asserted about the value, so
-    a later edit that replaces the tuple with a comprehension goes red here.
+    a later edit that replaces the mapping with a comprehension goes red here.
     """
     source = Path(__file__).read_text(encoding="utf-8")
     assignment = next(
         node for node in ast.parse(source).body
-        if isinstance(node, ast.Assign) and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id == "GRANDFATHERED_LIVE_ARTIFACT_READERS")
-    assert isinstance(assignment.value, ast.Tuple)
-    assert all(isinstance(element, ast.Constant)
-               for element in assignment.value.elts)
-    assert len(assignment.value.elts) == len(
-        set(GRANDFATHERED_LIVE_ARTIFACT_READERS))
-    assert list(GRANDFATHERED_LIVE_ARTIFACT_READERS) \
-        == sorted(GRANDFATHERED_LIVE_ARTIFACT_READERS)
-    for name in GRANDFATHERED_LIVE_ARTIFACT_READERS:
+        if isinstance(node, ast.AnnAssign | ast.Assign)
+        and isinstance(getattr(node, "target", None) or node.targets[0], ast.Name)
+        and (getattr(node, "target", None) or node.targets[0]).id
+        == "DECLARED_LIVE_ARTIFACT_READERS")
+    assert isinstance(assignment.value, ast.Dict)
+    assert all(isinstance(key, ast.Constant) for key in assignment.value.keys)
+    assert len(assignment.value.keys) == len(DECLARED_LIVE_ARTIFACT_READERS)
+    assert list(DECLARED_LIVE_ARTIFACT_READERS) \
+        == sorted(DECLARED_LIVE_ARTIFACT_READERS)
+    for name in DECLARED_LIVE_ARTIFACT_READERS:
         assert (TESTS_DIR / name).is_file(), name

@@ -146,7 +146,29 @@ SUBJECTS = [
 #: The loaded workflow build_context has taken as a required argument
 #: since story-028, which injects the workflow's own facts — its stages,
 #: its create restrictions, its retry routes — into every stage prompt.
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+#:
+#: story-048 built it here rather than resolving what this repository deploys.
+#: The assertions below are about the *guidance text* the shipped tester and
+#: verifier templates carry, and the workflow is an input the assembler
+#: requires in order to render one of them at all — any workflow declaring a
+#: writing stage and a judging one renders the same guidance, so deriving it
+#: from the deployed definition made the number of stages this repository
+#: happens to ship into something these assertions would move on.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES,),
+        changed_files=conftest.CHANGED_FILES),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    name="shared-baseline-resolution-workflow",
+)
 
 
 def git(root: Path, *args: str) -> str:

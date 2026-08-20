@@ -56,8 +56,64 @@ ORCHESTRATION = REPO_ROOT / "orchestration"
 STORIES_DIR = REPO_ROOT / ".harness" / "stories"
 TESTS_DIR = REPO_ROOT / "tests"
 
-WORKFLOW = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
-IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if s["name"] == "implementer")
+#: The prefix the writing stage is restricted from creating under, and the
+#: directory the target's suite lives in. One value, stated once, because the
+#: target repository below is built with its tests there and the workflow is
+#: built to govern that same place — a fixture defines its names in one place
+#: and everything else derives them from it.
+GOVERNED_PREFIX = "tests/"
+
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py`. story-048 made the change: the subject here is *how the
+#: revert check decides an edit*, and the declaration that turns the check on is
+#: an input to that question rather than its subject. Reading the deployed one
+#: made "which stage this deployment restricts, and under what prefix" into
+#: something this module enforced.
+#:
+#: Four stages, because the check must be shown to run for the stage that
+#: declares it and for no other, and because the run has to reach a verdict.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        may_not_create=(GOVERNED_PREFIX,),
+        revert_check={"result": "revert-check-result.json",
+                      "baseline": "stage-baseline"},
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        # Declared because several assertions below are about the revert check
+        # *not* being the run's only clone: the clean-clone check is the other
+        # one, and the counts here are stated against it rather than against
+        # nothing.
+        clean_clone={"result": conftest.CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="revert-check-workflow",
+)
+
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+#: The stage that declares the check, found by the declaration rather than by
+#: name, so this file names no stage the definition does not.
+IMPLEMENTER_STAGE = next(s for s in WORKFLOW["stages"] if "revert_check" in s)
 #: The artifact name and the governed prefix are read off the workflow, never
 #: spelled here, for the same reason the coordinator may not spell them. Since
 #: story-019 the declaration is an object naming both the result artifact and
@@ -77,7 +133,7 @@ TEST_COMMAND = shlex.join([sys.executable, "-m", "pytest", "tests", "-q",
                            "-p", "no:cacheprovider"])
 
 CONFIG = f"""\
-workflow: story-workflow
+workflow: {WORKFLOW["name"]}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -87,7 +143,7 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {TEST_COMMAND}
-tests_dir: tests/
+tests_dir: {GOVERNED_PREFIX}
 """
 
 # --------------------------------------------------------------------------
@@ -207,8 +263,14 @@ def target(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def harness_root() -> Path:
-    return REPO_ROOT
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying the workflow built above.
+
+    The rules and the schemas are the harness's rather than the workflow's, so
+    they stay linked at the shipped ones: converting away from the shipped
+    *workflow* is not building a second rule set.
+    """
+    return conftest.materialize_workflow(WORKFLOW, tmp_path / "revert-harness")
 
 
 # --------------------------------------------------------------------------
@@ -294,20 +356,21 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None):
         self.calls.append(stage)
-        if stage == "implementer":
-            write_json(self.run_dir / "changed-files.json", self._record(stage))
-            write(self.run_dir / "implementation-summary.md", "Did it.\n")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        if stage == WRITING:
+            write_json(self.run_dir / conftest.CHANGED_FILES, self._record(stage))
+            write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 2,
                 "tests_passed": 2, "tests_failed": 0, "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json", self._record(stage))
-        elif stage == "verifier":
-            write_json(self.run_dir / "verification-result.json", PASS)
-        elif stage == "documenter":
-            write(self.run_dir / "documentation-report.md", "Nothing.\n")
-            write_json(self.run_dir / "documenter-changed-files.json",
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
+                       self._record(stage))
+        elif stage == VERIFYING:
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, PASS)
+        elif stage == DOCUMENTING:
+            write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -366,17 +429,14 @@ def configure(target_root: Path, **overrides) -> None:
 
 
 def mirror_harness(tmp_path: Path, workflow: dict) -> Path:
-    """A harness root identical to the real one but for its workflow file."""
-    fake = tmp_path / "harness"
-    (fake / "workflows").mkdir(parents=True)
-    for shared in ("prompts", "schemas", "rules"):
-        (fake / shared).symlink_to(REPO_ROOT / shared)
-    write_json(fake / "workflows" / "story-workflow.json", workflow)
-    return fake
+    """A harness root carrying a variant of the workflow built above."""
+    workflow = {**workflow, "name": WORKFLOW["name"]}
+    return conftest.materialize_workflow(workflow, tmp_path / "harness")
 
 
 def loaded_workflow() -> dict:
-    return conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+    """A fresh copy of the built definition, for a caller about to mutate it."""
+    return json.loads(json.dumps(WORKFLOW))
 
 
 def append_to_story(target_root: Path, text: str) -> None:
@@ -498,10 +558,10 @@ def test_the_added_test_passes_against_the_module_before_and_after(tmp_path):
 
 
 def test_a_forced_edit_under_the_governed_prefix_is_permitted(target, harness_root):
-    code, runner = run(target, harness_root, {"implementer": forced_repair})
+    code, runner = run(target, harness_root, {WRITING: forced_repair})
     assert code == 0
     assert state_of(target)["status"] == "completed"
-    assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
+    assert runner.calls == STAGE_NAMES
 
     record = record_of(target)
     assert record["ran"] is True
@@ -513,21 +573,21 @@ def test_a_forced_edit_under_the_governed_prefix_is_permitted(target, harness_ro
 def test_the_run_records_why_the_forced_edit_was_permitted(target, harness_root):
     """A reader must be able to see why an implementer was allowed into the
     prefix, not only that it was."""
-    assert run(target, harness_root, {"implementer": forced_repair})[0] == 0
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
     events = (run_dir_of(target) / "events.log").read_text()
     permitting = [line for line in events.splitlines() if "permitted" in line]
     assert len(permitting) == 1
-    assert "implementer" in permitting[0]
+    assert WRITING in permitting[0]
     assert PREFIX in permitting[0]
     assert "tests/test_app.py" in permitting[0]
     assert record_of(target)["output_tail"]
 
 
 def test_an_edit_that_only_adds_coverage_is_escalated(target, harness_root):
-    code, runner = run(target, harness_root, {"implementer": added_coverage})
+    code, runner = run(target, harness_root, {WRITING: added_coverage})
     assert code == 2
     assert state_of(target)["status"] == "escalated"
-    assert runner.calls == ["implementer"]
+    assert runner.calls == [WRITING]
 
     record = record_of(target)
     assert record["permitted"] is False
@@ -536,7 +596,7 @@ def test_an_edit_that_only_adds_coverage_is_escalated(target, harness_root):
 
 
 def test_a_deleted_governed_path_the_change_broke_is_permitted(target, harness_root):
-    code, _ = run(target, harness_root, {"implementer": deleted_broken_test})
+    code, _ = run(target, harness_root, {WRITING: deleted_broken_test})
     assert code == 0
     record = record_of(target)
     assert record["permitted"] is True
@@ -544,7 +604,7 @@ def test_a_deleted_governed_path_the_change_broke_is_permitted(target, harness_r
 
 
 def test_deleting_a_governed_path_that_still_passes_is_escalated(target, harness_root):
-    code, _ = run(target, harness_root, {"implementer": deleted_passing_test})
+    code, _ = run(target, harness_root, {WRITING: deleted_passing_test})
     assert code == 2
     record = record_of(target)
     assert record["permitted"] is False
@@ -552,10 +612,10 @@ def test_deleting_a_governed_path_that_still_passes_is_escalated(target, harness
 
 
 def test_the_escalation_names_the_stage_the_prefix_and_the_paths(target, harness_root):
-    assert run(target, harness_root, {"implementer": added_coverage})[0] == 2
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 2
     events, summary = evidence(target)
     for text in (events, summary):
-        assert "implementer" in text
+        assert WRITING in text
         assert PREFIX in text
         assert "tests/test_app.py" in text
 
@@ -563,7 +623,7 @@ def test_the_escalation_names_the_stage_the_prefix_and_the_paths(target, harness
 def test_the_escalation_does_not_increment_retry_count(target, harness_root):
     """It escalates the way the ownership violation beside it does, not the
     way a failed verification does."""
-    assert run(target, harness_root, {"implementer": added_coverage})[0] == 2
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 2
     state = state_of(target)
     assert state["status"] == "escalated"
     assert state["retry_count"] == 0
@@ -577,7 +637,7 @@ def test_the_escalation_does_not_increment_retry_count(target, harness_root):
 def test_a_record_naming_no_governed_path_builds_no_clone_and_writes_nothing(
     target, harness_root, clone_calls, builds,
 ):
-    code, _ = run(target, harness_root, {"implementer": nothing_governed})
+    code, _ = run(target, harness_root, {WRITING: nothing_governed})
     assert code == 0
     assert not (run_dir_of(target) / ARTIFACT).exists()
     # The one clone and the one suite run are the verifier's clean-clone
@@ -591,7 +651,7 @@ def test_the_same_run_with_a_governed_path_does_build_a_clone_and_write_one(
 ):
     """The control for the assertion above: identical machinery, one governed
     path added, and the clone, the suite run and the artifact all appear."""
-    code, _ = run(target, harness_root, {"implementer": forced_repair})
+    code, _ = run(target, harness_root, {WRITING: forced_repair})
     assert code == 0
     assert (run_dir_of(target) / ARTIFACT).exists()
     assert ("tests/test_app.py",) in clone_calls
@@ -611,7 +671,7 @@ def test_removing_the_declaration_disables_the_check(target, tmp_path, clone_cal
         stage.pop("revert_check", None)
     fake_root = mirror_harness(tmp_path / "no-declaration", workflow)
 
-    code, _ = run(target, fake_root, {"implementer": added_coverage})
+    code, _ = run(target, fake_root, {WRITING: added_coverage})
     assert code == 0
     assert not (run_dir_of(target) / ARTIFACT).exists()
     assert clone_calls == [()]
@@ -625,23 +685,23 @@ def test_moving_the_declaration_moves_the_check(target, tmp_path):
     for stage in workflow["stages"]:
         stage.pop("may_not_create", None)
         stage.pop("revert_check", None)
-        if stage["name"] == "tester":
+        if stage["name"] == VALIDATING:
             stage["may_not_create"] = ["src/"]
             stage["revert_check"] = DECLARATION
     fake_root = mirror_harness(tmp_path / "moved", workflow)
 
     # The implementer's edit under tests/ is now ungoverned; the tester's
     # edit under src/ is the one decided, and nothing forced it.
-    code, runner = run(target, fake_root, {"implementer": added_coverage,
-                                           "tester": nothing_governed})
+    code, runner = run(target, fake_root, {WRITING: added_coverage,
+                                           VALIDATING: nothing_governed})
     assert code == 2
-    assert runner.calls == ["implementer", "tester"]
+    assert runner.calls == [WRITING, VALIDATING]
     record = record_of(target)
     assert record["permitted"] is False
     assert record["paths"] == ["src/app.py"]
     events, summary = evidence(target)
     for text in (events, summary):
-        assert "tester" in text
+        assert VALIDATING in text
         assert "src/" in text
         assert "src/app.py" in text
 
@@ -654,7 +714,7 @@ def test_no_stage_name_no_prefix_and_no_artifact_name_is_written_in_the_code():
     assert PREFIX not in body
     assert ARTIFACT not in body
     for stage in WORKFLOW["stages"]:
-        if stage["name"] == "verifier":
+        if stage["name"] == VERIFYING:
             continue      # the verifier routing branch predates this story
         assert stage["name"] not in body, stage["name"]
 
@@ -677,11 +737,11 @@ def test_a_story_granting_the_prefix_is_not_subject_to_the_check_on_it(
 ):
     append_to_story(target, (
         "\nstage_exceptions:\n"
-        "  - stage: implementer\n"
+        f"  - stage: {WRITING}\n"
         f"    create: {PREFIX}\n"
         "    reason: the deliverable is the suite\n"
     ))
-    code, _ = run(target, harness_root, {"implementer": added_coverage})
+    code, _ = run(target, harness_root, {WRITING: added_coverage})
     assert code == 0
     assert not (run_dir_of(target) / ARTIFACT).exists()
     assert clone_calls == [()]
@@ -689,7 +749,7 @@ def test_a_story_granting_the_prefix_is_not_subject_to_the_check_on_it(
 
 def test_without_the_grant_the_same_record_escalates(target, harness_root):
     """The control for the grant: the story is the only difference."""
-    assert run(target, harness_root, {"implementer": added_coverage})[0] == 2
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 2
 
 
 # --------------------------------------------------------------------------
@@ -713,7 +773,7 @@ def test_a_clone_that_cannot_be_built_escalates_naming_why(
 
     monkeypatch.setattr(story_coordinator, "_build_clone", unbuildable)
 
-    code, _ = run(target, harness_root, {"implementer": forced_repair})
+    code, _ = run(target, harness_root, {WRITING: forced_repair})
     assert code == 2
     record = record_of(target)
     assert record["ran"] is False
@@ -729,7 +789,7 @@ def test_an_unresolvable_configured_interpreter_escalates_naming_why(
 ):
     """The same treatment the clean-clone check gives it."""
     configure(target, verification_runner="nowhere/python")
-    code, _ = run(target, harness_root, {"implementer": forced_repair})
+    code, _ = run(target, harness_root, {WRITING: forced_repair})
     assert code == 2
     record = record_of(target)
     assert record["ran"] is False
@@ -750,7 +810,7 @@ def test_a_set_containing_one_forced_repair_is_permitted_in_full(
     """The limit, constructed: two governed files, one forced and one not.
     The check reverts both at once, the suite fails, and the whole set is
     permitted - the addition included."""
-    code, _ = run(target, harness_root, {"implementer": mixed_set})
+    code, _ = run(target, harness_root, {WRITING: mixed_set})
     assert code == 0
     record = record_of(target)
     assert record["permitted"] is True
@@ -775,7 +835,7 @@ def test_a_single_file_mixing_a_repair_and_an_addition_is_permitted(
 ):
     """The case the granularity misses outright: one file, both acts. The
     record names the file it reverted and claims nothing about its hunks."""
-    code, _ = run(target, harness_root, {"implementer": mixed_file})
+    code, _ = run(target, harness_root, {WRITING: mixed_file})
     assert code == 0
     record = record_of(target)
     assert record["permitted"] is True
@@ -835,7 +895,7 @@ def test_the_schema_appears_in_no_stages_schemas_map():
 
 
 def test_the_written_record_satisfies_the_schema(target, harness_root):
-    assert run(target, harness_root, {"implementer": forced_repair})[0] == 0
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
     record = record_of(target)
     schema = schema_validator.load_schema(SCHEMA_STEM)
     assert schema_validator.validate(record, schema) == []
@@ -857,7 +917,7 @@ def test_nothing_in_orchestration_reads_the_record_back(target, harness_root):
 
 def test_the_record_is_not_injected_into_any_stage_prompt(target, harness_root):
     """Routing and context are the two ways a record could become state."""
-    assert run(target, harness_root, {"implementer": forced_repair})[0] == 0
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
     context = context_assembler.build_context(
         story_text=STORY,
         story={"acceptance_criteria": []},
@@ -910,8 +970,8 @@ def test_a_clone_built_with_the_default_carries_the_edit_and_one_reverted_does_n
 def test_the_clean_clone_check_still_writes_its_record_and_event_and_routes(
     target, harness_root,
 ):
-    verifier = next(s for s in WORKFLOW["stages"] if s["name"] == "verifier")
-    assert run(target, harness_root, {"implementer": forced_repair})[0] == 0
+    verifier = next(s for s in WORKFLOW["stages"] if s["name"] == VERIFYING)
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
     run_dir = run_dir_of(target)
     clean = json.loads((run_dir / verifier["clean_clone"]["result"]).read_text())
     events = (run_dir / "events.log").read_text()

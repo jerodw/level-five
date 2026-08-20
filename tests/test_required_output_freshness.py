@@ -55,7 +55,57 @@ import conftest
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = conftest.shipped_workflow()
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *whether a required
+#: output was produced by the attempt that claims it*, which needs a stage
+#: declaring a required output — not the shipped set of them.
+#:
+#: The stage a retry routes to carries a self-route budget, because the
+#: escalation this module drives happens after that budget is spent and the
+#: prompt filenames it asserts on are the ones a spent budget leaves behind.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        max_self_routes=1,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="required-output-freshness-workflow",
+)
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "freshness-harness")
+
+
 COORDINATOR_SOURCE = Path(story_coordinator.__file__).read_text(encoding="utf-8")
 
 #: Read off the loaded workflow rather than written here, so this file names
@@ -132,8 +182,8 @@ constraints:
   - preserve existing behavior
 """
 
-CONFIG = """\
-workflow: story-workflow
+CONFIG = f"""\
+workflow: {WORKFLOW["name"]}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -688,24 +738,19 @@ PROBE_OUTPUT = "design-notes.md"
 def probe_harness(tmp_path: Path):
     """A harness root whose retry stage declares an output the shipped
     workflow does not."""
-    root = tmp_path / "probe-harness"
-    root.mkdir()
-    for directory in ("prompts", "rules", "schemas"):
-        shutil.copytree(REPO_ROOT / directory, root / directory)
     workflow = json.loads(json.dumps(WORKFLOW))
     workflow["name"] = "freshness-probe-workflow"
     for stage in workflow["stages"]:
         if stage["name"] == RETRY_STAGE:
             stage["outputs"] = [*stage["outputs"], PROBE_OUTPUT]
-    (root / "workflows").mkdir()
-    write_json(root / "workflows" / f"{workflow['name']}.json", workflow)
+    root = conftest.materialize_workflow(workflow, tmp_path / "probe-harness")
     return root, workflow
 
 
 def use_probe_workflow(target_root: Path, workflow: dict) -> None:
     config = target_root / ".harness" / "config.yaml"
     write(config, config.read_text(encoding="utf-8").replace(
-        "workflow: story-workflow", f"workflow: {workflow['name']}"))
+        f"workflow: {WORKFLOW['name']}", f"workflow: {workflow['name']}"))
     # story-021's clean-tree pre-flight refuses a run whose target tree holds
     # work no stage produced. Which workflow the target runs is part of the
     # repository the run starts from, so it is committed rather than left

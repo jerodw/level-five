@@ -38,7 +38,60 @@ import story_coordinator
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
-WORKFLOW = conftest.shipped_workflow()
+#: The workflow these runs execute, assembled by the builder in
+#: `tests/conftest.py` rather than resolved out of what this repository
+#: deploys. story-048 made the change: the subject here is *what a retry
+#: records* — one entry per routed attempt, naming where it went and what it
+#: archived — and the stage list is an input to that question rather than its
+#: subject.
+WORKFLOW = conftest.build_workflow(
+    conftest.workflow_stage(
+        outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
+        changed_files=conftest.CHANGED_FILES,
+        schemas={conftest.CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
+        changed_files=conftest.TESTER_CHANGED_FILES,
+        schemas={conftest.TEST_RESULTS: "test-results",
+                 conftest.TESTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        outputs=(conftest.DOCUMENTATION_REPORT,
+                 conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        schemas={conftest.DOCUMENTER_CHANGED_FILES: "changed-files"}),
+    conftest.workflow_stage(
+        name=conftest.VERIFYING_STAGE,
+        outputs=(conftest.VERIFICATION_RESULT,),
+        schemas={conftest.VERIFICATION_RESULT: "verification-result",
+                 conftest.RETRY_GUIDANCE: "retry-guidance"},
+        # Declared because a clean-clone reroute is one of the two paths that
+        # write a retry entry, and several assertions below are about the
+        # entry that path writes rather than the one a verdict writes.
+        clean_clone={"result": conftest.CLEAN_CLONE_RESULT,
+                     "retry_stage": conftest.StageRef(0)},
+        retry_routing={"implementation-defect": {
+            "stage": conftest.StageRef(0),
+            "when": "the behaviour the story asked for is missing"}}),
+    escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
+    name="retry-history-workflow",
+)
+
+STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
+WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
+
+
+@pytest.fixture
+def configured_workflow() -> str:
+    """Point the shared target fixture at the definition built above."""
+    return WORKFLOW["name"]
+
+
+@pytest.fixture
+def harness_root(tmp_path: Path) -> Path:
+    """A harness root carrying that definition."""
+    return conftest.materialize_workflow(
+        WORKFLOW, tmp_path / "retry-history-harness")
+
 
 #: Read off the loaded workflow rather than written here, so this file names
 #: no stage the definition does not.
@@ -136,40 +189,40 @@ class RetryRunner:
         # is the attempt number whichever path routed here.
         self.attempt = max(1, self.calls.count(RETRY_STAGE))
 
-        if stage == "implementer":
-            write_json(self.run_dir / "changed-files.json", {
+        if stage == WRITING:
+            write_json(self.run_dir / conftest.CHANGED_FILES, {
                 "modified": ["src/app.py"],
                 "created": [f"src/attempt_{self.attempt}.py"],
                 "deleted": [],
             })
-            (self.run_dir / "implementation-summary.md").write_text(
+            (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 f"Implemented on attempt {self.attempt}.\n", encoding="utf-8")
-        elif stage == "tester":
-            write_json(self.run_dir / "test-results.json", {
+        elif stage == VALIDATING:
+            write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": self.attempt,
                 "tests_run": 5, "tests_passed": 5, "tests_failed": 0,
                 "failures": [],
             })
-            write_json(self.run_dir / "tester-changed-files.json", {
+            write_json(self.run_dir / conftest.TESTER_CHANGED_FILES, {
                 "modified": [],
                 "created": [f"tests/test_attempt_{self.attempt}.py"],
                 "deleted": [],
             })
-        elif stage == "verifier":
+        elif stage == VERIFYING:
             # A failed verdict must account for the guidance in force for the
             # attempt it judges, or the coordinator escalates on the
             # mismatch. Every entry is reported unmet, which is the ordinary
             # under-delivery case and routes exactly as it always did.
             verdict = conftest.answering_guidance(
                 self.verdicts.pop(0), self.run_dir)
-            write_json(self.run_dir / "verification-result.json", verdict)
+            write_json(self.run_dir / conftest.VERIFICATION_RESULT, verdict)
             if verdict["status"] == "failed":
                 write_json(self.run_dir / GUIDANCE_ARTIFACT,
                            guidance_for(self.attempt))
-        elif stage == "documenter":
-            (self.run_dir / "documentation-report.md").write_text(
+        elif stage == DOCUMENTING:
+            (self.run_dir / conftest.DOCUMENTATION_REPORT).write_text(
                 f"Documented after attempt {self.attempt}.\n", encoding="utf-8")
-            write_json(self.run_dir / "documenter-changed-files.json",
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         return AgentResult(ok=True, result_text=f"{stage} done")
 
@@ -353,10 +406,8 @@ def test_the_file_appears_at_the_first_retry_and_not_before(retry_then_pass):
     did."""
     runner, _ = retry_then_pass
     assert runner.history_seen == [
-        ("implementer", False), ("tester", False),
-        ("documenter", False), ("verifier", False),
-        ("implementer", True), ("tester", True),
-        ("documenter", True), ("verifier", True),
+        *[(stage, False) for stage in STAGE_NAMES],
+        *[(stage, True) for stage in STAGE_NAMES],
     ]
 
 
