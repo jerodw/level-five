@@ -1,0 +1,230 @@
+story:
+  id: story-053
+  title: Every history-reading test builds the history it needs
+  description: |
+    story-052 landed the mechanism and converted nothing. Its sixth rule in
+    tests/test_baseline_honesty.py reports every module under tests/ that
+    resolves this repository's own history through story_commit_range,
+    story_diff, repository_file_at, function_source_at or revision_carrying,
+    classifies each reported module as a subject reader or as pending
+    conversion, asserts the two agree in both directions, and holds the
+    pending count against a ceiling that only a converting story lowers.
+    Twenty-six modules are pending, across seventy-five call sites. This is
+    that converting story.
+
+    The state those twenty-six leave the suite in is a suite whose answers
+    change when something is committed, renamed, squashed or rebased, none of
+    which is a property of the code under test. A rename gives a path a new
+    add-commit and silently empties every assertion bounded by that path's
+    range. A story's own commit moves its endpoint. A pinned revision does not
+    survive a squash-merge. CI checks out with fetch-depth: 0 for no reason
+    other than these resolutions. The price was measured rather than
+    predicted: story-051 wrote one of these into a module created that day,
+    for a single sentence, and spent the run's entire retry budget on it.
+
+    The conversion is not a grep. Each read is asked what it was actually
+    fetching, and there are three answers. A read fetching an *input* -- a
+    sentence, an earlier version of a function, the text of a file before a
+    repair -- is answered by building it: a repository the test constructs, or
+    the text carried as a committed fixture. That is roughly thirty of the
+    seventy-five, and it is the pre-story control family that
+    mutate-the-working-tree-never-a-pinned-revision already established the
+    discipline for. A read asserting a *frozen past fact the harness enforces
+    at run time* -- the story_diff scope assertions, which re-state that some
+    past story touched nothing outside its scope -- is restated over a
+    constructed repository in which the property both holds and fails, so it
+    is checked rather than recalled. That is roughly twenty-four of them,
+    across fourteen modules. The claim each assertion makes is preserved in
+    both families; what moves is where the evidence comes from.
+
+    The third answer is that a read is genuinely about this repository, and it
+    is deliberately unavailable here: story-052 fixed that a module leaves the
+    pending class by being converted and never by being reclassified a subject
+    reader, and this story does not lift that. What it does instead is refuse
+    to require an empty list. The ceiling is asserted equal to the honest count
+    this story reaches. If a read turns out genuinely unconvertible, its module
+    stays pending and the ceiling records that, because a story whose only exit
+    from a hard case is to reclassify it would produce exactly the invisible
+    half-conversion the ceiling exists to prevent.
+
+    Two pieces are named by hand rather than derived. tests/test_documented_
+    claim_support.py's historical test is retired rather than converted: it is
+    a weaker duplicate of the test immediately above it, which asserts the same
+    behaviour against a constructed sentence with no git at all and asserts
+    more besides. Its one genuine contribution, that real prose is messier than
+    a synthetic one-liner, is taken by writing a messier constant. And
+    tests/test_shared_baseline_resolution.py, which proves the resolution
+    itself, stops resolving anything out of this repository and gains the
+    coverage it lacks: repository_file_at, function_source_at and
+    revision_carrying are far less proven than story_commit_range is, and the
+    cases this repository has actually hit -- a rename, a revert-and-restore, a
+    squash, and a file with no history -- are the ones to prove them against.
+
+    Emptying the pending class forces two edits inside the sixth rule itself,
+    which story-052 otherwise fenced off. The assertion that both classes are
+    non-empty stops being true the moment the conversion succeeds, and the test
+    naming the read story-051 spent its budget on has to invert: that module is
+    no longer reported at all, which is the stronger statement. The scan, the
+    classification vocabulary and the ceiling machinery all survive, so the next
+    module to take a history dependency still goes red.
+
+tasks:
+  - Convert every module the sixth rule lists as pending so that it resolves nothing out of this repository's own history, deciding each call site by what it was fetching rather than by the helper it called.
+  - For a call fetching an input -- a sentence, an earlier source, the text of a file before a change -- build that input: a history the test constructs in a repository under a temporary directory, or the text carried as a committed fixture read from the working tree.
+  - For a story_diff scope assertion re-stating that a past story changed nothing outside its scope, restate it over a constructed repository in which the same predicate is shown both to pass when the scope was respected and to report when it was not.
+  - Preserve what every converted assertion claims. This story changes where a test's evidence comes from, not what the test says about it.
+  - Retire tests/test_documented_claim_support.py's historical duplicate rather than converting it, and take its one genuine contribution by writing a constant messier than a synthetic one-liner into the test above it.
+  - Convert tests/test_shared_baseline_resolution.py's remaining reads, carrying the five pre-repair sources it recovers from history as committed fixture files under tests/ instead.
+  - Extend tests/test_shared_baseline_resolution.py to prove repository_file_at, function_source_at and revision_carrying against constructed histories, over a rename, a revert-and-restore, a squash, and a file with no history.
+  - Add to tests/conftest.py whatever shared builder the conversions need for constructing a history in a repository under a temporary directory, without changing the behaviour or the signature of any of the five resolvers.
+  - Remove each converted module from the pending class in tests/test_baseline_honesty.py and lower PENDING_CEILING to the count that remains.
+  - Restate, if and only if the pending class empties, the assertion that both classes are non-empty and the test naming the module story-051 spent its retry budget on, so an empty pending class reads as the success it is rather than as a broken list.
+  - Leave the sixth rule's scan, its classification vocabulary, its controls and its stated limits otherwise intact, and leave the four declared subject readers and their recorded reasons alone.
+
+acceptance_criteria:
+  - No module under tests/ that this story converts is reported by the sixth rule's scan, demonstrated by running the scan rather than by reading the modules.
+  - The declared list in tests/test_baseline_honesty.py names exactly what the scan reports, asserted in both directions, and the four subject entries and their recorded reasons are unchanged.
+  - PENDING_CEILING equals the number of pending entries this story leaves, and the control showing a list one entry longer is rejected still fails when it should.
+  - No module moved out of the pending class by being reclassified a subject reader. The subject class holds the same four names it held at story-052's completion.
+  - Each converted module still fails when the behaviour it names is violated, shown for each converted module by a planted violation rather than by the module continuing to pass.
+  - Every assertion that survives conversion claims what it claimed before, demonstrated by comparing the set of test names in each converted module against the set it carried before this story, with any deliberate removal named and argued.
+  - tests/test_documented_claim_support.py::test_story_049s_own_sentence_is_reported_when_a_run_adds_it is gone, the test above it carries a multi-sentence constant with the messiness of real prose rather than a synthetic one-liner, and that test still reports the added text.
+  - tests/test_shared_baseline_resolution.py proves repository_file_at, function_source_at and revision_carrying against histories it constructs, with a case each for a rename, a revert-and-restore, a squash, and a file with no history, and each case fails when the helper it proves is broken.
+  - The five pre-repair sources tests/test_shared_baseline_resolution.py recovers are read from committed fixture files, and the check under test still flags each of them.
+  - The five resolvers in tests/conftest.py keep their behaviour and their signatures, asserted of the signatures rather than claimed.
+  - The converted modules pass against a clone whose history is truncated to a depth that would not answer the reads this story removed, run rather than reasoned about.
+  - The sixth rule's scan, its five planted-violation controls, its benign controls and its "What it does not cover" paragraph report and state exactly what they reported and stated before.
+  - The five rules preceding it in tests/test_baseline_honesty.py report exactly what they reported before, and their declared lists are unchanged.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Run the sixth rule's scan over tests/ first and take its report as the work list, since it names the call site and the helper for each of the seventy-five reads.
+    - Convert tests/test_shared_baseline_resolution.py first and extend its coverage there, because every other conversion leans on resolution behaviour that module is the proof of.
+    - Add the shared history builder to tests/conftest.py once the second or third conversion shows what it actually needs, rather than designing it up front.
+    - Work the pre-story control family next -- the repository_file_at and function_source_at calls bound to BASELINE -- since they share one shape and most are controls for a comparison whose subject is already present-tense.
+    - Work the story_diff scope family after it, restating each over a constructed repository and reusing the control most of these modules already carry beside the assertion.
+    - Retire the tests/test_documented_claim_support.py duplicate and write the messier constant into the test above it.
+    - Lower the pending class and the ceiling last, so the count recorded is the count reached rather than the count intended.
+  likely_file_changes:
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: the pending class shrinks to what the conversion reached, the ceiling follows it, and an empty pending class restates two assertions that assumed a non-empty one
+    - file: tests/conftest.py
+      stage: tester
+      reason: the shared home for suite-wide idioms gains whatever builder the conversions need for constructing a history in a repository under a temporary directory
+    - file: tests/test_shared_baseline_resolution.py
+      stage: tester
+      reason: the module that proves the resolution stops resolving out of this repository, and gains the rename, revert-and-restore, squash and no-history coverage the three less-proven helpers lack
+    - file: tests/test_documented_claim_support.py
+      stage: tester
+      reason: its historical duplicate is retired, the test above it gains a messier constant, and its remaining prompt read is converted
+    - file: tests/test_attempt_archiving.py
+      stage: tester
+      reason: one story_diff scope assertion to restate over a constructed repository
+    - file: tests/test_branch_base.py
+      stage: tester
+      reason: two function_source_at controls to build rather than recover
+    - file: tests/test_clean_clone_check.py
+      stage: tester
+      reason: one story_diff scope assertion to restate over a constructed repository
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: one story_diff scope assertion to restate over a constructed repository
+    - file: tests/test_contract_assertions_bite.py
+      stage: tester
+      reason: a repository_file_at control and a story_commit_range endpoint to build
+    - file: tests/test_documenter_before_verification.py
+      stage: tester
+      reason: two repository_file_at reads of the workflow at two commits to build
+    - file: tests/test_escalation_resume.py
+      stage: tester
+      reason: a pre-story control family and two story_diff scope assertions
+    - file: tests/test_escalation_summary.py
+      stage: tester
+      reason: a function_source_at control and two story_diff scope assertions
+    - file: tests/test_execution_history.py
+      stage: tester
+      reason: one story_diff scope assertion to restate over a constructed repository
+    - file: tests/test_foreign_work_refusal.py
+      stage: tester
+      reason: a pre-story control family of three reads
+    - file: tests/test_mutation_controls.py
+      stage: tester
+      reason: five pre-story controls over scans and rules vocabulary
+    - file: tests/test_plan_commit.py
+      stage: tester
+      reason: one repository_file_at pre-story control to build
+    - file: tests/test_plan_time_validation.py
+      stage: tester
+      reason: a story_commit_range baseline and the repository_file_at read bounded by it
+    - file: tests/test_planner_injection.py
+      stage: tester
+      reason: two story_diff scope assertions to restate over a constructed repository
+    - file: tests/test_rerun_refusal.py
+      stage: tester
+      reason: a pre-story control family and a story_commit_range read used to re-break an assertion
+    - file: tests/test_resume_guard.py
+      stage: tester
+      reason: eight function_source_at reads, the densest single module on the list
+    - file: tests/test_retry_history.py
+      stage: tester
+      reason: one story_diff scope assertion to restate over a constructed repository
+    - file: tests/test_revert_baseline.py
+      stage: tester
+      reason: a repository_file_at pre-story control and four story_diff scope assertions
+    - file: tests/test_revert_check.py
+      stage: tester
+      reason: two story_diff scope assertions to restate over a constructed repository
+    - file: tests/test_schema_inventory_location.py
+      stage: tester
+      reason: eight reads spanning both families, including the archive assertion
+    - file: tests/test_self_routing_retry.py
+      stage: tester
+      reason: two repository_file_at pre-story controls to build
+    - file: tests/test_stage_baseline.py
+      stage: tester
+      reason: a function_source_at control and two story_diff scope assertions
+    - file: tests/test_stage_output_ownership.py
+      stage: tester
+      reason: one story_diff scope assertion to restate over a constructed repository
+    - file: tests/test_stage_tool_grants.py
+      stage: tester
+      reason: three repository_file_at pre-story controls to build
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records that the suite's history coupling is gone or reduced to a stated remainder, the rule each conversion applied, and what the ceiling now says
+
+scope:
+  modify:
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - workflows/
+    - schemas/
+    - scripts/
+    - prompts/
+    - config.yaml
+    - .github/
+
+verification_requirements:
+  - Confirm by running the sixth rule's scan that it reports only the modules the declared list still names, and that the four subject entries are the same four with the same reasons.
+  - Confirm PENDING_CEILING equals the pending count reached, and that no module left the pending class by being reclassified a subject reader.
+  - Confirm each converted module still fails when the behaviour it names is violated, by planting a violation per module and observing the failure -- a conversion that went vacuous is indistinguishable from a good one otherwise.
+  - Confirm each converted module's surviving test names match what it carried before this story, and that every removal is named and argued rather than silent.
+  - Confirm the retired duplicate is gone, that the test above it now carries a constant with the messiness of real prose, and that it still reports the added text.
+  - Confirm the new helper coverage proves repository_file_at, function_source_at and revision_carrying over a rename, a revert-and-restore, a squash and a file with no history, and that each case fails when the helper it proves is broken.
+  - Confirm the five resolvers in tests/conftest.py have the same signatures and the same behaviour they had before.
+  - Confirm the converted modules pass against a clone whose history is truncated below what the removed reads required, run rather than reasoned about.
+  - Confirm the five rules preceding the sixth report what they reported before, and that the sixth rule's controls and stated limits are otherwise unchanged.
+  - Confirm the full test suite passes.
+
+constraints:
+  - No converted assertion changes what it claims. This story changes where a test's evidence comes from.
+  - A module leaves the pending class by being converted, never by being reclassified a subject reader.
+  - The ceiling records the count this story honestly reached. An empty pending list is the target and not a requirement, and a module whose read resists conversion stays pending rather than being argued away.
+  - The five resolvers in tests/conftest.py keep their behaviour and their signatures.
+  - The four declared subject readers keep their reads and their recorded reasons.
+  - The sixth rule's scan and its controls keep detecting what they detect. A conversion is a change to the modules the scan reports, never to the scan.
+  - No test is skipped, weakened or deleted to make a conversion pass.
