@@ -42,8 +42,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, NothingToCompareAgainst, repository_file_at,
-                      story_commit_range, story_diff)
+import context_assembler
+from conftest import (BASELINE, NothingToCompareAgainst, function_source,
+                      repository_file_at, story_commit_range, story_diff)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -142,19 +143,31 @@ def _names_the_repository_root(node: ast.AST) -> bool:
 SPAWNING_CALLS = ("run", "check_output", "Popen", "call", "check_call")
 
 
-def _imported_spawners(tree: ast.Module) -> frozenset[str]:
-    """Names this module bound directly from `subprocess`.
+def _imported_names(tree: ast.Module, module: str,
+                    wanted: object) -> dict[str, str]:
+    """What this module bound from `module`, as local name to original name.
 
     Read off the import statements, which is a fact stated in the source, not
-    a value anything has to resolve. `from subprocess import run` binds `run`;
-    `from subprocess import run as sh` binds `sh`.
+    a value anything has to resolve. `from subprocess import run` binds `run`
+    to `run`; `from subprocess import run as sh` binds `sh` to `run`.
+
+    The alias handling lives here once. The reader rule below reaches it
+    through `_imported_spawners`, and the history rule at the foot of this
+    module reaches it directly for the helpers it names — a second copy of
+    "which local name stands for which import" is exactly the kind of thing
+    that gets fixed in one place and left wrong in the other.
     """
-    names = set()
+    bound: dict[str, str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "subprocess":
-            names.update(alias.asname or alias.name for alias in node.names
-                         if alias.name in SPAWNING_CALLS)
-    return frozenset(names)
+        if isinstance(node, ast.ImportFrom) and node.module == module:
+            bound.update({alias.asname or alias.name: alias.name
+                          for alias in node.names if alias.name in wanted})
+    return bound
+
+
+def _imported_spawners(tree: ast.Module) -> frozenset[str]:
+    """Names this module bound directly from `subprocess`."""
+    return frozenset(_imported_names(tree, "subprocess", SPAWNING_CALLS))
 
 
 def _is_subprocess_call(node: ast.Call, imported: frozenset[str]) -> bool:
@@ -1425,12 +1438,16 @@ def test_the_three_rules_are_stated_separately_and_none_derives_another():
 
 
 @pytest.mark.parametrize("scan", ["module_construction", "git_text_reads",
-                                  "mutation_controls"])
+                                  "mutation_controls", "history_reads"])
 def test_each_new_rule_states_what_it_does_not_cover(scan):
     """The narrowness this module already states about itself, required of
     each new rule as well — and the three limits named by this story's
     acceptance criteria are checked by name, so a rewritten paragraph that
     quietly drops one goes red.
+
+    `history_reads` is held to the same shape by the same test rather than by a
+    second one beside it: a rule whose limits are stated in a paragraph nothing
+    reads is a rule whose limits go stale.
     """
     source = Path(__file__).read_text(encoding="utf-8")
     where = source.index(f"def {scan}(")
@@ -2543,3 +2560,793 @@ def test_the_declared_list_is_a_list_and_not_a_derivation():
         == sorted(DECLARED_LIVE_ARTIFACT_READERS)
     for name in DECLARED_LIVE_ARTIFACT_READERS:
         assert (TESTS_DIR / name).is_file(), name
+
+
+# --------------------------------------------------------------------------
+# A seventh rule: a test resolves this repository's own history only when that
+# history is what it is about
+#
+# Its own rule again, and it shares nothing with the six above. Those are about
+# a comparison that cannot fail, an instrument built out of history, where a
+# file's historical text is read, what a control may mutate, what a module may
+# be called, and which of the files this repository *ships* an assertion may
+# reach for. This one is about the commit graph those files sit in.
+#
+# The five shared helpers in `tests/conftest.py` — `story_commit_range`,
+# `story_diff`, `repository_file_at`, `function_source_at` and
+# `revision_carrying` — resolve commits out of the history the harness itself
+# lives in, and they are the *sanctioned* route to it. The third rule above
+# exists so that no module writes a second one, and nothing here reverses that.
+# What they are not is a source of ordinary inputs. A module whose subject
+# genuinely is this repository — that a value is defined exactly once across
+# the tree, that a committed archive holds a particular patch, that a
+# declaration moved in a named commit — reads the history as its subject and
+# goes on reading it. A module that wants a sentence, a prior version of a
+# function, or the set of paths some change touched is using the history as an
+# *instrument*, and its answers then move when something is committed, renamed,
+# squashed or rebased, none of which is a property of the code under test.
+#
+# Observed, not predicted. story-051 wrote one of these into a module created
+# that day, for a single sentence, and spent that run's entire retry budget on
+# it: a pinned revision rebased away by a squash merge, then a content search
+# that collided with the story's own documentation quoting the very figure it
+# searched for. The attempt that passes does so because no line of the prose
+# happens to carry two words together, which is a property nobody is holding.
+# The test immediately above it asserts the same behaviour against a sentence
+# constructed in the test, with no git at all, and asserts more besides.
+#
+# Nothing caught it, and that is what this rule is for. The sixth rule covers
+# five families of file that ship, and the commit graph is in none of them and
+# structurally cannot be: that scan matches a path shape joined onto a
+# repository-root name, and a history read has no path shape to match. It is a
+# call, to a named helper, whose repository argument is defaulted or spelled.
+# So this one is a call-site scan, and the two share neither a predicate nor a
+# vocabulary.
+#
+# **This rule reports rather than forbids, and the declared list is why.** The
+# list records every module the scan reports, and each entry is *classified*: a
+# subject reader carries the reason this repository's history is what that
+# module's assertions are about, and a pending entry says only that the module
+# has not been decided yet. Pending is not a verdict that a read is wrong; it
+# is the work list for a conversion that is a separate story. A module leaves
+# that class by being converted, never by being reclassified. The list is
+# asserted *equal* to what the scan reports, in both directions: a module that
+# joins the set fails because it is not on the list, and a module converted off
+# the set fails because the list still names it.
+#
+# And a ceiling, because a list that only ever grows records a practice instead
+# of stopping one. `PENDING_CEILING` is the number of pending entries at this
+# story's completion: a converting story lowers it, and nothing raises it. It
+# is a literal integer compared against a length, and resolves nothing out of
+# this repository's history itself — a rule against reading the commit graph
+# that read the commit graph to enforce itself would be the third instance of
+# the practice it exists to stop.
+#
+# What it does not cover, stated here because this is where a reader meets it:
+#
+#   * **git reached any other way.** A `subprocess` invocation of git spelled
+#     out by hand is the first and third rules' business rather than this
+#     one's, and a module's own helper wrapping one of the five is not followed
+#     across the assignment that bound it. This scan reads the call the source
+#     states and tracks no values, exactly as `_is_subprocess_call` does not.
+#   * **a path a test has already written history into.** Reading a file the
+#     test wrote, or a working-tree path, is not a history read and is not
+#     reported — which is the point rather than a gap, since that is the shape
+#     a converted module takes.
+#   * **deliberate obfuscation.** A helper fetched with `getattr`, a resolver
+#     reached through a module object bound at runtime, or a repository
+#     argument assembled out of pieces is not seen.
+#   * **the difference between a subject and an instrument.** The scan cannot
+#     tell them apart, and this is the rule's central limit. Every report is a
+#     place to ask the question, not a verdict that the read is wrong, and the
+#     classification recorded beside each listed module is a human answer to it
+#     rather than something the scan derived.
+#
+# And the same standing limit as everything mechanical here: it is not
+# tamper-proof. An edit deleting this check alongside a genuinely forced repair
+# is not caught, at any granularity, because deleting the check that fails you
+# satisfies the revert rule's own definition of a forced edit.
+# --------------------------------------------------------------------------
+
+
+#: The module the shared helpers are imported from, named once. It is the
+#: module the third rule above exempts, for the same reason: that is where
+#: reaching this repository's history is the correct thing to do.
+HISTORY_HELPER_MODULE = "conftest"
+
+#: The five helpers that resolve a commit out of the history this harness lives
+#: in, each mapped to the position its `repo` argument may be written at.
+#: `story_commit_range(validation_file, repo, origin)` takes one positionally;
+#: the other four take it keyword-only, and `None` records that. Reading the
+#: interface rather than guessing at it is what lets a call against a
+#: repository the test built for itself go unreported.
+HISTORY_RESOLVERS = {
+    "story_commit_range": 1,
+    "story_diff": None,
+    "repository_file_at": None,
+    "function_source_at": None,
+    "revision_carrying": None,
+}
+
+
+def _resolver_called(node: ast.Call, bound: dict[str, str],
+                     resolvers: dict[str, int | None]) -> str | None:
+    """Which of the five this call reaches, however the helper reached here.
+
+    Three spellings, all of them the same call: imported by name
+    (`story_diff(...)`), reached as an attribute of the module that holds it
+    (`conftest.story_diff(...)`), and bound to a local alias by the import
+    (`from conftest import story_diff as diff_of_this_story`). The alias case
+    is read off `_imported_names`, which is the one place in this module that
+    maps a local name back to what it imports; the attribute case matches on
+    the name alone, whatever qualifies it, for the reason
+    `_is_subprocess_call` gives — requiring the module to be spelled a
+    particular way makes the check evadable by an import statement.
+    """
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr if func.attr in resolvers else None
+    if isinstance(func, ast.Name):
+        if func.id in bound:
+            return bound[func.id]
+        return func.id if func.id in resolvers else None
+    return None
+
+
+def _asks_this_repositorys_history(node: ast.Call, resolver: str,
+                                   resolvers: dict[str, int | None]) -> bool:
+    """Whether this call asks *this* repository's history rather than another.
+
+    Every one of the five defaults its repository to the root the harness lives
+    in, so a call that states no repository states this one. A defaulted call
+    is therefore reported rather than skipped: leaving it out would make the
+    rule evadable by deleting an argument, which is the same reasoning the
+    sixth rule applies to a defaulted workflow root.
+
+    A stated repository is read the way the first and third rules read one,
+    through `_names_the_repository_root`: a repository-root name means this
+    repository, and anything else — a root under `tmp_path`, a fixture
+    parameter, a local a test assembled — is somebody else's history and is not
+    this rule's business.
+    """
+    stated = next((keyword.value for keyword in node.keywords
+                   if keyword.arg == "repo"), None)
+    index = resolvers[resolver]
+    if stated is None and index is not None and len(node.args) > index:
+        stated = node.args[index]
+    return stated is None or _names_the_repository_root(stated)
+
+
+def history_reads(source: str, module: str,
+                  resolvers: dict[str, int | None] | None = None) -> list[Flag]:
+    """Every call in one module that resolves this repository's own history.
+
+    `resolvers` is a parameter rather than a constant read straight out of the
+    module body, for the reason `story_numbered_modules` takes a directory: the
+    same scan the live suite is held to can then be run over a vocabulary with
+    one helper taken out of it, which is how each of the five is shown below to
+    be doing work.
+
+    No exemption is applied, here or by any caller. The module holding the
+    helpers states a repository for every call it makes to them, so it is
+    unreported by the rule rather than excused from it.
+    """
+    resolvers = HISTORY_RESOLVERS if resolvers is None else resolvers
+    tree = ast.parse(source)
+    bound = _imported_names(tree, HISTORY_HELPER_MODULE, resolvers)
+    flags = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        resolver = _resolver_called(node, bound, resolvers)
+        if resolver is None:
+            continue
+        if not _asks_this_repositorys_history(node, resolver, resolvers):
+            continue
+        flags.append(Flag(
+            module=module, line=node.lineno,
+            reason=(f"resolves this repository's own history through "
+                    f"{resolver}; that is right when this repository's history "
+                    f"is what the assertion is about, and wrong when the "
+                    f"assertion merely wanted a sentence, an earlier version "
+                    f"or a set of paths — build the history the test needs, or "
+                    f"construct the value in the test"),
+        ))
+    return flags
+
+
+def history_reading_modules() -> list[str]:
+    """Every module under tests/ the history scan reports, by name.
+
+    Discovered by globbing, never by naming, so a module that starts resolving
+    this repository's history joins this set the moment it lands — which is
+    what makes the equality below bite.
+    """
+    return sorted(
+        path.name for path in all_modules()
+        if history_reads(path.read_text(encoding="utf-8"), path.name)
+    )
+
+
+#: What a listed module's entry says when the module has not been decided yet.
+#: It is a classification rather than a verdict: the read may well be wrong,
+#: and it may well be right, and this story does not say which. Every pending
+#: entry is an item on the conversion story's work list.
+PENDING = "pending conversion"
+
+
+#: Every module the scan above reports, classified. A subject reader carries
+#: the reason this repository's *history* is what its assertions are about; a
+#: pending entry carries `PENDING` and nothing else, because a reason there
+#: would be a decision this story did not make.
+#:
+#: A mapping rather than a tuple, so a name cannot sit here unclassified. It is
+#: asserted equal to what the scan reports in both directions, so it cannot
+#: grow silently and cannot keep a name whose module was converted.
+#:
+#: The reasons live here rather than in thirty module docstrings: this story
+#: lands the mechanism and converts nothing, and writing a paragraph into a
+#: module it is not converting would be an edit with no assertion behind it.
+DECLARED_HISTORY_READERS = {
+    "test_attempt_archiving.py": PENDING,
+    "test_baseline_honesty.py":
+        "its regression set is committed evidence rather than a constructed "
+        "fixture: the five known vacuous assertions are recovered from this "
+        "repository's history at the bound of the story that carried each, and "
+        "the archived pre-reset copy is read from the tree this repository "
+        "commits. What this repository's own stories did is the subject",
+    "test_baseline_resolution_is_single.py":
+        "its subject is that the baseline resolution is written exactly once "
+        "across this repository's tree, and that a named story's commit really "
+        "did carry the marker into the coordinator — a claim about where a "
+        "declaration lives here and when it moved, which no constructed "
+        "repository can answer",
+    "test_branch_base.py": PENDING,
+    "test_clean_clone_check.py": PENDING,
+    "test_config_keys_are_obeyed.py": PENDING,
+    "test_contract_assertions_bite.py": PENDING,
+    "test_documented_claim_support.py": PENDING,
+    "test_documenter_before_verification.py": PENDING,
+    "test_escalation_resume.py": PENDING,
+    "test_escalation_summary.py": PENDING,
+    "test_execution_history.py": PENDING,
+    "test_foreign_work_refusal.py": PENDING,
+    "test_git_history_loading_retired.py":
+        "its subject is that a practice this repository retired is gone from "
+        "it and stayed gone: the marker is asserted present at the endpoint of "
+        "the story that removed it and absent at that story's baseline, and "
+        "the archived copy is asserted still to hold what it held. That is a "
+        "claim about this repository's own history of the defect",
+    "test_mutation_controls.py": PENDING,
+    "test_plan_commit.py": PENDING,
+    "test_plan_time_validation.py": PENDING,
+    "test_planner_injection.py": PENDING,
+    "test_rerun_refusal.py": PENDING,
+    "test_resume_guard.py": PENDING,
+    "test_retry_history.py": PENDING,
+    "test_revert_baseline.py": PENDING,
+    "test_revert_check.py": PENDING,
+    "test_schema_inventory_location.py": PENDING,
+    "test_self_routing_retry.py": PENDING,
+    "test_shared_baseline_resolution.py": PENDING,
+    "test_stage_baseline.py": PENDING,
+    "test_stage_output_ownership.py": PENDING,
+    "test_stage_tool_grants.py": PENDING,
+    "test_validation_module_naming.py":
+        "its subject is this repository's own module names and the origins "
+        "declared for them: that every declared origin resolves to a commit in "
+        "this history, that the endpoints they resolve to are distinct, and "
+        "that the rename a named story made is visible across it. The names "
+        "this repository carries are the thing under test",
+}
+
+
+#: The number of pending entries at this story's completion. A converting story
+#: lowers it, and nothing raises it: a module that begins resolving this
+#: repository's history has to be converted or argued to be a subject reader,
+#: and neither of those adds to this count. It is a literal integer compared
+#: against a length — it resolves nothing out of this repository's history,
+#: which is asserted of the code that performs the comparison rather than
+#: claimed here.
+PENDING_CEILING = 26
+
+
+def pending_entries() -> list[str]:
+    """Every listed module the classification leaves undecided."""
+    return sorted(name for name, entry in DECLARED_HISTORY_READERS.items()
+                  if entry == PENDING)
+
+
+def subject_entries() -> dict[str, str]:
+    """Every listed module whose assertions are about this repository, and why."""
+    return {name: entry for name, entry in DECLARED_HISTORY_READERS.items()
+            if entry != PENDING}
+
+
+def within_the_ceiling(pending: list[str]) -> bool:
+    """Whether a pending list fits under the declared ceiling.
+
+    A length against a literal integer, and nothing else. The whole point of
+    the constant is that enforcing a rule against reading the commit graph must
+    not read the commit graph, and that is a property of this function's body
+    rather than of the sentence above it — so the body is asserted below with
+    the same scans this module holds the suite to.
+    """
+    return len(pending) <= PENDING_CEILING
+
+
+def disagreements(reported: set[str], listed: set[str]) -> tuple[list[str],
+                                                                 list[str]]:
+    """The two directions of the agreement, kept apart.
+
+    A single set comparison says only that the two differ. These say which
+    module joined the reported set without being declared, and which declared
+    module the scan no longer reports — and they are a function rather than two
+    inline expressions so each direction can be shown to fail below.
+    """
+    return sorted(reported - listed), sorted(listed - reported)
+
+
+def test_the_modules_resolving_this_repositorys_history_are_exactly_declared():
+    """The rule, run rather than inspected, and asserted in both directions.
+
+    Set equality rather than either subset. A module that begins resolving this
+    repository's history is absent from the list and fails; a module converted
+    to a history it builds stops being reported and its stale entry fails.
+    """
+    reported = set(history_reading_modules())
+    listed = set(DECLARED_HISTORY_READERS)
+    joined, left = disagreements(reported, listed)
+
+    assert not joined, (
+        "these modules resolve this repository's own history and are not "
+        "declared. Ask the question the scan cannot: is this repository's "
+        "history what the assertion is about, or an instrument it reached for? "
+        "If it is an instrument, build the history the test needs — the "
+        "target_root fixture is a repository under a temporary directory — or "
+        "construct the value in the test; if it is the subject, declare it "
+        "here with the reason: " + ", ".join(joined))
+    assert not left, (
+        "these modules no longer resolve this repository's history and must be "
+        "removed from the declared list: " + ", ".join(left))
+
+    assert reported == listed
+    # The companion assertion the glob needs: a scan over zero files agrees
+    # with an empty list for the wrong reason.
+    assert len(all_modules()) >= 15
+    assert reported
+
+
+def test_each_direction_of_the_agreement_fails_when_it_should():
+    """The control for the equality above, one direction at a time.
+
+    An equality that has stopped seeing either side passes exactly as happily
+    as one that holds, so each direction is shown reporting: a name added to
+    the reported set is a module that joined without being declared, and a name
+    added to the list is a module the scan no longer reports.
+    """
+    reported = set(history_reading_modules())
+    listed = set(DECLARED_HISTORY_READERS)
+    assert disagreements(reported, listed) == ([], [])
+
+    joined, left = disagreements(reported | {"test_probe.py"}, listed)
+    assert joined == ["test_probe.py"] and left == []
+
+    joined, left = disagreements(reported, listed | {"test_probe.py"})
+    assert joined == [] and left == ["test_probe.py"]
+
+
+def test_every_entry_is_classified_and_every_subject_states_its_reason():
+    """No entry is unclassified, and a subject entry with no reason is a name
+    nobody asked the question about."""
+    assert set(pending_entries()) | set(subject_entries()) \
+        == set(DECLARED_HISTORY_READERS)
+    assert set(pending_entries()).isdisjoint(subject_entries())
+
+    for name, reason in subject_entries().items():
+        assert (TESTS_DIR / name).is_file(), name
+        assert reason != PENDING and reason.strip(), name
+        assert len(reason.split()) >= 8, (name, reason)
+    for name in pending_entries():
+        assert (TESTS_DIR / name).is_file(), name
+        assert DECLARED_HISTORY_READERS[name] is PENDING, name
+
+    assert subject_entries() and pending_entries()
+
+
+def test_the_read_story_051_spent_its_retry_budget_on_is_listed_as_pending():
+    """The case this rule exists to have caught, named.
+
+    story-051 wrote a history read into a module created that day, for one
+    sentence, and burned its whole retry budget on it while nothing in the
+    suite had anything to say. That module is on the list, and it is pending —
+    which is the statement that its read is the conversion story's work rather
+    than a decided subject read.
+    """
+    assert DECLARED_HISTORY_READERS["test_documented_claim_support.py"] \
+        is PENDING
+    assert "test_documented_claim_support.py" in history_reading_modules()
+
+
+def test_the_pending_list_is_within_the_declared_ceiling():
+    """The ceiling, run. It is an equality at this story's completion: the
+    constant *is* today's count, so a module joining the pending class fails
+    here rather than being discovered two stories later."""
+    pending = pending_entries()
+    assert within_the_ceiling(pending)
+    assert len(pending) == PENDING_CEILING
+
+
+def test_the_ceiling_rejects_a_pending_list_one_entry_longer():
+    """Its control, by construction rather than by the assertion above
+    continuing to pass: a list one entry longer than today's is rejected by the
+    same predicate that accepts today's."""
+    pending = pending_entries()
+    assert within_the_ceiling(pending)
+    assert not within_the_ceiling(pending + ["test_probe.py"])
+    # And a converted module leaves room rather than taking it, which is the
+    # direction the constant is allowed to move in.
+    assert within_the_ceiling(pending[:-1])
+
+
+def test_the_ceilings_own_evaluation_reads_nothing_out_of_this_history():
+    """Asserted of the code that performs it, not of the story.
+
+    A rule against resolving this repository's commit graph that resolved the
+    commit graph to enforce itself would be the third instance of the practice
+    it exists to stop. So the constant, the predicate and the test that runs it
+    are read as source and put through this module's own scans.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    performing = "".join(
+        function_source(source, name) for name in
+        ("pending_entries", "within_the_ceiling",
+         "test_the_pending_list_is_within_the_declared_ceiling",
+         "test_the_ceiling_rejects_a_pending_list_one_entry_longer"))
+
+    assert history_reads(performing, "probe.py") == []
+    assert flagged_calls(performing, "probe.py") == []
+    assert git_text_reads(performing, "probe.py") == []
+
+    # The control: the same reading over the same code with one history read
+    # planted in it reports, so the emptiness above is a property of the code
+    # rather than of the scans having stopped looking at it.
+    planted = performing.replace(
+        "return len(pending) <= PENDING_CEILING",
+        "return len(pending) <= len(story_diff([], "
+        "validation_file=Path(__file__)))")
+    assert len(history_reads(planted, "probe.py")) == 1
+
+    # And the constant really is a literal integer rather than something
+    # computed, which is what makes the reading above worth doing.
+    declared = next(
+        node for node in ast.parse(source).body
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "PENDING_CEILING")
+    assert isinstance(declared.value, ast.Constant)
+    assert isinstance(declared.value.value, int)
+
+
+@pytest.mark.parametrize("planted,resolver", [
+    pytest.param("R = story_commit_range(Path(__file__))\n",
+                 "story_commit_range", id="the-range-imported-by-name"),
+    pytest.param("D = story_diff(['orchestration/'], "
+                 "validation_file=Path(__file__))\n",
+                 "story_diff", id="the-diff-imported-by-name"),
+    pytest.param("T = conftest.repository_file_at('x.py', bound=BASELINE, "
+                 "validation_file=Path(__file__))\n",
+                 "repository_file_at", id="a-files-text-as-a-module-attribute"),
+    pytest.param("F = conftest.function_source_at('a.py', 'f', "
+                 "revision=REVISION, repo=REPO_ROOT)\n",
+                 "function_source_at", id="a-functions-source-at-a-revision"),
+    pytest.param("from conftest import revision_carrying as newest\n"
+                 "V = newest('docs/ARCHITECTURE.md', 'a phrase')\n",
+                 "revision_carrying", id="a-content-search-under-a-local-alias"),
+])
+def test_the_history_scan_reports_a_planted_violation(planted, resolver):
+    """Its reach demonstrated rather than asserted, on the same terms as the
+    scans above, and one planting per helper: a scan that had quietly lost one
+    of the five would still pass a control over the other four.
+
+    The three spellings are spread across the five — imported by name, reached
+    as an attribute of the module that holds it, and bound to a local alias —
+    so no route to a helper is left undemonstrated.
+    """
+    flags = history_reads(planted, "probe.py")
+    assert len(flags) == 1, flags
+    assert resolver in flags[0].reason
+
+    # The other half of the control: with that one helper dropped from the
+    # vocabulary the same source is unreported, so each name is carrying the
+    # report rather than some other name catching it.
+    without = {name: index for name, index in HISTORY_RESOLVERS.items()
+               if name != resolver}
+    assert history_reads(planted, "probe.py", without) == []
+
+
+@pytest.mark.parametrize("spelling", [
+    pytest.param("S = story_diff(['x'], validation_file=Path(__file__))\n",
+                 id="imported-by-name"),
+    pytest.param("S = conftest.story_diff(['x'], "
+                 "validation_file=Path(__file__))\n",
+                 id="an-attribute-of-the-module-that-holds-it"),
+    pytest.param("from conftest import story_diff as what_this_story_touched\n"
+                 "S = what_this_story_touched(['x'], "
+                 "validation_file=Path(__file__))\n",
+                 id="bound-to-a-local-alias-by-the-import"),
+])
+def test_the_history_scan_reads_the_call_however_the_helper_arrived(spelling):
+    """One helper, three spellings, one report each: a rule matching only the
+    bare name would be evadable by an import statement, which is the failure
+    `_is_subprocess_call` records having had."""
+    flags = history_reads(spelling, "probe.py")
+    assert len(flags) == 1, flags
+    assert "story_diff" in flags[0].reason
+
+
+def test_the_history_scan_leaves_a_module_that_builds_its_own_repository_alone():
+    """The distinction stated as a control rather than as an absence.
+
+    Two sources asking the same questions. The first builds a repository under
+    a temporary directory, runs git inside it and resolves the helpers against
+    *that*; the second reaches for the history the harness is running in. Only
+    the second is reported, so "not reported" above is a property of which
+    repository is named rather than of the scan having stopped looking.
+    """
+    against_a_fixture = (
+        "import subprocess\n"
+        "def probe(tmp_path):\n"
+        "    root = tmp_path / 'repo'\n"
+        "    subprocess.run(['git', '-C', str(root), 'init'])\n"
+        "    subprocess.run(['git', '-C', str(root), 'commit', '-m', 'x'])\n"
+        "    validation = root / 'tests' / 'test_thing.py'\n"
+        "    span = story_commit_range(validation, root)\n"
+        "    text = repository_file_at('a.py', revision=span.baseline, "
+        "repo=root)\n"
+        "    diff = story_diff(['a.py'], validation_file=validation, "
+        "repo=root)\n"
+        "    return span, text, diff\n"
+    )
+    assert history_reads(against_a_fixture, "probe.py") == []
+
+    reached_for = (against_a_fixture.replace("repo=root", "repo=REPO_ROOT")
+                   .replace("story_commit_range(validation, root)",
+                            "story_commit_range(validation, REPO_ROOT)"))
+    assert len(history_reads(reached_for, "probe.py")) == 3
+
+
+@pytest.mark.parametrize("benign", [
+    pytest.param("def probe(tmp_path):\n"
+                 "    return (tmp_path / 'written.md').read_text()\n",
+                 id="a-fixture-the-test-wrote-and-read-back"),
+    pytest.param("import subprocess\n"
+                 "subprocess.run(['git', '-C', str(root), 'show',\n"
+                 "                f'HEAD:{path}'], cwd=root)\n",
+                 id="the-throwaway-repository-idiom-the-other-rules-allow"),
+    pytest.param("S = story_diff(['x'], validation_file=validation, "
+                 "repo=target_root)\n",
+                 id="a-helper-resolved-against-a-repository-the-test-owns"),
+    pytest.param("S = story_commit_range(validation, tmp_path / 'repo')\n",
+                 id="the-same-repository-stated-positionally"),
+    pytest.param("S = conftest.function_source(source, 'story_branch')\n",
+                 id="the-text-helper-that-resolves-no-commit"),
+    pytest.param("S = repository_file_at\n",
+                 id="a-reference-to-a-helper-that-calls-nothing"),
+])
+def test_the_history_scan_leaves_these_alone(benign):
+    """What it must not report: another repository's history is not this
+    rule's business, a file the test wrote is not history at all, and the
+    throwaway-repository idiom the first and third rules leave alone stays
+    unflagged here for the same reason it does there."""
+    assert history_reads(benign, "probe.py") == []
+
+
+def test_this_rule_draws_nothing_from_the_six_above():
+    """Seven rules, seven purposes. No scan calls another, and this one draws
+    neither a predicate nor a vocabulary from the live-artifact rule — asserted
+    the way that rule asserts its own independence from the five before it.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    functions = {node.name: node for node in ast.parse(source).body
+                 if isinstance(node, ast.FunctionDef)}
+    reachable = set()
+    frontier = ["history_reads"]
+    while frontier:
+        name = frontier.pop()
+        for inner in ast.walk(functions[name]):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) \
+                    and inner.func.id not in reachable:
+                reachable.add(inner.func.id)
+                if inner.func.id in functions:
+                    frontier.append(inner.func.id)
+
+    others = ("flagged_calls", "undeclared_targets", "module_construction",
+              "git_text_reads", "mutation_controls", "story_numbered_modules",
+              "live_artifact_reads")
+    assert reachable.isdisjoint(others)
+
+    # And nothing the live-artifact rule introduced, transitively: its scan,
+    # its predicates and its helpers. `_names_the_repository_root` is not on
+    # that list and is deliberately shared — it predates the live-artifact rule
+    # and the first and third rules recognise a repository through it too.
+    live_artifact_predicates = ("_path_fragments", "_is_path_join",
+                                "_callee_name", "_is_a_repository_root_name",
+                                "_resolves_a_workflow_through_a_helper")
+    assert reachable.isdisjoint(live_artifact_predicates)
+
+    for vocabulary in (set(LIVE_ARTIFACT_SEGMENTS), set(WORKFLOW_RESOLVERS),
+                       set(MODULE_CONSTRUCTORS + SOURCE_EXECUTORS),
+                       set(CONTENT_SUBCOMMANDS),
+                       set(REVISION_KEYWORDS + PATH_WRITES + LOADER_INTERFACE)):
+        assert vocabulary.isdisjoint(set(HISTORY_RESOLVERS)), vocabulary
+
+    assert ("a test resolves this repository's own history only when that"
+            in source)
+
+
+def test_the_declared_history_list_is_a_list_and_not_a_derivation():
+    """It is written out, and it must be: a list derived from the scan would
+    equal it by construction and the equality above would assert nothing.
+
+    Read off this module's own source rather than asserted about the value, so
+    a later edit that replaces the mapping with a comprehension goes red here.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    assignment = next(
+        node for node in ast.parse(source).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "DECLARED_HISTORY_READERS")
+    assert isinstance(assignment.value, ast.Dict)
+    assert all(isinstance(key, ast.Constant) for key in assignment.value.keys)
+    assert len(assignment.value.keys) == len(DECLARED_HISTORY_READERS)
+    assert list(DECLARED_HISTORY_READERS) == sorted(DECLARED_HISTORY_READERS)
+
+    # Each entry is classified in the literal itself: a pending one names the
+    # sentinel and a subject one states its reason as text.
+    for value in assignment.value.values:
+        assert isinstance(value, ast.Name | ast.Constant)
+        if isinstance(value, ast.Name):
+            assert value.id == "PENDING"
+
+
+# --------------------------------------------------------------------------
+# The guidance the rendered tester prompt carries
+#
+# The shipped template is the *subject* here, not an input: the acceptance
+# criterion is that the guidance reaches the agent, and what reaches the agent
+# is the rendering rather than the file. It is read the way the harness reads
+# it — through the loader, against the root the fixture hands over — so no path
+# in this module is joined onto a repository-root name and the sixth rule's
+# declared list does not grow. That is one of that rule's stated limits rather
+# than a route around it.
+#
+# Every check here is a positive assertion over a rendering, which passes just
+# as happily when it has stopped reading anything, so each is run again over
+# the same rendering with the guidance cut out, where it must report.
+# --------------------------------------------------------------------------
+
+
+#: The tester's template, named because it is the subject of these assertions.
+#: No stage name is written here: the template is loaded directly, so the
+#: workflow's own naming of the stage that carries it is not something this
+#: section has to restate.
+TESTER_TEMPLATE = "tester.md"
+
+#: Where the commit-graph half of the guidance begins, and where the role layer
+#: ends. The cut for the control below is made at these rather than at a column.
+COMMIT_GRAPH_GUIDANCE_START = "Ask the same question of this repository's own"
+COMMIT_GRAPH_GUIDANCE_END = "When you finish, write these files"
+
+#: The phrases the guidance has to carry. Phrases rather than sentences, so
+#: rewording the prose around them does not redden this while dropping one
+#: does. Each is unique to the commit-graph paragraphs — the fixture guidance
+#: story-047 wrote sits immediately above them and shares its wording with
+#: nothing here.
+THE_COMMIT_GRAPH_QUESTION = "same question of this repository's own commit graph"
+THE_SANCTIONED_ROUTE = "sanctioned route"
+THE_INSTRUMENT = "using the history as an instrument"
+THE_MOVEMENT = "committed, renamed, squashed or rebased"
+THE_INSTRUCTION_TO_BUILD = "When the history is an input, build one"
+THE_CONSTRUCTED_REPOSITORY = "constructs its own repository and commits into it"
+
+#: The idiom the guidance has to name rather than describe, as the identifiers
+#: the suite actually provides.
+THE_HISTORY_IDIOMS = ("target_root", "git init", "commit_setup")
+
+
+def flattened(text: str) -> str:
+    """One rendering with its line wrapping taken out.
+
+    The template is wrapped to a column, so a phrase of the guidance is broken
+    across lines at a position nothing about the guidance decides. A phrase
+    searched for in the raw text would then be absent for a reason that has
+    nothing to do with whether the guidance is there.
+    """
+    return " ".join(text.split())
+
+
+@pytest.fixture
+def rendered_tester_prompt(harness_root) -> str:
+    """The tester's prompt as the harness renders it, not as the file holds it."""
+    template = context_assembler.load_template(harness_root, TESTER_TEMPLATE)
+    rendered = context_assembler.render(template, {})
+    # The rendering really is a rendering: the template carries placeholders
+    # here and the result carries none, so a phrase found below was found in
+    # what a stage is handed rather than in the file it came from.
+    assert "{{" in template
+    assert "{{" not in rendered
+    return rendered
+
+
+def without_the_commit_graph_guidance(rendered: str) -> str:
+    """The same rendering with the commit-graph paragraphs cut out of it."""
+    return (rendered[:rendered.index(COMMIT_GRAPH_GUIDANCE_START)]
+            + rendered[rendered.index(COMMIT_GRAPH_GUIDANCE_END):])
+
+
+def test_the_rendered_tester_prompt_asks_the_question_of_the_commit_graph(
+    rendered_tester_prompt,
+):
+    """The question story-047 put to the shipped artifacts, put to the history
+    the harness itself lives in — and the five helpers named, because guidance
+    that names four leaves the fifth reading as though it were exempt."""
+    prose = flattened(rendered_tester_prompt)
+
+    assert THE_COMMIT_GRAPH_QUESTION in prose
+    for resolver in HISTORY_RESOLVERS:
+        assert resolver in prose, resolver
+    assert THE_SANCTIONED_ROUTE in prose
+    assert THE_INSTRUMENT in prose
+    assert THE_MOVEMENT in prose
+
+
+def test_the_rendered_tester_prompt_says_a_test_that_needs_a_history_builds_one(
+    rendered_tester_prompt,
+):
+    """The instruction, and the existing idiom named rather than a principle
+    described: a tester is pointed at the fixture that already builds a
+    repository under a temporary directory, and at the helper that commits what
+    a test adds afterwards."""
+    prose = flattened(rendered_tester_prompt)
+
+    assert THE_INSTRUCTION_TO_BUILD in prose
+    assert THE_CONSTRUCTED_REPOSITORY in prose
+    for idiom in THE_HISTORY_IDIOMS:
+        assert idiom in prose, idiom
+
+
+def test_the_control_removes_the_commit_graph_guidance_and_nothing_else(
+    rendered_tester_prompt,
+):
+    """The control the cases below lean on, asserted rather than assumed:
+    shorter, and still carrying the rest of the prompt at both ends — including
+    the fixture guidance story-047 wrote, which sits immediately above the cut
+    and must survive it."""
+    stripped = flattened(without_the_commit_graph_guidance(rendered_tester_prompt))
+    whole = flattened(rendered_tester_prompt)
+
+    assert len(stripped) < len(whole)
+    assert stripped.startswith(whole[:200])
+    assert stripped.endswith(whole[-200:])
+    assert "is the shipped artifact the subject of this assertion" in stripped
+
+
+@pytest.mark.parametrize("phrase", [
+    THE_COMMIT_GRAPH_QUESTION, THE_SANCTIONED_ROUTE, THE_INSTRUMENT,
+    THE_MOVEMENT, THE_INSTRUCTION_TO_BUILD, THE_CONSTRUCTED_REPOSITORY,
+    *THE_HISTORY_IDIOMS, *HISTORY_RESOLVERS,
+])
+def test_every_phrase_this_section_looks_for_is_absent_once_it_is_removed(
+    rendered_tester_prompt, phrase,
+):
+    """The control for every positive check above, stated once.
+
+    Each phrase is found in the rendering and not found in the same rendering
+    with the commit-graph guidance cut out. Without this, a check that had
+    drifted to a phrase the prompt happens to carry elsewhere would pass while
+    asserting nothing about the guidance.
+    """
+    assert phrase in flattened(rendered_tester_prompt)
+    assert phrase not in flattened(
+        without_the_commit_graph_guidance(rendered_tester_prompt))
