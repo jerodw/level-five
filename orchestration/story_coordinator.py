@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -1737,6 +1738,304 @@ def _revert_check_permitted(
 
 
 # --------------------------------------------------------------------------
+# Whether a documented claim is something the repository could support
+# --------------------------------------------------------------------------
+#
+# An architecture document is tracked and permanent; the run directories,
+# logs and requests a stage writes it from are not. So a stage can write a
+# factual claim into the repository whose only support is a file local to one
+# machine, invisible to whoever judges it, and absent from any clone.
+#
+# Nothing here reads prose to decide what a factual claim is: that is not
+# tractable, and a check that half-works is worse than none. The tractable
+# seam is the reference. A claim about another story names it in a fixed
+# shape, and whether that story's work is in this repository's history is a
+# question git answers. So the whole decision is: text this run added to a
+# configured document, naming a story with no completion commit reachable
+# from the run's base, in a block that also carries a quantity.
+#
+# The forward-reference case survives structurally rather than by judgement.
+# A document legitimately describes the story currently landing, which is by
+# definition unmerged when it is written — but a phrase-shaped forward
+# reference ("the next story in this line") carries no story number at all,
+# because a story number does not exist until the story is planned, and the
+# run's own story id is exempt outright.
+
+#: The shape a claim about another story wears. The reference is the seam the
+#: whole check is keyed on, so it is one pattern read in three places: the
+#: references a block names, the run's own id being subtracted from them, and
+#: the quantity test below, which looks outside the references it removes.
+STORY_REFERENCE = re.compile(r"story-\d+")
+
+#: What counts as a quantity: a digit, and nothing cleverer. A spelled-out
+#: number ("eight of twenty-two") is a quantity this does not see, and that
+#: limit is stated rather than papered over — the check reports a narrow,
+#: mechanical class and every branch of it is decidable without reading the
+#: text as language.
+QUANTITY = re.compile(r"\d")
+
+
+def added_blocks(diff: str) -> list[str]:
+    """The contiguous blocks of text a unified diff adds.
+
+    Added lines are grouped into blocks, and a blank added line ends a block
+    the way an unchanged line does, so a block is a paragraph of added prose
+    rather than a whole hunk. That is the granularity the report is about: a
+    reference and a quantity in one paragraph are one claim, while the same
+    two in paragraphs a page apart are not.
+
+    Reads a diff and nothing else — no git invocation, no filesystem — so the
+    grouping can be exercised against a diff a caller composed.
+    """
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            text = line[1:]
+            if text.strip():
+                current.append(text)
+                continue
+        if current:
+            blocks.append("\n".join(current))
+            current = []
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def story_references(text: str, story_id: str) -> list[str]:
+    """The stories `text` names, sorted, less the run's own.
+
+    The run's own story is exempt outright: its work is by definition
+    unmerged while it is landing, so a document describing the story it is
+    part of would otherwise be reported on every run.
+    """
+    return sorted(set(STORY_REFERENCE.findall(text)) - {story_id})
+
+
+def carries_a_quantity(text: str) -> bool:
+    """Whether `text` carries a quantity outside the story references in it.
+
+    The references are removed before looking, because `story-049` is a name
+    and the digits in it are part of that name rather than an assertion about
+    how many of anything there were.
+    """
+    return bool(QUANTITY.search(STORY_REFERENCE.sub(" ", text)))
+
+
+@dataclass(frozen=True)
+class ClaimSupportResult:
+    """What one claim-support check found, as the run directory records it.
+
+    `reports` is absent from the record when the check did not run, and
+    `reason` absent when it did, following the optional-by-absence convention
+    the other coordinator-written records use: a check that could not run
+    reported nothing and cleared nothing, and an empty list would claim it
+    had looked.
+    """
+
+    ran: bool
+    base: str | None = None
+    story_id: str | None = None
+    documents: tuple[str, ...] = ()
+    reports: tuple[dict, ...] = ()
+    reason: str | None = None
+
+    def as_record(self) -> dict:
+        record: dict = {"ran": self.ran}
+        if self.base is not None:
+            record["base"] = self.base
+        if self.story_id is not None:
+            record["story_id"] = self.story_id
+        if self.documents:
+            record["documents"] = list(self.documents)
+        if self.ran:
+            record["reports"] = [dict(report) for report in self.reports]
+        if self.reason is not None:
+            record["reason"] = self.reason
+        return record
+
+
+def unsupported_claims(
+    document: str,
+    diff: str,
+    story_id: str,
+    has_merged_work,
+) -> list[dict]:
+    """The added blocks of one document's diff that assert what nothing checks.
+
+    One report per block naming a story with no merged work and carrying a
+    quantity. `has_merged_work` is the merged decision, passed in rather than
+    made here, so the question "has this story's work landed" has one answer
+    in the coordinator rather than a second spelling of it.
+
+    No branch reads what a block *says* beyond the references in it and
+    whether a digit appears outside them, so varying a reported figure — to
+    another wrong value or to the right one — cannot change what is reported.
+    """
+    reports = []
+    for block in added_blocks(diff):
+        referenced = story_references(block, story_id)
+        if not referenced:
+            continue
+        unmerged = [ref for ref in referenced if not has_merged_work(ref)]
+        if not unmerged:
+            continue
+        if not carries_a_quantity(block):
+            continue
+        reports.append(
+            {"document": document, "stories": unmerged, "text": block}
+        )
+    return reports
+
+
+def claim_support_check(
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    artifact: str,
+    base: str,
+    story_id: str,
+) -> ClaimSupportResult:
+    """Report the added claims about another story that nothing tracked can hold.
+
+    Scans the text this run added to each of the target's configured
+    architecture documents, against the run's resolved base. The merged
+    question is put to `completion_commits`, the same reader the finished-branch
+    pre-flight uses, so what counts as a story's merged work is one fact.
+
+    It routes nothing and escalates nothing: the record is written, injected
+    into the verifier, and read by the stage whose job is judging.
+
+    Three conditions stop it, and each is recorded as a check that could not
+    run *with the reason* rather than as a check that found nothing — a target
+    configuring no architecture documents must not read as a document whose
+    added claims are all supportable.
+    """
+    documents = tuple(config.get("architecture_docs", []) or ())
+    if not documents:
+        return _record_claim_support(
+            run_dir,
+            artifact,
+            ClaimSupportResult(
+                ran=False,
+                story_id=story_id,
+                reason=(
+                    "the target configures no architecture documents, so there "
+                    "is nothing to scan; this is not a document whose added "
+                    "claims are all supportable"
+                ),
+            ),
+        )
+
+    if _git(target_root, "rev-parse", "--verify", base).returncode != 0:
+        return _record_claim_support(
+            run_dir,
+            artifact,
+            ClaimSupportResult(
+                ran=False,
+                story_id=story_id,
+                documents=documents,
+                reason=(
+                    f"the run's base '{base}' does not resolve, so there is no "
+                    f"horizon to ask what this run added or what has merged"
+                ),
+            ),
+        )
+
+    merged: dict[str, bool] = {}
+
+    def has_merged_work(story: str) -> bool:
+        if story not in merged:
+            merged[story] = bool(completion_commits(target_root, base, story))
+        return merged[story]
+
+    reports: list[dict] = []
+    for document in documents:
+        diff = _git(target_root, "diff", base, "--", document)
+        if diff.returncode != 0:
+            return _record_claim_support(
+                run_dir,
+                artifact,
+                ClaimSupportResult(
+                    ran=False,
+                    base=base,
+                    story_id=story_id,
+                    documents=documents,
+                    reason=(
+                        f"the text this run added to {document} could not be "
+                        f"read: git diff against {base} failed: "
+                        f"{diff.stderr.strip()}"
+                    ),
+                ),
+            )
+        reports.extend(
+            unsupported_claims(document, diff.stdout, story_id, has_merged_work)
+        )
+
+    return _record_claim_support(
+        run_dir,
+        artifact,
+        ClaimSupportResult(
+            ran=True,
+            base=base,
+            story_id=story_id,
+            documents=documents,
+            reports=tuple(reports),
+        ),
+    )
+
+
+def _record_claim_support(
+    run_dir: Path, artifact: str, result: ClaimSupportResult
+) -> ClaimSupportResult:
+    (run_dir / artifact).write_text(
+        json.dumps(result.as_record(), indent=2) + "\n", encoding="utf-8"
+    )
+    return result
+
+
+def _claim_support_recorded(
+    run_dir: Path, stage_name: str, artifact: str, result: ClaimSupportResult
+) -> None:
+    """Say what the check found. Nothing routes on it.
+
+    Its own event kind rather than the generic `note`, because a note is the
+    kind an existing reader uses to *find* the stale-base note and to assert
+    its absence; sharing it would make that reader report this instead. The
+    kind says only that the check ran and what it saw — the coordinator
+    computes the fact and the verifier decides what to do with it, so no
+    route, no retry and no escalation hangs off this line.
+    """
+    if not result.ran:
+        message = (
+            f"claim support check on {stage_name}'s documents did not run: "
+            f"{result.reason}"
+        )
+    elif result.reports:
+        listed = "; ".join(
+            f"{report['document']} names {', '.join(report['stories'])}"
+            for report in result.reports
+        )
+        message = (
+            f"claim support check on {stage_name}'s documents reports "
+            f"{len(result.reports)} added claim(s) nothing tracked can "
+            f"support: {listed}"
+        )
+    else:
+        message = (
+            f"claim support check on {stage_name}'s documents reports nothing"
+        )
+    append_event(
+        run_dir,
+        message,
+        kind="claim-support-checked",
+        stage=stage_name,
+        artifacts=[artifact],
+    )
+
+
+# --------------------------------------------------------------------------
 # The self-route
 #
 # Mechanical failures route differently from verdicts. There is no defect to
@@ -3304,6 +3603,26 @@ def run_story(
                         duration_seconds=elapsed(),
                     )
                 _revert_check_permitted(run_dir, name, revert_artifact, edits)
+
+        # The claim-support check, declared like the two above: one key names
+        # the artifact and turns the check on, so the stage it runs after is
+        # read off the workflow and no stage name appears here. It reports and
+        # routes nothing — the record is written, a note is appended, and the
+        # verifier that receives the record decides what a report means. A run
+        # whose record reports a claim is therefore routed exactly as the same
+        # run with an empty record.
+        claim_support = stage.get("claim_support") or {}
+        claim_artifact = claim_support.get("result")
+        if claim_artifact:
+            supported = claim_support_check(
+                run_dir,
+                target_root,
+                config,
+                claim_artifact,
+                resolved_base,
+                story_id,
+            )
+            _claim_support_recorded(run_dir, name, claim_artifact, supported)
 
         if name == "verifier":
             verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))

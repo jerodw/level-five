@@ -33,6 +33,9 @@
       "prompt": "documenter.md",
       "outputs": ["documentation-report.md", "documenter-changed-files.json"],
       "changed_files": "documenter-changed-files.json",
+      "claim_support": {
+        "result": "claim-support-result.json"
+      },
       "schemas": {
         "documenter-changed-files.json": "changed-files"
       }

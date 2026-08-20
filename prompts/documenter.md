@@ -29,6 +29,17 @@ It must satisfy this schema:
 
 {{changed_files_schema}}
 
+The run directories, the logs and the requests directory are untracked by
+design: they are gitignored, they are absent from any clone, and whoever
+reads the document you write cannot see them. They are therefore not
+citable authority. A fact you found there and think is worth keeping is
+kept in one of two ways: restate it in the document in terms the
+repository can hold — what is in the tree, the history, or a tracked
+artifact — or attribute it as a quotation, naming the source it came from,
+so a reader weighs it as that source's account rather than as a fact this
+repository holds. Do not write a figure or a count into the document as a
+plain fact when its only support is a file that exists on one machine.
+
 [Workflow Layer]
 Documentation is architectural memory. Future planning agents load these
 documents before generating story plans, so record what they will need.

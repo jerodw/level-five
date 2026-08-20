@@ -29,6 +29,7 @@
           "verification-failed",
           "clean-clone-passed",
           "clean-clone-failed",
+          "claim-support-checked",
           "self-routed",
           "escalated",
           "story-completed",
