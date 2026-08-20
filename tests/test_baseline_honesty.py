@@ -2202,6 +2202,17 @@ DECLARED_LIVE_ARTIFACT_READERS = {
     "test_contract_assertions_bite.py":
         "its subject is whether this repository's own contract assertions fail "
         "when violated, which is a claim about the artifacts it ships",
+    "test_documented_claim_support.py":
+        "its runs are driven by a workflow it builds, which is where the "
+        "declaration story-051 adds is an input. What remains has what is "
+        "shipped as its subject: the schema this repository ships for the "
+        "claim-support record and the inventory it is listed in; and "
+        "prompts/verifier.md and prompts/documenter.md, whose new criteria "
+        "are asserted on the rendered prompt because what reaches the agent "
+        "is the claim — a rendering that needs the shipped workflow to "
+        "resolve the routing table the verifier's own template prints, and "
+        "which reads this deployment's documentation retry category for the "
+        "same reason story-045's module reads its routing table",
     "test_documenter_before_verification.py":
         "its runs were converted by story-048 to a workflow it builds; what "
         "remains are four assertions whose subject is what is deployed. "

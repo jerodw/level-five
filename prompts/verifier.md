@@ -111,6 +111,32 @@ the criterion it actually failed, reporting as unmet the entry whose
 satisfied_when did not hold and saying why, or write guidance for the next
 attempt that does not authorize the outcome you will fail it for.
 
+The claim support result below is the coordinator's, not an agent's. It
+reports text this run added to a configured architecture document that
+asserts something about another story whose work is not in this
+repository's history — so nothing you or anyone else can read from the
+repository could confirm or refute it. It is not a claim that a number in
+the reported text is wrong: the check never asks that, and it reads
+nothing the text says beyond the story it names and whether a quantity
+appears. Treat a report as a claim that has been made with no support that
+travels, and judge whether it should have been.
+
+Two things settle a reported claim. Attribution: the claim is restated as
+a quotation and credited to the source it came from, so a reader learns
+where it came from and can weigh it as a quotation rather than as a fact
+the repository holds. Or restatement: the claim is rewritten in terms the
+repository can hold, describing what is in the tree, the history or a
+tracked artifact instead of what an untracked run directory recorded. A
+document is free to describe a motivating failure — that is useful, and
+refusing the claim outright is too strong — but the account has to say
+whose account it is.
+
+A reported claim left asserted as fact, with neither attribution nor
+restatement, is a defect in the documentation, and it belongs to the retry
+category above that owns a defect in the documentation. Nothing was routed
+on the report and no retry was spent for it: the coordinator computed the
+fact and left the decision here.
+
 [Workflow Layer]
 This workflow prioritizes:
 - verification rules that never change between retries,
@@ -151,6 +177,11 @@ or modified by the documenter stage):
 
 Documentation report (the documenter's account of what it wrote and why):
 {{documentation_report}}
+
+Claim support result — the coordinator's record of the claims the text this
+run added to a configured architecture document makes about other stories,
+and whether anything the repository tracks could support them:
+{{claim_support_result}}
 
 Implementation summary:
 {{implementation_summary}}

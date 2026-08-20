@@ -377,6 +377,52 @@ def repository_file_at(relative: str, *, revision: str | None = None,
     return result.stdout
 
 
+def revision_carrying(relative: str, *needles: str,
+                      repo: Path = HARNESS_ROOT) -> str:
+    """The newest revision at which one line of `relative` carries every needle.
+
+    A search rather than a pinned sha, for the reason the architecture
+    document records under the baseline bullets: a sha survives neither a
+    rebase nor a squash merge, and a rebased-away sha is *unreachable in a
+    clone* even while it still resolves in the working repository — which is
+    exactly how a suite that passed locally failed in the clean clone.
+
+    Several needles, and all of them on **one line**, because what a caller is
+    looking for is a sentence rather than a document: a later revision can
+    carry the same phrase in a different sentence — a document describing a
+    check quotes the very figure the check is about — and a whole-document
+    search answers with that revision instead. Requiring the needles together
+    on a line is what makes the sentence, not the phrase, the thing found.
+
+    Raises `NothingToCompareAgainst` when no revision carries the text, so a
+    search that finds nothing cannot degrade into a caller reading whatever
+    the working tree happens to hold.
+    """
+    if not needles:
+        raise ValueError("revision_carrying needs at least one needle")
+    result = _git(repo, "log", "--format=%H", "--", relative)
+    if result.returncode != 0:
+        raise NothingToCompareAgainst(
+            f"the history of {relative} cannot be read in {repo}: "
+            f"{result.stderr.strip()}"
+        )
+    for revision in result.stdout.split():
+        try:
+            text = repository_file_at(relative, revision=revision, repo=repo)
+        except NothingToCompareAgainst:
+            # `git log -- <path>` reports the commit that *removed* the path
+            # as well as the ones that wrote it; a revision holding no blob
+            # answers the question with a no rather than an error.
+            continue
+        if any(all(needle in line for needle in needles)
+               for line in text.splitlines()):
+            return revision
+    raise NothingToCompareAgainst(
+        f"no revision of {relative} in {repo} carries {list(needles)!r} "
+        f"on one line"
+    )
+
+
 def function_source(source: str, name: str) -> str:
     """One top-level function's own text, decorators included.
 
@@ -712,6 +758,7 @@ DOCUMENTATION_REPORT = "documentation-report.md"
 VERIFICATION_RESULT = "verification-result.json"
 RETRY_GUIDANCE = "retry-guidance.json"
 CLEAN_CLONE_RESULT = "clean-clone-result.json"
+CLAIM_SUPPORT_RESULT = "claim-support-result.json"
 
 
 class StageRef:

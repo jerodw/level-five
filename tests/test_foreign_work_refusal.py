@@ -558,7 +558,14 @@ CLEAN_RUN_EVENTS = [
     "workflow started for story-001",
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
-    "documenter stage started", "documenter stage completed",
+    "documenter stage started",
+    # story-051: the shipped workflow declares a claim-support check on the
+    # documenter, so a run that reaches that stage records what the check saw
+    # before the stage completes. Listed rather than dropped from the
+    # comparison: this stays an exact equality on the whole stream, which is
+    # what makes it able to report an event that should not be there.
+    "claim support check on documenter's documents reports nothing",
+    "documenter stage completed",
     "verifier stage started", "verification passed",
     "clean-clone suite passed with the story committed",
     "story completed on branch story/story-001",

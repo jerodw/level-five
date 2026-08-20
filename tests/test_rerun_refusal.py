@@ -617,7 +617,14 @@ FIRST_RUN_EVENTS = [
     f"workflow started for {STORY_ID}",
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
-    "documenter stage started", "documenter stage completed",
+    "documenter stage started",
+    # story-051: the shipped workflow declares a claim-support check on the
+    # documenter, so a run that reaches that stage records what the check saw
+    # before the stage completes. Listed rather than dropped from the
+    # comparison: this stays an exact equality on the whole stream, which is
+    # what makes it able to report an event that should not be there.
+    "claim support check on documenter's documents reports nothing",
+    "documenter stage completed",
     "verifier stage started", "verification passed",
     "clean-clone suite passed with the story committed",
     f"story completed on branch {STORY_BRANCH}",

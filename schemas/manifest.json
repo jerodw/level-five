@@ -1,6 +1,7 @@
 {
   "schemas": [
     "changed-files",
+    "claim-support-result",
     "clean-clone-result",
     "execution-history",
     "harness-config",

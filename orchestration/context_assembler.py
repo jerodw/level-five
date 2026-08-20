@@ -242,6 +242,15 @@ def build_context(
         # passed — so this is how the retried implementer receives the
         # evidence, rather than the coordinator fabricating retry-guidance.json.
         "clean_clone_result": _read(run_dir / "clean-clone-result.json"),
+        # What the coordinator computed about the claims a document gained in
+        # this run: an added claim about another story that nothing reachable
+        # from the run's base could support or refute. Read here beside the
+        # clean-clone record because it is the same kind of thing — a fact the
+        # coordinator computed rather than an agent's judgement — and because
+        # the stage that decides what to do about it is the one that judges the
+        # documenter's work. Absent renders as None, which is what a stage
+        # running before the check does.
+        "claim_support_result": _read(run_dir / "claim-support-result.json"),
         # A self-routed stage has no agent-authored guidance behind it — the
         # stage failed mechanically and no verifier saw the work — so the
         # coordinator's own statement of why it is running again is passed in

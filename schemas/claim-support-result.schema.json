@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "claim-support-result",
+  "description": "The coordinator's record of one claim-support check: whether the text this run added to a configured architecture document asserts a fact about another story that nothing the repository tracks could support or refute. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; it is injected into the verifier, which decides what to do about a report, and nothing in orchestration routes on it. WHAT IT DOES NOT SAY: the check never asks whether a reported figure is right. It asks only whether anything reachable from the run's base could say, and it reads no added text as language — the whole decision is the story-0NN reference shape, whether that story has a completion commit reachable from the base, and whether a digit appears outside the reference itself. A report is therefore a question for the verifier, not a finding that a number is wrong, and an empty reports array is not a statement that the document's claims are true. Optional fields are expressed by absence rather than by null, as clean-clone-result and revert-check-result do: a check that could not run reported nothing and cleared nothing.",
+  "type": "object",
+  "required": ["ran"],
+  "properties": {
+    "ran": {
+      "type": "boolean",
+      "description": "Whether the check actually ran. False when it could not — the target configures no architecture documents, the run's base does not resolve, or a git invocation failed — in which case reason says why and reports is absent. A check that could not run must not be read as a document with no unsupportable claims; that is what this field is for."
+    },
+    "base": {
+      "type": "string",
+      "description": "The revision the added text was resolved against: the base this run's story branch was cut from, which is also the horizon the merged question is asked at. Absent when no base was resolved."
+    },
+    "story_id": {
+      "type": "string",
+      "description": "The run's own story, whose work is by definition unmerged while it is landing and which is therefore exempt outright: a claim about it is never reported, whatever quantities it carries. Absent when the check did not run."
+    },
+    "documents": {
+      "type": "array",
+      "description": "The configured architecture documents that were scanned, in the order the target's architecture_docs declares them. Empty is not a possible value of a check that ran: a target configuring none is recorded as a check that could not run.",
+      "items": { "type": "string" }
+    },
+    "reports": {
+      "type": "array",
+      "description": "One entry per added block of a scanned document that names a story with no completion commit reachable from the base and also carries a quantity. Present whenever ran is true, and empty when the check found nothing to report. Scoped to the text this run added, so the claims already in the document at the base are not re-reported by every run.",
+      "items": {
+        "type": "object",
+        "required": ["document", "stories", "text"],
+        "properties": {
+          "document": {
+            "type": "string",
+            "description": "The configured document the added text was added to."
+          },
+          "stories": {
+            "type": "array",
+            "description": "The stories the added text names that have no completion commit reachable from the base, sorted. The run's own story id is never among them.",
+            "items": { "type": "string" }
+          },
+          "text": {
+            "type": "string",
+            "description": "The added text the report is about, as the run added it: the contiguous block of added lines the reference and the quantity were found in. This is what the verifier reads to decide whether the claim is attributed as a quotation, restated in terms the repository can hold, or left asserted."
+          }
+        }
+      }
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why the check did not run, naming what stopped it. Absent when ran is true."
+    }
+  }
+}
