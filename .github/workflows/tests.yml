@@ -22,10 +22,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history, not the default shallow clone. The differential tests
-          # resolve their pre-story baseline by walking a file's own history
-          # (tests/test_story_011_validation.py), and a one-commit checkout has
-          # no revision older than the change under test.
+          # Full history, not the default shallow clone. story-053 converted
+          # every module that resolved this repository's history for an *input*
+          # onto committed fixtures under tests/history-fixtures/, so this is no
+          # longer load-bearing for those. It still is for the modules whose
+          # subject genuinely is what a past commit did — the entries
+          # tests/test_baseline_honesty.py declares as history readers rather
+          # than pending conversion, currently test_baseline_honesty.py,
+          # test_baseline_resolution_is_single.py, test_git_history_loading_retired.py
+          # and test_validation_module_naming.py. A one-commit checkout has no
+          # revision older than the change under test, so those go red.
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
