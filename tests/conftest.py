@@ -2,6 +2,7 @@ import ast
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -509,7 +510,7 @@ constraints:
 """
 
 CONFIG = """\
-workflow: story-workflow
+workflow: {workflow}
 branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
@@ -524,11 +525,25 @@ tests_dir: tests/
 
 
 @pytest.fixture
-def target_root(tmp_path: Path) -> Path:
+def configured_workflow() -> str:
+    """The workflow `target_root` configures its target to run.
+
+    A seam rather than a literal at the write below: a module that has built
+    its own workflow overrides this with the built definition's name, and the
+    same target fixture then drives a run under a definition this repository
+    does not ship. Defaulted to the shipped name so a module that has not been
+    converted configures exactly what it configured before.
+    """
+    return "story-workflow"
+
+
+@pytest.fixture
+def target_root(tmp_path: Path, configured_workflow: str) -> Path:
     root = tmp_path / "sample-target"
     for sub in (".harness/standards", ".harness/stories", ".harness/runs", ".harness/logs", ".harness/docs", "src"):
         (root / sub).mkdir(parents=True)
-    (root / ".harness" / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    (root / ".harness" / "config.yaml").write_text(
+        CONFIG.format(workflow=configured_workflow), encoding="utf-8")
     (root / ".harness" / "stories" / "story-001.yaml").write_text(STORY, encoding="utf-8")
     (root / ".harness" / "standards" / "coding.md").write_text("# Coding Standards\n- keep it simple\n", encoding="utf-8")
     (root / ".harness" / "standards" / "testing.md").write_text("# Testing Standards\n- test everything\n", encoding="utf-8")
@@ -634,3 +649,268 @@ def answering_guidance(verdict: dict, run_dir: Path, *,
 @pytest.fixture
 def harness_root() -> Path:
     return HARNESS_ROOT
+
+
+# --------------------------------------------------------------------------
+# Building a workflow instead of reaching for the shipped one
+#
+# Almost every module under tests/ that loads `workflows/story-workflow.json`
+# is not testing that definition. It is testing a mechanism -- does the
+# coordinator self-route, route a retry, refuse a malformed declaration,
+# enforce a boundary -- and it reached for the live artifact to avoid writing a
+# stage name or a restricted prefix into the test. The rule that produced that
+# is right and stays: a test writes no stage name, no prefix and no artifact
+# name of its own. What was wrong is *which* workflow the names were derived
+# from. Deriving them from what this repository happens to deploy makes a
+# deployment fact into something the suite enforces: story-047 granted one
+# stage a `max_self_routes` budget, a correct one-line change, and reddened
+# four assertions in a module with nothing to say about whether that grant was
+# right.
+#
+# So a test builds the workflow it needs and derives its names from that. The
+# builder is deliberately small and compositional rather than one canonical
+# fixture: a single definition serving thirty modules accretes until it is a
+# second shipped workflow with the same coupling. A test asks for the stages it
+# needs and the declarations it is about; every key it does not ask for is
+# absent from what it gets, so a module can build a case this repository does
+# not deploy.
+#
+# It resolves nothing this repository ships. `build_workflow` reads no file at
+# all -- no workflow, no configuration, no rules -- which is a property
+# `tests/test_shipped_workflow_is_valid.py` demonstrates by running it against
+# a filesystem where this repository is not reachable rather than by asserting
+# about its source.
+# --------------------------------------------------------------------------
+
+
+#: The one stage name the harness itself writes. `story_coordinator` keys its
+#: verdict handling on `name == "verifier"`, so a built workflow whose run must
+#: reach a verdict has to call that stage this. It is a fact about the harness
+#: rather than about what this repository deploys, and it is written *here*,
+#: once, so a module that needs it derives it from the fixture exactly as it
+#: derives every other name -- rather than spelling it at a call site.
+#: `tests/test_shipped_workflow_is_valid.py` holds the coordinator to it.
+VERIFYING_STAGE = "verifier"
+
+
+class StageRef:
+    """A reference to a stage of the workflow being built, by position.
+
+    A route names its destination stage, and the destination's name is
+    assigned by the builder rather than by the caller -- so a caller that
+    wanted to write the name would have to know what the builder was going to
+    choose. It names the position instead and the builder substitutes the
+    name, which keeps the rule intact from the caller's side: the test never
+    writes a stage name, it points at one.
+    """
+
+    __slots__ = ("index",)
+
+    def __init__(self, index: int):
+        self.index = index
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return f"StageRef({self.index})"
+
+
+def workflow_stage(*, name: str | None = None, prompt: str | None = None,
+                   outputs: Sequence[str] | None = None,
+                   changed_files: str | None = None,
+                   may_not_create: Sequence[str] | None = None,
+                   max_self_routes: object = None,
+                   revert_check: dict | None = None,
+                   clean_clone: dict | None = None,
+                   retry_routing: dict | None = None,
+                   schemas: dict | None = None,
+                   **extra) -> dict:
+    """One stage declaration, carrying exactly what the caller asked for.
+
+    Every argument defaults to a sentinel meaning "not asked for", and an
+    argument not asked for produces no key: a stage built with no
+    `max_self_routes` declares no budget, which is a different thing from
+    declaring zero, and the coordinator treats the two differently. `extra`
+    exists so a test needing a key nobody has needed yet can pass it without
+    the builder growing an argument for it first -- but a key more than one
+    module needs should become an argument here rather than being spelled at
+    each call site.
+
+    `max_self_routes` is checked against a sentinel rather than against None
+    because zero and False are both values a test builds deliberately, to
+    drive the pre-flight that refuses a budget which is not a count.
+    """
+    declaration: dict = {"name": name} if name is not None else {}
+    if prompt is not None:
+        declaration["prompt"] = prompt
+    if outputs is not None:
+        declaration["outputs"] = list(outputs)
+    if changed_files is not None:
+        declaration["changed_files"] = changed_files
+    if may_not_create is not None:
+        declaration["may_not_create"] = list(may_not_create)
+    if max_self_routes is not None:
+        declaration["max_self_routes"] = max_self_routes
+    if revert_check is not None:
+        declaration["revert_check"] = dict(revert_check)
+    if clean_clone is not None:
+        declaration["clean_clone"] = dict(clean_clone)
+    if retry_routing is not None:
+        declaration["on_failure"] = {"retry_routing":
+                                     {category: dict(route)
+                                      for category, route in retry_routing.items()}}
+    if schemas is not None:
+        declaration["schemas"] = dict(schemas)
+    declaration.update(extra)
+    return declaration
+
+
+def _substitute_refs(value, names: list[str]):
+    """Replace every StageRef in a built definition with the stage's name."""
+    if isinstance(value, StageRef):
+        if not 0 <= value.index < len(names):
+            raise AssertionError(
+                f"this workflow has {len(names)} stages, so {value!r} names "
+                f"nothing; a route must point at a stage the builder built")
+        return names[value.index]
+    if isinstance(value, dict):
+        return {key: _substitute_refs(item, names) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_substitute_refs(item, names) for item in value]
+    return value
+
+
+def build_workflow(*stages: dict, name: str = "built-workflow",
+                   escalation_rules: dict | None = None) -> dict:
+    """A workflow definition assembled from what the caller asked for.
+
+    Reads nothing. Every stage the caller did not describe is absent, every
+    key a stage did not ask for is absent, and the names are the builder's --
+    positional unless a caller named one -- so a test derives its stage names
+    from the definition it built exactly as it used to derive them from the
+    definition this repository ships.
+
+    A stage's `prompt` defaults to a file named for the stage, because
+    `materialize_workflow` writes one per stage and the coordinator loads a
+    template by the name the declaration carries.
+    """
+    names = [stage.get("name") or f"stage-{index + 1}"
+             for index, stage in enumerate(stages)]
+    if len(set(names)) != len(names):
+        raise AssertionError(f"two stages of {name} share a name: {names}")
+    built = []
+    for stage_name, stage in zip(names, stages):
+        declaration = {"name": stage_name,
+                       "prompt": stage.get("prompt", f"{stage_name}.md")}
+        for key, value in stage.items():
+            if key in ("name", "prompt"):
+                continue
+            declaration[key] = value
+        built.append(_substitute_refs(declaration, names))
+    definition: dict = {"name": name, "stages": built}
+    if escalation_rules is not None:
+        definition["escalation_rules"] = _substitute_refs(escalation_rules, names)
+    return definition
+
+
+#: The context fields a materialized stage prompt renders. Named here, in the
+#: fixture, for the same reason the builder assigns stage names here: a module
+#: asserting on a rendered prompt derives the field it is looking for from what
+#: the fixture declares rather than from what this repository's own templates
+#: happen to say today. A test needing a field this does not list passes its
+#: own template to `materialize_workflow`.
+BUILT_PROMPT_FIELDS = (
+    "story", "acceptance_criteria", "stage_exceptions", "run_dir",
+    "test_command", "tests_dir", "repository_standards", "testing_standards",
+    "architecture_docs", "architecture_doc_paths", "workflow_stages",
+    "stage_create_restrictions", "retry_routes", "blocked_paths",
+    "changed_files", "tester_changed_files", "documenter_changed_files",
+    "implementation_summary", "documentation_report", "test_results",
+    "verification_result", "latest_verifier_finding", "retry_guidance",
+    "clean_clone_result", "self_route_result", "retry_state",
+)
+
+#: The shared partial the assembler resolves before injecting it, mirrored here
+#: so a run against a built harness root renders a `{{harness_layer}}` the way a
+#: run against a deployed one does. Its text is the fixture's own.
+BUILT_HARNESS_LAYER = """\
+[Built Harness Layer]
+
+Blocked paths:
+{{blocked_paths}}
+
+Granted commands:
+{{allowed_tools}}
+"""
+
+
+def built_stage_prompt(stage_name: str) -> str:
+    """The template `materialize_workflow` writes for a stage it was given.
+
+    Every field the fixture declares, labelled on its own line with the
+    placeholder on the line below it, so a module asserting that some artifact
+    reached a stage can find the span by the label it derived from
+    `BUILT_PROMPT_FIELDS` -- and so a multi-line value renders as a block the
+    way it does in the shipped templates rather than trailing off a label.
+    """
+    lines = [f"# {stage_name}", "", "{{harness_layer}}", ""]
+    for field in BUILT_PROMPT_FIELDS:
+        lines += [f"{field}:", f"{{{{{field}}}}}", ""]
+    return "\n".join(lines)
+
+
+def materialize_workflow(workflow: dict, root: Path, *,
+                         prompts: dict[str, str] | None = None,
+                         rules: dict | None = None,
+                         copy: Sequence[str] = (),
+                         shipped_root: Path = HARNESS_ROOT) -> Path:
+    """Write a built workflow into a harness root the caller owns.
+
+    The point of the builder is a definition a test can *run*, not one it can
+    only inspect: a converted module has to exercise the same code path the
+    module reading the shipped definition exercised, which means a real
+    coordinator loading a real file. So the definition is written where a run
+    finds it, and a prompt template is written for every stage it declares --
+    the shipped templates are named for the shipped stages and a built
+    workflow's stages are not.
+
+    `rules` and `schemas` are the harness's, not the workflow's, and a test
+    converting away from the shipped *workflow* is not thereby building its own
+    rule set: they are linked at the shipped ones unless the caller supplies
+    otherwise, exactly as the probe-harness idiom this generalises did.
+
+    Returns the root, so a fixture can be one line.
+    """
+    root = Path(root)
+    (root / "workflows").mkdir(parents=True, exist_ok=True)
+    (root / "workflows" / f"{workflow['name']}.json").write_text(
+        json.dumps(workflow, indent=2) + "\n", encoding="utf-8")
+
+    prompt_dir = root / "prompts"
+    prompt_dir.mkdir(exist_ok=True)
+    (prompt_dir / "harness-layer.md").write_text(BUILT_HARNESS_LAYER,
+                                                 encoding="utf-8")
+    supplied = prompts or {}
+    for stage in workflow["stages"]:
+        text = supplied.get(stage["name"], built_stage_prompt(stage["name"]))
+        (prompt_dir / stage["prompt"]).write_text(text, encoding="utf-8")
+
+    if rules is None:
+        if not (root / "rules").exists():
+            (root / "rules").symlink_to(shipped_root / "rules")
+    else:
+        (root / "rules").mkdir(exist_ok=True)
+        (root / "rules" / "execution-rules.json").write_text(
+            json.dumps(rules, indent=2) + "\n", encoding="utf-8")
+    if not (root / "schemas").exists():
+        (root / "schemas").symlink_to(shipped_root / "schemas")
+    # Copied rather than linked, and only when asked for: an entry point under
+    # `scripts/` resolves its own harness root as `Path(__file__).resolve()`,
+    # and `resolve()` follows a symlink straight back to this repository --
+    # which would load the shipped workflow and undo the whole point of
+    # building one. A caller driving a run through an entry point asks for the
+    # directories it needs; every other caller pays nothing.
+    for name in copy:
+        destination = root / name
+        if not destination.exists():
+            shutil.copytree(shipped_root / name, destination,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+    return root

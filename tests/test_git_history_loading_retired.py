@@ -1415,10 +1415,20 @@ def test_the_suite_passes_without_any_recovered_module_being_made_runnable():
     # it. Written bare until story-038, which named a renamed validation
     # module `test_clean_clone_check.py` and put that name in the shared
     # module's origin map — a module *name* containing the key's spelling,
-    # which is not a frozen declaration of it. Quoting narrows the match to
-    # what the assertion is about; a conftest that did freeze the key still
-    # fails here.
-    assert '"clean_clone"' not in shared
+    # which is not a frozen declaration of it. Narrowed once more by story-048,
+    # which put a workflow *builder* in the shared module: it assembles a
+    # declaration from what a caller asks for, so `declaration["clean_clone"]`
+    # appears as a subscript assignment. That is the opposite of a frozen copy —
+    # nothing is declared, the caller supplies it — and the subject here is a
+    # frozen copy, which carries the key as a *mapping literal*. Both
+    # narrowings keep the subject and neither widens what is permitted; the
+    # control below constructs the frozen form and shows it still fails.
+    frozen_marker = '"clean_clone": '
+    assert frozen_marker not in shared
+    assert frozen_marker in (
+        'WORKFLOW = {"stages": [{"name": "verifier", '
+        '"clean_clone": {"result": "clean-clone-result.json"}}]}'), (
+        "the marker no longer matches the frozen form it is looking for")
 
     for name, source in module_sources().items():
         if name == THIS_FILE.name:
