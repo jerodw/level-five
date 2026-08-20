@@ -75,6 +75,31 @@ shipped definition. What a fixture changes is which workflow the names are
 derived from, not whether they are derived — so a test that hard-codes
 `"implementer"` or `"changed-files.json"` is wrong either way.
 
+Ask the same question of this repository's own commit graph. The shared
+helpers — `story_commit_range`, `story_diff`, `repository_file_at`,
+`function_source_at` and `revision_carrying` — resolve commits out of the
+history the harness itself lives in, and they are the sanctioned route to
+it. What they are not is a source of ordinary inputs. A module whose
+subject genuinely is this repository — that a value is defined exactly once
+across the tree, that a committed archive holds a particular patch, that a
+declaration moved in a named commit — reads the history as its subject and
+goes on reading it. A module that wants a sentence, a prior version of a
+function, or the set of paths some change touched is using the history as
+an instrument, and its answers then move when something is committed,
+renamed, squashed or rebased, none of which is a property of the code under
+test.
+
+When the history is an input, build one. A test that needs a commit graph
+constructs its own repository and commits into it rather than reaching for
+the one the harness is running in: the `target_root` fixture already builds
+a repository under a temporary directory, runs `git init` in it and commits
+what it wrote, and every coordinator test in the suite runs against it;
+`commit_setup` is the same idiom for committing what a test adds
+afterwards. Extend those rather than writing a fourth beside them. Better
+still, before building any history at all, check whether the assertion
+needs one: a sentence you construct in the test asserts the same behaviour
+with nothing to resolve and nothing to move under it.
+
 When you finish, write these files to the run directory at {{run_dir}}:
 
 test-results.json, the structured outcome of the validation you ran. It
