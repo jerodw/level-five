@@ -1,0 +1,207 @@
+story:
+  id: story-051
+  title: The documenter may not assert what nothing can check
+  description: |
+    .harness/docs/ARCHITECTURE.md is tracked and permanent. The evidence the
+    documenter writes it from is not: .gitignore excludes .harness/runs/,
+    .harness/logs/ and .harness/requests/, and git ls-files .harness/runs/
+    returns nothing. So the documenter can write a factual claim into the
+    repository whose only support is a file local to one machine, invisible to
+    the verifier, and absent from any clone.
+
+    story-049's documenter wrote, of story-048, "having converted 8 of 22
+    modules -- 0 in the first attempt, then 3, then 2". Zero, three and two sum
+    to five; the true end state was 5 converted, 14 awaiting, 8 subject
+    readers, and the 8 was the subject-reader count. The verifier caught the
+    arithmetic inconsistency, recorded it in unverified, and said correctly
+    that it could not be settled from the artifacts available. That was exactly
+    true: story-049 branched from story-048's plan commit, so the ground truth
+    was on an unmerged branch it had no reason to visit, recorded in a run
+    directory nothing tracks. The documenter-before-verifier order worked and
+    is not the gap. The gap is that the verifier's evidence horizon is its own
+    branch and its own run directory, and the documenter is free to write past
+    it.
+
+    Detection here was luck. The figure was visible only because it
+    contradicted a breakdown printed in the same sentence. A wrong number with
+    no adjacent arithmetic -- "story-044 assigned 21 files to one stage", also
+    in this document, from the same untracked source -- passes silently and
+    stays wrong forever. The class of defect is undetectable by inspection, so
+    counting occurrences is not available as evidence and this is filed on one
+    sighting.
+
+    Nothing here reads prose to decide what a factual claim is. That is not
+    tractable and a check that half-works is worse than none, which is the
+    lesson story-050 already records. The tractable seam is the reference: a
+    claim about another story names story-0NN, a fixed shape, and whether that
+    story's work is in the repository's history is a question git answers. So
+    the check is narrow and mechanical: text this run added to a configured
+    architecture document, naming a story with no completion commit reachable
+    from the run's base, in a block that also carries a quantity, is reported.
+
+    The forward-reference case survives structurally rather than by a
+    judgement. ARCHITECTURE.md legitimately says "the next story in this line"
+    and describes the story currently landing, which is by definition unmerged
+    when the documenter writes. A phrase-based forward reference carries no
+    story-0NN at all and is invisible to a check keyed on the reference,
+    because a story number does not exist until the story is planned; and the
+    run's own story id is exempt outright. That is the distinction this lives
+    or dies on, and it is a property of the shape rather than of a rule about
+    intent.
+
+    The remedy is attribution, not refusal. Describing a motivating failure is
+    legitimate and useful, so refusing the claim outright is too strong. "The
+    story-048 request records 14 remaining" is checkable as a quotation and
+    honest about its provenance, where "converted 8 of 22" asserts a fact the
+    repository cannot hold. The check therefore reports and routes nothing: the
+    coordinator's record is injected into the verifier, which already judges
+    the documenter's work since story-045 and already owns a documentation
+    retry category. The coordinator computes the fact; the stage whose job is
+    judging decides what to do with it. Beside that, prompts/documenter.md is
+    told that the untracked directories are not citable authority, so the
+    preventive half and the detective half land together and the prompt rule is
+    the one the check makes enforceable.
+
+    The check never asks whether a number is right, only whether anything
+    tracked could say. Its scope is the text this run added, so the claims
+    already in the document are not re-reported on every run; re-verifying
+    figures already there is out of scope, as is tracking .harness/runs/,
+    giving the verifier cross-branch access, and the documenter-before-verifier
+    order.
+
+    It travels. The documenter, the verifier, the coordinator and the gitignore
+    are harness-owned, and the documents scanned come from the target's own
+    architecture_docs configuration, so every target inherits both the defect
+    and the fix.
+
+tasks:
+  - Add schemas/claim-support-result.schema.json for the coordinator's record of one claim-support check, following the optional-by-absence and ran/reason conventions clean-clone-result and revert-check-result already use, and add its name to schemas/manifest.json.
+  - Declare the check on the documenter stage in workflows/story-workflow.json as a claim_support object naming its result artifact, so the stage the check runs after is read off the workflow rather than written into orchestration code.
+  - Add the check to orchestration/story_coordinator.py - the added text of each configured architecture document against the run's resolved base, the story references in it, the quantity test, the run's own story id exempt - reusing completion_commits to decide whether a referenced story has merged work rather than writing a second spelling of merged.
+  - Record a check that could not run as ran false with the reason, rather than as a check that found nothing, for a target that configures no architecture documents, a base that cannot be resolved, and a git invocation that fails.
+  - Inject the record into the verifier's context in orchestration/context_assembler.py as claim_support_result, beside clean_clone_result, and render it in prompts/verifier.md.
+  - Add to prompts/verifier.md what a reported claim means and what settles it - attribution as a quotation to its source, or restatement in terms the repository can hold - and that a claim left asserted is a documentation defect belonging to the documentation retry category the workflow already defines.
+  - Add to prompts/documenter.md that .harness/runs/, .harness/logs/ and .harness/requests/ are untracked by design and are not citable authority, so a fact worth keeping is restated in the document or attributed as a quotation.
+  - Write tests/test_documented_claim_support.py as the standing regression module for the whole of the above, including the negative controls.
+  - Bring any existing module the schema, workflow, context or prompt changes redden up to date, reporting each edited assertion with the reason the edit is not a weakening.
+
+acceptance_criteria:
+  - schemas/claim-support-result.schema.json exists, is listed in schemas/manifest.json, and is valid against the validator this repository ships.
+  - The record distinguishes a check that ran and reported nothing from a check that could not run, by the ran field and an accompanying reason, so a target configuring no architecture documents does not read as a document with no unsupportable claims.
+  - workflows/story-workflow.json declares the check on the documenter stage, and the coordinator runs it because the stage declares it - a workflow that moves the declaration to another stage runs it after that stage instead, with no change to orchestration code.
+  - Text this run added to a configured architecture document, naming a story with no completion commit reachable from the run's base and carrying a quantity, is reported in the record, naming the document, the story or stories with no merged work, and the added text the report is about.
+  - story-049's own "converted 8 of 22 modules" sentence, taken from git history at the commit before 1323aed, is reported when it is the text a run added.
+  - A forward reference that names no story - the "next story in this line" shape the document already uses - is not reported.
+  - A claim about the story the run is landing is not reported, whatever quantities it carries.
+  - A claim about a story with a completion commit reachable from the base is not reported, since git can support it.
+  - Text a run did not add is not reported, so the claims already in the document at the base are not re-reported by every run.
+  - The check makes no judgement about whether a reported number is right - it reports only that nothing tracked could say - and no branch of it depends on what any added text says beyond the story reference and the presence of a quantity.
+  - The record is injected into the verifier's rendered prompt, and that prompt resolves every placeholder.
+  - The rendered verifier prompt states what a reported claim means and what settles it, and that a claim left asserted is a documentation defect belonging to the documentation retry category.
+  - The rendered documenter prompt states that the untracked directories are not citable authority and what to do instead.
+  - The check routes nothing and escalates nothing - a run whose record reports a claim is routed exactly as the same run with an empty record, and consumes no retry and no self-route for it.
+  - tests/test_documented_claim_support.py drives real runs for the routing and injection behaviour rather than calling the check directly, and drives the check directly against fixture repositories for the reference and quantity cases.
+  - Every absence this story asserts - that a forward reference is not reported, that the landing story is not reported, that a merged story is not reported, that text already at the base is not reported, that no retry is consumed - carries a control demonstrating the same assertion fails when the behaviour is violated.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Write the result schema first, taking clean-clone-result and revert-check-result as the model for ran, reason and optional-by-absence, and add it to the manifest.
+    - Add the claim_support declaration to the documenter stage in the shipped workflow, shaped like the clean_clone and revert_check declarations beside it - an object whose result key names the artifact.
+    - Add the check to the coordinator - collect the added lines of git diff against the run's resolved base for each configured architecture document, group them into contiguous blocks, find story-0NN references, drop the run's own story id, ask completion_commits whether each remaining reference has merged work, and report a block that names an unmerged story and carries a quantity outside the reference itself.
+    - Run the check where the stage declares it, at the same point in the stage loop the other declared post-stage checks are run, writing the record and appending an event, and routing nothing on the result.
+    - Add claim_support_result to the assembled context beside clean_clone_result, and the token to the verifier template.
+    - Add the criteria to prompts/verifier.md and the citability rule to prompts/documenter.md.
+    - Run the suite and bring up to date whatever the schema, workflow, context and prompt changes reddened, reporting each edited assertion with why the edit was not a weakening.
+  likely_file_changes:
+    - file: schemas/claim-support-result.schema.json
+      stage: implementer
+      reason: the coordinator's record of one claim-support check, and what its absence of findings does and does not mean
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: the new schema is listed where the shipped schema inventory is declared
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: the documenter stage declares the check, so the stage it runs after is workflow-owned
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the check itself, its record, its event, and the call site the stage declaration drives
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: the record is injected into the verifier's context beside clean_clone_result
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: the token for the record, what a reported claim means, and what settles it
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: the untracked directories are not citable authority, and what to do instead
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: existing module - it holds the schema inventory, which gains a schema
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: implementer
+      reason: existing module - it states what the shipped workflow declares, which gains a stage declaration
+    - file: tests/test_context_assembler.py
+      stage: implementer
+      reason: existing module - it states what the assembled context carries, which gains a key
+    - file: tests/test_documented_claim_support.py
+      stage: tester
+      reason: the standing regression module for the check, its record, its injection and their controls
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records what the harness now computes about a documented claim, why the seam is the reference rather than the sentence, and why the remedy is attribution rather than refusal
+
+scope:
+  modify:
+    - schemas/claim-support-result.schema.json
+    - schemas/manifest.json
+    - workflows/story-workflow.json
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .gitignore
+    - orchestration/plan_validation.py
+    - orchestration/harness_config.py
+    - schemas/story.schema.json
+    - schemas/harness-config.schema.json
+    - schemas/verification-result.schema.json
+    - schemas/retry-guidance.schema.json
+    - schemas/self-route-result.schema.json
+    - prompts/planner.md
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/harness-layer.md
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the fixture case the story exists for, using story-049's own "converted 8 of 22 modules" sentence read out of git history at the commit before 1323aed rather than retyped, and confirm the report names the document, the unmerged story and the added text.
+  - Confirm a forward reference naming no story is not reported, and that a claim about the story currently landing is not reported. This is the distinction the story lives or dies on, so confirm both by running the check rather than by reading the code.
+  - Confirm a claim about a story with a completion commit reachable from the base is not reported, and confirm the merged decision is the one completion_commits makes rather than a second spelling of it.
+  - Confirm the check reports rather than guesses, by varying a reported number to a different wrong value and to the right one and observing the report is unchanged.
+  - Confirm text already present at the base is not reported, by running against a document whose existing content carries an unsupportable claim and observing only the added text is reported.
+  - Confirm a check that could not run is recorded as such with its reason, for a target configuring no architecture documents and for a base that cannot be resolved, and confirm neither reads as a document with nothing to report.
+  - Confirm the record reaches the verifier by planting a distinctive string in the reported text and finding it in the record on disk and in the rendered verifier prompt of the run.
+  - Confirm the rendered verifier and documenter prompts carry their new criteria and resolve every placeholder, by inspecting rendered prompts rather than the templates.
+  - Confirm the check routes nothing, by running a story whose documenter writes a reported claim and observing the run routes exactly as the same run without one, with the recorded retry count and self-route count unmoved.
+  - Confirm the declaration is what drives the check, by running a workflow whose declaration is absent and observing no record is written and the run is otherwise unchanged.
+  - Confirm the new module's absence assertions can fail, by breaking each behaviour in turn and observing the assertion that catches it. An assertion that no forward reference was reported passes equally when none was and when the assertion has stopped looking.
+  - Confirm every existing behaviour outside this check is unchanged, by running the modules that state them and reporting any assertion that had to be edited together with why the edit was not a weakening.
+  - Confirm the full test suite passes.
+
+constraints:
+  - No branch of the check reads added text as language; the whole decision is the story-reference shape, whether that story has merged work, and whether a quantity is present outside the reference.
+  - The check never determines whether a reported figure is correct, only whether anything the repository tracks could support or refute it.
+  - The stage the check runs after comes from the workflow declaration; no stage name is written into orchestration code for it.
+  - The documents scanned come from the target's configured architecture_docs; no document path is written into harness source.
+  - The check makes no routing decision, appends nothing to retry-history.json, consumes no retry and no self-route, and adds no escalation path.
+  - No configured scalar, threshold or budget is introduced.
+  - Nothing in .gitignore changes: the run directory, the logs and the requests stay untracked, and making the claim checkable does not depend on tracking them.
+  - The clean-clone check, the revert check, the ownership check, the schema check and the self-route keep every property they have today.
+  - No assertion is weakened, narrowed or deleted to accommodate the new check; an existing assertion that must change is reported with the reason it is not a weakening.
+  - The new module derives stage names, artifact names and document paths from the workflow and configuration it drives rather than writing them inline.
