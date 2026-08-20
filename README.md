@@ -27,7 +27,7 @@ The exact harness Appendix A describes is tagged **`appendix-a`**. If you are re
 
 ### What has changed since
 
-Each story below is a step the book's roadmap calls for, or a failure the build hit that the roadmap did not anticipate. The story artifacts are committed in `.harness/stories/`. Run directories are execution state rather than source, so `.harness/runs/` is gitignored and does not travel with a clone; the runs worth keeping — three escalations, and three runs preserved for what they showed — are copied into `.harness/runs-archive/`.
+Each story below is a step the book's roadmap calls for, or a failure the build hit that the roadmap did not anticipate. The story artifacts are committed in `.harness/stories/`. Run directories are execution state rather than source, so `.harness/runs/` is gitignored and does not travel with a clone; the runs worth keeping — four escalations, and three runs preserved for what they showed — are copied into `.harness/runs-archive/`.
 
 | Story | Change | Where the book argues for it |
 | --- | --- | --- |
