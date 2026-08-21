@@ -1,0 +1,142 @@
+story:
+  id: story-057
+  title: Refuse a plan that assigns a governed path without granting it
+  description: |
+    A stage's may_not_create declaration restricts creating files beneath a
+    prefix, and nothing forbids modifying a file that is already there. Two
+    checks act on that at run time: the ownership check refuses a created
+    file outright, and the revert check restores the stage's edits under the
+    governed prefixes and re-runs the suite, permitting an edit that was
+    forced and escalating on one that was not.
+
+    story-042 settled that a plan may assign an existing governed file to the
+    stage restricted there, and plan_validation.assignment_problems was
+    narrowed to say nothing about it. What that leaves is a plan the harness
+    accepts and a run the harness can only refuse. story-056 assigned
+    tests/conftest.py, where story_commit_range is defined, to the stage that
+    writes the implementation; the work was right and the plan was legal, and
+    the run escalated twenty-five minutes in because reverting an
+    implementation change never breaks a suite - the assertion that would
+    hold the new behaviour belongs to a later stage and has not been written
+    yet. A comment-only change is refused by the same arithmetic. The verdict
+    was structurally guaranteed, so it carried no information about the work.
+
+    The reconciliation already exists and nothing requires it. A granted path
+    is skipped by governed_edits exactly as it is skipped by the ownership
+    check, so a plan that assigns the file and grants it works today;
+    story-056's own artifact was repaired by adding two grants and resuming.
+
+    This story makes assignment_problems require the grant. An entry naming a
+    file beneath a prefix its own stage is restricted under, with no grant on
+    that stage covering it, is reported whether or not the file exists.
+    Existence stops deciding the verdict and decides only the wording: an
+    absent file describes a creation the ownership check refuses, a present
+    one describes a modification the revert check governs and can, for an
+    implementation or comment-only change, only refuse. Both forms name the
+    grant that would make the plan legal, because the failure mode story-056
+    hit was not knowing the field exists.
+
+    The judgement being moved is *is this file implementation or test logic
+    for this story*, which is a question about intent that a human answers
+    where a human is present. It is not moved into the revert check, which
+    would have to read a diff as language to answer it and would put a target
+    stack back into harness source that story-040 and story-041 removed.
+    Neither run-time check changes.
+
+tasks:
+  - Replace the existence exemption in plan_validation.assignment_problems with a grant requirement - an entry offends when its file falls beneath a prefix its own stage is restricted under and no grant on that stage covers it, whatever the filesystem holds - keeping story_coordinator.stage_restrictions and story_coordinator.grant_covers as the single source of both halves and of the grant decision.
+  - Word the reported problem from what the filesystem holds - an absent file as a creation the ownership check refuses, a present one as a modification the revert check governs and refuses unless reverting it breaks the suite - so the two faults read as what they are while remaining one verdict.
+  - End both wordings with the same resolution clause - reassign the file to a stage that may own it, or declare a stage_exceptions grant naming that file for that stage, whose reason field is required - so a plan repaired at either fault is repaired the same way.
+  - Rewrite the fourth-check section of the plan_validation module docstring, which today states that a present file yields nothing and that the check is a prediction about what a stage may create; both cease to be true.
+  - Rewrite the paragraph of prompts/planner.md that tells a planner an entry naming a file already present is not refused, so that it states the rule the artifact is now held to and the grant that satisfies it.
+  - Repoint the assertions story-042 wrote around the narrowing, which state the exemption this story removes, to state the wording distinction that replaces it.
+  - Repoint the committed-artifact corpus assertions, which today require that no committed artifact is reported by this check, to state what is now true of artifacts written before the rule and why it costs them nothing.
+  - Build the standing regression coverage for the new refusal, its two wordings, the grants that silence it and the grants that do not, end to end through scripts/l5-plan as well as at the function.
+  - Record in .harness/docs/ARCHITECTURE.md what the plan-time assignment check now decides, that existence words the message rather than deciding the verdict, and why the judgement sits at plan time rather than in the revert check.
+
+acceptance_criteria:
+  - plan_validation.assignment_problems reports an entry whose file falls beneath a prefix the entry's own stage is restricted under and which no grant on that stage covers, and reports it identically whether or not that file exists beneath the target root.
+  - A grant naming that exact file, and a grant naming the whole restricted prefix, each silence the report for both an existing and a non-existent file.
+  - A grant naming a different file beneath the same prefix does not silence it, and neither does a grant of the same path made to another stage.
+  - An entry whose file lies beneath no prefix its stage is restricted under yields nothing, and a story declaring no stage_exceptions at all and naming no governed path yields nothing.
+  - The reported message names the file, the stage, the prefix in the workflow's own words, and both resolutions - reassignment, or a stage_exceptions grant naming that file for that stage - and states that the grant carries a required reason.
+  - The message for a file the target root does not hold describes a creation and cites the rule the workflow declares; the message for a file the target root does hold describes a modification and cites the revert check as what refuses it.
+  - assignment_problems still names no stage and no restricted prefix as a literal in its source, and neither does the module as a whole; both halves of every match come off the loaded workflow definition and the grant decision comes off story_coordinator.grant_covers.
+  - The committed artifact of story-056 as it stands, carrying its two grants, is reported by nothing; the same artifact with its stage_exceptions removed is reported once per governed entry.
+  - scripts/l5-plan leaves an artifact carrying the new conflict uncommitted in the working tree, prints the problem, and commits the same artifact once a grant naming the file is added to it.
+  - No run reads either plan-time function: pre-flight refuses nothing it did not refuse before, and every artifact already committed under .harness/stories/ remains runnable.
+  - The revert check and the ownership check decide exactly what they decide today, on the same inputs, with the same records and the same events.
+  - The paragraph of prompts/planner.md governing this states that an entry naming a governed path needs a grant beside it whether or not the file is already present, and states both resolutions; the rendered prompt still names no stage and no restricted prefix as a literal.
+  - The fourth-check section of the plan_validation module docstring states the rule as it now stands, what existence now decides, and that neither run-time check is weakened or anticipated by it.
+
+technical_plan:
+  implementation_steps:
+    - In assignment_problems, keep the grant short-circuit ahead of everything else, then report on the stage-and-prefix match alone; consult the root only to choose between the two wordings once an entry has already been decided to offend.
+    - Keep the resolution clause identical across the two wordings, built once, so a repair reads the same at either fault.
+    - Leave the signatures of assignment_problems and artifact_problems as they are, root included and undefaulted, so no caller silently resolves existence against the process working directory.
+    - Rewrite the fourth-check section of the module docstring and the function docstring together, replacing the narrowing story-042 recorded with the rule that replaces it and stating what existence still decides.
+    - Rewrite the corresponding paragraph of prompts/planner.md in the terms the injected restriction already uses, without writing a stage name or a restricted prefix into the template.
+    - Repoint the assertions that state the removed exemption, and the corpus assertions that require no committed artifact to be reported, to the facts that replace them; run the suite before finishing.
+    - Build the regression coverage from fixtures, including a story-056 pair reconstructed from its committed artifact with and without its grants, with a demonstration beside every asserted absence that it can fail.
+  likely_file_changes:
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: the check itself, the two wordings, and the docstring sections that state the rule
+    - file: prompts/planner.md
+      stage: implementer
+      reason: the paragraph telling a planner an entry naming an existing governed file is not refused
+    - file: tests/test_plan_assignment_refusal.py
+      stage: implementer
+      reason: existing module - it states the exemption this story removes and the corpus property that changes with it
+    - file: tests/test_plan_assignment_refusal.py
+      stage: tester
+      reason: the standing regression coverage for the refusal, its two wordings, and the grants that do and do not silence it
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records story-032's check and story-042's narrowing, and must record what the check now decides and where the judgement sits
+
+scope:
+  modify:
+    - orchestration/plan_validation.py
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - orchestration/plan_commit.py
+    - orchestration/harness_config.py
+    - scripts/l5-plan
+    - scripts/l5-run
+    - schemas/
+    - workflows/story-workflow.json
+    - .harness/config.yaml
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/documenter.md
+    - prompts/verifier.md
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm that the artifact of story-056 committed under .harness/stories/ is reported by nothing, and that the same artifact with its stage_exceptions removed is reported - the pair is the case this story exists for.
+  - Confirm the report is independent of the filesystem: the same entry, against a root that holds the file and a root that does not, is reported both times, and the two messages differ only in the fault they describe.
+  - Confirm a grant covering a different file beneath the same prefix leaves the entry reported, since a single-file grant covers that file alone.
+  - Confirm a plan naming only ungoverned paths is unaffected, and that a story declaring no stage_exceptions is unaffected.
+  - Confirm the refusal happens before any stage runs - that scripts/l5-plan withholds the commit, and that no run calls either plan-time function.
+  - Confirm every artifact already committed under .harness/stories/ still parses, still satisfies the schema, and is still accepted by l5-run's pre-flight.
+  - Confirm the revert check and the ownership check are unchanged in what they revert, what they permit, what they escalate on, and what they record.
+  - Confirm each asserted absence carries a demonstration that it can fail, per the standing negative-control rule, and that no assertion in the suite passes on a fixture nothing objects to.
+  - Confirm neither prompts/planner.md nor orchestration/plan_validation.py contains a stage name or a restricted prefix as a literal, by a scan that is shown to catch one planted there.
+
+constraints:
+  - Neither run-time check may be weakened, anticipated or duplicated: this adds a plan-time refusal and changes nothing about what a stage may do once a run has started.
+  - No check may read a diff as source in any language; the judgement this story moves is a plan-time one precisely because no scan can derive it.
+  - story-042's permission stands - a plan may still assign a file the target already holds to the stage restricted beneath that prefix; the grant is what makes the plan say so completely.
+  - Both halves of the match, and the decision about whether a grant covers a path, stay owned by story_coordinator; nothing here writes a second answer to either question.
+  - The five plan-time classes stay plan-time only, so no artifact already committed becomes unrunnable.
+  - A test builds the repository state it needs rather than reading this repository's git history or its shipped workflow definition.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_plan_assignment_refusal.py
+    reason: the module states the exemption this story removes, so its assertions go stale the moment the check changes and the stage that changes the check has to repoint them to leave the suite green; the coverage for the new behaviour is still the tester's
