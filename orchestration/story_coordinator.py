@@ -3547,27 +3547,44 @@ def run_story(
         # the live count for one stage invocation and nothing carries it across
         # a resume: the stage is being entered afresh, not re-running itself.
         state.self_route_count = 0
-        if state.status == "escalated":
-            # The interrupted attempt is archived before the resumed stage
-            # runs, under the attempt number it was written with. Refuse rather
-            # than overwrite: the archive is the evidence a resume exists to
-            # preserve, and story-010 recorded exactly this case as open.
-            attempt = state.retry_count + 1
-            destination = attempt_dir(run_dir, attempt)
-            if destination.exists():
-                print(
-                    f"{destination} already holds an archived attempt, and "
-                    f"resuming {story_id} would write attempt {attempt} over "
-                    f"it. Move or remove it if that attempt is not worth "
-                    f"keeping, then run the story again.",
-                    file=sys.stderr,
-                )
-                return 1
-            archive_attempt(
-                run_dir,
-                interrupted_attempt_artifacts(stages, attempt, run_dir=run_dir),
-                attempt,
+        # The interrupted attempt is archived before the resumed stage runs,
+        # under the attempt number it was written with. This happens for both
+        # resumed statuses: a crashed run stopped for a reason nobody recorded,
+        # which is when a partial artifact is most likely to be the only
+        # account of what happened, and a resume carries retry_count forward,
+        # so the stage loop would re-render the prompt under the very number
+        # the dead attempt used. Refuse rather than overwrite: the archive is
+        # the evidence a resume exists to preserve, and story-010 recorded
+        # exactly this case as open.
+        #
+        # Archiving makes no claim about what it copied. A stage that died
+        # mid-write may leave a truncated or schema-invalid file, and
+        # preserving that file exactly as it is is the point — nothing here
+        # parses, validates or repairs an archived artifact.
+        #
+        # What does not generalize with it is the state transition below and
+        # the unchanged guard above. A crashed run is already running, so
+        # assigning that status would state a transition that did not happen;
+        # and a crashed run has no escalation commit to compare against, so
+        # unchanged_since_escalation could establish nothing and its refusal
+        # would be meaningless.
+        attempt = state.retry_count + 1
+        destination = attempt_dir(run_dir, attempt)
+        if destination.exists():
+            print(
+                f"{destination} already holds an archived attempt, and "
+                f"resuming {story_id} would write attempt {attempt} over "
+                f"it. Move or remove it if that attempt is not worth "
+                f"keeping, then run the story again.",
+                file=sys.stderr,
             )
+            return 1
+        archive_attempt(
+            run_dir,
+            interrupted_attempt_artifacts(stages, attempt, run_dir=run_dir),
+            attempt,
+        )
+        if state.status == "escalated":
             state.status = "running"
             save_state(run_dir, state)
         append_event(
