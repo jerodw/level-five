@@ -77,6 +77,14 @@ class RunState:
     #: state.json and events.log. Empty means no guidance is in force, and a
     #: verification then routes exactly as a first verification does.
     guidance_in_force: list[str] = field(default_factory=list)
+    #: How many correction passes this run has taken. Live *and* cumulative,
+    #: unlike self_route_count: the budget is one pass per run, so the count
+    #: is what makes termination a property rather than a hope, and it is
+    #: saved and restored with the rest of the state so a resumed run cannot
+    #: spend the pass a second time. A correction pass spends nothing a retry
+    #: spends, so this is a separate count and neither reads nor writes
+    #: retry_count.
+    correction_pass_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -2323,6 +2331,167 @@ def self_route(
 
 
 # --------------------------------------------------------------------------
+# A minor, correct finding has somewhere to go
+#
+# A verifier that notices something real but too small to fail a run used to
+# record it in `unverified`, where nothing read it: no routing decision touched
+# it, no stage received it, and the observation shipped uncorrected. A verdict
+# may now carry `correctable_findings` instead — findings the verifier judges
+# correct, mechanically fixable, and a correction to words rather than to
+# behaviour — and on a passing verdict, after the clean-clone check has passed,
+# the workflow re-enters at the earliest stage those findings' categories name
+# and runs through to verification again.
+#
+# That is a retry's shape minus everything a retry spends: no retry_count, no
+# attempts/attempt-N/ archive, no retry-history.json entry, and the verdict
+# that routed it is unchanged. The budget is declared in the workflow the way
+# clean_clone is, so removing the key disables the whole mechanism with no
+# change here, and nothing below writes a stage name or a category: both come
+# off the loaded definition, as every other route does.
+
+
+def correction_pass_declaration(stages: list[dict]) -> dict:
+    """The workflow's correction-pass declaration, wherever a stage carries it.
+
+    Read off the loaded definition rather than looked up by stage name, so a
+    workflow that declares the pass on a different stage is found here and one
+    that declares it nowhere disables the mechanism entirely. The first
+    declaration wins; a definition carrying two would be declaring one
+    mechanism twice.
+    """
+    for stage in stages:
+        declaration = stage.get("correction_pass")
+        if declaration:
+            return declaration
+    return {}
+
+
+def correction_pass_result_file(artifact: str, number: int) -> str:
+    """Where one correction pass's record is written, keyed so none overwrites another.
+
+    The declared artifact name carries the pass number before its extension.
+    The budget is one pass per run today, so no run reaches a second name; the
+    key exists because the alternative is a name that silently becomes wrong
+    the moment a workflow declares a larger budget, which is the failure the
+    self-route records already key against.
+    """
+    stem, dot, extension = artifact.rpartition(".")
+    if not dot:
+        return f"{artifact}-{number}"
+    return f"{stem}-{number}{dot}{extension}"
+
+
+def correction_pass_statement(stage_name: str) -> str:
+    """What the coordinator tells the stage a correction pass routes to.
+
+    A passing verdict writes no retry guidance, so there is no agent-authored
+    guidance behind this and the statement says so, exactly as the self-route
+    statement does. What the stage most needs to know is the boundary: this
+    corrects words and never behaviour, and the suite must pass unchanged
+    across the pass.
+    """
+    return (
+        f"The verification passed. It also recorded findings it judges correct, "
+        f"too small to fail the run, and fixable in the words alone, and the "
+        f"coordinator has re-entered the workflow at {stage_name} so they have "
+        f"somewhere to go. This is the coordinator's own statement, not an "
+        f"agent's: a passing verdict writes no retry guidance, so nothing here "
+        f"was authored by a verifier beyond the findings themselves. This is "
+        f"not a retry and no retry budget was spent — the retry count is "
+        f"unchanged, no attempt was archived, and the passing verdict stands. "
+        f"Correct the words each finding names and nothing else: a correction "
+        f"pass changes prose — a comment, a docstring, a schema description, a "
+        f"document — and never behaviour, so nothing you change here may alter "
+        f"what any test asserts about the system, and the suite must pass "
+        f"unchanged across this pass. Then let the workflow run through to "
+        f"verification again as it normally would."
+    )
+
+
+@dataclass(frozen=True)
+class CorrectionRouting:
+    """Where a verdict's correctable findings send execution, or why they cannot.
+
+    `unknown` holds the categories no route in the table defines, in the order
+    the findings named them and without repeats. It is non-empty exactly when
+    the run must escalate instead of routing, which is the same strictness an
+    unrecognised `retry_target` already gets: absorbing an unknown category
+    into a default destination would be the drift the routing table exists to
+    remove.
+    """
+
+    stage: str | None
+    unknown: list[str]
+
+
+def correction_destination(
+    findings: list[dict], routes: dict, stage_names: list[str]
+) -> CorrectionRouting:
+    """The earliest stage in workflow order among the categories the findings name.
+
+    Earliest, so a verdict naming two categories enters at the first of them
+    and reaches the other on the way back to verification rather than needing
+    a pass apiece. The destinations are read off the stage's declared
+    retry_routing table, so this introduces no vocabulary of its own and no
+    category or stage name is written here.
+    """
+    unknown: list[str] = []
+    destinations: list[int] = []
+    for finding in findings:
+        category = finding.get("category")
+        if category in routes:
+            destinations.append(stage_names.index(routes[category]["stage"]))
+        elif category not in unknown:
+            unknown.append(category)
+    if unknown or not destinations:
+        return CorrectionRouting(None, unknown)
+    return CorrectionRouting(stage_names[min(destinations)], [])
+
+
+def _correction_pass_routed(
+    run_dir: Path,
+    stage_name: str,
+    destination: str,
+    findings: list[dict],
+    number: int,
+    budget: int,
+) -> None:
+    append_event(
+        run_dir,
+        f"correction pass {number} of {budget}: verification passed carrying "
+        f"{len(findings)} correctable finding(s); re-entering at {destination}",
+        kind="correction-pass-routed",
+        stage=stage_name,
+        retry_stage=destination,
+    )
+
+
+def _correction_pass_recorded(
+    run_dir: Path, stage_name: str, findings: list[dict], budget: int
+) -> None:
+    """Record findings a spent budget leaves uncorrected, and complete the run.
+
+    The bound is one pass per run and it is what makes termination a property
+    rather than a hope: a fix the verifier keeps rejecting cannot cycle. A
+    second verdict still carrying findings is not an error and routes nowhere,
+    so the findings are named in the event stream, where a developer meets
+    them, and the run completes.
+    """
+    named = "; ".join(
+        f"{finding.get('location')}: {finding.get('finding')}"
+        for finding in findings
+    )
+    append_event(
+        run_dir,
+        f"correction pass budget of {budget} is spent; verification passed "
+        f"still carrying correctable findings, which are recorded here and "
+        f"left uncorrected: {named}",
+        kind="correction-pass-recorded",
+        stage=stage_name,
+    )
+
+
+# --------------------------------------------------------------------------
 # Ending a run so it can be resumed
 #
 # A successful run's work is durable: _complete commits it. An escalated run's
@@ -3397,6 +3566,25 @@ def run_story(
             if evidence.is_file():
                 self_route_result = evidence.read_text(encoding="utf-8")
 
+        # A stage running because a passing verdict carried a correctable
+        # finding carries the coordinator's own record of that pass. Read back
+        # off the artifact just written rather than passed along in memory, so
+        # what the prompt says and what the run directory records are one
+        # thing, exactly as the self-route evidence above is. The artifact name
+        # comes off the workflow's declaration wherever a stage carries it, so
+        # no stage name and no artifact name is written here. It renders as
+        # None for every stage of a run that took no pass, including the
+        # stages that ran before one.
+        correction_pass_result = None
+        if state.correction_pass_count:
+            declared = correction_pass_declaration(stages).get("result")
+            if declared:
+                record = run_dir / correction_pass_result_file(
+                    declared, state.correction_pass_count
+                )
+                if record.is_file():
+                    correction_pass_result = record.read_text(encoding="utf-8")
+
         context = context_assembler.build_context(
             story_text=story_text,
             story=reading.parsed,
@@ -3411,6 +3599,7 @@ def run_story(
             retry_stage=routed_stage,
             allowed_tools=config.get("allowed_tools"),
             self_route_result=self_route_result,
+            correction_pass_result=correction_pass_result,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
@@ -3789,6 +3978,92 @@ def run_story(
                         index = stage_names.index(destination)
                         continue
                     _clean_clone_passed(run_dir, name, artifact)
+
+                # A finding too small to fail the run has somewhere to go.
+                # Read here, on a passing verdict and after the clean-clone
+                # check has passed, because a failed verdict already routes
+                # and the correction travels in the retry guidance it writes.
+                # Both names come off the one declaration, exactly as
+                # clean_clone's do, so removing that key disables the whole
+                # mechanism with no change here and the same verdict completes
+                # the run as it did before this existed.
+                correction = stage.get("correction_pass") or {}
+                correction_artifact = correction.get("result")
+                findings = verdict.get("correctable_findings") or []
+                if correction_artifact and findings:
+                    routing = correction_destination(findings, routes, stage_names)
+                    if routing.unknown:
+                        # Above the budget comparison for the reason the two
+                        # unroutable-retry escalations sit above the ceiling: a
+                        # finding naming a category the workflow does not
+                        # define is a bug in what the verifier produced, and
+                        # that is the reason a developer should read rather
+                        # than the budget. Through _escalate, so retry_count is
+                        # untouched, and above archive_attempt, so no
+                        # attempts/attempt-N/ is written.
+                        named = ", ".join(f"'{one}'" for one in routing.unknown)
+                        return _escalate(
+                            run_dir,
+                            state,
+                            f"a correctable finding named {named}, which is "
+                            f"not a retry category {workflow['name']} defines; "
+                            f"it defines: {declared}",
+                            target_root=target_root,
+                            harness_root=harness_root,
+                            duration_seconds=elapsed(),
+                            verifier_outcome=verdict.get("status"),
+                            retry_decision="escalate",
+                            retry_reason=(
+                                f"a correctable finding named the unknown "
+                                f"category {named}"
+                            ),
+                        )
+                    budget = correction["budget"]
+                    if state.correction_pass_count >= budget:
+                        _correction_pass_recorded(run_dir, name, findings, budget)
+                    else:
+                        state.correction_pass_count += 1
+                        record = {
+                            "pass": state.correction_pass_count,
+                            "attempt": attempt,
+                            "stage": routing.stage,
+                            "findings": findings,
+                            "statement": correction_pass_statement(routing.stage),
+                        }
+                        (
+                            run_dir
+                            / correction_pass_result_file(
+                                correction_artifact, state.correction_pass_count
+                            )
+                        ).write_text(
+                            json.dumps(record, indent=2) + "\n", encoding="utf-8"
+                        )
+                        # The passing verdict that routed this wrote no
+                        # guidance, so none is in force for the verification
+                        # the pass runs back into. Cleared here for the same
+                        # reason the clean-clone reroute clears it: a stale
+                        # guidance read as in force would subject a
+                        # verification to a check about an attempt it is not
+                        # judging.
+                        state.guidance_in_force = []
+                        save_state(run_dir, state)
+                        _correction_pass_routed(
+                            run_dir,
+                            name,
+                            routing.stage,
+                            findings,
+                            state.correction_pass_count,
+                            budget,
+                        )
+                        # Nothing a retry spends is spent: retry_count is
+                        # untouched, archive_attempt is not reached, and no
+                        # retry-history entry is appended. The pass is not a
+                        # retry, so it names no retry category and no retry
+                        # destination; what the stage is told comes off the
+                        # record just written.
+                        routed_category, routed_stage = None, None
+                        index = stage_names.index(routing.stage)
+                        continue
             elif verdict.get("retry_recommended") and not target:
                 # Above the ceiling comparison deliberately: a verdict that
                 # cannot be routed is a bug in what the verifier produced, and

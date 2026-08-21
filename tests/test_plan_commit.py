@@ -64,6 +64,8 @@ import pytest
 from conftest import repointed_at_todays_signature
 import conftest
 
+import context_assembler
+
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
 PLAN_COMMIT = HARNESS_ROOT / "orchestration" / "plan_commit.py"
@@ -718,7 +720,22 @@ def test_the_argument_list_handed_to_claude_is_what_the_exec_passed(
     )
     after = planning.session()
 
-    assert after["argv"] == before["argv"]
+    # story-055 gave the planner the shared prose partial, which the old script
+    # does not resolve: it renders `{{prose_layer}}` as the literal None, where
+    # today's script renders the partial's text. That is exactly and only what
+    # the two prompts differ by, so it is subtracted here rather than the
+    # comparison being loosened — every other argument, and every other byte of
+    # the prompt, is still held to equality, and anything else that changed
+    # still fails.
+    prose = context_assembler.resolved_partial(
+        HARNESS_ROOT, context_assembler.PROSE_LAYER, {}
+    )
+    assert prose, "the planner's prose partial is missing"
+    prompt_at = after["argv"].index("--append-system-prompt") + 1
+    without_prose = list(after["argv"])
+    without_prose[prompt_at] = without_prose[prompt_at].replace(prose, "None")
+    assert without_prose == before["argv"]
+    assert after["argv"] != before["argv"]  # the partial really did reach it
     assert after["cwd"] == before["cwd"]
     assert "--append-system-prompt" in after["argv"]
     assert f"Story request: {request}" in after["argv"]

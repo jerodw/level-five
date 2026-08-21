@@ -3,6 +3,7 @@
     "changed-files",
     "claim-support-result",
     "clean-clone-result",
+    "correction-pass",
     "execution-history",
     "harness-config",
     "retry-guidance",

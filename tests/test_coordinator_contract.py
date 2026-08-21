@@ -174,6 +174,13 @@ def state_contract_problems(state: dict) -> list[str]:
         # attempts/ archive. Defaulted like the fields above, and empty means
         # no guidance is in force.
         "guidance_in_force": list,
+        # story-055's correction-pass counter: how many correction passes this
+        # run has taken, bounded by the budget the workflow declares.
+        # Defaulted like the fields above, and zero means none has been taken.
+        # Unlike self_route_count it is cumulative over the run, because the
+        # bound is one pass per run and that bound is what makes the mechanism
+        # terminate.
+        "correction_pass_count": int,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []

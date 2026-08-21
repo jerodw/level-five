@@ -2219,6 +2219,15 @@ DECLARED_LIVE_ARTIFACT_READERS = {
     "test_contract_assertions_bite.py":
         "its subject is whether this repository's own contract assertions fail "
         "when violated, which is a claim about the artifacts it ships",
+    "test_correction_pass.py":
+        "its runs are driven against a workflow it builds, where the "
+        "declaration, the categories and the artifact name are inputs. What "
+        "remains has what is shipped as its subject: the schemas this "
+        "repository ships for the correction-pass record and the verification "
+        "result, the inventory the first is registered in, the retry ceiling "
+        "in rules/execution-rules.json, and prompts/verifier.md, which is "
+        "where a verifier reads what may go in the field and so is the only "
+        "place the words-and-never-behaviour constraint can be asserted",
     "test_documented_claim_support.py":
         "its runs are driven by a workflow it builds, which is where the "
         "declaration story-051 adds is an input. What remains has what is "
@@ -2246,6 +2255,13 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json, "
         "which a summary written *at* the ceiling is a summary about",
+    "test_harness_layer_extraction.py":
+        "its subject is which prompts this repository ships carry a shared "
+        "partial and which do not, so the templates, the two partials and the "
+        "prompts a real run of the shipped workflow renders are the artifacts "
+        "under test rather than inputs to it; the planner half drives the real "
+        "scripts/l5-plan, which resolves this repository as its own harness "
+        "root and so can only be compared against what is deployed",
     "test_plan_assignment_refusal.py":
         "the refusal is decided against this repository's own declarations: "
         "which stage may create what, here, in this deployment",

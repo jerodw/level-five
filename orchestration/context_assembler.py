@@ -16,6 +16,10 @@ from pathlib import Path
 
 PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
 
+#: The shared prose partial, injected under {{prose_layer}}. Its one home, so
+#: build_context and l5-plan name it once between them rather than twice.
+PROSE_LAYER = "prose-layer.md"
+
 
 def render(template: str, context: dict[str, str | None]) -> str:
     def substitute(match: re.Match[str]) -> str:
@@ -27,6 +31,30 @@ def render(template: str, context: dict[str, str | None]) -> str:
 
 def load_template(harness_root: Path, prompt_file: str) -> str:
     return (harness_root / "prompts" / prompt_file).read_text(encoding="utf-8")
+
+
+def resolved_partial(
+    harness_root: Path, name: str, context: dict[str, str | None] | None = None
+) -> str | None:
+    """Render a shared prompt partial against an assembled context, or None.
+
+    render() is single-pass, so a partial injected into a template is not
+    itself resolved afterwards; a partial carrying placeholders must therefore
+    be rendered before it is injected. This is that render, in one place, so
+    the two call sites that need a partial — build_context for the workflow
+    stages, and l5-plan for the planner template, which no coordinator renders
+    — resolve it the same way rather than twice.
+
+    An absent partial returns None, which render() maps to the literal None,
+    the optional-placeholder convention. A partial carrying no placeholders of
+    its own — which is what the planner render requires of one, since it
+    assembles a narrower context than a stage render does — is returned
+    unchanged whatever context it is given.
+    """
+    path = harness_root / "prompts" / name
+    if not path.is_file():
+        return None
+    return render(load_template(harness_root, name), context or {})
 
 
 def schema_context(harness_root: Path) -> dict[str, str]:
@@ -189,6 +217,7 @@ def build_context(
     retry_stage: str | None = None,
     allowed_tools: list[str] | None = None,
     self_route_result: str | None = None,
+    correction_pass_result: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -258,6 +287,13 @@ def build_context(
         # and try, which is the coordinator's to compose. Defaulted to None so
         # a call that omits it renders exactly what it rendered before.
         "self_route_result": self_route_result,
+        # A stage the workflow re-entered because a passing verdict carried a
+        # correctable finding is told so by the coordinator's own record of
+        # that pass, passed in for the reason the self-route evidence beside it
+        # is: the artifact's name is keyed by the pass number, which is the
+        # coordinator's to compose. Defaulted to None so a call that omits it
+        # renders exactly what it rendered before.
+        "correction_pass_result": correction_pass_result,
         "retry_state": retry_state,
         "testing_standards": _read(standards_dir / "testing.md"),
     }
@@ -287,5 +323,16 @@ def build_context(
     if harness_layer_path.is_file():
         partial = load_template(harness_root, "harness-layer.md")
         context["harness_layer"] = render(partial, context)
+
+    # The second shared partial, resolved through the helper both this and the
+    # planner render use, so the planner template receives the same text a
+    # stage does. It addresses a different audience from the harness-layer
+    # partial above — that one addresses stages that mutate a tree, this one
+    # anything that writes prose a human later reads, which includes the
+    # planner — which is why it is a second partial rather than a paragraph in
+    # the first, and why the first's reach is left exactly as it was.
+    prose = resolved_partial(harness_root, PROSE_LAYER, context)
+    if prose is not None:
+        context["prose_layer"] = prose
 
     return context

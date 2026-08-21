@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "correction-pass",
+  "description": "The coordinator's record of one correction pass: a passing verdict carried correctable findings, and the workflow re-entered at the earliest stage the categories those findings name routes to, ran through to verification again, and completed. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a run directory can say why a stage ran again after a verification that passed, rather than the reason living only in the re-run's prompt. It is a retry's shape minus everything a retry spends: no retry_count, no attempts/attempt-N/ archive, no retry-history.json entry, and the verdict that routed it is unchanged — the archived verification iteration still records status passed. One is written per pass under a name keyed by the pass number, so no pass overwrites another. The findings are copied verbatim from the verdict rather than summarised, because the stage receiving the pass acts on the words the verifier wrote. Optional fields are expressed by absence rather than by null, as clean-clone-result and execution-history do.",
+  "type": "object",
+  "required": ["pass", "attempt", "stage", "findings"],
+  "properties": {
+    "pass": {
+      "type": "integer",
+      "description": "The 1-based count of correction passes taken in this run, at or below the budget the workflow declares. It is the same number this record's filename carries, so the two can be read together."
+    },
+    "attempt": {
+      "type": "integer",
+      "description": "The 1-based attempt this pass happened within, unchanged by it: a correction pass consumes no attempt number, so this matches the attempt of the rendered prompts the pass produces and of any attempts/attempt-N/ directory of the same number."
+    },
+    "stage": {
+      "type": "string",
+      "description": "The stage the workflow re-entered at: the earliest in workflow order among the stages the findings' categories route to, so a verdict naming two categories enters at the first of them and reaches the other on the way back to verification."
+    },
+    "findings": {
+      "type": "array",
+      "description": "The correctable findings the verdict carried, copied verbatim. The item shape is declared inline rather than referenced, because this validator subset has no cross-file reference and a finding recorded here must validate identically to one in verification-result.schema.json's correctable_findings — the duplication is stated here so the two are edited together rather than drifting.",
+      "items": {
+        "type": "object",
+        "required": ["location", "finding", "correction", "category"],
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "Where the wording is, as the verifier recorded it."
+          },
+          "finding": {
+            "type": "string",
+            "description": "What is wrong with the words as they stand, as the verifier recorded it."
+          },
+          "correction": {
+            "type": "string",
+            "description": "What the words should say instead, as the verifier recorded it."
+          },
+          "category": {
+            "type": "string",
+            "description": "The retry category that owns the prose, as the verifier recorded it and as the workflow's retry_routing table declares it."
+          }
+        }
+      }
+    },
+    "statement": {
+      "type": "string",
+      "description": "What the coordinator tells the stage the pass routes to: that the verification passed, that this is not a retry and no retry budget was spent, and that a correction pass corrects words and never behaviour. This is the coordinator's own statement and says so — a passing verdict writes no retry guidance, so there is no agent-authored guidance behind the pass."
+    }
+  }
+}
