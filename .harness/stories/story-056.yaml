@@ -171,6 +171,31 @@ technical_plan:
         baseline bullets there are what a later agent reads before bounding a
         comparison.
 
+stage_exceptions:
+  - stage: implementer
+    create: tests/conftest.py
+    reason: >-
+      This story's implementation is in tests/conftest.py. story_commit_range
+      is defined there, so changing how a story's endpoint resolves is the
+      feature rather than test work, and the file is a shared helper library
+      rather than a test module. Without this grant the revert check governs
+      the edit and can only refuse it: reverting an implementation change
+      leaves the suite green by construction, because the assertion that would
+      hold the new behaviour is the tester's and has not been written yet. The
+      first attempt escalated on exactly that, with the suite passing and the
+      edits reverted.
+  - stage: implementer
+    create: tests/test_validation_module_naming.py
+    reason: >-
+      The one module whose range currently ends at an escalation commit, and
+      the only remaining caller this story changes. Its module docstring states
+      the range it compares over, which this story makes false, so correcting
+      that sentence is part of landing the change rather than validation of it.
+      A prose correction can never break a suite, so the revert check cannot
+      decide it and would refuse it for that reason alone. The tester still
+      owns every assertion in this module; this grant covers the file, not the
+      authorship of what it asserts.
+
 scope:
   modify:
     - tests/conftest.py
