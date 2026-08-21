@@ -1,0 +1,230 @@
+story:
+  id: story-056
+  title: A story's range ends where the story ended, not where it escalated
+  description: |
+    `conftest.story_commit_range` resolves a story's endpoint as the oldest
+    commit that added the file identifying that story. For a story whose
+    validation file was already in the tree when it escalated, the escalation
+    commit is what added that file, so the range ends at the escalation and
+    excludes everything the story did after it resumed. An assertion bounded by
+    such a range is silently blind to the work that made the story succeed, and
+    it stays green, because comparing less is not an error.
+
+    Measured against the merged history on 2026-08-20,
+    `tests/test_validation_module_naming.py` is the live case: its own path was
+    added by `e7bdde6 l5 escalated: story-038 stopped at verifier`, and the
+    commit that finished that story is `0f558db story-038: A test module is
+    named for what it checks`. The other modules `DECLARED_HISTORY_READERS`
+    lists resolve to their own stories' commits.
+
+    The oldest-add rule is not arbitrary and is not what changes. It defends
+    against a later revert-and-restore being mistaken for the story's own run,
+    and against a planning or hotfix commit — which modifies the file rather
+    than adding it — being returned. Both hazards were hit, and both stay
+    defended. The escalation commit is a third case the rule was never written
+    against: a commit that legitimately adds the file *during* the story,
+    before the story is done.
+
+    This story keeps the oldest add as where a story begins and advances the
+    endpoint past the escalation commits belonging to that story, to the commit
+    that completed it. It does so on recorded evidence rather than on ordering
+    or counting: escalation commits carry `ESCALATION_COMMIT_MARKER`, and a
+    finished run's commit is recognised by its subject shape together with
+    `COMPLETION_COMMIT_MARKER`, which `completion_commits` already does for
+    story-027's re-run refusal.
+
+    A story that has escalated and not yet resumed has no completion commit.
+    Its endpoint resolves to None, joining the case the shared resolution
+    already handles that way — an uncommitted story, whose endpoint is the
+    working tree. That is the only reading under which a validation module can
+    run while its own story is still in flight.
+
+    The shas the filed request recorded for this defect are not in the current
+    history; it has been rebased since. Nothing this story writes may pin a
+    sha: commits are recognised by subject and marker.
+
+tasks:
+  - Give `orchestration/story_coordinator.py` a reader that recovers the story
+    id an escalation commit's subject names, paired with
+    `escalation_commit_message`'s composition the way `completion_commit_subject`
+    is paired with `completion_commits`, so the writing of that subject and the
+    reading of it are one fact rather than two spellings.
+  - Change `conftest.story_commit_range` so that when the oldest commit adding
+    the identifying file is an escalation commit, the endpoint advances past
+    every escalation commit belonging to that same story to the commit that
+    completed it, leaving the baseline as the parent of that oldest add.
+  - Resolve the completion commit through the recognition the coordinator
+    already carries — subject shape for that story together with
+    `COMPLETION_COMMIT_MARKER` — importing the constants and helpers from
+    `story_coordinator` rather than re-spelling either marker or the matching
+    rule in `tests/conftest.py`.
+  - Resolve the endpoint to None when the identifying file's add-commit is an
+    escalation and no completion commit for that story follows it, which is a
+    story still in flight.
+  - Rewrite `story_commit_range`'s docstring so it states the rule the code now
+    follows, including why the oldest add is still where a story begins.
+  - Extend the constructed-history fixtures in `tests/conftest.py` so the
+    escalate-and-resume shape can be built: a commit that adds the validation
+    file carrying an escalation subject for a named story, followed by a commit
+    carrying that story's completion subject and body marker.
+  - Extend those fixtures so the two shapes the oldest-add rule defends against
+    are constructible as well — a revert-and-restore of the validation file,
+    and a planning or hotfix commit that modifies the file rather than adding
+    it.
+  - Repoint whatever in `tests/test_validation_module_naming.py` compared
+    against the truncated range, so its assertions are about the whole of
+    story-038 rather than about the part that preceded the escalation.
+  - Write the story's validation module, `tests/test_story_range_endpoint.py`,
+    asserting the resolver's behaviour against constructed histories and
+    against the live case named in this story.
+
+acceptance_criteria:
+  - Resolving `tests/test_validation_module_naming.py` through
+    `conftest.story_commit_range` returns an endpoint whose subject is
+    story-038's completion subject and whose body carries
+    `COMPLETION_COMMIT_MARKER`, rather than a commit whose subject begins with
+    `ESCALATION_COMMIT_MARKER`.
+  - Resolving `tests/test_retry_routing.py` returns the same endpoint it
+    returns today; it escalated at the implementer on its first attempt, before
+    any tester had written the file, so the escalation commit did not add it and
+    it is the control showing the rule is about the file and not about
+    resumption.
+  - Resolving each module `DECLARED_HISTORY_READERS` lists returns an endpoint
+    that is not an escalation commit.
+  - The baseline every one of those resolutions returns is unchanged by this
+    story.
+  - A test builds a repository in which a story escalates with its validation
+    file already in the tree and then resumes and completes, and asserts the
+    resolved endpoint is the completion commit and the resolved baseline is the
+    parent of the escalation commit.
+  - A test builds a repository in which a story escalates with its validation
+    file already in the tree and never resumes, and asserts the resolved
+    endpoint is None.
+  - A test builds a repository in which the validation file is deleted and
+    restored after the story completed, and asserts the resolved range is the
+    one the story's own run produced — the hazard the oldest-add rule was
+    written against, unchanged by this story.
+  - A test builds a repository in which a later commit modifies the validation
+    file rather than adding it, as a planning or hotfix commit does, and asserts
+    that commit is not what the resolution returns.
+  - No test asserts a literal commit sha of this repository's history; commits
+    are recognised by subject and by marker, so a rebase or a squash merge does
+    not falsify an assertion.
+  - Neither `ESCALATION_COMMIT_MARKER`'s text nor `COMPLETION_COMMIT_MARKER`'s
+    text nor the completion subject's shape is spelled a second time in
+    `tests/conftest.py`; each is imported from `orchestration/story_coordinator.py`.
+  - The story id an escalation commit names is recovered by a reader in
+    `orchestration/story_coordinator.py` that is derived from the same
+    composition `escalation_commit_message` writes, rather than by a pattern
+    written independently of it.
+  - The full suite passes, and any assertion in
+    `tests/test_validation_module_naming.py` that the widened range turns red is
+    repaired to be about story-038's whole change rather than narrowed back to
+    what it could see before.
+
+technical_plan:
+  implementation_steps:
+    - Read `escalation_commit_message` and `completion_commits` in
+      `orchestration/story_coordinator.py`, and `story_commit_range` in
+      `tests/conftest.py`, before changing either.
+    - Add the escalation-subject reader beside `escalation_commit_message`,
+      composing and parsing through one shared piece of the subject exactly as
+      `completion_commit_subject` serves both the writer and `completion_commits`.
+    - In `story_commit_range`, keep the oldest add-commit as the baseline's
+      parent, then inspect that commit's subject. When it is an escalation, read
+      the story it names and search forward from it for the commit that
+      completed that story, recognised by subject and body marker.
+    - Return that completion commit as the endpoint, and None when the search
+      finds nothing.
+    - Rewrite the docstring to state the whole rule — oldest add for the start,
+      advance past this story's escalations for the end, and the two hazards
+      that survive.
+    - Extend the constructed-history helpers so the escalate-and-resume,
+      revert-and-restore and hotfix-modify shapes are each one call, built with
+      the commit subjects and bodies the coordinator writes.
+    - Run the suite, and repair what the widened range turns red in
+      `tests/test_validation_module_naming.py` by widening what it compares
+      rather than by re-narrowing the bound.
+    - Write `tests/test_story_range_endpoint.py` against the constructed shapes
+      and against the live resolution.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: gains the reader that recovers the story id an escalation
+        commit's subject names, beside the composition that writes it.
+    - file: tests/conftest.py
+      stage: implementer
+      reason: holds `story_commit_range`, whose endpoint rule changes, and the
+        constructed-history helpers the new shapes are built with.
+    - file: tests/test_validation_module_naming.py
+      stage: implementer
+      reason: resolves to story-038's escalation today, so its range widens by
+        a commit and whatever it compared against the truncated range is
+        repointed.
+    - file: tests/test_story_range_endpoint.py
+      stage: tester
+      reason: this story's validation module, asserting the endpoint rule and
+        the two hazards that survive it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records what a story's resolved range now means, since the
+        baseline bullets there are what a later agent reads before bounding a
+        comparison.
+
+scope:
+  modify:
+    - tests/conftest.py
+    - orchestration/story_coordinator.py
+    - tests/test_validation_module_naming.py
+    - tests/test_story_range_endpoint.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - tests/test_retry_routing.py
+    - workflows/
+    - schemas/
+    - .harness/stories/
+    - scripts/
+
+verification_requirements:
+  - Confirm `tests/test_validation_module_naming.py` resolves to story-038's
+    completion commit and not to its escalation, by reading the resolved
+    commit's subject and body rather than by comparing a sha.
+  - Confirm `tests/test_retry_routing.py` resolves to what it resolved to
+    before this story, since it is the control that shows the rule is about
+    whether the file existed when the story escalated and not about whether the
+    story resumed.
+  - Confirm the endpoint of every module `DECLARED_HISTORY_READERS` lists is a
+    commit that does not carry `ESCALATION_COMMIT_MARKER`.
+  - Confirm the revert-and-restore hazard is still defended, against a
+    constructed repository rather than by reading the docstring's claim.
+  - Confirm the planning-or-hotfix hazard is still defended, against a
+    constructed repository, by checking that a commit which modifies the
+    validation file is not what the resolution returns.
+  - Confirm a story that escalated and has not resumed resolves to an endpoint
+    of None, and that a caller reading a file at that endpoint reads the working
+    tree rather than raising.
+  - Confirm each assertion in `tests/test_story_range_endpoint.py` fails when
+    the behaviour it names is violated, by reverting the resolver's change and
+    observing the failure. Widening a range is exactly the change that can make
+    an assertion pass for a new reason.
+  - Confirm that whatever changed in `tests/test_validation_module_naming.py`
+    widened what it compares rather than narrowing its bound back to the
+    escalation.
+  - Confirm no assertion added by this story names a literal sha of this
+    repository's history.
+
+constraints:
+  - The oldest commit that added the identifying file stays how a story's
+    beginning is found; the baseline this story returns for any existing
+    resolution does not move.
+  - The endpoint is never resolved by taking the newest commit, by counting
+    commits, or by reasoning about a commit's position in the log. It is
+    resolved from what the commits record about themselves.
+  - `STORY_ORIGINS` and the declared-origin mechanism story-038 landed are left
+    as they are.
+  - What the affected modules assert is left as it is, beyond repointing what
+    the truncated range made them unable to see.
+  - `NothingToCompareAgainst` keeps being raised in each case that raises it
+    today; this story adds no new raise for a story that is merely unfinished.
+  - `completion_commits` keeps working for story-027's re-run refusal exactly as
+    it does now.
