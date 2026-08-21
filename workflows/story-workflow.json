@@ -33,6 +33,7 @@
       "prompt": "documenter.md",
       "outputs": ["documentation-report.md", "documenter-changed-files.json"],
       "changed_files": "documenter-changed-files.json",
+      "max_self_routes": 1,
       "claim_support": {
         "result": "claim-support-result.json"
       },
