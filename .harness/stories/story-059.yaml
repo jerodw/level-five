@@ -1,0 +1,192 @@
+story:
+  id: story-059
+  title: l5-plan offers to run the story it just planned
+  description: |
+    scripts/l5-plan ends by committing the story artifact and pushing it, then
+    returns; the developer reads the story id off the screen and types the run
+    command, which the planner agent has already printed because
+    prompts/planner.md tells it to. The script that just committed the artifact
+    is the thing best placed to offer to run it.
+
+    After the push succeeds, l5-plan prompts the developer to run the story it
+    just committed: Enter runs it now, n skips. On skip it prints the whole
+    command, copy-pasteable, and starts nothing. When stdin is not a terminal
+    the offer is not made at all and the skip path is taken, so a scripted or
+    cron invocation cannot hang on a prompt nothing can answer.
+
+    The automatic commit and push are unchanged in what they do and when. The
+    closing sentence of prompts/planner.md is trimmed to name only the story id,
+    because the command it tells the agent to print is now printed by the script
+    or acted on directly.
+
+tasks:
+  - Add orchestration/plan_run_offer.py holding the offer mechanism - deciding
+    run or skip from the developer's reply, launching the run, and rendering the
+    command a skipped run would be started with - so scripts/l5-plan stays the
+    thin entry point it is and the wording stays in report().
+  - Have the decision skip without reading whenever stdin is not a terminal or
+    the read reaches end of input, so a non-interactive invocation takes the
+    skip path rather than blocking.
+  - Have the launch run scripts/l5-run for the committed story as a subprocess
+    with stdin, stdout and stderr inherited, returning the run's exit status,
+    and propagate l5-plan's --base to it when one was given.
+  - Wire the offer into scripts/l5-plan's report() after the successful push and
+    ahead of its return, so it is reached only on the path that reports success,
+    and only when the commit held exactly one artifact; with more than one, print
+    the command for each and offer nothing.
+  - Trim the closing sentence of prompts/planner.md so it still tells the planner
+    to name the story id and no longer tells it to print the run command.
+  - Write the regression tests for the offer, driving the real scripts/l5-plan as
+    a subprocess against a throwaway repository the way tests/test_plan_commit.py
+    does, without executing a real run and without invoking a model.
+  - Record the offer in .harness/docs/ARCHITECTURE.md and in the README's
+    description of what l5-plan does.
+
+acceptance_criteria:
+  - The artifact is committed and pushed exactly as before this story - same
+    commit contents, same subject, same pathspec, same push target - and the
+    offer is reached only after both have succeeded.
+  - A commit that fails returns 1, prints what it prints today, and makes no
+    offer; a push that fails returns 1, prints today's "the commit is intact on
+    <branch>; push it yourself." and makes no offer.
+  - On an interactive stdin, an empty line - Enter alone - starts scripts/l5-run
+    for the story id of the artifact that was just committed.
+  - The run's stdin, stdout and stderr are the terminal l5-plan was given -
+    nothing captures, pipes or buffers the run's output - and l5-plan exits with
+    the run's exit status.
+  - Any non-empty reply, "n" among them, skips - the prompt is read once and
+    never re-asked.
+  - The skip path prints a single command that starts the story unmodified,
+    including the path to l5-plan's sibling script as it must be typed from the
+    current directory, and starts no process.
+  - When l5-plan is given --base, the launched run carries the same --base and
+    the printed command names it too.
+  - When stdin is not a terminal, no prompt is written, nothing is read, the
+    command is printed exactly as on the skip path, and l5-plan exits with the
+    status it would have had without the offer.
+  - A session that produced more than one artifact prints the command for each
+    and makes no offer.
+  - The rendered planner prompt still instructs the planner to tell the
+    developer the story id, and no longer instructs it to print the run command.
+  - A test drives l5-plan with stdin redirected from /dev/null and observes it
+    exit rather than block.
+  - The tests cover the run path without executing a real run and without
+    invoking a model.
+
+technical_plan:
+  implementation_steps:
+    - Add orchestration/plan_run_offer.py with three small public functions and
+      type hints on each - one that reads the developer's reply and returns
+      whether to run, one that launches the run and returns its exit status, and
+      one that renders the command a skipped run would be started with. The
+      module returns what happened rather than printing it, the way plan_commit
+      does, so l5-plan's report() remains the one place the developer-facing
+      wording lives.
+    - Make the reply reader take the input stream as an argument so a test can
+      hand it something other than sys.stdin. Skip when the stream is not a tty
+      and when reading reaches end of input; otherwise run on an empty line and
+      skip on anything else.
+    - Make the launcher build the argument list from the harness root's
+      scripts/l5-run, the story id, and --base when one was given, and run it
+      with subprocess.run passing no stdout, stderr or capture arguments at all,
+      so the child inherits the terminal. Return its returncode. Leave the
+      working directory alone - l5-run finds the target repository by walking up
+      from it, and that is the directory l5-plan was started in.
+    - Render the command from the same executable path the launcher uses, made
+      relative to the current directory when it lies beneath it and left
+      absolute otherwise, so what is printed is what can be pasted back.
+    - In scripts/l5-plan's report(), after the line that prints the push, derive
+      the story ids from the artifact paths, print the command for each and
+      return 0 when there is more than one, and otherwise print the prompt, read
+      the reply through the new module, and either return the launched run's
+      exit status or print the command and return 0.
+    - In prompts/planner.md, cut the second half of the closing sentence so it
+      asks only that the developer be told the story id.
+    - Write tests/test_plan_run_offer.py against the real script, following
+      tests/test_plan_commit.py's fixtures - a throwaway target repository, a
+      stub claude on PATH that writes an artifact, a bare remote to push to, and
+      the pty helpers for the interactive cases. For the run path, either copy
+      the harness's scripts and orchestration into a temporary root whose
+      scripts/l5-run is a stub that records its argument list and the tty state
+      of the three standard streams, or drive the launcher directly and assert
+      the argument list it builds and that it passes no capture arguments. Do
+      not execute the real scripts/l5-run.
+    - Cover the absences with controls the way the existing plan-commit tests do:
+      the assertion that a failed commit offers nothing sits beside a run where
+      the offer is made, and the assertion that the planner prompt no longer
+      prints the command sits beside the pre-story text of that file read out of
+      git history, which does.
+    - Record in ARCHITECTURE.md what the offer is, where it sits, and why the
+      non-tty case takes the skip path, and update the README's line for
+      l5-plan.
+  likely_file_changes:
+    - file: orchestration/plan_run_offer.py
+      stage: implementer
+      reason: New module holding the offer's decision, launch and command rendering.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: report() gains the offer after the successful push.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The closing sentence stops telling the planner to print the run command.
+    - file: tests/test_plan_run_offer.py
+      stage: tester
+      reason: Regression tests for the offer, the skip path and the non-tty case.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the seam between planning and running.
+    - file: README.md
+      stage: documenter
+      reason: The l5-plan entry describes the offer.
+
+scope:
+  modify:
+    - orchestration/plan_run_offer.py
+    - scripts/l5-plan
+    - prompts/planner.md
+    - tests/test_plan_run_offer.py
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - scripts/l5-run
+    - orchestration/story_coordinator.py
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - workflows/
+    - schemas/
+
+verification_requirements:
+  - Confirm the commit and the push are unchanged - the same paths committed,
+    the same subject, the same remote and branch - by the plan-commit tests
+    passing untouched.
+  - Confirm the offer is reached only after a successful push, and that a failed
+    commit and a failed push each still return 1 having offered nothing.
+  - Confirm Enter starts scripts/l5-run for the committed story, that l5-plan
+    exits with the run's status, and that the run's three standard streams are
+    the ones l5-plan was given rather than pipes.
+  - Confirm a non-empty reply skips, prints the command and starts nothing.
+  - Confirm the printed command, taken verbatim, is one that would run the story
+    unmodified from the directory l5-plan was run in.
+  - Confirm --base reaches both the launched run and the printed command.
+  - Confirm stdin redirected from /dev/null takes the skip path and exits rather
+    than blocking, and that the test would catch a version that blocked.
+  - Confirm the rendered planner prompt still names the story id and no longer
+    carries the run command, with the pre-story text of that file as the control.
+  - Confirm no test in this story executes scripts/l5-run for real and no test
+    invokes a model.
+  - Confirm the full suite passes.
+
+constraints:
+  - What l5-plan commits and pushes, and when, does not change.
+  - scripts/l5-run is not modified.
+  - The offer is run-or-skip and nothing else - no flags, no stage selection, no
+    editing the artifact from the prompt.
+  - No --yes or --no-run flag: the terminal check answers the non-interactive
+    case, and a flag would be a second answer to it.
+  - Standard library only; no third-party runtime dependency for reading the
+    reply.
+  - scripts/l5-plan stays a thin entry point - the mechanism lives in
+    orchestration/, and the existing test asserting the script holds no git
+    logic keeps passing.
+  - The prompt is read once; nothing loops waiting for a recognised answer.
+  - The offer never unwinds or re-reports the commit and push that preceded it.
