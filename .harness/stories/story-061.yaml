@@ -1,0 +1,139 @@
+story:
+  id: story-061
+  title: A crashed run's resume archives the interrupted attempt
+  description: |
+    story-020 gave a resumed run an evidence guarantee - the interrupted attempt
+    is archived under attempts/attempt-N/ before the resumed stage runs, and a
+    resume refuses rather than writing over an archive that already exists. Both
+    halves live inside a branch that fires only when the recorded status is
+    escalated. A run left running by a dead process gets neither.
+
+    The overwrite that follows is guaranteed rather than possible. A resume
+    carries retry_count forward by design, so the attempt number resolves to the
+    one the dead attempt used, and the stage loop re-renders the prompt
+    unconditionally under that number. The interrupted attempt's rendered prompt
+    is replaced, and whatever the dying stage managed to write is left at the run
+    root under a name the new attempt will claim.
+
+    The asymmetry runs the wrong way round. An escalated run reached a decision
+    the harness made deliberately and recorded, and its evidence is protected. A
+    crashed run stopped for a reason nobody recorded, which is when a partial
+    artifact is most likely to be the only account of what happened - and that is
+    the one the harness writes over.
+
+    The comment opening the resume branch is the strongest evidence the
+    asymmetry is unintended rather than a decision: it states that Chapter 18
+    treats a crash and an escalation identically and so does this code, twenty
+    lines above the branch that treats them differently.
+
+    This story extends the archive and its collision refusal to a running
+    resume, and nothing else. The state transition inside that branch stays
+    escalated-only, because a crashed run is already running. The
+    unchanged_since_escalation guard stays escalated-only too: a crashed run has
+    no escalation commit to compare against, so the refusal would be meaningless.
+
+    The request behind this story worried that self-routing retries, landing
+    first, would leave the archive set blind to the try dimension. That
+    reconciliation has already happened - interrupted_attempt_artifacts takes an
+    optional run_dir and reads the try-suffixed names off the directory with
+    self_route_artifacts - so this story inherits it rather than owning it, and
+    changes neither function.
+
+    No run in .harness/runs/ has been resumed from running state, so this is a
+    defect in story-020's implementation caught before it cost anything. The
+    story should not claim an observed loss.
+
+tasks:
+  - Split the escalated-only block on the resume path in orchestration/story_coordinator.py so the attempt number, the archive-directory collision refusal and the archive_attempt call run for a running state and an escalated one alike, while the status transition and its save_state stay inside the escalated branch.
+  - Keep the collision refusal a single message serving both paths rather than a second copy of the same text, so the two resumes cannot drift into refusing differently.
+  - Leave the unchanged_since_escalation guard where it is, escalated-only and unmoved, and state at the hoist why it did not generalize with the archive.
+  - State at the hoist that archiving makes no claim about a copied artifact's validity - a stage that died mid-write may leave a truncated or schema-invalid file, and preserving it is the point.
+  - Rewrite test_a_crashed_run_still_resumes_exactly_as_it_did in tests/test_escalation_resume.py, whose assertion that a crashed resume writes no attempts directory this story reverses, keeping the test's subject and repointing the assertion to the guarantee that now holds.
+  - Add coverage in tests/test_escalation_resume.py for a running resume - the archive is written before the resumed stage runs, it holds the interrupted attempt's rendered prompt and whatever stage artifacts that attempt wrote, and the archived prompt is byte-identical to the one the dead stage was given while the freshly rendered prompt sits at the run root.
+  - Add coverage that a second resume onto an existing attempts/attempt-N/ refuses, and that it refuses with the same message an escalated resume gives.
+  - Add coverage that an escalated resume is unchanged by this story, since story-020's behaviour is not what is being fixed.
+  - Update the "Resuming a run" section of .harness/docs/ARCHITECTURE.md, which describes the resume branch as though the archive were already universal while attributing it to the escalation.
+
+acceptance_criteria:
+  - Resuming a run whose recorded status is running writes attempts/attempt-N/ under the attempt number that run's counters resolve to, before the resumed stage is invoked.
+  - That archive holds the interrupted attempt's rendered prompt and whatever artifacts the dead attempt wrote, and the archived prompt is byte-identical to the file the interrupted stage was given rather than to the resumed stage's fresh rendering.
+  - The resumed stage's freshly rendered prompt is at the run-directory root under its canonical name, so the live copy and the archived copy are both present and differ.
+  - A second resume onto an existing attempts/attempt-N/ exits non-zero without archiving, and prints the same refusal text an escalated resume prints in that situation, produced by one expression rather than two that agree today.
+  - The status transition to running and its save_state still run for an escalated resume and do not run for a crashed one, which is already running.
+  - unchanged_since_escalation is still evaluated for an escalated resume only, and a crashed resume is refused by nothing it decides.
+  - An artifact the interrupted attempt did not write is skipped rather than treated as an error, exactly as archive_attempt already skips an absent conditional artifact, and an attempt that wrote nothing still produces the directory and so still refuses a second resume.
+  - Nothing this story adds inspects a copied artifact's content or validity. A truncated or schema-invalid file the dying stage left is archived as it is.
+  - interrupted_attempt_artifacts, self_route_artifacts, attempt_dir and archive_attempt are unedited. This story adds a caller, not a new archive set.
+  - The dirty-tree pre-flight still exempts a running state, and the exemption and the archive do not interact - the pre-flight reads the working tree and the archive touches only the run directory.
+  - test_a_crashed_run_still_resumes_exactly_as_it_did states the guarantee that now holds rather than being deleted, and no assertion in the suite still requires a crashed resume to leave no archive.
+  - Every escalated-resume test in tests/test_escalation_resume.py passes with its assertions unweakened, including the archive tests story-020 wrote and the collision refusal naming the directory.
+  - The "Resuming a run" section of .harness/docs/ARCHITECTURE.md says the archive and the collision refusal apply to both resumed statuses and that the state transition and the unchanged guard do not, and no sentence there still attributes the archive to the escalation alone.
+  - The full suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the resume branch in orchestration/story_coordinator.py, from the comment that opens it through append_event, and locate the three things the escalated block does - the collision-checked archive, and the status transition with its save_state.
+    - Hoist the attempt number, the destination check with its refusal, and the archive_attempt call out of that block, leaving the status assignment and save_state inside it. The archive must still sit after the stage override and after self_route_count is zeroed, and before append_event, so the ordering the documentation records is preserved.
+    - Keep the refusal message as one expression. It names the destination, the story and the attempt number, and both paths must reach that same text.
+    - Amend the comment at the top of the escalated block, which currently explains the archive as an escalation concern, so it explains the split instead - what generalizes and what does not, and why unchanged_since_escalation is not generalized with it.
+    - Rewrite the reddened assertion in tests/test_escalation_resume.py in the same commit as the hoist. It is an existing file and the edit is a modification rather than a creation - reverting it leaves the suite red against the new coordinator, which is the rule story-017 established for deciding a test edit and story-042 established for assigning an existing test module to the implementer.
+    - Add the crashed-resume coverage beside the escalated archive tests in that same module, reusing its fixtures. A running state written directly and then resumed is the cheaper fixture than killing a coordinator and reaches the same branch.
+    - Write the byte-identity assertion against content captured before the resume, not against the file the resumed run leaves at the root. Asserting only that the directory exists would pass while the wrong file was preserved.
+    - Revise the ARCHITECTURE.md section once the coordinator and the tests agree.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The resume branch archives the interrupted attempt and refuses a colliding archive for an escalated status only. This is the story's whole behavioural change.
+    - file: tests/test_escalation_resume.py
+      stage: implementer
+      reason: test_a_crashed_run_still_resumes_exactly_as_it_did asserts that a crashed resume writes no attempts directory. The hoist reddens it, so reverting the edit breaks the suite, and deferring it would have the implementer hand on a knowingly red tree.
+    - file: tests/test_escalation_resume.py
+      stage: tester
+      reason: The crashed-resume coverage - archive before the resumed stage runs, the byte-identical prompt beside the fresh rendering, the second resume refusing with the escalated message, and the escalated path unchanged.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The "Resuming a run" section lists the archive among the things the resume branch does before any state is written, and then attributes it and its collision refusal to the escalated status. The scope of both statements changes.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_escalation_resume.py
+    reason: The hoist reddens test_a_crashed_run_still_resumes_exactly_as_it_did in that module, which asserts a crashed resume produces no attempts directory. The implementer must rewrite it in the same commit or hand on a knowingly red tree, so the story declares this one file the implementer's to own for its duration. The grant names the file rather than the tests/ prefix, leaving every other path beneath tests/ governed - including the crashed-resume coverage the tester adds to this same module, which is ordinary tester work and needs no grant.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_escalation_resume.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/
+    - prompts/
+    - workflows/
+    - scripts/
+    - orchestration/context_assembler.py
+    - tests/test_attempt_archiving.py
+    - tests/test_resume_guard.py
+    - tests/test_self_routing_retry.py
+
+verification_requirements:
+  - Confirm a resume of a running state archives the interrupted attempt under attempts/attempt-N/ before the resumed stage is invoked, by evidence of ordering rather than by the directory's existence alone.
+  - Confirm the archived prompt is byte-identical to the one the interrupted stage was given, and that the resumed stage's fresh rendering is at the run root under the canonical name. A test asserting only that the archive directory exists would pass while the wrong file was preserved, so confirm the assertion distinguishes the two.
+  - Confirm a second resume onto an existing archive refuses and archives nothing, and that its message comes from the same expression the escalated resume's refusal comes from rather than from a copy.
+  - Confirm the status transition and save_state are still reached by an escalated resume and not by a crashed one, and that unchanged_since_escalation is still escalated-only.
+  - Confirm an escalated resume behaves exactly as it did - the archive, the collision refusal, the carried-forward counters and the preserved verification iteration - and that no story-020 assertion was weakened or deleted to make room for this story.
+  - Confirm the reddened test was rewritten rather than removed, that its subject is still a crashed run's resume, and that the suite holds no remaining assertion requiring a crashed resume to leave no archive.
+  - Confirm interrupted_attempt_artifacts, self_route_artifacts, attempt_dir and archive_attempt are unedited, and that the archive set a crashed resume passes is the one an escalated resume passes.
+  - Confirm the dirty-tree pre-flight still exempts a running state and that no path added by this story reads or refuses on the working tree.
+  - Confirm the "Resuming a run" section of .harness/docs/ARCHITECTURE.md agrees with the coordinator statement by statement about which resumed statuses reach the archive, the collision refusal, the state transition and the unchanged guard.
+  - Confirm the full test suite passes.
+
+constraints:
+  - Do not generalize unchanged_since_escalation. A crashed run has no escalation commit to compare against and its refusal would be meaningless.
+  - Do not move the status transition or its save_state out of the escalated branch. A crashed run is already running, and assigning the status it already holds would state a transition that did not happen.
+  - Do not change what a resume reinitializes. retry_count and verification_iterations are carried forward and self_route_count is zeroed, and the archive exists precisely because those decisions stand.
+  - Do not change which stage a resume re-enters at, or anything about the --stage argument.
+  - Do not change what _escalate commits, or either terminal commit.
+  - Do not add a flag, environment variable or configuration key that skips the archive or the collision refusal for either status.
+  - Do not make the archive conditional on what the dying stage left behind. An attempt that wrote nothing still produces the directory, exactly as archive_attempt already behaves, and the refusal that follows is the same refusal an escalated resume gives.
+  - Do not validate, parse or repair an archived artifact. Preserving a truncated file is the guarantee, not a failure of it.
+  - Do not write a stage name or an artifact name into the coordinator's archive path. Both come off the loaded workflow, and this story adds a caller rather than a name.
+  - Preserve the order the resume branch runs in - guard, stage, archive, then state - since a guard evaluated after the state was rewritten would be deciding about a run that no longer exists.
