@@ -15,6 +15,7 @@ the repository's own default branch, and --base states another deliberately.
 import subprocess
 import sys
 from pathlib import Path
+from typing import Sequence
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
@@ -22,6 +23,7 @@ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 import context_assembler  # noqa: E402
 import harness_config  # noqa: E402
 import plan_commit  # noqa: E402
+import plan_run_offer  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
 
@@ -169,6 +171,38 @@ def report(target_root: Path, stories_dir: Path, before, stages, config=None, ba
         )
         return 1
     print(f"l5-plan: pushed {push.branch} to {push.remote}")
+    return offer(artifacts, base)
+
+
+def offer(artifacts: Sequence[Path], base: str | None = None) -> int:
+    """Offer to run the story that was just committed, or say how to run it.
+
+    Reached only on the path that reports success, so a commit that failed and
+    a push that failed each return before it and offer nothing. The offer never
+    unwinds or re-reports the commit and push that preceded it: the worst it
+    does is print a command.
+
+    A session that produced more than one artifact is told how to run each and
+    offered nothing, because the offer is run-or-skip for one story and there
+    is no order between them to pick from.
+
+    The prompt is written only to a terminal. When stdin is not one, nothing is
+    asked and nothing is read, and the skip path's command is printed exactly as
+    it would have been had the developer declined.
+    """
+    story_ids = [artifact.stem for artifact in artifacts]
+    if len(story_ids) == 1 and plan_run_offer.can_prompt(sys.stdin):
+        print(
+            f"l5-plan: run {story_ids[0]} now? "
+            "Enter runs it, anything else skips: ",
+            end="",
+            flush=True,
+        )
+        if plan_run_offer.should_run(sys.stdin):
+            return plan_run_offer.launch_run(HARNESS_ROOT, story_ids[0], base)
+    for story_id in story_ids:
+        command = plan_run_offer.run_command(HARNESS_ROOT, story_id, base)
+        print(f"l5-plan: run {story_id} with: {command}")
     return 0
 
 

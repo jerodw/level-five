@@ -2267,6 +2267,12 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "which stage may create what, here, in this deployment",
     "test_plan_commit.py":
         "its subject is what a plan commit of *this* repository contains",
+    "test_plan_run_offer.py":
+        "everything it drives runs against a harness root it builds under "
+        "tmp_path, whose l5-run is a stub; what remains is the planner prompt "
+        "as this deployment renders it, which is where the story's criterion "
+        "about what the planner is and is no longer told lives — a rendering "
+        "only the shipped template, workflow and rules can produce",
     "test_plan_time_validation.py":
         "it reads a real story against the real workflow, which is the pairing "
         "the plan-time check exists to validate",
