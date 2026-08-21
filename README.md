@@ -72,7 +72,7 @@ All harness capabilities are invoked through `l5-` scripts in `scripts/`:
 | Script | Purpose |
 | --- | --- |
 | `l5-init` | Initialize a `.harness/` structure in a target repository |
-| `l5-plan` | Plan a story interactively with the planner agent; produces a story artifact |
+| `l5-plan` | Plan a story interactively with the planner agent; commits and pushes the story artifact the session produced, then offers to run it |
 | `l5-run` | Execute an approved story through the story workflow |
 | `l5-status` | Show a snapshot of story runs (status, current stage, retries), or one run's detail |
 | `l5-assist` | Launch the interactive assist agent with harness context |
@@ -106,7 +106,7 @@ This repository is both the harness repository and its own first target reposito
 
 ## How a story runs
 
-1. `l5-plan` runs an interactive planning session and writes an approved story artifact to `.harness/stories/`.
+1. `l5-plan` runs an interactive planning session and writes an approved story artifact to `.harness/stories/`, then validates, commits and pushes it and offers to run it: Enter starts `l5-run` for the story just planned, anything else skips and prints the command that would have started it. When stdin is not a terminal the offer is not made at all and the command is printed, so a scripted invocation cannot hang on a prompt nothing can answer.
 2. `l5-run` hands the story to the Story Coordinator, which creates a story branch and a run directory under `.harness/runs/<story-id>/`.
 3. The coordinator advances the workflow stage by stage (implement → test → document → verify), assembling each stage's context, injecting it into the stage prompt, and invoking the agent headlessly (`claude -p`). The documenter runs before verification so that what it writes is judged rather than taken on trust.
 4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry, or escalate. A retry goes to the stage that owns the defect — named by the verifier as a category the workflow defines, with no default route — carrying structured guidance in `retry-guidance.json`. A verdict may also report that retrying cannot finish the work at all, which escalates immediately and leaves the retry budget unspent. On a passing verdict the coordinator re-runs the suite in a fresh clone with the story committed, because the working tree is the one place that commit does not yet exist.

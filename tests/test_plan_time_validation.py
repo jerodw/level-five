@@ -761,7 +761,20 @@ def test_a_valid_session_commits_and_pushes_exactly_as_it_did_before(
                      old_repo, "add a thing", L5_STUB_WRITE=written)
     new = run_plan(new_repo, "add a thing", L5_STUB_WRITE=written)
 
-    assert (new.returncode, new.stdout, new.stderr) == \
+    # story-059 ends a successful push by offering to run what was committed;
+    # neither of these runs is on a terminal, so the offer is not made and the
+    # skip path's command is printed instead. That one line is subtracted here
+    # and everything else — the status, the stderr and every other byte of the
+    # commit-and-push report — is still compared exactly.
+    offered = [line for line in new.stdout.splitlines(keepends=True)
+               if line.startswith("l5-plan: run story-900 with: ")]
+    assert len(offered) == 1, new.stdout
+    without_offer = "".join(
+        line for line in new.stdout.splitlines(keepends=True)
+        if line not in offered
+    )
+    assert new.stdout != old.stdout
+    assert (new.returncode, without_offer, new.stderr) == \
         (old.returncode, old.stdout, old.stderr)
     assert new.returncode == 0, new.stderr
     assert committed_paths(new_repo.root) == committed_paths(old_repo.root)

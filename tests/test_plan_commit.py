@@ -642,6 +642,11 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
         time.sleep(0.05)
     assert written.is_file(), "the stub never got as far as writing the artifact"
     os.killpg(os.getpgid(process.pid), signal.SIGINT)
+    # The interrupted session's artifact is still committed and pushed, and
+    # since story-059 a successful push on a terminal ends by offering to run
+    # what was committed. This pty is a terminal, so the offer is made and has
+    # to be answered; declining it leaves the interrupt's own status to win.
+    os.write(master, b"n\n")
 
     status, _ = drain(process, master)
 

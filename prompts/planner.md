@@ -159,5 +159,4 @@ lifted:
 	    create: <path prefix that stage is normally not allowed to create under>
 	    reason: <why this story needs the restriction lifted>
 
-After writing the artifact, tell the developer the story id and how to
-execute it: scripts/l5-run <story-id>.
+After writing the artifact, tell the developer the story id.
