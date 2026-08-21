@@ -1,0 +1,195 @@
+story:
+  id: story-055
+  title: A minor, correct finding has somewhere to go
+  description: |
+    A verifier that notices something real but too small to fail a run records it
+    in `unverified` and the run completes. Nothing reads that array: no routing
+    decision touches it, no stage receives it, and the observation ships
+    uncorrected. Three stale numerals have shipped that way across five stories,
+    each one caught by the verifier that saw it, each correctly classified as
+    non-blocking, none ever fixed.
+
+    This story gives those findings a destination. `verification-result.json`
+    gains an optional `correctable_findings` array. A finding recorded there is
+    one the verifier judges correct, mechanically fixable, and a correction to
+    words rather than to behaviour - a comment, a docstring, a schema
+    description, a document. Each entry names the retry category that owns the
+    prose, spelled exactly as the workflow's existing `retry_routing` table
+    declares it, so the field introduces no new vocabulary and the coordinator
+    still writes no stage name.
+
+    On a passing verdict, after the clean-clone check has passed, the coordinator
+    re-enters the workflow at the earliest destination stage those categories
+    name and runs through to verification again. That is a retry's shape minus
+    everything a retry spends: no `retry_count`, no `attempts/attempt-N/`, no
+    `retry-history.json` entry. The budget is one pass per run, declared in the
+    workflow the way `clean_clone` is declared, so removing the key disables the
+    whole mechanism with no change in the coordinator. A second verdict still
+    carrying findings records them in the event stream and the run completes -
+    that bound is what stops a fix the verifier keeps rejecting from cycling.
+
+    The companion half is cheaper and lands with it: stop writing the number at
+    all. In all three sightings the count was redundant with the list beside it -
+    "four assertions" followed by six names, "converted 8 of 22" beside "0, then
+    3, then 2". Delete the count and the class disappears. That rule goes in a
+    second shared prompt partial rather than in `prompts/harness-layer.md`,
+    because the two have different audiences: the existing partial addresses
+    stages that mutate a tree, and a prose rule addresses anything that writes
+    prose a human later reads, which includes the planner - the stage that wrote
+    the first of the three stale counts, in story-047's own story text.
+
+    A scanner is not the answer and is not in scope. One was tried before this
+    was filed: a heuristic over `tests/` reported five candidates and four were
+    false positives, and a check with an 80% false-positive rate trains a reader
+    to skim past it. The detection already works unaided; what was missing was
+    somewhere for the result to go.
+
+tasks:
+  - Add an optional correctable_findings array to schemas/verification-result.schema.json, an array of objects requiring location, finding, correction and category, with the description stating that presence is the signal and naming the same validator-subset limitation retry_target, unfinishable_by_retry and guidance_outcomes.unmet already record, rather than re-deriving it.
+  - State in that description that a correctable finding is a correction to words alone - a comment, a docstring, a schema description, a document - never to behaviour, and that category names a retry category the workflow declares.
+  - Add schemas/correction-pass.schema.json for the coordinator's own record of one correction pass, carrying the pass number, the attempt it happened within, the destination stage and the findings copied verbatim, and register the name in schemas/manifest.json.
+  - Declare the correction pass on the verifier stage in workflows/story-workflow.json, one key naming the result artifact and the budget of one, in the shape clean_clone uses, so the mechanism is turned on by a declaration and no destination is written in the coordinator.
+  - Route the correction pass in orchestration/story_coordinator.py on a passing verdict, after the clean-clone check has passed, to the earliest destination stage in workflow order among the categories the findings name, reading the destinations off the stage's declared retry_routing table.
+  - Make the correction pass spend nothing a retry spends - no increment of retry_count, no attempts/attempt-N/ archive, no retry-history.json entry - and clear the guidance in force when it is routed, since the passing verdict that routed it wrote no guidance.
+  - Bound the pass at one per run, counted on the run state and saved with it, so a second passing verdict carrying findings appends an event recording them and the run completes.
+  - Escalate rather than route when a finding names a category the workflow does not declare, with the same strictness an unrecognised retry_target already gets.
+  - Inject the correction-pass record into the destination stages and the verifier through orchestration/context_assembler.py, and read it in the prompts of the stages that can receive one.
+  - Add prompts/prose-layer.md, a second shared partial carrying no placeholders of its own, stating the redundancy rule, its exception, and the repository's habit of holding a count that matters with a test.
+  - Resolve that partial through one helper in orchestration/context_assembler.py used by both build_context and scripts/l5-plan, so the planner template receives it too, and leave the harness-layer partial's distribution unchanged.
+  - Inject the prose partial into prompts/implementer.md, prompts/tester.md, prompts/documenter.md, prompts/verifier.md and prompts/planner.md, placing it in the verifier beside its inline evidence-discipline block rather than replacing that block.
+  - Tell the verifier in prompts/verifier.md what belongs in correctable_findings and what stays in unverified, and that a finding it records is one a single stage can fix in the words alone.
+  - Add tests driving real runs through the coordinator against a fixture workflow, covering the routed pass, the run that carries no findings, the exhausted budget, the untouched retry budget and the unrouted categories, each absence beside a control.
+
+acceptance_criteria:
+  - A passing verdict carrying a correctable finding results in the destination stage running again within the same run, observable in the run's own event stream and in the rendered prompt that stage was given.
+  - The finding reaches that stage - the correction-pass record the coordinator wrote is present in the run directory and its content appears in the prompt the destination stage was rendered.
+  - A run whose passing verdict carries no correctable findings has the same exit code, the same stages invoked, the same event stream and the same retry count as it had before this story.
+  - A correction pass leaves retry_count unchanged, writes no attempts/attempt-N/ directory for the verification that routed it, and appends no entry to retry-history.json, each asserted beside a run that does spend those things.
+  - A correction pass does not change the verdict that routed it - the archived verification iteration still records status passed.
+  - The guidance in force is empty at the entry to the stage the correction pass routes to, read off state.json, beside a retry-routed entry to the same stage where it is not empty.
+  - Only one correction pass runs per run - a second passing verdict carrying findings appends an event naming them and the run completes, with no third invocation of any stage.
+  - The destination is the earliest stage in workflow order among the categories the findings name, so a verdict naming validation and documentation together enters at the tester and reaches the documenter on the way to verification.
+  - A finding naming a category the workflow does not declare escalates the run, naming the categories the workflow does define, rather than being routed somewhere by default.
+  - Removing the correction-pass declaration from the workflow disables the mechanism entirely - the same verdict completes the run as it did before this story - with no change to orchestration/story_coordinator.py.
+  - No stage name and no retry category name is written in orchestration/story_coordinator.py for this mechanism; both are read off the loaded workflow definition.
+  - The correction pass changes words and not behaviour - the test suite passes unchanged across a pass, and the constraint is stated where the verifier reads what may go in the field.
+  - prompts/prose-layer.md exists, carries no {{placeholder}} of its own, and states the rule, the exception for a count adjacent content does not already carry, and the habit of holding a count that matters with a test.
+  - The rendered prompt of every workflow stage carries the prose partial's text, read back out of a real run's directory, and no rendered prompt leaves a placeholder unresolved.
+  - The planner prompt scripts/l5-plan renders carries the prose partial's text, and the same render still resolves every placeholder it did before.
+  - The harness-layer partial reaches exactly the prompts it reached before this story - prompts/planner.md and prompts/assist.md still receive none of it, and the verifier's inline harness block is still its own.
+  - schemas/correction-pass.schema.json is registered in schemas/manifest.json and validates the record a real run wrote.
+
+technical_plan:
+  implementation_steps:
+    - Read the verifier branch of the stage loop in orchestration/story_coordinator.py, from the passing verdict through the clean-clone check to where the loop falls through to completion, and the clean_clone declaration beside it, since the correction pass is declared and routed in the same shape.
+    - Read the self-route machinery - self_route_result_file, self_route_statement, self_route - as the model for a coordinator-written record keyed so no pass overwrites another and injected rather than passed in memory.
+    - Add correctable_findings to the verification-result schema, and add the correction-pass schema and its manifest entry.
+    - Add the correction_pass declaration to the verifier stage in the workflow, naming the result artifact and the budget.
+    - Add the correction pass count to the run state dataclass, saved and restored with the rest of the state.
+    - Route the pass in the coordinator after the clean-clone check passes - resolve the destinations off the stage's retry_routing table, escalate on an unknown category, write the record, clear the guidance in force, append the event, and set the loop index to the destination stage.
+    - Add the record to build_context as an optional argument beside self_route_result, defaulted so a call that omits it renders exactly what it rendered before.
+    - Add prompts/prose-layer.md and a helper in context_assembler that resolves a named partial against an assembled context, used for the new partial by both build_context and scripts/l5-plan, leaving the harness-layer resolution's reach as it is.
+    - Add the placeholder to the five prompt templates, and the correction-pass placeholder to the templates of the stages that can receive one and to the verifier.
+    - Write the verifier's instruction for what belongs in the field, beside the existing text on unfinishable_by_retry and the claim-support report, in the same register.
+  likely_file_changes:
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: The new optional field and the description that states presence is the signal.
+    - file: schemas/correction-pass.schema.json
+      stage: implementer
+      reason: The coordinator's record of one pass, new in this story.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: The declared inventory of shipped schemas, which the new name must join.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The verifier stage's correction_pass declaration turns the mechanism on and names the budget.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The routing, the record, the state count and the events all live in the verifier branch of the stage loop.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: The record is injected here, and the shared partial helper the planner render also uses lives here.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: The planner context is assembled here from schema and workflow context alone, so the prose partial reaches the planner through this call site.
+    - file: prompts/prose-layer.md
+      stage: implementer
+      reason: The second shared partial, new in this story.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: What belongs in correctable_findings, what stays in unverified, and the prose partial beside the inline evidence-discipline block.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: Receives the correction-pass record and the prose partial.
+    - file: prompts/implementer.md
+      stage: implementer
+      reason: Receives the correction-pass record and the prose partial.
+    - file: prompts/tester.md
+      stage: implementer
+      reason: Receives the correction-pass record and the prose partial.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Receives the prose partial, since the first of the three stale counts was written in a story artifact.
+    - file: tests/test_correction_pass.py
+      stage: tester
+      reason: The validation module for the routed pass, the bound, the unspent retry budget and the unrouted categories, driven as real runs against a fixture workflow.
+    - file: tests/test_harness_layer_extraction.py
+      stage: tester
+      reason: The module that holds which prompts carry the shared partial, which this story adds a second partial to without changing the first one's reach.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The correction pass is a new routing decision and the second partial a new injection site, both of which this document records.
+
+scope:
+  modify:
+    - schemas/verification-result.schema.json
+    - schemas/correction-pass.schema.json
+    - schemas/manifest.json
+    - workflows/story-workflow.json
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - scripts/l5-plan
+    - prompts/prose-layer.md
+    - prompts/verifier.md
+    - prompts/documenter.md
+    - prompts/implementer.md
+    - prompts/tester.md
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/harness-layer.md
+    - prompts/assist.md
+    - .harness/stories/
+    - .harness/requests/
+    - orchestration/plan_validation.py
+    - orchestration/story_parser.py
+    - schemas/story.schema.json
+
+verification_requirements:
+  - Confirm the pass is driven as a real run through the coordinator rather than by calling the branch that routes it, with every routing assertion read off what the run wrote - state.json, events.log, the run directory listing, the rendered prompts.
+  - Confirm the routing tests run against a fixture workflow built for them rather than against the shipped definition, with the stage names, categories, destinations and artifact names read off that fixture.
+  - Confirm a passing verdict carrying a correctable finding results in the destination stage running again and the finding reaching it, evidenced by the record on disk and by the rendered prompt.
+  - Confirm a run whose verdict carries none behaves exactly as it does today, compared against the same run under a coordinator with the branch disabled.
+  - Confirm the pass spends no retry budget - retry_count unchanged, no attempt archive, no retry-history entry - each beside a control run that does spend them.
+  - Confirm the pass does not turn a passing verdict into a failing one, read off the archived verification iteration.
+  - Confirm the loop terminates - a run whose every verdict carries findings stops after one pass, with the second occurrence recorded as an event and no stage invoked a third time.
+  - Confirm a finding naming an undeclared category escalates rather than being absorbed by a default route, beside a control naming a declared one that routes.
+  - Confirm removing the workflow declaration disables the mechanism with no coordinator change, driven as a run against a fixture workflow carrying no such declaration.
+  - Confirm the prose partial reaches every workflow stage and the planner, read back out of a real run's rendered prompts and out of the planner prompt the script renders, and confirm the harness-layer partial's reach is unchanged.
+  - Confirm every absence assertion carries a demonstration that it fails when the behaviour is violated, per the standing rule.
+  - Confirm the new tests are shown to fail against the code as it stood before this story.
+
+constraints:
+  - A correction pass corrects words and never behaviour. Nothing it changes may alter what any test asserts about the system, and the suite must pass unchanged across a pass.
+  - The correction pass spends nothing a retry spends - no retry_count, no attempts/attempt-N/ archive, no retry-history.json entry - and a run that takes one is otherwise the run it would have been.
+  - Presence is the signal. No new key exists to say whether the field means anything, for the same reason retry_target, unfinishable_by_retry and guidance_outcomes.unmet have none.
+  - The field is read only on a passing verdict. A failed verdict already routes, and the correction travels in the retry guidance it already writes.
+  - No stage name and no retry category is written into orchestration source for this mechanism. Both come off the loaded workflow definition, as every other route does.
+  - One pass per run, and the bound is what makes termination a property rather than a hope.
+  - No scanner, no heuristic, and nothing that reads prose as language. The detection stays the verifier's unaided judgement.
+  - What makes a finding blocking is unchanged. The classification in the three sightings was right, and this story acts on findings that are correctly non-blocking.
+  - The harness-layer partial keeps exactly the reach it has - the workflow stages that mutate a tree - and the verifier's inline evidence-discipline block stays inline and stays its own.
+  - The prose partial carries no placeholders, because the planner render resolves a narrower context than a stage render does.
+  - The three known stale numerals are not this story's work. They are fixed by hand, independently.
