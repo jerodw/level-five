@@ -1,0 +1,123 @@
+story:
+  id: story-058
+  title: A check that re-runs the suite announces itself before it starts
+  description: |
+    Every stage announces itself before it works. The checks that run between
+    stages do not: they emit their result and nothing else. The clean-clone
+    check re-runs the whole suite in a fresh clone, so the console sits silent
+    for the length of a suite run with `verification passed` as its last line
+    -- measured on main from story-050 to story-055 as intervals of roughly
+    eight to nine minutes, the only gaps of their kind in those runs. It reads
+    as a hang.
+
+    The rule this story lands is general rather than a single missing event: a
+    check that re-runs the configured test command says so before doing so.
+    Today that is the clean-clone check and the revert check. The revert check
+    is equally silent and only looks fine because it sits between the
+    implementer's started and completed lines, so a reader already has a line
+    on screen saying work is in progress. Its quiet is hidden by position, not
+    by design, and if it ever moves the silence reappears somewhere new.
+
+    The announcement is an event rather than a bare print, because
+    `append_event` is the coordinator's one write path -- its own docstring
+    argues that a second output path, however correct, is drift waiting to
+    happen -- and because an event is what makes the wait visible in
+    `l5-status` and `execution-history.json` rather than only on one console.
+
+    Nothing about what the checks do, when they run, or what they decide
+    changes. This is what the coordinator says while they run.
+
+tasks:
+  - Add a helper to orchestration/story_coordinator.py that appends the announcement through append_event under a new event kind, carrying the stage, the result artifact the declaration names, and a message saying what is being re-run and why.
+  - Call that helper from inside clean_clone_check, before the clone is built, so the announcement cannot happen without the check running and removing the clean_clone declaration silences announcement and result together.
+  - Call the same helper from inside revert_check, in the branch that actually builds a clone -- not on the path where no baseline was captured, which runs no suite and so has nothing to announce.
+  - Add the new event kind to the enum in schemas/execution-history.schema.json, beside the clean-clone result kinds.
+  - Add revert-check-permitted to that same enum. The coordinator already emits it and the enum does not declare it; the gap is invisible only because no schema-validating fixture run has governed edits.
+  - Add coverage that the announcement precedes each check's result, that each declaration still turns its whole check off when removed, that the new kind is emitted from one place rather than spelled per check, and that every kind the coordinator can pass to append_event is a kind the schema declares.
+  - Repair existing test modules whose expectations pin the event stream, deriving the expectation rather than restating a longer literal.
+  - Record the rule in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A run whose verification passes appends the announcement before the clean-clone check builds its clone, and the clean-clone result event follows it.
+  - The announcement's message says the suite is being re-run in a fresh clone with the story committed, so a reader who has just seen `verification passed` learns why more work is happening.
+  - A stage whose edits under a governed prefix trigger the revert check appends the announcement before that check builds its clone, and its message names the paths being reverted and that the check decides whether the edits were needed.
+  - The revert check announces nothing on the path where no baseline was captured, because that path runs no suite.
+  - Both announcements come from one helper. The new event kind is spelled in exactly one function in orchestration/story_coordinator.py, the way append_event is already the only writer of the history file.
+  - Each announcement names the result artifact its check writes, read from the declaration that turned the check on rather than written in the coordinator.
+  - A workflow whose verifier stage declares no clean_clone emits neither the announcement nor the clean-clone result, and a workflow whose implementer stage declares no revert_check emits neither the announcement nor the revert-check result.
+  - The new event kind and revert-check-permitted are both declared in schemas/execution-history.schema.json, and a history carrying either validates against it.
+  - A test asserts that every event kind the coordinator can pass to append_event is declared in that enum, so a future kind added without the schema entry is reported rather than discovered by a fixture that happens to exercise it.
+  - l5-status renders a run whose history carries the new kind without error.
+  - No existing assertion about the event stream is weakened to accommodate the new event. A module that had to change derives its expectation from the workflow or from the coordinator's behaviour rather than restating a longer literal sequence or count.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read append_event and the two check functions, clean_clone_check and revert_check, and note that both already receive run_dir, the stage name or its record, and the artifact name off the workflow declaration -- everything the announcement needs is already in hand at both sites.
+    - Add the helper beside the existing result-event helpers. It takes the run directory, the stage name, the artifact, and the phrase describing what is being re-run, and calls append_event with the new kind.
+    - Call it at the top of clean_clone_check, before the scratch directory is made, with the phrase describing a fresh clone with the story committed.
+    - Call it in revert_check inside the else branch that builds the clone, after the baseline resolves, with the phrase naming the reverted paths and what the check decides.
+    - Add the new kind and revert-check-permitted to the execution-history schema enum.
+    - Run the suite and let it name the modules whose expectations the extra event breaks. Repair each by deriving its expectation; the story-047 precedent is a literal call list that assumed a stage never ran again in place and had to derive rather than be re-pinned.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: gains the announcement helper and its two call sites inside the check functions
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: the closed enum gains the new kind and the revert-check-permitted entry it was already missing
+    - file: tests/test_clean_clone_check.py
+      stage: tester
+      reason: the home for the clean-clone check's behaviour gains the announcement's ordering and the declaration-removal case
+    - file: tests/test_revert_check.py
+      stage: tester
+      reason: gains the revert check's announcement, including that the no-baseline path announces nothing
+    - file: tests/test_execution_history.py
+      stage: tester
+      reason: the home for the one-write-path and event-shape rules gains the one-emitter assertion and the enum-completeness assertion
+    - file: tests/test_retry_history.py
+      stage: tester
+      reason: its expectations over the event stream may pin a sequence the extra event lengthens
+    - file: tests/test_correction_pass.py
+      stage: tester
+      reason: it validates a run's history against the schema and may pin a sequence the extra event lengthens
+    - file: tests/test_self_routing_retry.py
+      stage: tester
+      reason: it compares evidence across the event stream and may pin a sequence the extra event lengthens
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records that a check re-running the configured test command announces itself first, and that the revert check's old quiet was hidden by position rather than by design
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/execution-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - prompts/
+    - scripts/
+    - .harness/config.yaml
+    - .harness/stories/
+    - .harness/requests/
+    - templates/
+    - hooks/
+
+verification_requirements:
+  - Confirm a run whose verification passes emits the announcement before the clean-clone check runs, and that its timestamp precedes the result's by approximately the suite's runtime.
+  - Confirm the revert check announces itself from the same helper as the clean-clone check rather than by a second spelling, and that the announcement is inside the check rather than at the coordinator's call site.
+  - Confirm a workflow with the clean_clone declaration removed emits neither the announcement nor the result, so removing the declaration still disables the whole check with no change to orchestration, and the same for revert_check.
+  - Confirm the new event kind validates against the execution-history schema and that l5-status renders a run carrying it.
+  - Confirm the enum-completeness assertion is not vacuous -- that it reports a kind the coordinator emits which the schema does not declare, which is the state revert-check-permitted was in before this story.
+  - Confirm no existing assertion about the event stream was weakened to accommodate the new event. A module that had to change derives its expectation rather than restating a longer literal.
+  - Confirm the checks decide exactly what they decided before: no change to when they run, what they revert, what they commit, or what their results mean.
+  - Confirm the full test suite passes.
+
+constraints:
+  - append_event stays the only writer of events.log and execution-history.json. The announcement is an event, not a second output path.
+  - No stage name and no artifact name is written into the announcement helper. Both come from the declaration the caller already read.
+  - events.log's line format is unchanged: one bracketed timestamp and one prose line.
+  - The checks' behaviour is unchanged -- what they run, when they run, what they revert, and what they decide all stay as they are.
+  - No progress output during a check: no percentage, no live tail of the suite's output.
+  - Nothing here makes the checks faster or runs them concurrently with anything.
