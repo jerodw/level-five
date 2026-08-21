@@ -80,49 +80,67 @@ rephrasing at plan time, which is where a human is present to do it.
 
 What the fourth check is
 ------------------------
-Two rules govern a stage's relationship with a governed prefix and this check
-used to conflate them. The workflow's restriction is about *creating* files
-there, and it is the one this check enforces. *Modifying* a file that already
-exists is legal and is governed by the revert check instead, which restores
-the stage's edits under the governed prefixes and re-runs the suite,
-escalating when they were not forced and recording them as permitted when
-they were. That is a question about what a run did, so it is a run's to
-answer; nothing here duplicates it or anticipates it.
+A plan must not assign a governed path to a stage without granting it. A
+technical_plan.likely_file_changes entry offends when its file falls beneath
+a prefix the entry's own stage is restricted under and no grant on that stage
+covers it — whatever the filesystem holds. Two literals decide it, one in the
+artifact and one in the workflow definition, plus the story's own grants.
 
-So a plan must not assign work to a stage that cannot own it, and what it
-cannot own is a file it would have to *create*. A
-technical_plan.likely_file_changes entry naming a file beneath a prefix its
-own stage is restricted from creating under, with no grant covering that
-file, and with no such file beneath the root, describes a run that can only
-end one way: the stage does exactly what the plan named, and the coordinator
-refuses the result. All of that is decidable before the run starts — two
-literals, one in the artifact and one in the workflow definition, and one
-question put to the filesystem — and the decision belongs where a developer
-is present to repair it in one exchange.
+Two run-time checks act on a stage beneath a governed prefix, and between
+them they leave no version of that entry that a run can accept. The
+ownership check refuses a created file outright. The revert check restores
+the stage's edits beneath the governed prefixes and re-runs the suite,
+permitting an edit that was forced and escalating on one that was not — and
+an implementation change reverts cleanly by construction, because the
+assertion that would hold the new behaviour belongs to a later stage and has
+not been written yet; a comment-only change is refused by the same
+arithmetic. So the plan the harness accepts is a run the harness can only
+refuse, and the verdict carries no information about the work because it was
+structurally guaranteed.
+
+The grant is the reconciliation, and it already exists: a granted path is
+skipped by the revert check's governed_edits exactly as it is skipped by the
+ownership check, so a plan that assigns the file and grants it works today.
+What this check adds is requiring the plan to say so.
+
+Existence decides the **wording** and not the verdict. An absent file
+describes a creation the ownership check refuses; a present one describes a
+modification the revert check governs and, for an implementation or
+comment-only change, can only refuse. Both wordings end with the same
+resolution clause — reassign the file to a stage that may own it, or declare
+a stage_exceptions grant naming that file for that stage, whose reason field
+is required — so a plan repaired at either fault is repaired the same way,
+and the grant is named because the failure mode this check exists against was
+not knowing the field exists.
 
 Existence is resolved against the **target root**, the repository the story
 will run in, which artifact_problems requires of its caller and passes down.
 It is neither the harness root nor the process working directory: the three
 coincide when the harness is its own target and will not in general, and no
-default hides which one was consulted. The fact is derived from the
-repository rather than declared by a likely_file_changes field, because a
-field would be the planner's claim about something the filesystem already
-knows and the check would have to verify it against the repository anyway.
+default hides which one was consulted.
+
+The judgement being moved here is *is this file implementation or test logic
+for this story*, which is a question about intent that a human answers where
+a human is present. It is not moved into the revert check, which would have
+to read a diff as language to answer it. Neither run-time check is weakened,
+anticipated or duplicated by this: what a stage may do once a run has started
+is exactly what it was.
 
 That is why it is structural rather than a scan of English. It compares an
-entry's declared file against an entry's declared stage and asks the
-repository whether the file is there; it does not read prose, does not guess
-at intent, and does not err in either direction. Nothing about it is hedged,
-and the limits recorded above for the third check are not its limits.
-likely_file_changes is its subject because it is the only field carrying a
-file and a stage together — scope.modify names paths with no stage and cannot
-state this conflict at all. A story with no technical_plan, or an entry
-missing either field, yields nothing rather than raising.
+entry's declared file against an entry's declared stage and against the
+story's grants; it does not read prose, does not guess at intent, and does
+not err in either direction. Nothing about it is hedged, and the limits
+recorded above for the third check are not its limits. likely_file_changes is
+its subject because it is the only field carrying a file and a stage together
+— scope.modify names paths with no stage and cannot state this conflict at
+all. A story with no technical_plan, or an entry missing either field, yields
+nothing rather than raising.
 
 What it stays is a **prediction**. A file present when the plan is written
-may be gone by the time the story runs, and this check makes no promise
-about that: the run-time ownership check and the revert check remain the
-authority on what a stage was actually allowed to do.
+may be gone by the time the story runs, and this check makes no promise about
+that beyond which of the two faults it named: the run-time ownership check
+and the revert check remain the authority on what a stage was actually
+allowed to do.
 
 What the fifth check is
 -----------------------
@@ -211,6 +229,38 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
     return problems
 
 
+#: The fault an offending entry describes when the target root holds no such
+#: file: the stage would have to create it, and the ownership check refuses a
+#: created file beneath a governed prefix outright.
+_CREATION_FAULT = (
+    "The target root holds no such file, so the entry describes a creation, "
+    "which the stage output ownership check refuses outright."
+)
+
+#: The fault an offending entry describes when the file is already there. The
+#: revert check is the instrument, and stating what it does is what stops the
+#: message reading as a claim that modifying is forbidden: it is permitted
+#: exactly when reverting it breaks the suite, which an implementation change
+#: or a comment-only change never does.
+_MODIFICATION = (
+    "The target root already holds that file, so the entry describes a "
+    "modification, which the revert check governs: it restores the stage's "
+    "edits beneath that prefix and re-runs the suite, and refuses them unless "
+    "reverting them breaks it."
+)
+
+#: Both wordings end here, identically, so a plan repaired at either fault is
+#: repaired the same way. The grant is named because not knowing the field
+#: exists is the failure this check is written against, and its required
+#: reason is stated because that is what makes the grant a judgement a
+#: reviewer can weigh.
+_RESOLUTIONS = (
+    "Either assign '{path}' to a stage that may own it, or declare a "
+    "stage_exceptions grant naming '{path}' for {stage}, whose reason field is "
+    "required."
+)
+
+
 def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str]:
     """Report plan entries assigning a file to a stage that cannot own it.
 
@@ -220,13 +270,20 @@ def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str
     say who was meant to write one. One problem per offending entry and
     restriction.
 
-    An entry offends when its file falls under a prefix the entry's own stage
-    is restricted from creating under, no grant on that stage covers the file,
-    and no such file exists beneath `root`. The last is what keeps the check to
-    the rule it enforces: the workflow restricts *creating* files under a
-    prefix, and a file that is already there is not one the stage can create.
-    An entry naming an existing file predicts a modification, which the revert
-    check owns at run time and this check says nothing about.
+    An entry offends when its file falls beneath a prefix the entry's own
+    stage is restricted under and no grant on that stage covers the file. The
+    filesystem decides nothing about that: an entry naming a file the target
+    already holds is reported exactly as one naming a file it does not,
+    because both describe a run the harness can only refuse — the created file
+    outright by the ownership check, the modification by the revert check,
+    which reverts an implementation or comment-only change without breaking
+    the suite and so escalates on it. The grant is what reconciles them, and
+    the grant short-circuits above everything else here.
+
+    Existence chooses between the two **wordings** once an entry has already
+    been decided to offend, so the two faults read as what they are while
+    remaining one verdict. Both wordings end with the same resolution clause,
+    built once, so a plan repaired at either fault is repaired the same way.
 
     `root` is the repository existence is resolved against — the target root,
     not the harness root and not the process working directory. It is required
@@ -258,18 +315,17 @@ def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str
         if story_coordinator.grant_covers(granted, path):
             continue
         for stage, prefix in restrictions:
-            if (
-                stage == name
-                and path.startswith(prefix)
-                and not (Path(root) / path).exists()
-            ):
-                problems.append(
-                    f"$.technical_plan.likely_file_changes[{index}]: assigns "
-                    f"'{path}' to stage '{name}', which the workflow declares: "
-                    f"{stage} may not create files under {prefix}. Either "
-                    f"assign '{path}' to a stage that may own it, or declare a "
-                    f"stage_exceptions grant naming '{path}' for {stage}."
-                )
+            if stage != name or not path.startswith(prefix):
+                continue
+            fault = (
+                _MODIFICATION if (Path(root) / path).exists() else _CREATION_FAULT
+            )
+            problems.append(
+                f"$.technical_plan.likely_file_changes[{index}]: assigns "
+                f"'{path}' to stage '{name}', which the workflow declares: "
+                f"{stage} may not create files under {prefix}. {fault} "
+                + _RESOLUTIONS.format(path=path, stage=stage)
+            )
     return problems
 
 
