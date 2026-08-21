@@ -293,6 +293,54 @@ def messages(target_root: Path) -> list[str]:
     return [line.split("] ", 1)[1] for line in log.splitlines() if "] " in line]
 
 
+#: The kind the coordinator appends before a check re-runs the configured
+#: test command. Named rather than spelled at each use below.
+SUITE_RERUN = "suite-rerun-started"
+
+
+def history_of(target_root: Path) -> list[dict]:
+    return json.loads(
+        (run_dir_of(target_root) / "execution-history.json").read_text(
+            encoding="utf-8"))
+
+
+def stage_stream(target_root: Path) -> list[str]:
+    """The stream with the coordinator's suite-rerun announcements dropped.
+
+    Since story-058 a check that re-runs the configured test command announces
+    itself first, so a reader who has just seen `verification passed` is not
+    left watching a silent console for the length of a suite run. That message
+    is composed inside the check that makes it; restating it here would be a
+    second spelling of text this module has nothing to say about, and would
+    have to be retyped every time another check learns to announce itself.
+
+    The announcements are identified by *kind*, never by their wording, and
+    dropping them hides nothing about where they sit: the assertion beside
+    each use holds every one of them to standing immediately before the event
+    of the check it announces. What this module is about — the stage events,
+    in order, and nothing else — stays an exact equality on the whole stream.
+    """
+    kinds = [entry["event"] for entry in history_of(target_root)]
+    lines = messages(target_root)
+    assert len(kinds) == len(lines), "the two renderings disagree in length"
+    return [line for kind, line in zip(kinds, lines) if kind != SUITE_RERUN]
+
+
+def announcements_precede_their_checks(target_root: Path) -> bool:
+    """Whether every announcement is immediately followed by an event of the
+    same stage that is not itself an announcement — which is the ordering the
+    announcement exists for, and what `stage_stream` above leaves to this."""
+    history = history_of(target_root)
+    for entry, following in zip(history, history[1:]):
+        if entry["event"] != SUITE_RERUN:
+            continue
+        if following["event"] == SUITE_RERUN:
+            return False
+        if following.get("stage") != entry.get("stage"):
+            return False
+    return history[-1]["event"] != SUITE_RERUN
+
+
 def commit(target_root: Path, message: str = "the developer's own work") -> str:
     git(target_root, "add", "-A")
     git(target_root, "commit", "-q", "--allow-empty", "-m", message)
@@ -648,7 +696,8 @@ def test_a_first_run_of_a_story_whose_branch_does_not_exist_is_unaffected(
     present = artifacts_in(target)
     assert set(FIRST_RUN_ARTIFACTS) <= set(present)
     assert "escalation-summary.md" not in present
-    assert messages(target) == FIRST_RUN_EVENTS
+    assert stage_stream(target) == FIRST_RUN_EVENTS
+    assert announcements_precede_their_checks(target)
 
     state = state_of(target)
     assert state["status"] == "completed"

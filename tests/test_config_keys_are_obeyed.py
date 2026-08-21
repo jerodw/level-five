@@ -549,8 +549,18 @@ def clean_clone_record(run: Run) -> dict:
     and free of any dependency on a second toolchain being installed.
     """
     artifact = "xyzzy-clean-clone-result.json"
-    story_coordinator.clean_clone_check(run.run_dir, run.target, run.config,
-                                        artifact)
+    # The check is invoked by hand here rather than reached through a run —
+    # this fixture's workflow strips the declaration, because `test_command`
+    # names a command that does not exist. Its announcement therefore has no
+    # declaring stage to name, and which stage it names is not what these
+    # proofs are about, so the stage is taken off the fixture's own definition
+    # rather than written down.
+    definition = json.loads(
+        (run.harness / "workflows" / f"{FIXTURE_WORKFLOW}.json").read_text(
+            encoding="utf-8"))
+    story_coordinator.clean_clone_check(
+        run.run_dir, run.target, run.config, artifact,
+        stage_name=definition["stages"][-1]["name"])
     return json.loads((run.run_dir / artifact).read_text(encoding="utf-8"))
 
 
