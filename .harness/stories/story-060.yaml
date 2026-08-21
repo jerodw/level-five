@@ -1,0 +1,114 @@
+story:
+  id: story-060
+  title: Grant the documenter a self-route budget
+  description: |
+    The documenter is the last stage of this deployment's workflow declaring no
+    max_self_routes, so a mechanical failure there ends the run. Grant it a
+    budget of 1, the same budget the implementer and the verifier declare.
+
+    This is a precaution rather than a fix. No documenter mechanical failure has
+    been observed, and the story should not pretend one has. What argues for the
+    grant is where the documenter now sits: since the documenter began running
+    before verification, the verifier reads its report and the documentation
+    retry category routes back to it, so a dropped connection at the documenter
+    discards a run whose implementer and tester work is already green. That is
+    the most expensive escalation in this workflow to recover by hand, and it
+    carries no judgement about the work.
+
+    The request behind this story asked for the tester and the documenter
+    together, and argued the documenter might be the one stage where escalation
+    is the right answer because nothing downstream depends on it. Both halves
+    have since been overtaken. story-047 granted the tester a budget of 2 with a
+    recorded reason, and the documenter no longer runs last, so the verifier does
+    depend on it.
+
+    Granting it empties the population that one assertion in
+    tests/test_shipped_workflow_is_valid.py reads: that this deployment leaves at
+    least one stage unbudgeted. That assertion is rewritten rather than deleted,
+    to state the decision that now holds. It does not need to be preserved as a
+    deployment fact, because story-048 moved the compatibility property it was
+    protecting onto a constructed budget-less stage in
+    tests/test_self_routing_retry.py, where it is held against a definition that
+    test builds for itself.
+
+    No new mechanism coverage is written. The coordinator's self-route machinery
+    is already exercised stage-agnostically against built workflows: the
+    two-budget separation, the escalation naming an exhausted budget, the
+    baseline reuse, and the coordinator-authored statement injected into the
+    re-run prompt, whose text names no stage. A per-stage copy of that coverage
+    would assert the deployment where the mechanism is the subject, which is the
+    split story-048 exists to maintain.
+
+tasks:
+  - Add "max_self_routes": 1 to the documenter stage in workflows/story-workflow.json, beside its outputs and changed_files keys, matching the implementer's and the verifier's declaration.
+  - Rewrite test_this_deployment_grants_a_self_route_budget_to_more_than_one_stage in tests/test_shipped_workflow_is_valid.py so it states the deployment decision that now holds - every stage of the shipped workflow declares a budget, and every declared budget is an integer count - keeping the module's subject and renaming the function for what it now checks.
+  - Add a control beside that rewritten assertion, built from the builder in tests/conftest.py rather than from a mutated copy of the shipped definition, showing that the same check reports a workflow that leaves a stage unbudgeted. Without it "every shipped stage is budgeted" is an absence assertion that passes against a check that has stopped looking.
+  - Update the max_self_routes paragraph in .harness/docs/ARCHITECTURE.md so it records the documenter's budget and drops the claim that keeping one budget-less stage is what keeps the compatibility property exercised, naming where story-048 moved that property to.
+  - Confirm, without adding coverage, that the existing self-route tests still pass unchanged, and record in the documentation report where the mechanism-level properties the request asked about are already held.
+
+acceptance_criteria:
+  - The documenter stage in workflows/story-workflow.json declares max_self_routes of 1, and no stage of that workflow declares no budget.
+  - The documenter's declaration carries no max_self_routes_reason, because 1 is the common budget in this deployment and the sibling-reason convention applies to a budget that differs from it. The tester's 2 remains the only declaration carrying a reason.
+  - tests/test_shipped_workflow_is_valid.py no longer asserts that some shipped stage is unbudgeted, and asserts instead that every shipped stage declares a budget and that every declared budget is an int.
+  - A control in the same module shows that rewritten check reporting a definition in which a stage declares no budget, and that definition comes from the builder in tests/conftest.py rather than from a mutated copy of the shipped workflow.
+  - test_the_budgets_this_deployment_grants_are_recorded_where_a_reader_meets_them and test_a_recorded_reason_states_the_number_it_is_explaining still pass, still find an outlier to read, and are not edited by this story - the documenter's 1 is the common budget, so it changes neither.
+  - Every test in tests/test_self_routing_retry.py passes unedited, including the compatibility property held against a constructed budget-less stage and the assertion that a self-route moves none of the retry bookkeeping.
+  - The max_self_routes paragraph of .harness/docs/ARCHITECTURE.md states the budget every stage of this workflow declares, including the documenter's, and no longer says the documenter declares none or that keeping such a stage is what exercises the compatibility property.
+  - The full suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Add the documenter's max_self_routes key to workflows/story-workflow.json. Nothing else in that file changes.
+    - Rewrite the reddened assertion in tests/test_shipped_workflow_is_valid.py in the same commit as the workflow change. It is an existing file and the edit is a modification rather than a creation - reverting it leaves the suite red against the new workflow, which is the rule story-017 established for deciding a test edit and story-042 established for assigning an existing test file to the implementer.
+    - Keep the rewritten assertion's docstring honest about its provenance. It arrived in this module from tests/test_self_routing_retry.py when story-048 split configuration from mechanism, and the docstring should now say what changed - the deployment stopped hosting the budget-less stage, and the property that needed one lives on a built definition.
+    - Add the builder-based control for that assertion, in the section of the module that holds the other controls.
+    - Revise the ARCHITECTURE.md paragraph once the workflow and the tests agree.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The documenter stage gains max_self_routes of 1. This is the story's whole behavioural change.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: implementer
+      reason: The assertion that this deployment leaves a stage unbudgeted is rewritten to state what now holds. Assigned here rather than to the tester because the workflow change reddens it, so reverting the edit breaks the suite, and deferring it would have the implementer hand on a knowingly red tree.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: The control showing the rewritten check reports a definition that leaves a stage unbudgeted, built from tests/conftest.py rather than from the shipped workflow.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Its max_self_routes paragraph names the documenter as declaring none and claims that keeping one such stage is what exercises the compatibility property. Both statements stop being true.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_shipped_workflow_is_valid.py
+    reason: The workflow change reddens test_this_deployment_grants_a_self_route_budget_to_more_than_one_stage in that module, which asserts this deployment leaves a stage unbudgeted. The implementer must rewrite it in the same commit or hand on a knowingly red tree, so the story declares this one file the implementer's to own for its duration. The grant names the file rather than the tests/ prefix, leaving every other path beneath tests/ governed - including the control the tester adds to this same module, which is ordinary tester work and needs no grant.
+
+scope:
+  modify:
+    - workflows/story-workflow.json
+    - tests/test_shipped_workflow_is_valid.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - schemas/
+    - prompts/
+    - tests/test_self_routing_retry.py
+    - tests/conftest.py
+    - scripts/
+
+verification_requirements:
+  - Confirm the documenter's budget is declared in workflows/story-workflow.json and that the coordinator's pre-flight self-route check accepts the resulting definition.
+  - Confirm no stage of the shipped workflow declares no budget, and that the suite contains no assertion still requiring one.
+  - Confirm the rewritten assertion in tests/test_shipped_workflow_is_valid.py would report a deployment that failed its claim, by checking that the control beside it exercises the same code against a built definition rather than restating the assertion in different words.
+  - Confirm the compatibility property still has a home - a stage declaring no budget escalates on every mechanical failure exactly as it did before story-036 - and that it is demonstrated against a constructed budget-less stage rather than against the shipped workflow.
+  - Confirm tests/test_self_routing_retry.py and tests/conftest.py are unchanged by this story, and that every test in the first still passes.
+  - Confirm the documentation report says where the mechanism-level properties the story declined to re-test are already held, naming the tests, rather than asserting they are covered.
+  - Confirm the ARCHITECTURE.md paragraph agrees with the shipped workflow stage by stage, and that it makes no claim about the deployment that the workflow contradicts.
+  - Confirm the full test suite passes.
+
+constraints:
+  - No orchestration code changes. The self-route mechanism reads the budget off the loaded stage dict and needs nothing new to honour a fourth declaration.
+  - No new mechanism tests. The two-budget separation, the exhausted-budget escalation, the baseline reuse and the coordinator-authored self-route statement are already held against built workflows, and duplicating them per stage would make a deployment fact into something a mechanism test enforces.
+  - Do not change the implementer's, the tester's or the verifier's budget, or the tester's recorded reason. They are settled.
+  - Do not touch retry_count, max_retries, the attempts/ archive or retry-history.json. A self-route spends none of them, and this story adds no reason to revisit that.
+  - Do not delete an assertion because the deployment fact it read has gone. The one assertion this story displaces is rewritten to state what replaced that fact.
+  - Preserve the split story-048 drew: an assertion about what this repository deploys belongs in tests/test_shipped_workflow_is_valid.py, and an assertion about whether a mechanism works belongs in a module that builds its own workflow.
