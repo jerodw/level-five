@@ -1010,13 +1010,23 @@ def test_the_refusal_this_story_narrowed_is_named_at_both_ends_of_its_range(
 
 
 def test_a_crashed_run_still_resumes_exactly_as_it_did(target, harness_root):
-    """The status this story did not touch. A run left `running` resumes with
-    no guard and no archive — the archive belongs to the escalation path, and
-    a crashed run's interrupted attempt is its own unfinished work."""
+    """A run left `running` resumes at the recorded stage with no guard — the
+    guard is escalated-only, because a crashed run has no escalation commit to
+    compare against.
+
+    What this test used to assert is the half story-061 reverses: it required a
+    crashed resume to leave no `attempts/` directory, on the reading that the
+    archive belonged to the escalation path. The archive is now the guarantee
+    both resumed statuses get, so the assertion states that instead — the
+    interrupted attempt is archived, before the resumed stage runs, under the
+    attempt number the crashed run's counters resolve to. The subject is
+    unchanged: this is still a crashed run's resume.
+    """
     crashed = Runner(target, {WRITING: [edits_the_module]})
-    run_dir_of(target).mkdir(parents=True, exist_ok=True)
+    run_dir = run_dir_of(target)
+    run_dir.mkdir(parents=True, exist_ok=True)
     story_coordinator.save_state(
-        run_dir_of(target),
+        run_dir,
         story_coordinator.RunState(story_id=STORY_ID, branch=f"story/{STORY_ID}",
                                    status="running", current_stage=VALIDATING),
     )
@@ -1025,7 +1035,10 @@ def test_a_crashed_run_still_resumes_exactly_as_it_did(target, harness_root):
 
     assert code == 0
     assert crashed.calls[0] == VALIDATING
-    assert not (run_dir_of(target) / "attempts").exists()
+    first_stage, archives_at_entry = crashed.archives_seen[0]
+    assert first_stage == VALIDATING
+    assert archives_at_entry == ["attempt-1"]
+    assert story_coordinator.attempt_dir(run_dir, 1).is_dir()
 
 
 # --------------------------------------------------------------------------
@@ -1177,6 +1190,541 @@ def test_a_resume_whose_archive_directory_exists_refuses_naming_it(
     proceeded, runner = run(elsewhere, harness_root, verdicts=[PASS])
     assert proceeded == 0
     assert runner.calls != []
+
+
+# --------------------------------------------------------------------------
+# The same archive, reached from the other recorded status
+# --------------------------------------------------------------------------
+#
+# The cases below drive the branch the escalated-resume cases above drive,
+# entered from a `running` state instead. Writing that status onto the run
+# directory an escalation already filled is the cheaper fixture than killing a
+# coordinator mid-stage and reaches exactly the same code, because the resume
+# decides from the recorded status and from nothing else. The escalation's own
+# `escalation_commit` is deliberately left on the state: a guard that ran would
+# have something to refuse on, which is what makes "no guard decides a crashed
+# resume" evidence rather than a coincidence about an empty field.
+#
+# Every name here is derived - the resumed stage off the loaded definition, the
+# archive directory off `attempt_dir`, the prompt off `prompt_file`, the stage
+# artifacts off the conftest constants the builder assembles the workflow from.
+
+#: The stage an escalated run stops at, and so the stage both resumes below
+#: re-enter at. Read off the definition rather than written.
+RESUMED_STAGE = VERIFIER_STAGE["name"]
+
+
+def crashed(target_root: Path) -> None:
+    """Leave the run recorded as `running`, the way a dead process leaves it."""
+    write_state(target_root, status="running")
+
+
+def archived_names(run_dir: Path, attempt: int) -> list[str]:
+    return sorted(p.name for p in story_coordinator.attempt_dir(
+        run_dir, attempt).iterdir())
+
+
+def test_a_crashed_resume_archives_under_the_attempt_number_its_counters_resolve_to(
+    target, harness_root,
+):
+    """The number is the one the crashed run's own counters resolve to, not a
+    fresh one: a resume carries `retry_count` forward, so the stage loop
+    re-renders under exactly the number the dead attempt used.
+
+    Read at the entry to the resumed stage rather than after the run, so
+    "before the resumed stage runs" is a fact about ordering. The list is
+    compared whole against the directories present before the resume plus the
+    one this story adds, so an archive written under any other number fails
+    here. The shape is the one that took a retry, so the run already carries
+    the archive that retry made — which is what makes "under the number the
+    counters resolve to" distinguishable from "under the first free number".
+    """
+    escalate(target, harness_root, AFTER_A_RETRY)
+    run_dir = run_dir_of(target)
+    assert state_of(target)["retry_count"] == 1
+    retried = story_coordinator.attempt_dir(run_dir, 1).name
+    interrupted = story_coordinator.attempt_dir(run_dir, 2).name
+    assert sorted(p.name for p in (run_dir / "attempts").iterdir()) == [retried]
+    crashed(target)
+
+    code, resumed = run(target, harness_root, verdicts=[PASS])
+
+    assert code == 0
+    first_stage, archives_at_entry = resumed.archives_seen[0]
+    assert first_stage == RESUMED_STAGE
+    assert archives_at_entry == [retried, interrupted]
+
+
+def test_the_crashed_attempts_prompt_is_archived_beside_the_fresh_rendering(
+    target, harness_root,
+):
+    """The archive holds the prompt the interrupted stage was actually given,
+    byte for byte, while the resumed stage's own rendering sits at the run root
+    under the canonical name.
+
+    Compared against bytes captured *before* the resume, not against the file
+    the resumed run leaves at the root. Asserting only that the archive
+    directory exists would pass while the wrong file was preserved, and
+    asserting the two copies are equal would pass if the archive had simply
+    copied the fresh rendering back over itself — so both halves are here: the
+    archived copy equals what was captured, and the live copy does not.
+    """
+    escalate(target, harness_root, AFTER_A_RETRY)
+    run_dir = run_dir_of(target)
+    rendered = story_coordinator.prompt_file(RESUMED_STAGE, 2)
+    interrupted = (run_dir / rendered).read_bytes()
+    crashed(target)
+
+    code, _ = run(target, harness_root, verdicts=[PASS])
+    assert code == 0
+
+    archived = story_coordinator.attempt_dir(run_dir, 2) / rendered
+    assert archived.read_bytes() == interrupted
+    live = run_dir / rendered
+    assert live.is_file()
+    assert live.read_bytes() != interrupted
+
+
+def test_the_crashed_archive_holds_what_that_attempt_wrote_and_skips_the_rest(
+    target, harness_root,
+):
+    """An artifact the interrupted attempt never wrote is skipped rather than
+    treated as an error, exactly as `archive_attempt` already skips an absent
+    conditional artifact.
+
+    The control is the identical resume in a repository where that artifact is
+    present, whose archive does hold it — so the absence below is the missing
+    file's doing rather than the archive having stopped seeing anything.
+    """
+    escalate(target, harness_root)
+    run_dir = run_dir_of(target)
+    (run_dir / conftest.TEST_RESULTS).unlink()
+    crashed(target)
+
+    code, _ = run(target, harness_root, verdicts=[PASS])
+    assert code == 0
+    without = archived_names(run_dir, 1)
+    assert conftest.TEST_RESULTS not in without
+    assert conftest.VERIFICATION_RESULT in without
+    assert conftest.CHANGED_FILES in without
+
+    kept = build_target(target.parent / "artifact-kept")
+    escalate(kept, harness_root)
+    crashed(kept)
+    proceeded, _ = run(kept, harness_root, verdicts=[PASS])
+    assert proceeded == 0
+    assert conftest.TEST_RESULTS in archived_names(run_dir_of(kept), 1)
+
+
+def test_a_crashed_attempt_that_wrote_nothing_still_refuses_a_second_resume(
+    target, harness_root,
+):
+    """The archive is not conditional on what the dying stage left behind. An
+    attempt that wrote nothing still produces the directory, and the directory
+    is what the second resume refuses on.
+
+    The control for "the directory is empty" is the resume above, whose archive
+    of an attempt that did write is not — so an empty listing here is the
+    attempt's emptiness rather than a listing that reads nothing.
+    """
+    run_dir = run_dir_of(target)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    story_coordinator.save_state(
+        run_dir,
+        story_coordinator.RunState(story_id=STORY_ID, branch=f"story/{STORY_ID}",
+                                   status="running", current_stage=RESUMED_STAGE),
+    )
+
+    code, _ = run(target, harness_root, verdicts=[PASS])
+    assert code == 0
+    assert story_coordinator.attempt_dir(run_dir, 1).is_dir()
+    assert archived_names(run_dir, 1) == []
+
+    crashed(target)
+    blocked = Runner(target)
+    refused = story_coordinator.run_story(STORY_ID, harness_root, target, blocked)
+    assert refused == 1
+    assert blocked.calls == []
+
+
+def test_both_resumed_statuses_refuse_a_colliding_archive_with_the_same_text(
+    target, harness_root, capsys,
+):
+    """One refusal, reached twice. The two messages are compared byte for byte
+    against one another rather than each against a literal, so two texts that
+    merely agree today would have to keep agreeing to pass.
+
+    Both refusals are taken from one run directory, so the destination, the
+    story and the attempt number they interpolate are identical and any
+    difference in the printed text is a difference in the expression that
+    produced it.
+    """
+    escalate(target, harness_root)
+    run_dir = run_dir_of(target)
+    occupied = story_coordinator.attempt_dir(run_dir, 1)
+    occupied.mkdir(parents=True)
+    write(occupied / conftest.VERIFICATION_RESULT, "hand-written evidence\n")
+    change_the_code(target)
+    # Committed, so the escalated refusal below can only be the archive
+    # directory's: a dirty tree refuses first, for story-021's reason.
+    ready_to_resume(target)
+    capsys.readouterr()
+
+    from_escalated = Runner(target)
+    escalated_code = story_coordinator.run_story(
+        STORY_ID, harness_root, target, from_escalated)
+    escalated_message = capsys.readouterr().err
+
+    crashed(target)
+    from_running = Runner(target)
+    running_code = story_coordinator.run_story(
+        STORY_ID, harness_root, target, from_running)
+    running_message = capsys.readouterr().err
+
+    assert escalated_code == 1 and running_code == 1
+    assert from_escalated.calls == [] and from_running.calls == []
+    assert escalated_message.strip() != ""
+    assert running_message == escalated_message
+    assert str(occupied) in running_message
+    # Nothing was archived over: the refusal is what the archive exists for.
+    assert (occupied / conftest.VERIFICATION_RESULT).read_text() \
+        == "hand-written evidence\n"
+
+
+def refusals_naming_the_destination(source: str) -> list[tuple[str, int]]:
+    """The prints in `run_story` that name the archive destination, each as its
+    exact source segment and the column it starts at.
+
+    Structural rather than textual: the message itself is interpolated at
+    runtime, and a test that matched on its words would be a second copy of
+    the very text it exists to keep from being copied. The segment is returned
+    verbatim so the control below can duplicate the real statement rather than
+    a re-rendering of it.
+    """
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "print"):
+            continue
+        names = {inner.id for inner in ast.walk(node)
+                 if isinstance(inner, ast.Name)}
+        if "destination" in names:
+            found.append((ast.get_source_segment(source, node), node.col_offset))
+    return found
+
+
+def test_the_collision_refusal_is_one_expression_rather_than_one_per_path(
+    target, harness_root,
+):
+    """Both resumed statuses reach the refusal above by construction, not by
+    two copies that happen to agree.
+
+    The control is the same scan over a copy of the source with that print
+    duplicated, which reports two — so "exactly one" is the source's doing
+    rather than a scan that has stopped finding prints.
+    """
+    source = inspect.getsource(story_coordinator.run_story)
+    found = refusals_naming_the_destination(source)
+    assert len(found) == 1
+
+    segment, column = found[0]
+    duplicated = source.replace(
+        segment, f"{segment}\n{' ' * column}{segment}", 1)
+    assert duplicated != source
+    assert len(refusals_naming_the_destination(duplicated)) == 2
+
+
+def escalated_branches(tree: ast.AST) -> list[ast.If]:
+    """Every `if state.status == "escalated":` in a parsed function.
+
+    The subject of the two readers below is what this coordinator still makes
+    conditional on the escalated status, so they read the shipped coordinator
+    rather than a fixture. Nested statements inside those blocks are walked,
+    which is the point: an archive re-indented back inside one would show up.
+    """
+    branches = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if (isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Attribute)
+                and test.left.attr == "status"
+                and len(test.comparators) == 1
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value == "escalated"):
+            branches.append(node)
+    return branches
+
+
+def calls_inside_the_escalated_branches(source: str) -> set[str]:
+    """Every function called inside one of those blocks."""
+    inside: set[str] = set()
+    for node in escalated_branches(ast.parse(source)):
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
+                    inside.add(inner.func.id)
+    return inside
+
+
+def statuses_assigned_inside_the_escalated_branches(source: str) -> set[str]:
+    """The literal statuses `state.status` is assigned inside those blocks."""
+    assigned: set[str] = set()
+    for node in escalated_branches(ast.parse(source)):
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if not (isinstance(inner, ast.Assign)
+                        and isinstance(inner.value, ast.Constant)):
+                    continue
+                for target in inner.targets:
+                    if isinstance(target, ast.Attribute) and target.attr == "status":
+                        assigned.add(inner.value.value)
+    return assigned
+
+
+def test_the_escalated_branch_kept_the_transition_and_gave_up_the_archive(
+    target, harness_root,
+):
+    """What generalized and what did not, read off the coordinator itself.
+
+    The archive and its collision refusal are no longer conditional on the
+    escalated status; the state transition, its `save_state` and the
+    `unchanged_since_escalation` guard still are.
+
+    The control is the same scan over `run_story` as this repository carried it
+    at story-020's endpoint, where the archive *was* inside that branch and the
+    scan reports it — so "not inside" is this story's hoist rather than a scan
+    that never looked in the right place. `archive_attempt` is called from the
+    retry paths in both texts, outside any escalated branch, which is why the
+    scan is scoped to those branches rather than counting call sites.
+    """
+    now = calls_inside_the_escalated_branches(
+        inspect.getsource(story_coordinator.run_story))
+    assert "archive_attempt" not in now
+    assert "attempt_dir" not in now
+    assert "save_state" in now
+    assert "unchanged_since_escalation" in now
+    assert statuses_assigned_inside_the_escalated_branches(
+        inspect.getsource(story_coordinator.run_story)) == {"running"}
+
+    before = calls_inside_the_escalated_branches(
+        coordinator_function("run_story", ENDPOINT))
+    assert "archive_attempt" in before
+    assert "attempt_dir" in before
+
+
+def test_the_status_transition_runs_for_an_escalated_resume_and_not_a_crashed_one(
+    target, harness_root, monkeypatch,
+):
+    """A crashed run is already running, so assigning that status would state a
+    transition that did not happen.
+
+    Every `save_state` of the run is recorded, for the same escalation resumed
+    once from each status. The escalated resume's sequence is the crashed one's
+    with exactly one extra write at the front, carrying the status the
+    transition assigns — so the transition is present in one run, absent in the
+    other, and nothing else about the two runs differs.
+    """
+    saved: dict[str, list[str]] = {}
+    real_save = story_coordinator.save_state
+
+    def recording(bucket: list[str]):
+        def save(run_dir, state):
+            bucket.append(state.status)
+            return real_save(run_dir, state)
+        return save
+
+    from_escalated = build_target(target.parent / "transition-escalated")
+    escalate(from_escalated, harness_root)
+    change_the_code(from_escalated)
+    ready_to_resume(from_escalated)
+    saved["escalated"] = []
+    monkeypatch.setattr(story_coordinator, "save_state",
+                        recording(saved["escalated"]))
+    code, _ = run(from_escalated, harness_root, verdicts=[PASS])
+    assert code == 0
+
+    monkeypatch.setattr(story_coordinator, "save_state", real_save)
+    from_running = build_target(target.parent / "transition-running")
+    escalate(from_running, harness_root)
+    change_the_code(from_running)
+    ready_to_resume(from_running)
+    crashed(from_running)
+    saved["running"] = []
+    monkeypatch.setattr(story_coordinator, "save_state",
+                        recording(saved["running"]))
+    code, _ = run(from_running, harness_root, verdicts=[PASS])
+    assert code == 0
+
+    assert saved["escalated"] == ["running"] + saved["running"]
+
+
+def test_a_crashed_resume_is_refused_by_nothing_the_unchanged_guard_decides(
+    target, harness_root,
+):
+    """`unchanged_since_escalation` stays escalated-only. A crashed run has no
+    escalation commit to compare against, so its refusal would be meaningless.
+
+    Nothing is changed before the resume, and the escalation's own commit is
+    left on the state — so the guard has exactly the evidence it refuses on.
+    The control is the identical repository resumed from the escalated status,
+    which does refuse.
+    """
+    escalate(target, harness_root)
+    assert state_of(target)["escalation_commit"]
+    crashed(target)
+
+    code, resumed = run(target, harness_root, verdicts=[PASS])
+    assert code == 0
+    assert resumed.calls == stages_from(RESUMED_STAGE)
+
+    still_escalated = build_target(target.parent / "guard-control")
+    escalate(still_escalated, harness_root)
+    blocked = Runner(still_escalated)
+    refused = story_coordinator.run_story(
+        STORY_ID, harness_root, still_escalated, blocked)
+    assert refused == 1
+    assert blocked.calls == []
+
+
+def test_a_crashed_resume_still_exempts_a_dirty_tree_and_the_archive_leaves_it_alone(
+    target, harness_root, monkeypatch,
+):
+    """The pre-flight exemption and the archive do not interact: the pre-flight
+    reads the working tree and the archive touches only the run directory.
+
+    The dirty paths are read either side of the archive call itself. Paths
+    outside the run directory are unchanged across it; paths inside it are not,
+    which is the control — a comparison that saw nothing at all would satisfy
+    the first assertion and fail the second.
+    """
+    escalate(target, harness_root)
+    run_dir = run_dir_of(target)
+    write(target / "src" / "half-finished.py", "value = ")
+    crashed(target)
+
+    seen: list[tuple[set[str], set[str]]] = []
+    real_archive = story_coordinator.archive_attempt
+
+    def watching(run_directory, artifacts, attempt):
+        before = set(story_coordinator.dirty_paths(target))
+        archived = real_archive(run_directory, artifacts, attempt)
+        seen.append((before, set(story_coordinator.dirty_paths(target))))
+        return archived
+
+    monkeypatch.setattr(story_coordinator, "archive_attempt", watching)
+    code, resumed = run(target, harness_root, runner=Runner(target),
+                        verdicts=[PASS])
+
+    assert code == 0
+    assert resumed.calls == stages_from(RESUMED_STAGE)
+    assert len(seen) == 1
+    before, after = seen[0]
+    run_relative = str(run_dir.relative_to(target))
+    outside = lambda paths: {p for p in paths if not p.startswith(run_relative)}
+    assert outside(after) == outside(before)
+    assert outside(before) != set(), "the tree was meant to be dirty"
+    assert after - before != set(), "the archive was meant to write something"
+
+    control = build_target(target.parent / "dirty-control")
+    escalate(control, harness_root)
+    write(control / "src" / "half-finished.py", "value = ")
+    blocked = Runner(control)
+    refused = story_coordinator.run_story(
+        STORY_ID, harness_root, control, blocked)
+    assert refused == 1
+    assert blocked.calls == []
+
+
+def test_the_archive_set_a_crashed_resume_passes_is_the_escalated_ones(
+    target, harness_root, monkeypatch,
+):
+    """This story adds a caller, not a second archive set. The list and the
+    attempt number handed to `archive_attempt` are recorded for the same
+    escalation resumed once from each status, and compared with each other."""
+    passed: dict[str, tuple[list[str], int]] = {}
+    real_archive = story_coordinator.archive_attempt
+
+    def recording(key: str):
+        def archive(run_directory, artifacts, attempt):
+            passed[key] = (list(artifacts), attempt)
+            return real_archive(run_directory, artifacts, attempt)
+        return archive
+
+    from_escalated = build_target(target.parent / "set-escalated")
+    escalate(from_escalated, harness_root, AFTER_A_RETRY)
+    change_the_code(from_escalated)
+    ready_to_resume(from_escalated)
+    monkeypatch.setattr(story_coordinator, "archive_attempt",
+                        recording("escalated"))
+    assert run(from_escalated, harness_root, verdicts=[PASS])[0] == 0
+
+    # Unpatched while the second escalation runs: its retry archives too, and
+    # the recorder would otherwise keep that call instead of the resume's.
+    monkeypatch.setattr(story_coordinator, "archive_attempt", real_archive)
+    from_running = build_target(target.parent / "set-running")
+    escalate(from_running, harness_root, AFTER_A_RETRY)
+    crashed(from_running)
+    monkeypatch.setattr(story_coordinator, "archive_attempt",
+                        recording("running"))
+    assert run(from_running, harness_root, verdicts=[PASS])[0] == 0
+
+    assert passed["running"] == passed["escalated"]
+    assert passed["running"][0] != []
+
+
+def test_a_truncated_artifact_the_dying_stage_left_is_archived_as_it_is(
+    target, harness_root,
+):
+    """Nothing this story adds inspects a copied artifact's content or
+    validity. A stage that died mid-write leaves a file no schema accepts, and
+    preserving it exactly is the point rather than a failure of it."""
+    escalate(target, harness_root)
+    run_dir = run_dir_of(target)
+    half_written = '{"status": "pa'
+    write(run_dir / conftest.VERIFICATION_RESULT, half_written)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(half_written)
+    crashed(target)
+
+    code, _ = run(target, harness_root, verdicts=[PASS])
+
+    assert code == 0
+    archived = story_coordinator.attempt_dir(run_dir, 1) / conftest.VERIFICATION_RESULT
+    assert archived.read_text() == half_written
+
+
+def test_an_escalated_resume_gives_the_guarantee_it_gave_before_this_story(
+    target, harness_root,
+):
+    """story-020's behaviour is not what this story fixes, so it is restated
+    whole here beside the crashed cases above: the same archive, at the same
+    point, under the same number, with the counters carried forward and the
+    escalated attempt's verification iteration untouched."""
+    escalate(target, harness_root, AFTER_A_RETRY)
+    run_dir = run_dir_of(target)
+    rendered = story_coordinator.prompt_file(RESUMED_STAGE, 2)
+    interrupted = (run_dir / rendered).read_bytes()
+    iteration_2 = (run_dir / "verification" / "iteration-2.json").read_bytes()
+    change_the_code(target)
+    ready_to_resume(target)
+
+    code, resumed = run(target, harness_root, verdicts=[PASS])
+
+    assert code == 0
+    assert resumed.calls == stages_from(RESUMED_STAGE)
+    first_stage, archives_at_entry = resumed.archives_seen[0]
+    assert first_stage == RESUMED_STAGE
+    assert archives_at_entry == [story_coordinator.attempt_dir(run_dir, 1).name,
+                                 story_coordinator.attempt_dir(run_dir, 2).name]
+    assert (story_coordinator.attempt_dir(run_dir, 2)
+            / rendered).read_bytes() == interrupted
+    assert (run_dir / rendered).read_bytes() != interrupted
+    state = state_of(target)
+    assert state["retry_count"] == 1
+    assert state["verification_iterations"] == 3
+    assert (run_dir / "verification" / "iteration-2.json").read_bytes() == iteration_2
 
 
 # --------------------------------------------------------------------------
