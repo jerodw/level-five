@@ -1353,8 +1353,44 @@ def run_clean_clone(
     )
 
 
+def _suite_rerun_started(
+    run_dir: Path, stage_name: str, artifact: str, phrase: str
+) -> None:
+    """Announce a check that is about to re-run the configured test command.
+
+    Every stage says it has started before it works. A check that re-runs the
+    whole suite said nothing at all, so the console sat silent for the length
+    of a suite run with the previous line still on screen, which reads as a
+    hang. This is the general rule rather than one missing event: a check that
+    re-runs the configured test command says so before doing so.
+
+    It is an event rather than a bare print because `append_event` is the
+    coordinator's one write path — a second output path, however correct, is
+    drift waiting to happen — and because an event is what makes the wait
+    visible in `l5-status` and in the run's structured history rather than only
+    on the console of whoever started the run.
+
+    No stage name and no artifact name is written here. Both come from the
+    declaration the caller already read, and `phrase` says what is being re-run
+    and why, so both announcements come from this one function rather than
+    being spelled per check.
+    """
+    append_event(
+        run_dir,
+        f"re-running the suite {phrase}; this takes as long as a suite run",
+        kind="suite-rerun-started",
+        stage=stage_name,
+        artifacts=[artifact],
+    )
+
+
 def clean_clone_check(
-    run_dir: Path, target_root: Path, config: dict, artifact: str
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    artifact: str,
+    *,
+    stage_name: str,
 ) -> CleanCloneResult:
     """Run the check in a scratch directory and record what it did.
 
@@ -1362,7 +1398,21 @@ def clean_clone_check(
     repository and removed once the run of the suite completes, whatever its
     result. The record stays: a reader can tell the check ran rather than
     inferring it from a pass.
+
+    The announcement is made here rather than at the call site, so it cannot
+    happen without the check running: removing the `clean_clone` declaration
+    silences the announcement and the result together. `stage_name` is required
+    and keyword-only for the reason `capture_stage_baseline`'s `accounted_for`
+    is — a defaulted argument would let a later call site silence the
+    announcement by omission.
     """
+    _suite_rerun_started(
+        run_dir,
+        stage_name,
+        artifact,
+        "in a fresh clone with the story committed, to check that it still "
+        "passes where the code ships",
+    )
     scratch = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
     try:
         result = run_clean_clone(
@@ -1666,6 +1716,8 @@ def revert_check(
     artifact: str,
     paths: tuple[str, ...],
     baseline: Path | None = None,
+    *,
+    stage_name: str,
 ) -> RevertCheckResult:
     """Run the suite once with every governed path reverted, and record it.
 
@@ -1684,6 +1736,13 @@ def revert_check(
     that did not run, with the reason, rather than as a permission: a stage
     that declares the check with no baseline captured, and a clone that
     cannot be built at all.
+
+    The announcement is made inside the branch that builds the clone, not at
+    the top: the no-baseline path runs no suite and so has nothing to announce.
+    Its quiet used to look fine only because the check sits between the
+    implementer's started and completed lines, so a reader already had a line
+    on screen saying work was in progress — hidden by position rather than by
+    design, and the silence would reappear the moment it moved.
     """
     command = config["test_command"]
     runner = config.get("verification_runner") or shlex.split(command)[0]
@@ -1700,6 +1759,13 @@ def revert_check(
             ),
         )
     else:
+        _suite_rerun_started(
+            run_dir,
+            stage_name,
+            artifact,
+            f"with {', '.join(paths)} reverted, to decide whether those edits "
+            "were needed",
+        )
         scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
         try:
             result = run_clean_clone(
@@ -3853,6 +3919,7 @@ def run_story(
                     revert_artifact,
                     edits.paths,
                     baseline_dir,
+                    stage_name=name,
                 )
                 if not decided.result.ran:
                     return _escalate(
@@ -3936,7 +4003,9 @@ def run_story(
                 clean_clone = stage.get("clean_clone") or {}
                 artifact = clean_clone.get("result")
                 if artifact:
-                    clean = clean_clone_check(run_dir, target_root, config, artifact)
+                    clean = clean_clone_check(
+                        run_dir, target_root, config, artifact, stage_name=name
+                    )
                     if not clean.ran:
                         return _escalate(
                             run_dir,

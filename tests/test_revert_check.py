@@ -32,6 +32,7 @@ artifact" is paired with the file it did edit.
 Nothing here invokes a model: every run goes through a fake agent runner,
 and every clone source is a local filesystem path.
 """
+import ast
 import inspect
 import json
 import re
@@ -704,6 +705,181 @@ def test_moving_the_declaration_moves_the_check(target, tmp_path):
         assert VALIDATING in text
         assert "src/" in text
         assert "src/app.py" in text
+
+
+# --------------------------------------------------------------------------
+# The check says it is about to re-run the suite (story-058)
+#
+# This check's silence only ever looked fine because it sits between the
+# implementer's started and completed lines, so a reader already had a line on
+# screen saying work was in progress - hidden by position rather than by
+# design. The rule is general: a check that re-runs the configured test
+# command announces itself first, from the same helper the clean-clone check
+# announces from.
+# --------------------------------------------------------------------------
+
+#: The kind the coordinator appends before a check re-runs the configured test
+#: command. An event kind is the coordinator's own vocabulary rather than a
+#: name the workflow declares, so it is spelled here rather than read off the
+#: definition. The workflow above declares both checks, so a run of it carries
+#: an announcement for each and every assertion below says which stage it means.
+ANNOUNCEMENT = "suite-rerun-started"
+
+
+def history_of(target_root: Path) -> list[dict]:
+    return json.loads(
+        (run_dir_of(target_root) / "execution-history.json").read_text(
+            encoding="utf-8"))
+
+
+def announcements(target_root: Path, stage: str) -> list[dict]:
+    return [e for e in history_of(target_root)
+            if e["event"] == ANNOUNCEMENT and e.get("stage") == stage]
+
+
+def test_the_check_announces_itself_before_its_result(target, harness_root):
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
+
+    history = history_of(target)
+    indices = [index for index, entry in enumerate(history)
+               if entry["event"] == ANNOUNCEMENT and entry["stage"] == WRITING]
+    assert len(indices) == 1
+    assert history[indices[0] + 1]["event"] == "revert-check-permitted"
+
+
+def test_the_announcement_names_the_stage_and_the_declarations_artifact(
+    target, harness_root,
+):
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
+    entry = announcements(target, WRITING)[0]
+    assert entry["stage"] == WRITING
+    assert entry["artifacts"] == [ARTIFACT]
+
+
+def test_the_announcement_names_the_reverted_paths_and_what_is_decided(
+    target, harness_root,
+):
+    """What a reader learns while the suite runs a second time: which edits
+    are being taken away, and that taking them away is how the check decides
+    whether they were needed."""
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
+    message = announcements(target, WRITING)[0]["message"].lower()
+    for path in record_of(target)["paths"]:
+        assert path in message
+    assert "decide" in message
+    assert "needed" in message
+
+
+def test_the_announcement_appears_in_both_renderings(target, harness_root):
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
+    entry = announcements(target, WRITING)[0]
+    log = (run_dir_of(target) / "events.log").read_text(encoding="utf-8")
+    assert f"[{entry['timestamp']}] {entry['message']}" in log.splitlines()
+
+
+def test_the_announcement_is_on_disk_before_the_reverting_clone_is_built(
+    target, harness_root, monkeypatch,
+):
+    """The ordering that makes it worth appending at all: written before the
+    wait starts rather than beside the result once the wait is over. The run's
+    other clone is the verifier's clean-clone check, so the calls are told
+    apart by what they revert, the way `clone_calls` above tells them apart.
+    """
+    run_dir = run_dir_of(target)
+    seen: list[tuple[tuple[str, ...], list[str]]] = []
+    original = story_coordinator.run_clean_clone
+
+    def spy(*args, **kwargs):
+        revert = tuple(kwargs.get("revert", args[4] if len(args) > 4 else ()))
+        history = json.loads(
+            (run_dir / "execution-history.json").read_text(encoding="utf-8"))
+        seen.append((revert, [entry["event"] for entry in history]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator, "run_clean_clone", spy)
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
+
+    reverting = [kinds for revert, kinds in seen if revert]
+    assert len(reverting) == 1
+    assert reverting[0][-1] == ANNOUNCEMENT
+    assert "revert-check-permitted" not in reverting[0]
+
+
+def test_the_path_where_no_baseline_was_captured_announces_nothing(
+    target, tmp_path,
+):
+    """That path runs no suite, so it has nothing to announce: a reader told
+    the suite is re-running would be waiting for work that never starts."""
+    run_dir = tmp_path / "no-baseline-run"
+    run_dir.mkdir()
+    decided = story_coordinator.revert_check(
+        run_dir, target, {"test_command": TEST_COMMAND}, ARTIFACT,
+        ("tests/test_app.py",), None, stage_name=WRITING)
+
+    assert decided.result.ran is False
+    assert not (run_dir / "execution-history.json").exists()
+    assert not (run_dir / "events.log").exists()
+
+
+def test_the_same_call_with_a_baseline_does_announce(target, tmp_path):
+    """The control for the assertion above: the identical call, one captured
+    baseline added, and the check runs the suite and says so first."""
+    baseline = baseline_of(target, tmp_path / "before")
+    forced_repair(target)
+    run_dir = tmp_path / "baselined-run"
+    run_dir.mkdir()
+
+    decided = story_coordinator.revert_check(
+        run_dir, target, {"test_command": TEST_COMMAND}, ARTIFACT,
+        ("tests/test_app.py",), baseline, stage_name=WRITING)
+
+    assert decided.result.ran is True
+    history = json.loads(
+        (run_dir / "execution-history.json").read_text(encoding="utf-8"))
+    assert [entry["event"] for entry in history] == [ANNOUNCEMENT]
+    assert history[0]["stage"] == WRITING
+
+
+def test_removing_the_declaration_silences_the_announcement_too(
+    target, tmp_path,
+):
+    """The declaration is one switch, not two: with it gone the check neither
+    announces nor decides, and no orchestration code changed. The verifier's
+    own announcement is still there, which is what says this is looking at a
+    stream that carries announcements at all."""
+    workflow = loaded_workflow()
+    for stage in workflow["stages"]:
+        stage.pop("revert_check", None)
+    fake_root = mirror_harness(tmp_path / "no-declaration", workflow)
+
+    assert run(target, fake_root, {WRITING: added_coverage})[0] == 0
+    assert announcements(target, WRITING) == []
+    assert not any(entry["event"] == "revert-check-permitted"
+                   for entry in history_of(target))
+    assert announcements(target, VERIFYING)
+
+
+def test_both_checks_announce_through_the_same_helper(target, harness_root):
+    """One helper, one spelling of the kind — the way `append_event` is
+    already the only writer of the history file. The emitter is found by
+    reading the source for the kind the run above produced, so a second
+    spelling of it anywhere would be reported here rather than drifting."""
+    assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
+    assert announcements(target, WRITING) and announcements(target, VERIFYING)
+
+    source = (ORCHESTRATION / "story_coordinator.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    emitters = [
+        node.name for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef)
+        and any(isinstance(inner, ast.Constant) and inner.value == ANNOUNCEMENT
+                for inner in ast.walk(node))
+    ]
+    assert len(emitters) == 1, emitters
+    helper = emitters[0]
+    for check in (story_coordinator.clean_clone_check,
+                  story_coordinator.revert_check):
+        assert helper in executable_source(inspect.getsource(check)), check.__name__
 
 
 def test_no_stage_name_no_prefix_and_no_artifact_name_is_written_in_the_code():

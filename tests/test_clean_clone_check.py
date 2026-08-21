@@ -680,7 +680,7 @@ def test_the_check_writes_that_record_for_a_configuration_that_names_the_runner(
         run_dir, story_target,
         {"test_command": FOREIGN_TEST_COMMAND,
          "verification_runner": f"./{RUNNER_PATH}"},
-        ARTIFACT)
+        ARTIFACT, stage_name=VERIFIER_STAGE["name"])
 
     record = record_of(run_dir)
     assert record["runner"] == f"./{RUNNER_PATH}"
@@ -741,7 +741,8 @@ def test_the_scratch_directory_is_removed_whatever_the_result(
     config = {"test_command": command}
 
     result = story_coordinator.clean_clone_check(
-        run_dir, story_target, config, ARTIFACT)
+        run_dir, story_target, config, ARTIFACT,
+        stage_name=VERIFIER_STAGE["name"])
 
     assert result.ran is True
     assert not Path(result.clone_path).exists()
@@ -760,7 +761,8 @@ def test_the_check_leaves_no_scratch_directory_behind_in_the_temp_root(
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
     story_coordinator.clean_clone_check(
-        run_dir, story_target, {"test_command": "sh -c 'exit 1'"}, ARTIFACT)
+        run_dir, story_target, {"test_command": "sh -c 'exit 1'"}, ARTIFACT,
+        stage_name=VERIFIER_STAGE["name"])
     assert {p.name for p in root.glob("l5-clean-clone-*")} == before
 
 
@@ -1242,6 +1244,154 @@ def test_the_new_events_go_through_append_event_and_nothing_else():
 
 
 # --------------------------------------------------------------------------
+# The check says it is about to re-run the suite (story-058)
+#
+# The check re-runs the whole suite, so the console sat silent for the length
+# of a suite run with `verification passed` as its last line, which reads as a
+# hang. The announcement is an event rather than a print, so the wait is
+# visible in l5-status and in the structured history and not only on the
+# console of whoever started the run.
+# --------------------------------------------------------------------------
+
+#: The kind the coordinator appends before a check re-runs the configured test
+#: command. An event kind is the coordinator's own vocabulary rather than a
+#: name the workflow declares, so it is spelled here exactly as the clean-clone
+#: result kinds above are.
+ANNOUNCEMENT = "suite-rerun-started"
+
+L5_STATUS = REPO_ROOT / "scripts" / "l5-status"
+
+
+def announcements(run_dir: Path) -> list[dict]:
+    return [e for e in history_of(run_dir) if e["event"] == ANNOUNCEMENT]
+
+
+def test_the_announcement_stands_immediately_before_the_checks_result(green_run):
+    """After the verifier's pass and before the result the check writes: the
+    gap the reader was watching in silence is the one it now covers."""
+    _, _, run_dir = green_run
+    kinds = [e["event"] for e in history_of(run_dir)]
+    assert kinds.count(ANNOUNCEMENT) == 1
+    announced = kinds.index(ANNOUNCEMENT)
+    assert kinds.index("verification-passed") < announced
+    assert kinds[announced + 1] == "clean-clone-passed"
+
+
+def test_the_announcement_names_the_stage_and_the_declarations_artifact(green_run):
+    _, _, run_dir = green_run
+    entry = announcements(run_dir)[0]
+    assert entry["stage"] == VERIFYING
+    assert entry["artifacts"] == [ARTIFACT]
+
+
+def test_the_announcement_says_the_suite_reruns_in_a_committed_fresh_clone(
+    green_run,
+):
+    """What a reader who has just seen `verification passed` learns from it:
+    that the suite is running again, where, and why that is not the same run
+    twice."""
+    _, _, run_dir = green_run
+    message = announcements(run_dir)[0]["message"].lower()
+    assert "suite" in message
+    assert "fresh clone" in message
+    assert "committed" in message
+
+
+def test_the_announcement_appears_in_both_renderings(green_run):
+    _, _, run_dir = green_run
+    entry = announcements(run_dir)[0]
+    assert f"[{entry['timestamp']}] {entry['message']}" in log_lines(run_dir)
+
+
+def test_the_announcement_is_on_disk_before_the_clone_is_built(
+    story_target, harness_root, monkeypatch,
+):
+    """The ordering that makes the announcement worth anything: it is written
+    before the work it announces starts, not recorded alongside the result
+    once the wait is over."""
+    configure(story_target, test_command=CORRECT_TEST_COMMAND)
+    run_dir = run_dir_of(story_target)
+    seen: list[list[str]] = []
+    original = story_coordinator.run_clean_clone
+
+    def spy(*args, **kwargs):
+        seen.append([e["event"] for e in history_of(run_dir)])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator, "run_clean_clone", spy)
+    assert story_coordinator.run_story(
+        "story-001", harness_root, story_target, Runner(story_target, [PASS])) == 0
+
+    assert len(seen) == 1
+    assert seen[0][-1] == ANNOUNCEMENT
+    assert "clean-clone-passed" not in seen[0]
+
+
+def test_the_announcement_names_an_artifact_no_orchestration_code_knows(
+    story_target, tmp_path,
+):
+    """The artifact comes off the declaration that turned the check on, the
+    same way the result event's does: rename it in the workflow and the
+    announcement follows, with the coordinator unchanged."""
+    renamed = "clean-clone-announced-probe.json"
+    assert renamed not in COORDINATOR_SOURCE
+    harness = probe_harness(
+        tmp_path, "renamed-announcement",
+        lambda s: s.__setitem__(
+            "clean_clone", {**s["clean_clone"], "result": renamed}))
+    configure(story_target, workflow="renamed-announcement",
+              test_command=CORRECT_TEST_COMMAND)
+
+    assert story_coordinator.run_story(
+        "story-001", harness, story_target, Runner(story_target, [PASS])) == 0
+
+    entry = announcements(run_dir_of(story_target))[0]
+    assert entry["artifacts"] == [renamed]
+
+
+def test_a_workflow_that_omits_the_declaration_announces_nothing_either(
+    story_target, tmp_path,
+):
+    """Removing the one key silences the announcement and the result together,
+    which is what announcing from inside the check buys: neither can happen
+    without the other, and no orchestration code changed.
+
+    The control is the run above, whose declaration is present and whose
+    announcement stands before its result — same coordinator, same runner, one
+    key different. The target's test command would fail if the check ran.
+    """
+    harness = probe_harness(tmp_path, "no-announcement",
+                            lambda s: s.pop("clean_clone"))
+    configure(story_target, workflow="no-announcement",
+              test_command="sh -c 'exit 1'")
+
+    assert story_coordinator.run_story(
+        "story-001", harness, story_target, Runner(story_target, [PASS])) == 0
+
+    run_dir = run_dir_of(story_target)
+    assert announcements(run_dir) == []
+    assert not any(
+        e["event"].startswith("clean-clone") for e in history_of(run_dir))
+
+
+def test_l5_status_renders_a_run_whose_history_carries_the_announcement(green_run):
+    """The reason it is an event rather than a print: the wait shows up where
+    a reader who is not watching the console goes to look."""
+    _, _, run_dir = green_run
+    target_root = run_dir.parents[2]
+    entry = announcements(run_dir)[0]
+    # The detail view renders the tail of the log, which is where the
+    # announcement of a check running this late in the run falls.
+    assert any(entry["message"] in line for line in log_lines(run_dir)[-10:])
+
+    result = subprocess.run(
+        [sys.executable, str(L5_STATUS), run_dir.name],
+        cwd=target_root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert entry["message"] in result.stdout
+
+
+# --------------------------------------------------------------------------
 # The retried implementer's evidence
 # --------------------------------------------------------------------------
 
@@ -1415,7 +1565,8 @@ def test_a_scratch_directory_left_behind_is_caught(story_target, tmp_path):
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
     result = module.clean_clone_check(
-        run_dir, story_target, {"test_command": "sh -c 'true'"}, ARTIFACT)
+        run_dir, story_target, {"test_command": "sh -c 'true'"}, ARTIFACT,
+        stage_name=VERIFIER_STAGE["name"])
     left = Path(result.clone_path)
     try:
         assert left.exists()

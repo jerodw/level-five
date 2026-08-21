@@ -976,3 +976,130 @@ def _templates_unchanged_by_this_story(repo, paths) -> bool:
     module's assertion red when a story touches one of the three paths.
     """
     return conftest.constructed_story_diff(repo, list(paths)).strip() == ""
+
+
+# --------------------------------------------------------------------------
+# Every kind the coordinator can pass to append_event, whether or not a
+# fixture run reaches it
+#
+# The runs above assert that the kinds *they* produced are declared in the
+# schema, which leaves a kind no fixture happens to emit unchecked. story-058
+# found one: `revert-check-permitted` had been emitted since story-017 and the
+# enum never declared it, invisible because no schema-validating run had
+# governed edits. These read the emitting code instead, so a kind added
+# without its enum entry is reported rather than waited for.
+# --------------------------------------------------------------------------
+
+
+def kind_spellings(source: str) -> dict[str, set[str]]:
+    """Each event kind an `append_event` call in `source` names, mapped to the
+    names of the functions that spell it.
+
+    `source` is a parameter rather than the coordinator's own text because the
+    controls below drive this same scan over a copy carrying the defect it is
+    meant to report. A kind assembled at runtime rather than written as a
+    literal would be invisible to the scan, so one is refused here rather than
+    silently dropped.
+    """
+    spellings: dict[str, set[str]] = {}
+
+    def visit(node, enclosing: str | None) -> None:
+        for child in ast.iter_child_nodes(node):
+            if (isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id == "append_event"):
+                kind = next(
+                    (kw.value for kw in child.keywords if kw.arg == "kind"), None)
+                if kind is not None:
+                    assert isinstance(kind, ast.Constant), (
+                        "a kind assembled at runtime cannot be checked against "
+                        f"the enum: {ast.unparse(child)}")
+                    spellings.setdefault(kind.value, set()).add(enclosing)
+            inner = (child.name
+                     if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     else enclosing)
+            visit(child, inner)
+
+    visit(ast.parse(source), None)
+    return spellings
+
+
+def default_kind(source: str) -> str:
+    """The kind a call that names none emits, read off `append_event`'s own
+    signature. The API allows such a call, so it is a kind the coordinator can
+    pass and the enum has to declare."""
+    module = ast.parse(source)
+    function = next(
+        node for node in ast.walk(module)
+        if isinstance(node, ast.FunctionDef) and node.name == "append_event")
+    index = [arg.arg for arg in function.args.kwonlyargs].index("kind")
+    return function.args.kw_defaults[index].value
+
+
+def emittable_kinds(source: str) -> set[str]:
+    return set(kind_spellings(source)) | {default_kind(source)}
+
+
+#: A second emitter, appended to a copy of the coordinator's source. The kind
+#: it names is substituted by the caller, which is what lets one template serve
+#: both controls: an undeclared kind for the enum assertion, and a kind already
+#: spelled elsewhere for the one-function assertion.
+PLANTED_EMITTER = '''
+
+def _planted_emitter(run_dir):
+    append_event(run_dir, "planted", kind="{kind}")
+'''
+
+ALLOWED_KINDS = HISTORY_SCHEMA["items"]["properties"]["event"]["enum"]
+
+
+def test_every_kind_the_coordinator_can_pass_to_append_event_is_declared():
+    emitted = emittable_kinds(COORDINATOR_SOURCE)
+    assert emitted, "the scan found no kinds at all, so it is looking nowhere"
+    undeclared = sorted(emitted - set(ALLOWED_KINDS))
+    assert undeclared == []
+
+
+def test_a_kind_the_schema_does_not_declare_is_reported():
+    """The control for the assertion above, and the state
+    `revert-check-permitted` was in before story-058: an emitter naming a kind
+    the enum has never heard of, which the same scan must report."""
+    planted = "a-kind-the-enum-never-declared"
+    assert planted not in ALLOWED_KINDS
+    emitted = emittable_kinds(
+        COORDINATOR_SOURCE + PLANTED_EMITTER.format(kind=planted))
+    assert planted in emitted
+    assert sorted(emitted - set(ALLOWED_KINDS)) == [planted]
+
+
+def test_a_history_carrying_any_kind_the_coordinator_can_pass_validates():
+    """Not only that the enum lists the kinds: that an entry carrying each one
+    passes the validator the coordinator's own history is checked with. The
+    control is `test_the_schema_catches_an_event_kind_it_does_not_define`
+    above, where an invented kind is rejected."""
+    for kind in sorted(emittable_kinds(COORDINATOR_SOURCE)):
+        entry = {"sequence": 1, "timestamp": "2026-01-01 00:00:00",
+                 "event": kind, "message": "something happened"}
+        assert schema_validator.validate([entry], HISTORY_SCHEMA) == [], kind
+
+
+def test_each_event_kind_is_spelled_in_exactly_one_function():
+    """One kind, one emitter — the rule `append_event` itself is the instance
+    of. A kind spelled at two call sites is two definitions of one event, and
+    the second drifts from the first in message, stage or artifacts without
+    anything noticing."""
+    spellings = kind_spellings(COORDINATOR_SOURCE)
+    assert spellings
+    assert {kind: sorted(f for f in functions)
+            for kind, functions in spellings.items() if len(functions) != 1} == {}
+
+
+def test_a_kind_spelled_in_a_second_function_is_reported():
+    """The control for the assertion above: an existing kind, taken from the
+    scan rather than written down, spelled again somewhere else."""
+    already = sorted(kind_spellings(COORDINATOR_SOURCE))[0]
+    spellings = kind_spellings(
+        COORDINATOR_SOURCE + PLANTED_EMITTER.format(kind=already))
+    assert spellings[already] == {*kind_spellings(COORDINATOR_SOURCE)[already],
+                                  "_planted_emitter"}
+    assert len(spellings[already]) == 2
