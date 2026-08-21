@@ -2827,6 +2827,16 @@ DECLARED_HISTORY_READERS = {
         "the story that removed it and absent at that story's baseline, and "
         "the archived copy is asserted still to hold what it held. That is a "
         "claim about this repository's own history of the defect",
+    "test_story_range_endpoint.py":
+        "its subject is where this repository's own stories end: that the "
+        "module validating story-038 had its path added by that story's "
+        "escalation commit and now resolves past it to the commit that "
+        "finished the story, and that no module resolving this history ends at "
+        "an escalation. Which commits this repository carries is the claim, "
+        "and no constructed repository can make it. Every other shape the "
+        "resolver is about — escalate and never resume, revert and restore, a "
+        "hotfix that modifies rather than adds — is built under tmp_path there "
+        "rather than looked for here",
     "test_validation_module_naming.py":
         "its subject is this repository's own module names and the origins "
         "declared for them: that every declared origin resolves to a commit in "
