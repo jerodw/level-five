@@ -53,6 +53,7 @@ Each story below is a step the book's roadmap calls for, or a failure the build 
 | 057 | A plan that assigns a stage a path it is restricted from is refused when the session ends, naming the grant that would make it legal — rather than a stage discovering it hours later against a check that could only refuse | Ch. 15, governance boundaries |
 | 058 | A check that re-runs the suite says so before it starts, and says what the wait is for, so a console that used to sit silent for the length of a suite run no longer reads as a hang | Ch. 18, hardening |
 | 059 | `l5-plan` offers to run the story it just committed, and skips without reading when nothing can answer, so a scripted invocation cannot hang on the prompt | Appendix A, the `l5-` entry points |
+| 060 | Every stage declares a self-route budget, so a mechanical failure anywhere runs again in place rather than ending the run — landable only once the compatibility guards were held against a built workflow instead of the deployed one | Ch. 18, hardening |
 
 Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, a fuller hook-based tool policy in place of the static `allowed_tools` allowlist, an adjudicator, an inspector, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
 
