@@ -68,6 +68,32 @@
         }
       }
     },
+    "correctable_findings": {
+      "type": "array",
+      "description": "Findings you judge correct but too small to fail the run, that one stage can fix mechanically. Its presence is the signal that a correction pass should run: there is no separate key saying whether this field means anything, for the same limitation retry_target, unfinishable_by_retry and guidance_outcomes.unmet already record above — this validator subset has no if/then and no dependentRequired, so a flag with a sibling payload has a state where the flag is set and the payload is missing, while presence-as-signal has none. A correctable finding is a correction to words alone — a comment, a docstring, a schema description, a document — and never to behaviour: nothing a correction pass changes may alter what any test asserts about the system, and the suite must pass unchanged across a pass. A finding whose repair would change behaviour is a blocking issue or belongs in unverified, not here. It is read only on a passing verdict, because a failed verdict already routes and the correction travels in the retry guidance it already writes. It is optional because almost every verdict has no such finding.",
+      "items": {
+        "type": "object",
+        "required": ["location", "finding", "correction", "category"],
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "Where the wording is: the file, and the symbol, section or line within it that carries the words to correct."
+          },
+          "finding": {
+            "type": "string",
+            "description": "What is wrong with the words as they stand."
+          },
+          "correction": {
+            "type": "string",
+            "description": "What the words should say instead, specifically enough that a stage can make the edit without re-deciding what the finding meant."
+          },
+          "category": {
+            "type": "string",
+            "description": "The retry category that owns the prose being corrected, spelled exactly as the workflow's retry_routing table declares it. The field introduces no new vocabulary: the coordinator reads the destination off that same table, so a category the workflow does not declare escalates the run naming the categories it does, with the same strictness an unrecognised retry_target gets."
+          }
+        }
+      }
+    },
     "unfinishable_by_retry": {
       "type": "string",
       "description": "The verifier's judgement that no number of retries closes the gap between what remains and what an attempt delivers, together with the split it recommends between this story and a follow-on. Its presence on a failed verdict ends the run in escalation at that verification, before the retry count is compared to the ceiling: the budget is left unspent and the retry count untouched, because the judgement is that spending them would not finish the work. Its content is both the judgement and the escalation's recorded reason, so the developer reads the verifier's own words rather than a reason the coordinator composed. It is one string rather than a boolean with a sibling reason for the same limitation retry_target records above: the validator subset has no if/then and no dependentRequired, so 'reason required when the flag is true' is inexpressible, and presence-as-signal leaves no state where the signal is set and the reason is missing. It is optional because almost every verdict has no such judgement to make, and it is read only on a failed verdict — a passing verification routes nowhere, so nothing there could act on it."

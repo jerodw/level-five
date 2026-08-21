@@ -52,6 +52,16 @@ def main() -> None:
     template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
     context = context_assembler.schema_context(HARNESS_ROOT)
     context.update(context_assembler.workflow_context(workflow, rules))
+    # The shared prose partial, resolved through the same helper build_context
+    # uses, so the planner is held to the rule every stage that writes prose is
+    # held to — the first of the stale counts it exists against was written in
+    # a story artifact. It carries no placeholders of its own, which is what
+    # lets this narrower context render it.
+    prose = context_assembler.resolved_partial(
+        HARNESS_ROOT, context_assembler.PROSE_LAYER, context
+    )
+    if prose is not None:
+        context["prose_layer"] = prose
     planner_prompt = context_assembler.render(template, context)
     stories_dir = target_root / config.get("stories_dir", ".harness/stories")
     # The session runs as a child rather than through os.execvp, so this

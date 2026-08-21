@@ -30,6 +30,8 @@
           "clean-clone-passed",
           "clean-clone-failed",
           "claim-support-checked",
+          "correction-pass-routed",
+          "correction-pass-recorded",
           "self-routed",
           "escalated",
           "story-completed",

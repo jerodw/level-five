@@ -53,6 +53,10 @@
         "result": "clean-clone-result.json",
         "retry_stage": "implementer"
       },
+      "correction_pass": {
+        "result": "correction-pass.json",
+        "budget": 1
+      },
       "on_failure": {
         "retry_routing": {
           "implementation": {
