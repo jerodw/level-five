@@ -562,20 +562,165 @@ def test_a_workflow_change_moves_this_module_and_not_a_mechanism_module(tmp_path
 # --------------------------------------------------------------------------
 
 
-def test_this_deployment_grants_a_self_route_budget_to_more_than_one_stage():
+def budget_problems(stages):
+    """One problem per stage of `stages` that declares no self-route budget,
+    and one per declared budget that is not an integer count.
+
+    Written as a function rather than inline in the assertion below so the
+    control beside it can put the same code to a definition that violates the
+    claim. An assertion spelled out inside its own test can only ever be shown
+    to pass; a control that restates it in different words is a second
+    assertion agreeing with the first rather than a demonstration that either
+    can fail.
+    """
+    problems = []
+    for stage in stages:
+        if "max_self_routes" not in stage:
+            problems.append(f"{stage['name']} declares no max_self_routes")
+        elif not isinstance(stage["max_self_routes"], int) \
+                or isinstance(stage["max_self_routes"], bool):
+            problems.append(
+                f"{stage['name']} declares a max_self_routes that is not a "
+                f"count: {stage['max_self_routes']!r}")
+    return problems
+
+
+def test_every_stage_of_this_deployment_declares_a_self_route_budget():
     """From tests/test_self_routing_retry.py, whose subject became "how a
-    budgeted stage and a budget-less one behave" once it built its own
-    workflow. That the *shipped* workflow budgets several stages, and leaves at
-    least one unbudgeted, is a deployment decision and is asserted here."""
-    budgeted = [stage["name"] for stage in SHIPPED_STAGES
-                if "max_self_routes" in stage]
-    unbudgeted = [stage["name"] for stage in SHIPPED_STAGES
-                  if "max_self_routes" not in stage]
-    assert len(budgeted) >= 2, budgeted
-    assert unbudgeted, "every stage is budgeted, so no run can escalate on a " \
-                       "mechanical failure"
-    assert all(isinstance(SHIPPED_STAGES[SHIPPED_NAMES.index(name)]
-                          ["max_self_routes"], int) for name in budgeted)
+    budgeted stage and a budget-less one behave" once story-048 split
+    configuration from mechanism and it built its own workflow.
+
+    It arrived here reading the population this deployment no longer has: that
+    the shipped workflow budgets several stages and leaves at least one
+    unbudgeted. story-060 granted the documenter a budget, which was the last
+    stage declaring none, and the assertion states the decision that replaced
+    that fact — every stage of this workflow declares a budget, and every
+    declared budget is a count. It is not preserved as a deployment fact
+    because it never needed to be one: the compatibility property it was
+    protecting, that a stage declaring no budget escalates on a mechanical
+    failure exactly as it did before story-036, is held in
+    tests/test_self_routing_retry.py against a budget-less stage that module
+    builds for itself.
+    """
+    assert SHIPPED_STAGES, "no stage was read, so this asserts nothing"
+    assert budget_problems(SHIPPED_STAGES) == []
+
+
+def test_budget_problems_reports_a_definition_that_leaves_a_stage_unbudgeted():
+    """The control for the assertion above.
+
+    "Every shipped stage declares a budget" is an absence assertion: it passes
+    when the property holds, and it passes just as happily against a check that
+    has stopped looking -- one whose loop never runs, or whose membership test
+    can no longer be false. So the same function is put to a definition that
+    does leave a stage unbudgeted, which is the deployment this repository had
+    until story-060 granted the documenter its budget.
+
+    The definition is built by `tests/conftest.py`'s builder rather than by
+    mutating the shipped one: a control that deleted a key from what this
+    repository deploys would restate today's deployment, and would stop
+    building its violation the day the stage it reached for was renamed. The
+    builder omits `max_self_routes` unless asked for it, so a budget-less stage
+    is what it produces by default.
+    """
+    stages = build_workflow(workflow_stage(max_self_routes=1),
+                            workflow_stage())["stages"]
+    unbudgeted = stages[1]["name"]
+    assert "max_self_routes" not in stages[1]
+
+    problems = budget_problems(stages)
+    assert len(problems) == 1, problems
+    assert unbudgeted in problems[0]
+
+    # And the companion that control needs in turn: a check reporting every
+    # stage it is handed would satisfy the assertion above just as well.
+    budgeted = build_workflow(workflow_stage(max_self_routes=1),
+                              workflow_stage(max_self_routes=0))["stages"]
+    assert budget_problems(budgeted) == []
+
+
+@pytest.mark.parametrize("budget", [True, "1", 1.0, None],
+                         ids=["a-bool", "a-string", "a-float", "a-null"])
+def test_budget_problems_reports_a_declared_budget_that_is_not_a_count(budget):
+    """The other half of what the assertion above claims of this deployment --
+    that every declared budget is an integer count -- shown to be able to fail.
+
+    `True` is in the cases because `isinstance(True, int)` holds, so a check
+    written as a bare integer test would accept a declaration of `true` and
+    call it a budget. `None` is here because a stage carrying the key with
+    nothing in it is not the same thing as a stage carrying no key, and only
+    the second is what this deployment stopped having.
+    """
+    stages = build_workflow(workflow_stage())["stages"]
+    # Assigned after building rather than asked of the builder, because the
+    # builder reads `None` as "not asked for" and would produce no key at all,
+    # which is the other violation and is covered above.
+    stages[0]["max_self_routes"] = budget
+
+    problems = budget_problems(stages)
+    assert len(problems) == 1, problems
+    assert stages[0]["name"] in problems[0]
+
+
+def reason_convention_problems(stages):
+    """One problem per stage recording a reason for a budget that does not
+    differ from the common one.
+
+    The convention `test_the_budgets_this_deployment_grants_are_recorded_where_
+    a_reader_meets_them` states from one side -- every budget differing from the
+    common one says why -- read from the other. A reason beside the common
+    budget explains a number no reader would have questioned, and it is the
+    thing that would have arrived with the documenter's grant had 1 been
+    recorded as though it were a judgement rather than the default.
+
+    A function rather than an inline loop, for the reason `budget_problems`
+    is one: the assertion below claims an absence, and a control can only
+    demonstrate that absence can be reported if it can run the same code.
+    """
+    declared = [stage for stage in stages if "max_self_routes" in stage]
+    if not declared:
+        return []
+    common = min(stage["max_self_routes"] for stage in declared)
+    return [f"{stage['name']} records a reason for the common budget "
+            f"{common!r}"
+            for stage in stages
+            if stage.get("max_self_routes_reason", "").strip()
+            and stage.get("max_self_routes") == common]
+
+
+def test_only_a_budget_that_differs_from_the_common_one_records_a_reason():
+    """The sibling-reason convention, stated where the grant that tests it
+    lands. story-060 gave the documenter the common budget, and the decision
+    recorded with it is that the common budget carries no reason -- so the
+    stage this deployment budgets differently stays the only one a reader
+    meets an explanation beside.
+    """
+    reasons = [stage["name"] for stage in SHIPPED_STAGES
+               if stage.get("max_self_routes_reason", "").strip()]
+    assert reasons, "no recorded reason was read, so this asserts nothing"
+    assert reason_convention_problems(SHIPPED_STAGES) == []
+
+
+def test_reason_convention_problems_reports_a_reason_beside_the_common_budget():
+    """The control for the assertion above, built rather than mutated from what
+    this repository deploys."""
+    stages = build_workflow(
+        workflow_stage(max_self_routes=1),
+        workflow_stage(max_self_routes=1,
+                       max_self_routes_reason="one, because of something"),
+    )["stages"]
+    problems = reason_convention_problems(stages)
+    assert len(problems) == 1, problems
+    assert stages[1]["name"] in problems[0]
+
+    # The companion: a check reporting every recorded reason would satisfy the
+    # assertion above without distinguishing the outlier from the common one.
+    outlier = build_workflow(
+        workflow_stage(max_self_routes=1),
+        workflow_stage(max_self_routes=2,
+                       max_self_routes_reason="two, because of something"),
+    )["stages"]
+    assert reason_convention_problems(outlier) == []
 
 
 def test_this_deployment_defines_more_than_one_retry_category():

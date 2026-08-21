@@ -368,14 +368,32 @@ def test_documenter_without_a_record_escalates_as_a_missing_artifact(
         target_root, harness_root):
     """Reported by the path that reports any other missing stage output: the
     control is the tester's own missing-record escalation above, which reads
-    the same sentence with its own stage and artifact named."""
+    the same sentence with its own stage and artifact named.
+
+    A missing required output is a mechanical failure, so the documenter runs
+    again in place while it has budget. The call list is resolved off its
+    declaration for the reason the tester's is: written out as the literal
+    `THROUGH_DOCUMENTER`, it assumed the documenter never runs again in place,
+    and it went red the moment story-060 granted it a budget. The claim is
+    unchanged — the escalation is still at the documenter, however many tries
+    it took.
+
+    The recorded reason gained the second half a budgeted stage's escalation
+    has carried since story-036: the mechanical failure, then that the stage
+    has spent its budget. Both halves are still asserted exactly, so a reason
+    that stopped naming the missing artifact still goes red.
+    """
     runner = StageRunner(target_root, write_documenter_record=False)
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    assert runner.calls == THROUGH_DOCUMENTER
+    budget = _invocations_before_escalating(harness_root, "documenter") - 1
+    assert runner.calls == THROUGH_DOCUMENTER[:-1] + ["documenter"] * (budget + 1)
+    assert "verifier" not in runner.calls
     reason = story_coordinator.escalation_reason(runner.run_dir)
     assert reason == ("documenter did not produce required artifacts: "
-                      "documenter-changed-files.json")
+                      "documenter-changed-files.json"
+                      f"; documenter has exhausted its self-route budget of "
+                      f"{budget}")
     assert not (runner.run_dir / "completion-report.md").is_file()
 
 
