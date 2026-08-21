@@ -2623,6 +2623,36 @@ def completion_commits(target_root: Path, branch: str, story_id: str) -> list[st
     return found
 
 
+#: The escalation commit's subject, written once as a template so that the
+#: composition below and the reader below it are one fact rather than two
+#: spellings — the pairing `completion_commit_subject` already gives
+#: `completion_commits`. `escalated_story` derives its own pattern from this
+#: string, so a change to the subject's shape moves both halves together.
+ESCALATION_SUBJECT_TEMPLATE = (
+    f"{ESCALATION_COMMIT_MARKER} {{story_id}} stopped at {{stage}}"
+)
+
+
+def escalation_commit_subject(story_id: str, stage: str) -> str:
+    """The escalation commit's subject line."""
+    return ESCALATION_SUBJECT_TEMPLATE.format(story_id=story_id, stage=stage)
+
+
+def escalated_story(subject: str) -> str | None:
+    """The story id an escalation commit's subject names, or None.
+
+    The pattern is built from `ESCALATION_SUBJECT_TEMPLATE` rather than written
+    beside it, so what this reads is exactly what `escalation_commit_subject`
+    writes. A subject of any other shape — a completion, a planning commit,
+    anyone's commit about the story — is not an escalation and yields None.
+    """
+    pattern = re.escape(ESCALATION_SUBJECT_TEMPLATE)
+    pattern = pattern.replace(re.escape("{story_id}"), r"(?P<story_id>\S+)")
+    pattern = pattern.replace(re.escape("{stage}"), r"\S.*")
+    match = re.fullmatch(pattern, subject.strip())
+    return match.group("story_id") if match else None
+
+
 def escalation_commit_message(state: RunState, reason: str) -> str:
     """The escalation commit's message: what it is, why, and how to undo it.
 
@@ -2633,7 +2663,7 @@ def escalation_commit_message(state: RunState, reason: str) -> str:
     """
     stage = state.current_stage or "no stage"
     return (
-        f"{ESCALATION_COMMIT_MARKER} {state.story_id} stopped at {stage}\n"
+        f"{escalation_commit_subject(state.story_id, stage)}\n"
         f"\n"
         f"The run escalated and this commit is a holding place for what it "
         f"left in the working tree, so the work survives a checkout of another "

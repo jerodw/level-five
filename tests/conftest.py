@@ -15,6 +15,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
 import harness_config  # noqa: E402
+import story_coordinator  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -251,15 +252,61 @@ def _origin_path(validation_file: Path, repo: Path,
     return origin
 
 
+def _completion_commit_after(repo: Path, run_commit: str,
+                             story_id: str) -> str | None:
+    """The commit that finished `story_id`, at or after `run_commit`.
+
+    The recognition is `story_coordinator.completion_commits` — subject shape
+    for that story together with `COMPLETION_COMMIT_MARKER` — reused whole
+    rather than re-spelled here, so what identifies a finished run is one fact
+    wherever it is asked. That reader answers newest-first over everything
+    reachable from HEAD, so this walks it oldest-first and takes the first
+    commit `run_commit` is an ancestor of: the completion that ended the run
+    the escalation belongs to, not a later one.
+
+    Returns None when no completion follows, which is a story that escalated
+    and has not yet resumed.
+    """
+    for line in reversed(story_coordinator.completion_commits(
+            repo, "HEAD", story_id)):
+        sha = line.split(" ", 1)[0]
+        if _git(repo, "merge-base", "--is-ancestor", run_commit,
+                sha).returncode != 0:
+            continue
+        resolved = _git(repo, "rev-parse", "--verify", sha)
+        if resolved.returncode == 0:
+            return resolved.stdout.strip()
+    return None
+
+
 def story_commit_range(validation_file: Path,
                        repo: Path = HARNESS_ROOT,
                        origin: str | None = None) -> StoryRange:
     """The commit range of the story `validation_file`'s module validates.
 
-    The run commit is the *oldest* commit that added the file identifying
-    that story, so a later revert-and-restore cannot be mistaken for the
-    story's own run, and a planning or hotfix commit on the same story —
-    which modifies the file rather than adding it — is never returned.
+    Where the story *begins* is the *oldest* commit that added the file
+    identifying it, and that is unchanged: it is what stops a later
+    revert-and-restore of the file being mistaken for the story's own run, and
+    what stops a planning or hotfix commit on the same story — which modifies
+    the file rather than adding it — from ever being returned. Both hazards
+    were hit; both stay defended, and the baseline is that commit's parent
+    whatever the endpoint turns out to be.
+
+    Where the story *ends* is not always that same commit. A story whose
+    validation file was already in the tree when it escalated had that file
+    added by the escalation commit, and a range ending there excludes
+    everything the story did after it resumed — silently, because comparing
+    less is not an error. So when the oldest add is an escalation commit, the
+    endpoint advances past every escalation belonging to that story to the
+    commit that completed it. Both are recognised from what the commits record
+    about themselves — `ESCALATION_COMMIT_MARKER` in the subject the
+    coordinator writes, and the completion subject together with
+    `COMPLETION_COMMIT_MARKER` — never by ordering, counting or position.
+
+    A story that escalated and has not resumed has no completion commit, so
+    its endpoint is None: the end of the range is the working tree, which is
+    the case an uncommitted story already resolves to and the only reading
+    under which a validation module runs while its own story is in flight.
 
     Which file identifies the story is `STORY_ORIGINS`' answer when the
     module declares one, and the module's own path otherwise.
@@ -287,7 +334,14 @@ def story_commit_range(validation_file: Path,
             f"parent in this history, so the comparison has nothing to "
             f"compare against"
         )
-    return StoryRange(baseline=parent.stdout.strip(), endpoint=run_commit)
+    baseline = parent.stdout.strip()
+    subject = _git(repo, "log", "-1", "--format=%s", run_commit).stdout.strip()
+    escalated = story_coordinator.escalated_story(subject)
+    if escalated is None:
+        return StoryRange(baseline=baseline, endpoint=run_commit)
+    return StoryRange(baseline=baseline,
+                      endpoint=_completion_commit_after(repo, run_commit,
+                                                        escalated))
 
 
 def story_diff(paths: list[str], *, validation_file: Path,
@@ -753,6 +807,122 @@ def constructed_story_diff(root: Path, paths: Sequence[str], **kwargs) -> str:
                       validation_file=Path(root) / kwargs.pop(
                           "validation_rel", CONSTRUCTED_VALIDATION_REL),
                       repo=Path(root), **kwargs)
+
+
+#: The story a constructed escalation or completion commit names. A number
+#: this repository does not carry, so a constructed history can never be
+#: mistaken for its own.
+CONSTRUCTED_STORY_ID = "story-900"
+
+#: The title a constructed completion commit's subject carries. Only its
+#: presence matters -- the subject shape is `<story-id>: <title>` and an empty
+#: title is not a completion -- so it says what the story is for.
+CONSTRUCTED_STORY_TITLE = "A story a test built for itself"
+
+
+def _escalation_message(story_id: str, stage: str) -> str:
+    """The message the coordinator writes when a run escalates.
+
+    Composed through the coordinator's own writer rather than spelled here, so
+    a constructed history carries the subject and body a real escalation
+    carries and a change to either moves this with it.
+    """
+    state = story_coordinator.RunState(story_id=story_id,
+                                       branch=f"story/{story_id}",
+                                       current_stage=stage)
+    return story_coordinator.escalation_commit_message(
+        state, "the constructed story stopped here")
+
+
+def _completion_message(story_id: str, title: str) -> str:
+    """The message the coordinator writes when a run finishes, likewise."""
+    state = story_coordinator.RunState(story_id=story_id,
+                                       branch=f"story/{story_id}")
+    return story_coordinator.completion_commit_message(state, title)
+
+
+def escalating_story(tmp_path: Path, *,
+                     story_id: str = CONSTRUCTED_STORY_ID,
+                     title: str = CONSTRUCTED_STORY_TITLE,
+                     escalated_at: Sequence[str] = ("verifier",),
+                     resumed: bool = True,
+                     respected: Sequence[str] = (),
+                     violated: Sequence[str] = (),
+                     validation_rel: str = CONSTRUCTED_VALIDATION_REL,
+                     name: str = "escalating-story") -> Path:
+    """A repository in which one story escalated with its file already written.
+
+    The shape `constructed_story` cannot build: commit 1 is the pre-story
+    state, then one commit per entry of `escalated_at` carrying that stage's
+    escalation subject -- the *first* of which adds the validation file, which
+    is what makes the oldest add an escalation -- and then, when `resumed`, the
+    commit that completed the story, carrying the completion subject and body
+    marker and making the change the story exists for.
+
+    So the story's own work is split across the escalations and the completion,
+    and a range that ends at the first escalation sees only the part that
+    preceded it. `violated` is touched by the completion commit alone, which is
+    what lets an assertion show which end of the range it was bounded at.
+
+    With `resumed` false there is no completion commit at all: a story that
+    escalated and has not resumed.
+    """
+    root = Path(tmp_path) / name
+    root.mkdir(parents=True)
+    _run_git(root, "init", "-q")
+    for guarded in (*respected, *violated):
+        subject, _ = _sample_under(guarded)
+        _write(root, subject, "the pre-story content\n")
+    _write(root, "unrelated.txt", "something the story may touch\n")
+    _commit(root, "pre-story")
+
+    for index, stage in enumerate(escalated_at):
+        if index == 0:
+            _write(root, validation_rel, CONSTRUCTED_VALIDATION_SOURCE)
+        else:
+            _write(root, validation_rel,
+                   CONSTRUCTED_VALIDATION_SOURCE
+                   + f"\n# what attempt {index + 1} had written\n")
+        _commit(root, _escalation_message(story_id, stage))
+
+    if resumed:
+        _write(root, "unrelated.txt", "the story's own legitimate change\n")
+        for guarded in violated:
+            subject, _ = _sample_under(guarded)
+            _write(root, subject, "rewritten after the story resumed\n")
+        _commit(root, _completion_message(story_id, title))
+    return root
+
+
+def deleted_and_restored(root: Path, *,
+                         validation_rel: str = CONSTRUCTED_VALIDATION_REL
+                         ) -> Path:
+    """Two more commits on a constructed story: the file removed, then put back.
+
+    The hazard the oldest-add rule was written against. The restoring commit
+    *adds* the path a second time, so a resolution taking the newest add would
+    bound the range at it and see nothing the story did.
+    """
+    root = Path(root)
+    (root / validation_rel).unlink()
+    _commit(root, "remove the module while deciding what to do with it")
+    _write(root, validation_rel, CONSTRUCTED_VALIDATION_SOURCE)
+    _commit(root, "restore the module")
+    return root
+
+
+def modified_later(root: Path, *,
+                   validation_rel: str = CONSTRUCTED_VALIDATION_REL,
+                   message: str = "hotfix: repair the module in place") -> Path:
+    """One more commit on a constructed story, modifying the validation file.
+
+    The other hazard: a planning or hotfix commit touches the file without
+    adding it, so it is not a candidate for either end of the range.
+    """
+    _write(Path(root), validation_rel,
+           CONSTRUCTED_VALIDATION_SOURCE + "\n# repaired in place\n")
+    _commit(Path(root), message)
+    return Path(root)
 
 
 def build_history(root: Path, commits: Sequence[dict]) -> list[str]:

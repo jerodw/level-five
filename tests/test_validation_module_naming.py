@@ -909,8 +909,14 @@ def test_the_search_does_not_read_the_archive_paths_as_tests_paths():
 
 
 #: Resolved through this module's own path, which nothing declares an origin
-#: for — so the range is story-038's own run commit against its parent, and
-#: while the story is in flight it is the working tree against HEAD.
+#: for. This module was added by story-038's *escalation* commit, so until
+#: story-056 the range ended there and the comparisons below could not see
+#: anything the story did after it resumed — they were green about the part of
+#: story-038 that preceded its escalation and silent about the rest. The
+#: endpoint now advances past that escalation to the commit that completed the
+#: story, so what follows is bounded at story-038's whole change: its own run
+#: commits against the parent of the first of them. While the story is in
+#: flight it is still the working tree against HEAD.
 THIS_FILE = Path(__file__).resolve()
 
 
