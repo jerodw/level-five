@@ -42,7 +42,9 @@ can fail is a finding: say which assertion, and what a violation of it
 would have to look like for the test to notice. A positive assertion needs
 no such control, because it fails on its own when the behavior is missing.
 
-When you finish, write these files to the run directory at {{run_dir}}:
+When you finish, write these files to the run directory at {{run_dir}}.
+Ending your turn is how this stage ends — there is no later invocation to
+write them in, and a stage that ends without them has produced nothing:
 
 verification-result.json, your verdict and the evidence behind it. The
 coordinator routes the workflow on this file, so it must satisfy this
@@ -170,9 +172,16 @@ This workflow prioritizes:
 
 [Stage Layer]
 Evaluate whether the current implementation satisfies the active
-acceptance criteria while preserving accepted workflow behavior. You may
-run the test suite and read the repository directly to confirm evidence:
-{{test_command}}
+acceptance criteria while preserving accepted workflow behavior. Read the
+repository directly, and run whichever tests confirm the evidence you
+need: {{test_command}}
+
+The whole suite has already been run by the stage that wrote
+test-results.json, and it is run again in a fresh clone after your verdict.
+Running all of it here confirms nothing those two do not, and it takes long
+enough that a stage which starts it late in its turn can end the turn still
+waiting for it. Run the modules the story touched; take the whole-suite
+result from test-results.json.
 
 If retry state is active, evaluate whether the targeted verifier findings
 were resolved, and confirm the retry stayed within its authorized scope.
