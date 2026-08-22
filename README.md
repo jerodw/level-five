@@ -55,6 +55,7 @@ Each story below is a step the book's roadmap calls for, or a failure the build 
 | 059 | `l5-plan` offers to run the story it just committed, and skips without reading when nothing can answer, so a scripted invocation cannot hang on the prompt | Appendix A, the `l5-` entry points |
 | 060 | Every stage declares a self-route budget, so a mechanical failure anywhere runs again in place rather than ending the run — landable only once the compatibility guards were held against a built workflow instead of the deployed one | Ch. 18, hardening |
 | 061 | A crashed run's resume archives the interrupted attempt before re-running the stage, and refuses rather than overwrites — a run that stopped for a reason nobody recorded is where a partial artifact is most likely to be the only account of what happened | Ch. 17, retry evidence; Ch. 18 |
+| 062 | A resume restores the run's attempt allowance and archives the entry it ends, so a run that escalated at its ceiling does not resume with nothing left to spend | Ch. 17, retry evidence; Ch. 18 |
 
 Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, a fuller hook-based tool policy in place of the static `allowed_tools` allowlist, an adjudicator, an inspector, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
 
