@@ -1,0 +1,97 @@
+story:
+  id: story-064
+  title: The implementer runs the tests its change touches
+  description: |
+    The implementer prompt told the stage to run the existing test suite in
+    three separate places. At this repository's size that is a command of over
+    ten minutes, and a stage that starts one late in its turn can end the turn
+    still holding it. story-063's implementer did exactly that twice — both
+    invocations completed normally, neither wrote changed-files.json or
+    implementation-summary.md, and the run self-routed and then escalated with
+    the story's work complete, verified, and its clean-clone passed. It is the
+    failure story-061's verifier had, in a second stage, and the fix that
+    worked there was to remove the reason to start the command rather than to
+    ask for better behaviour around it.
+
+    That fix was applied to prompts/implementer.md by hand in 69ad7e2, before
+    this story was planned, so that this story's own implementer does not run
+    under the instruction it is fixing. The prompt now says to run the tests
+    the change touches, and names the three checks that each run the whole
+    suite afterwards: the revert check, the stage that writes
+    test-results.json, and the clean-clone check.
+
+    This story formalises that change rather than making it. It carries the
+    turn-ending sentence verifier.md gained in ea08440 across to the two
+    stages that still lack it, writes the standing module that holds the
+    rendered prompts to the rule, and records in the architecture document who
+    runs the whole suite and who runs a subset. The turn-ending sentence is
+    cheap insurance rather than the fix; it is not sufficient alone and this
+    story does not lean on it.
+
+tasks:
+  - Add to prompts/tester.md the sentence prompts/verifier.md carries where it introduces the files the stage writes to the run directory — "Ending your turn is how this stage ends — there is no later invocation to write them in, and a stage that ends without them has produced nothing:" — worded identically and placed at the same point in the prompt.
+  - Add the same sentence, identically worded and identically placed, to prompts/documenter.md.
+  - Write a standing test module that drives a coordinator run against the shipped harness root and reads the rendered prompts back out of the run directory, asserting what the implementer's rendering says about which tests to run and that the turn-ending sentence is one statement across the four stages that carry it.
+  - Record in .harness/docs/ARCHITECTURE.md which stages and checks run the whole suite, which run a subset, and why the narrowing is safe.
+
+acceptance_criteria:
+  - The rendered implementer prompt states once, not three times, which tests the stage is to run before completing, and what it says is to run the tests the change touches rather than the whole suite.
+  - The rendered implementer prompt names the revert check, the stage that writes test-results.json, and the clean-clone check as the checks that each run the whole suite after it.
+  - The rendered tester prompt and the rendered documenter prompt each carry the turn-ending sentence, and the wording of that sentence is identical in the implementer, tester, documenter and verifier renderings.
+  - The test module derives the sentence it compares against from one of the renderings rather than restating it as a literal, so the four cannot drift into four statements of one rule without the module reporting it.
+  - The tester prompt still instructs the stage to run the full test suite, and test-results.json remains the run's record of the whole suite.
+  - Every absence the new module asserts is accompanied by a demonstration that the same check reports when the text it looks for is removed.
+  - .harness/docs/ARCHITECTURE.md carries a section naming which stages run a targeted selection, which stages and checks run the whole suite, and why an implementer that selects too narrowly is caught before the story completes.
+
+technical_plan:
+  implementation_steps:
+    - Read prompts/verifier.md around the line introducing the run-directory artifacts and copy the turn-ending sentence from it verbatim.
+    - Insert that sentence into prompts/tester.md and prompts/documenter.md at the corresponding point — after the sentence naming the run directory, before the list of files the stage writes.
+    - Leave prompts/implementer.md as it stands; the change it needed is already in it.
+    - Build the new module on the idiom in tests/test_tester_prompt_fixture_guidance.py — a coordinator run against the shipped harness root, with the rendered prompts read from the run directory rather than the templates read from disk, and line wrapping flattened before any phrase is searched for.
+    - Take the turn-ending sentence out of the verifier's rendering and assert the other three renderings contain that same string, so the comparison has one source.
+    - Assert the implementer's rendering says once which tests to run, and names the three checks that run the whole suite after it.
+    - Give each absence assertion a control — the same check over the same rendering with the text it looks for removed, where it must report.
+    - Write the architecture section from what the prompts and the checks now say, not from this story's artifact.
+  likely_file_changes:
+    - file: prompts/tester.md
+      stage: implementer
+      reason: Carries the turn-ending sentence across to the stage that lacks it.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: Carries the same sentence, identically worded, to the other stage that lacks it.
+    - file: tests/test_turn_ending_instructions.py
+      stage: tester
+      reason: The standing module that holds the rendered prompts to the instruction and to one wording of the turn-ending sentence.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records who runs the whole suite, who runs a subset, and why the narrowing is safe.
+
+scope:
+  modify:
+    - prompts/tester.md
+    - prompts/documenter.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/implementer.md
+    - prompts/verifier.md
+    - orchestration/
+    - workflows/
+    - schemas/
+    - scripts/
+
+verification_requirements:
+  - Confirm from the rendered implementer prompt, not from the template, that it states one instruction about which tests to run and that it names the checks which run the whole suite afterwards.
+  - Confirm the turn-ending sentence is present in the implementer, tester and documenter renderings and that its wording matches the verifier's exactly.
+  - Confirm the new module's comparison of that sentence is derived from a rendering rather than restated as a literal, and that removing the sentence from one prompt would redden it.
+  - Confirm the revert check, the stage that writes test-results.json, and the clean-clone check are unchanged in what they run — this story changes an instruction, not a check.
+  - Confirm the tester prompt's full-suite instruction is intact and that test-results.json still records the whole suite.
+  - Confirm every absence assertion in the new module carries a demonstration that it can fail.
+
+constraints:
+  - The tester's whole-suite run is its purpose and its recorded output; do not narrow it.
+  - Do not change what the clean-clone check or the revert check runs, reverts, commits, or decides.
+  - The turn-ending sentence must be one statement of one rule: identical wording in every prompt that carries it, and no stage-specific variation.
+  - Do not restate the correction pass's requirement that the suite pass unchanged across that pass; that is a separate request.
+  - Nothing in this story asserts that a stage followed the instruction; there is no deterministic check for that and the module must not construct one that appears to.
