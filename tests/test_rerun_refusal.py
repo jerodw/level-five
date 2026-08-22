@@ -868,8 +868,14 @@ def test_a_multi_line_body_does_not_split_one_commit_into_two(target):
         f"A trailing paragraph.\n\nstory-999: not a subject\n")
     assert len(story_coordinator.completion_commits(
         target, STORY_BRANCH, STORY_ID)) == 1
+    # A story the message names nowhere. It used to be story-999, which the
+    # body above names in the completion shape: since story-065 the two pieces
+    # of evidence are required anywhere in the message rather than in
+    # particular fields of it, so that line is evidence for story-999 and no
+    # longer a decoy. The control's subject — this reading produces no record
+    # for a story this commit did not finish — is unchanged.
     assert story_coordinator.completion_commits(
-        target, STORY_BRANCH, "story-999") == []
+        target, STORY_BRANCH, "story-998") == []
 
 
 def test_a_branch_that_does_not_exist_establishes_nothing(target):
