@@ -315,7 +315,7 @@ class Runner:
         return write(path, f"{artifact} written on attempt {attempt}.\n")
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None):
+                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         self.seen.append((stage, bookkeeping_of(self.run_dir)))
         attempt = max(1, self.calls.count(RETRY_STAGE))

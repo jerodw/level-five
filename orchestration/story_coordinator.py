@@ -93,6 +93,25 @@ class RunState:
     #: Defaulted like every field beside it, so a state file written before it
     #: existed still loads and reads as the first entry.
     resume_count: int = 0
+    #: What the current entry of this run has spent, in US dollars, summed
+    #: from what each invocation reported. This is the *live allowance*: it is
+    #: what the run ceiling is compared against, so it is policy rather than
+    #: accounting, and a resume zeroes it exactly as it zeroes the other live
+    #: counters — a human typing l5-run is the authorization to spend another
+    #: allowance. What the run cost is the record's question, and cost.json
+    #: answers it across every entry; one name does not serve both. One number
+    #: rather than one per stage, because the run ceiling is the only
+    #: cumulative comparison the harness makes and no per-stage total is
+    #: accumulated anywhere. Defaulted, so a state file written before it
+    #: existed still loads.
+    entry_cost_usd: float = 0.0
+    #: Whether this run stopped because a cost ceiling was reached. Recorded so
+    #: the unchanged-since-escalation guard can be skipped on a resume: that
+    #: guard refuses a resume when the story, the branch and the harness are
+    #: all unchanged, which is exactly the state a run stopped on cost is in,
+    #: and refusing it would refuse the resume this ceiling exists to allow.
+    #: Cleared by the resume, like the allowance it accompanies.
+    stopped_on_cost: bool = False
 
 
 @dataclass(frozen=True)
@@ -277,6 +296,56 @@ def self_route_problems(stages: list[dict]) -> list[str]:
             problems.append(
                 f"stage '{stage['name']}' declares max_self_routes "
                 f"{budget!r}, which is not a non-negative integer"
+            )
+    return problems
+
+
+def _is_a_ceiling(value) -> bool:
+    """Whether a declared ceiling is a value a ceiling can take.
+
+    A non-negative number, and not a bool: `isinstance(True, int)` holds, so a
+    bare number test would accept a declaration of `true` as a ceiling of one
+    dollar. Zero is accepted and means a deliberate refusal to run at all,
+    which is a different declaration from making none.
+    """
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and value >= 0
+    )
+
+
+def cost_ceiling_problems(workflow: dict) -> list[str]:
+    """Check every declared cost ceiling against what a ceiling can be.
+
+    Beside `retry_routing_problems` and `self_route_problems`, and for their
+    reason: a ceiling that is not a number cannot be compared or handed to an
+    invocation, every run under that definition carries the defect, and
+    discovering it at the first stage has already spent one.
+
+    Two ceilings are checked, the workflow's own `max_run_cost_usd` and each
+    stage's `max_execution_cost_usd`. A definition declaring neither is not
+    checked at all — absent means unbounded, which is the behaviour every
+    workflow had before ceilings existed. The sibling `_reason` keys are not
+    read here or anywhere else; they record the judgement where a reader of
+    the definition meets the number.
+    """
+    problems = []
+    if "max_run_cost_usd" in workflow:
+        ceiling = workflow["max_run_cost_usd"]
+        if not _is_a_ceiling(ceiling):
+            problems.append(
+                f"workflow '{workflow.get('name')}' declares max_run_cost_usd "
+                f"{ceiling!r}, which is not a non-negative number"
+            )
+    for stage in workflow.get("stages", []):
+        if "max_execution_cost_usd" not in stage:
+            continue
+        ceiling = stage["max_execution_cost_usd"]
+        if not _is_a_ceiling(ceiling):
+            problems.append(
+                f"stage '{stage['name']}' declares max_execution_cost_usd "
+                f"{ceiling!r}, which is not a non-negative number"
             )
     return problems
 
@@ -837,11 +906,11 @@ def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
     reason. Names are run-relative, so a move keeps each one's position beneath
     the run directory rather than flattening it.
 
-    The record is not here and must not be: the run's retry record, its two
-    renderings of the event stream, its state file and its escalation summary
-    account for the whole run, are never keyed by a counter, and stay at the
-    root. Nor is any stage artifact a resumed stage reads as input — those keep
-    canonical names a reset does not touch.
+    The record is not here and must not be: the run's retry record, its cost
+    record, its two renderings of the event stream, its state file and its
+    escalation summary account for the whole run, are never keyed by a
+    counter, and stay at the root. Nor is any stage artifact a resumed stage
+    reads as input — those keep canonical names a reset does not touch.
     """
     names: list[str] = []
     for stage in stages:
@@ -1043,6 +1112,67 @@ def append_retry_record(
         json.dumps(records, indent=2) + "\n", encoding="utf-8"
     )
     return entry
+
+
+def _cost_record_file(run_dir: Path) -> Path:
+    return run_dir / "cost.json"
+
+
+def load_cost_record(run_dir: Path) -> dict:
+    """What the run has recorded spending so far.
+
+    An empty record before the first invocation reports a cost, so a reader
+    need not distinguish "no file yet" from "nothing spent yet" — the total is
+    zero either way, which is the true answer to what has been recorded.
+    """
+    path = _cost_record_file(run_dir)
+    if not path.is_file():
+        return {"total_usd": 0.0, "invocations": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def append_cost_record(
+    run_dir: Path, stage: str, entry: int, attempt: int, cost: float
+) -> dict:
+    """Record one invocation's cost and rewrite the total. Returns the record.
+
+    The record accounts for the whole run and is never reset: a re-entry
+    leaves it at the run root and it continues from where it stood rather than
+    restarting at zero, which is the half of the split the live allowance on
+    state.json is the other side of.
+
+    The total is the plain sum of the invocations beside it, computed in their
+    recorded order and rounded not at all, so a reader summing the list gets
+    the number the record reports rather than one differing in its last bits.
+    Nothing here rewrites, repairs or prunes what is already recorded.
+    """
+    record = load_cost_record(run_dir)
+    record["invocations"].append(
+        {"stage": stage, "entry": entry, "attempt": attempt, "cost_usd": cost}
+    )
+    record["total_usd"] = sum(
+        invocation["cost_usd"] for invocation in record["invocations"]
+    )
+    _cost_record_file(run_dir).write_text(
+        json.dumps(record, indent=2) + "\n", encoding="utf-8"
+    )
+    return record
+
+
+def recorded_cost(run_dir: Path) -> float:
+    """What this run has cost across every entry of it, from the record.
+
+    The live allowance is entry-scoped and a resume zeroes it, so the run's
+    total cannot be read off state.json and is read off cost.json instead —
+    the same division `accumulated_attempts` makes between the counter that
+    routes and the record that accounts.
+    """
+    return load_cost_record(run_dir)["total_usd"]
+
+
+def format_usd(amount: float) -> str:
+    """One spelling of a dollar figure, for every message that states one."""
+    return f"${amount:.2f}"
 
 
 # --------------------------------------------------------------------------
@@ -3022,6 +3152,15 @@ def _recommended_investigation_section(run_dir: Path, state: RunState) -> str:
         f"every attempt on both sides of a resume, and each earlier entry's "
         f"artifacts move under resumes/resume-K/."
     )
+    # What the run cost, on the same terms as the attempts above: a fact every
+    # escalation has, read off the record rather than off the entry-scoped
+    # allowance, and stated without branching on the escalation's reason.
+    blocks.append(
+        f"This run has cost {format_usd(recorded_cost(run_dir))} in all, as "
+        f"cost.json records it; {format_usd(state.entry_cost_usd)} of that is "
+        f"the current entry's spend, which is what a run ceiling is compared "
+        f"against and which resuming returns to zero."
+    )
     blocks.append(
         f"Once you have made a change, `l5-run {state.story_id}` resumes this "
         f"run at the stage it stopped at ({state.current_stage}); `--stage "
@@ -3235,6 +3374,39 @@ def _refuse_bad_self_routes(workflow: dict, problems: list[str]) -> int:
     )
 
 
+def _refuse_bad_cost_ceilings(workflow: dict, problems: list[str]) -> int:
+    """Refuse a workflow whose declared cost ceiling is not a number.
+
+    Thin, like every other caller of `refuse`. The definition is wrong, not the
+    story and not the tree, so the guidance points at the file that has to
+    change.
+    """
+    return refuse(
+        f"Workflow '{workflow['name']}' declares a cost ceiling that cannot be "
+        f"applied:",
+        problems,
+        "Fix the workflow definition's cost ceilings before running a story "
+        "under it.",
+    )
+
+
+def _budget_stopped(run_dir: Path, stage_name: str, reason: str) -> None:
+    """Say that the run stopped on a cost ceiling, in its own event kind.
+
+    Its own kind rather than the `escalated` one that follows it, so a reader
+    of events.log can tell a budget stop from an escalation about the work.
+    The stop itself goes through the existing escalation path — the commit, the
+    summary and the resume path are exactly what they are for any other
+    escalation — and this line is what distinguishes it.
+    """
+    append_event(
+        run_dir,
+        f"stopped on a cost ceiling: {reason}",
+        kind="budget-stopped",
+        stage=stage_name,
+    )
+
+
 def _refuse_unresolved_workflow_token(
     unresolved: harness_config.UnresolvedWorkflowToken,
 ) -> int:
@@ -3417,6 +3589,11 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
         f"## Story\n{title}\n\n"
         f"## Outcome\nCompleted on branch {state.branch} after "
         f"{state.retry_count} retr{'y' if state.retry_count == 1 else 'ies'}.\n\n"
+        # From the record rather than the live allowance, which is
+        # entry-scoped: what the run cost is the whole run's question.
+        f"## Cost\nThis run cost {format_usd(recorded_cost(run_dir))}, summed "
+        f"from what each stage invocation reported. cost.json records them "
+        f"one by one.\n\n"
         f"## Evidence\n"
         f"- test-results.json\n"
         f"- verification/iteration-{state.verification_iterations}.json (passed)\n"
@@ -3521,6 +3698,15 @@ def run_story(
     budget_problems = self_route_problems(stages)
     if budget_problems:
         return _refuse_bad_self_routes(workflow, budget_problems)
+
+    # And the same pre-flight for the two cost ceilings. A ceiling that is not
+    # a number can be neither compared against a spend nor handed to an
+    # invocation, so a definition that cannot work is refused before a stage is
+    # spent on it. A definition declaring no ceiling anywhere is not checked and
+    # runs exactly as it did before ceilings existed.
+    ceiling_problems = cost_ceiling_problems(workflow)
+    if ceiling_problems:
+        return _refuse_bad_cost_ceilings(workflow, ceiling_problems)
 
     story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
     if not story_path.is_file():
@@ -3661,11 +3847,20 @@ def run_story(
         # execution-history.json, events.log, state.json, the escalation
         # summary — together with every stage artifact the resumed stage reads
         # as input, whose names no counter keys.
-        if state.status == "escalated":
+        if state.status == "escalated" and not state.stopped_on_cost:
             # Resuming is inferred from the recorded status and from nothing
             # else. What the guard adds is a refusal in the one case where a
             # resume is knowably pointless: the story, the tree and the harness
             # are all establishably what they were when the run escalated.
+            #
+            # A run stopped on a cost ceiling is exempted here, at the call
+            # site, rather than inside the guard: the guard keeps saying only
+            # what it establishes, and what it establishes is true of a budget
+            # stop — nothing has changed, and nothing needs to have. Resuming
+            # such a run is the decision to fund another allowance, which is
+            # precisely the resume this ceiling exists to allow, so refusing it
+            # on the guard's evidence would refuse the only useful response to
+            # the stop.
             evidence = unchanged_since_escalation(
                 state, story_text, target_root, harness_root
             )
@@ -3742,6 +3937,19 @@ def run_story(
         state.resume_count = entry
         state.retry_count = 0
         state.verification_iterations = 0
+        # The cost allowance is a live counter and resets where the other live
+        # counters reset. The rule it conforms to is the one they already
+        # follow: a counter is policy and is reset by the decision to continue,
+        # a record accounts and is never reset at all. So the allowance goes to
+        # zero and cost.json is left exactly where it is, continuing from where
+        # it stood. The ceiling bounds what an *unattended* execution may spend;
+        # a human typing l5-run is the authorization to spend another
+        # allowance. Read before the reset, so the note below can say what the
+        # entry that is ending spent.
+        spent_before_resume = state.entry_cost_usd
+        state.entry_cost_usd = 0.0
+        stopped_on_cost = state.stopped_on_cost
+        state.stopped_on_cost = False
         if state.status == "escalated":
             state.status = "running"
             save_state(run_dir, state)
@@ -3763,6 +3971,27 @@ def run_story(
             + ", ".join(moved),
             kind="note",
             stage=state.current_stage,
+        )
+        # What the resume decided about money, said where a reader of the log
+        # meets the resume. The accumulated total comes from the record, which
+        # accounts for every entry, and the entry's own spend from the
+        # allowance that has just been zeroed — reporting both is what makes
+        # the reset a decision rather than an accident. A run that stopped on a
+        # ceiling says outright that resuming funds another allowance, which is
+        # the whole of what the developer is authorizing.
+        spend_note = (
+            f"recorded spend so far: {format_usd(recorded_cost(run_dir))} "
+            f"across the run, {format_usd(spent_before_resume)} in the entry "
+            f"just ended; the allowance is back to zero and cost.json "
+            f"continues from where it stood"
+        )
+        if stopped_on_cost:
+            spend_note += (
+                ", and resuming a run stopped on a cost ceiling is the "
+                "decision to fund another allowance"
+            )
+        append_event(
+            run_dir, spend_note, kind="note", stage=state.current_stage
         )
     else:
         state = RunState(
@@ -3933,6 +4162,49 @@ def run_story(
             else None
         )
 
+        # The run ceiling, compared immediately above the invocation it would
+        # stop. It bounds *repetition* — how much a run may spend across every
+        # stage and every attempt of its current entry — where the per-execution
+        # allowance below bounds one call. An absent ceiling compares nothing:
+        # absent is unbounded, which is what every run did before ceilings
+        # existed. `is not None` rather than truthiness, because zero is a
+        # deliberate refusal to run at all and must stop the first invocation.
+        run_ceiling = workflow.get("max_run_cost_usd")
+        if run_ceiling is not None and state.entry_cost_usd >= run_ceiling:
+            reason = (
+                f"this run has spent {format_usd(state.entry_cost_usd)}, at or "
+                f"past the run ceiling of {format_usd(run_ceiling)}, so "
+                f"{name} was not invoked"
+            )
+            state.stopped_on_cost = True
+            _budget_stopped(run_dir, name, reason)
+            return _escalate(
+                run_dir,
+                state,
+                reason,
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
+        # The allowance this one invocation is handed: the stage's declared
+        # ceiling, unmodified by what the stage or the run has already spent.
+        # Flat rather than a remainder, deliberately — a self-route has to redo
+        # the work the failed invocation was doing, and handing it what is left
+        # invites it to fail again for a new reason. Repetition is bounded by
+        # max_self_routes, max_retries and the run ceiling above; the size of
+        # one call is bounded here. The consequence is that a run may finish
+        # above the run ceiling by at most one execution allowance, which is
+        # the price of not starving a legitimate retry.
+        #
+        # The keyword is passed only when the stage declares a ceiling, so a
+        # stage under none calls the runner with exactly the arguments it
+        # passed before this existed and every fake runner keeps its signature.
+        execution_ceiling = stage.get("max_execution_cost_usd")
+        budget = (
+            {} if execution_ceiling is None else {"max_budget_usd": execution_ceiling}
+        )
+
         result = runner(
             prompt,
             stage=name,
@@ -3941,7 +4213,52 @@ def run_story(
             permission_mode=config.get("permission_mode", "acceptEdits"),
             model=config.get("model"),
             allowed_tools=config.get("allowed_tools"),
+            **budget,
         )
+
+        # The cost the invocation reported, added to the live allowance and
+        # appended to the record. An invocation reporting none adds nothing to
+        # either: the harness carries what it was told and infers nothing.
+        cost = result.cost_usd
+        if cost is not None:
+            state.entry_cost_usd += cost
+            append_cost_record(
+                run_dir,
+                stage=name,
+                entry=state.resume_count,
+                attempt=attempt,
+                cost=cost,
+            )
+            save_state(run_dir, state)
+
+        # Then, before the mechanical-failure checks: did this invocation's own
+        # reported cost reach the allowance it was handed? It did, and the run
+        # stops on the ceiling; it did not, and the checks below decide as they
+        # always have. Deciding it from the recorded cost rather than from the
+        # wording of a result the harness does not own keeps this off a string
+        # it cannot rely on, and keeps a budget stop out of the self-route path
+        # — which would otherwise re-run the stage and spend the money again.
+        if (
+            execution_ceiling is not None
+            and cost is not None
+            and cost >= execution_ceiling
+        ):
+            reason = (
+                f"{name} spent {format_usd(cost)} of its execution allowance "
+                f"of {format_usd(execution_ceiling)}, so the invocation was "
+                f"stopped on its budget rather than failing at its work"
+            )
+            state.stopped_on_cost = True
+            _budget_stopped(run_dir, name, reason)
+            return _escalate(
+                run_dir,
+                state,
+                reason,
+                target_root=target_root,
+                harness_root=harness_root,
+                duration_seconds=elapsed(),
+            )
+
         # The first of the three mechanical failures. Each is routed through
         # one decision: re-enter the loop at this same index when the stage has
         # unspent budget, escalate with the same reason it always escalated

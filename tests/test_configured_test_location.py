@@ -334,7 +334,7 @@ class Runner:
         return self.records.get(stage, dict(EMPTY_RECORD))
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None):
+                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         self.prompts = getattr(self, "prompts", {})
         self.prompts[stage] = prompt

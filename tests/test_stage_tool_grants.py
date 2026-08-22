@@ -623,18 +623,34 @@ def test_run_agent_signature_is_unchanged_by_this_story(tmp_path):
     # a fixture equal to today's file would be answering the wrong question and
     # the equality below would hold for that reason instead.
     assert before != today
-    assert _signature_names(today) == _signature_names(before)
+    # story-063 widened the signature deliberately, so what story-035 added —
+    # nothing — is now stated as the baseline's parameters plus the ones named
+    # here. Repointed rather than relaxed: the comparison is still exact, still
+    # ordered, and still goes red on a parameter nobody declared. A later story
+    # that widens the signature again appends to this list, which is the
+    # deliberate edit an assertion about a signature should cost.
+    ADDED_SINCE_STORY_035 = ["max_budget_usd"]
+    assert _signature_names(today) == (
+        _signature_names(before) + ADDED_SINCE_STORY_035)
 
-    # The control: a signature that did gain a parameter is reported by the
-    # same comparison, so the equality above is not vacuous.
+    # The control: a signature that gained a parameter nobody declared is
+    # reported by the same comparison, so the equality above is not vacuous.
     widened = today.replace(
         "    allowed_tools: list[str] | None = None,\n",
         "    allowed_tools: list[str] | None = None,\n"
         "    settings: str | None = None,\n", 1)
-    assert _signature_names(widened) != _signature_names(before)
+    assert _signature_names(widened) != (
+        _signature_names(before) + ADDED_SINCE_STORY_035)
 
 
-#: The keyword arguments the coordinator calls its injected runner with.
+#: The keyword arguments the coordinator calls its injected runner with on
+#: *every* invocation. Since story-063 the call site has one more that is
+#: conditional — `max_budget_usd`, passed only when the stage declares a
+#: max_execution_cost_usd, so that a stage under no ceiling is invoked with
+#: exactly these — and a scan keyed on unconditional keywords cannot express
+#: that. Every fake runner in the suite accepts the conditional one too; what
+#: holds that is the story's own module rather than this tuple, which would
+#: otherwise report a fake driving a ceiling-less workflow as unsatisfied.
 CALL_SITE_KWARGS = ("stage", "cwd", "log_path", "permission_mode", "model",
                     "allowed_tools")
 

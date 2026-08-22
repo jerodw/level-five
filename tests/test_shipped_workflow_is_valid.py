@@ -17,12 +17,14 @@ well-formed, and whether it says what this project intends of it. An assertion
 that goes red here when the workflow changes has done its job — that is the
 question it is asking.
 
-Three validators decide well-formedness, and the coordinator runs all three at
+These validators decide well-formedness, and the coordinator runs them at
 pre-flight, before a run spends a stage on a definition that cannot work:
 
   * `self_route_problems` — every declared self-route budget is a count;
   * `retry_routing_problems` — every declared route names a stage the workflow
     defines, and one that sits before the stage declaring the route;
+  * `cost_ceiling_problems` — every declared cost ceiling, at the workflow
+    level and on each stage, is a non-negative number that is not a bool;
   * `stage_exception_problems` — a story's stage exceptions mean something
     against the workflow the run loaded.
 
@@ -154,6 +156,12 @@ def test_the_shipped_workflow_routes_every_retry_backwards_to_a_stage_it_defines
     assert story_coordinator.retry_routing_problems(SHIPPED_STAGES) == []
 
 
+def test_the_shipped_workflow_declares_only_ceilings_that_are_numbers():
+    """The whole definition rather than its stages, because one of the two
+    ceilings is declared at the workflow level."""
+    assert story_coordinator.cost_ceiling_problems(SHIPPED) == []
+
+
 def test_every_stage_exception_this_repository_states_means_something():
     """Each of this repository's own stories, cross-checked against its own
     workflow. A grant naming a stage this deployment does not define, or a path
@@ -242,6 +250,37 @@ def test_retry_routing_problems_accepts_a_route_that_points_backwards():
                                     "retry_stage": StageRef(0)}),
     )["stages"]
     assert story_coordinator.retry_routing_problems(stages) == []
+
+
+@pytest.mark.parametrize("ceiling", [-1, True, "30", [], None],
+                         ids=["negative", "a-bool", "a-string", "a-list",
+                              "declared-null"])
+def test_cost_ceiling_problems_reports_a_ceiling_that_is_not_a_number(ceiling):
+    """Both halves at once, so a validator checking only one of the two places
+    a ceiling can be declared is reported here."""
+    workflow = build_workflow(
+        workflow_stage(max_execution_cost_usd=ceiling),
+        name="a-badly-ceilinged-workflow")
+    workflow["max_run_cost_usd"] = ceiling
+    problems = story_coordinator.cost_ceiling_problems(workflow)
+    assert len(problems) == 2, problems
+    assert workflow["name"] in problems[0]
+    assert workflow["stages"][0]["name"] in problems[1]
+
+
+def test_cost_ceiling_problems_accepts_zero_and_a_definition_declaring_none():
+    """The companion the parametrization needs. Zero is a deliberate refusal to
+    run and is well-formed; declaring nothing is unbounded and is not checked
+    at all. A validator that reported everything would satisfy the cases above
+    while refusing both of these."""
+    zero = build_workflow(workflow_stage(max_execution_cost_usd=0),
+                          name="a-zero-ceilinged-workflow")
+    zero["max_run_cost_usd"] = 0
+    assert story_coordinator.cost_ceiling_problems(zero) == []
+
+    silent = build_workflow(workflow_stage(), name="an-unceilinged-workflow")
+    assert "max_execution_cost_usd" not in silent["stages"][0]
+    assert story_coordinator.cost_ceiling_problems(silent) == []
 
 
 def test_stage_exception_problems_reports_a_grant_naming_an_undefined_stage():
@@ -395,6 +434,75 @@ def test_a_recorded_reason_states_the_number_it_is_explaining():
     # satisfies the loop above without reading one reason.
     assert outliers, "this deployment declares no budget that differs from the " \
                      "common one, so no recorded reason was read"
+
+
+#: The key a declared value's recorded derivation sits under, formed from the
+#: declaration's own name. Written as the suffix rather than as two more
+#: literals, so a reason key and the number it explains cannot drift apart
+#: here without drifting apart in the definition too.
+REASON_SUFFIX = "_reason"
+RUN_CEILING_KEY = "max_run_cost_usd"
+EXECUTION_CEILING_KEY = "max_execution_cost_usd"
+
+
+def test_this_deployment_declares_both_ceilings_at_the_values_it_intends():
+    """What this deployment is willing to spend, stated where a change to it is
+    supposed to go red.
+
+    Every stage carries an execution allowance, deliberately: a stage under no
+    ceiling is a stage one runaway call can spend a run's whole budget in, and
+    the point of declaring these at all was to stop that without waiting for a
+    target to opt in.
+    """
+    assert SHIPPED[RUN_CEILING_KEY] == 90
+    assert {stage["name"]: stage.get(EXECUTION_CEILING_KEY)
+            for stage in SHIPPED_STAGES} == {
+        "implementer": 30, "tester": 75, "documenter": 10, "verifier": 30}
+
+
+def test_every_declared_ceiling_is_recorded_where_a_reader_meets_the_number():
+    """A ceiling is a judgement about what is pathological, and the logs the
+    figures came from are gitignored and reach no clone — so the reason beside
+    the number is the only place the derivation survives.
+
+    Each reason is required to state the number it explains, because a reason
+    that never mentions its own ceiling would satisfy a bare "a reason is
+    present" check while explaining nothing.
+    """
+    declarations = [(SHIPPED["name"], SHIPPED, RUN_CEILING_KEY)]
+    declarations += [(stage["name"], stage, EXECUTION_CEILING_KEY)
+                     for stage in SHIPPED_STAGES
+                     if EXECUTION_CEILING_KEY in stage]
+    assert len(declarations) == len(SHIPPED_STAGES) + 1
+
+    for where, declaring, key in declarations:
+        reason = declaring.get(key + REASON_SUFFIX, "")
+        assert reason.strip(), where
+        assert str(declaring[key]) in reason, where
+
+
+def test_nothing_in_the_harness_reads_a_recorded_reason():
+    """The reason keys are for a reader of the definition, not for the
+    coordinator: a ceiling whose behaviour depended on its own justification
+    would be a value nobody could change without rewriting prose.
+
+    The control is the same scan over the same source with a read of one of
+    those keys planted in it, which reports it — so the empty result is a scan
+    that can see one. Prose may name what code may not, so docstrings and
+    comment lines are stripped before the reading.
+    """
+    reason_keys = sorted({key for declaring in (SHIPPED, *SHIPPED_STAGES)
+                          for key in declaring if key.endswith(REASON_SUFFIX)})
+    assert reason_keys, "this deployment records no reason at all"
+
+    source = "\n".join(
+        _executable_source(path.read_text(encoding="utf-8"))
+        for path in sorted((REPO_ROOT / "orchestration").glob("*.py")))
+    assert [key for key in reason_keys if key in source] == []
+
+    planted = source + (f'\ndef planted(stage):\n'
+                        f'    return stage["{reason_keys[0]}"]\n')
+    assert [key for key in reason_keys if key in planted] == [reason_keys[0]]
 
 
 def test_this_deployment_escalates_when_the_retry_ceiling_is_reached():

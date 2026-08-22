@@ -366,7 +366,7 @@ class Runner:
         return edit(self.target_root, attempt)
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None):
+                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         self.archives_seen.append((stage, attempt_directories(self.run_dir)))
         attempt = max(1, self.calls.count(RETRY_STAGE))
@@ -1510,8 +1510,29 @@ def test_the_collision_refusal_is_one_expression_rather_than_one_per_path(
     assert len(refusals_naming_the_destination(duplicated)) == 2
 
 
+def _tests_the_escalated_status(test: ast.expr) -> bool:
+    """Whether an `if` test is keyed on the escalated status.
+
+    The compare itself, or a conjunct of an `and` that carries it. Since
+    story-063 the guard's branch is narrowed by a second conjunct — a run
+    stopped on a cost ceiling is exempted from it — and a recogniser that read
+    only the bare compare would stop seeing that branch and report the scan's
+    subject as absent rather than as narrowed. Only `and` is walked: a
+    disjunct would make the branch reachable on some *other* status, which is
+    not a branch conditional on this one.
+    """
+    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
+        return any(_tests_the_escalated_status(v) for v in test.values)
+    return (isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Attribute)
+            and test.left.attr == "status"
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == "escalated")
+
+
 def escalated_branches(tree: ast.AST) -> list[ast.If]:
-    """Every `if state.status == "escalated":` in a parsed function.
+    """Every branch keyed on `state.status == "escalated"` in a parsed function.
 
     The subject of the two readers below is what this coordinator still makes
     conditional on the escalated status, so they read the shipped coordinator
@@ -1520,15 +1541,7 @@ def escalated_branches(tree: ast.AST) -> list[ast.If]:
     """
     branches = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        test = node.test
-        if (isinstance(test, ast.Compare)
-                and isinstance(test.left, ast.Attribute)
-                and test.left.attr == "status"
-                and len(test.comparators) == 1
-                and isinstance(test.comparators[0], ast.Constant)
-                and test.comparators[0].value == "escalated"):
+        if isinstance(node, ast.If) and _tests_the_escalated_status(node.test):
             branches.append(node)
     return branches
 
@@ -2357,7 +2370,8 @@ NEW_FIELDS = {"story_digest", "escalation_commit", "harness_revision"}
 #: records it here deliberately, so a field that appears without anyone
 #: noticing still turns the assertion below red.
 FIELDS_ADDED_SINCE = {"self_route_count", "guidance_in_force",
-                      "correction_pass_count", "resume_count"}
+                      "correction_pass_count", "resume_count",
+                      "entry_cost_usd", "stopped_on_cost"}
 
 
 def pre_story_state_fields() -> list[str]:

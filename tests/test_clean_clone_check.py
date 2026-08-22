@@ -289,7 +289,7 @@ class Runner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None):
+                 allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         self.prompts = getattr(self, "prompts", {})
         self.prompts.setdefault(stage, []).append(prompt)
