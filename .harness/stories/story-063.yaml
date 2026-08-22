@@ -1,0 +1,191 @@
+story:
+  id: story-063
+  title: A run has a cost ceiling
+  description: |
+    Nothing bounds what a run may spend. max_retries bounds how many attempts
+    exist and max_self_routes bounds how many times a stage re-runs in place,
+    but neither is a statement about money: a single stage invocation has cost
+    more than a whole story, and the counters did not move while it did.
+
+    This story gives a run two optional cost ceilings, both of which the book
+    specifies and which nest — one for the whole run and one for a stage — and
+    gives every run a recorded total of what it cost. The number already
+    exists: every stage invocation ends with a result record carrying
+    total_cost_usd, which the runner parses and discards. The change is to
+    carry it, not to compute it, and never to re-derive it by reading the log
+    back.
+
+    A ceiling checked only between stages would be a gate rather than a
+    ceiling, because the invocation that runs after the gate opens is
+    unbounded, and the sharpest evidence here is a single implementer
+    invocation that spent $14.12 before its connection dropped. The agent CLI
+    the runner drives takes --max-budget-usd, so the ceiling is enforced
+    inside the invocation as well as before it: a stage is handed the smaller
+    of what the run has left and what the stage has left, and cannot spend
+    past it. The pre-invocation check remains for the case where nothing is
+    left to hand over.
+
+    Two things here go beyond what the book states, and the harness says so
+    rather than presenting them as the book's. The split between a live
+    allowance and a recorded total is this repository's; the book has usage
+    tracking as one undivided thing. And the allowance resetting when a run is
+    re-entered is a reading of the book's silence rather than its text. That
+    reading is the rule the other counters already follow after story-062 — a
+    live counter is policy and resets when a human re-enters a run, a record
+    accounts and does not — so the cost allowance is an instance of that rule
+    rather than an exception to it. The ceiling bounds what an unattended
+    execution may spend; a human typing l5-run is the authorization to spend
+    another allowance.
+
+    Absent means unbounded, which is today's behaviour, and the shipped
+    workflow declares no ceiling, so landing this changes nothing until a
+    target opts in. Zero is a different value and means a deliberate refusal
+    to run at all.
+
+tasks:
+  - Carry the cost the runner already receives. AgentResult gains a cost_usd field, defaulted to None, populated from the total_cost_usd the result event carries. The default is what leaves every fake runner in the suite unchanged.
+  - Let the runner be given a budget. run_agent gains an optional max_budget_usd parameter and passes it to the agent CLI as --max-budget-usd when it is set, so an invocation stops itself rather than being stopped afterwards. Unset, the command is exactly the command it is today.
+  - Hand each invocation its allowance. Before invoking a stage, the coordinator computes what is left under each declared ceiling and passes the smaller remainder. When no ceiling is declared it passes no budget at all, and the runner is called with exactly the arguments it is called with today.
+  - Distinguish an invocation that stopped on its budget from one that failed mechanically, so a budget-truncated stage does not self-route and spend the money again.
+  - Declare both ceilings in the workflow definition. A workflow-level max_run_cost_usd and a per-stage max_stage_cost_usd, both optional, both absent from the shipped definition.
+  - Validate the declared ceilings at pre-flight, beside the routing table and the self-route budgets, so a definition that cannot work is refused before a stage is spent on it. A declared ceiling must be a non-negative number and must not be a bool. Zero is accepted.
+  - Keep the live allowance in state.json as one per-stage mapping of what has been spent in the current entry. The per-stage ceiling reads its own key and the per-run ceiling reads the sum, so both ceilings read one number.
+  - Reset the allowance where a resume resets the other live counters, and add nothing to what a re-entry archives — the record accounts for the whole run and stays at the run root.
+  - Write the record. A cost.json at the run root, appended once per invocation that reports a cost, carrying the run total and one entry per invocation with the stage, the entry, the attempt and the cost. Add its schema and its manifest entry.
+  - Refuse when there is nothing left to hand over. Immediately above the call that invokes the stage agent, compare the entry's spend against the run ceiling and then that stage's spend against its own ceiling.
+  - Stop the run on a ceiling through the existing escalation path, so the commit, the summary and the resume path are unchanged, but record it with its own event kind so a reader can tell a budget stop from an escalation about the work.
+  - Record a budget stop on state.json and exempt it from the unchanged-since-escalation guard, which would otherwise refuse the resume this story exists to allow.
+  - Report the accumulated spend when a run is resumed, and say when the resume is the decision to fund another allowance.
+  - State the run total in the completion report and in the escalation summary.
+  - Cover the ceilings, the allowance, the record and the resume with tests that drive a fake runner reporting recorded costs.
+  - Document the two ceilings, the allowance-and-record split, and how a ceiling is enforced both before an invocation and inside it.
+
+acceptance_criteria:
+  - AgentResult carries the cost the result event reported, and constructing one without a cost is still valid and yields None.
+  - run_agent given a budget passes it to the agent CLI as --max-budget-usd, and run_agent given none builds exactly the command it builds today, with no budget argument anywhere in it.
+  - A stage invoked under a declared ceiling is handed a budget, and that budget is the smaller of what the run has left and what the stage has left. A stage under only one declared ceiling is handed that ceiling's remainder.
+  - A stage invoked under no declared ceiling is invoked with no budget argument at all, so a runner that accepts only today's arguments is still called correctly.
+  - An invocation that ended having spent its whole allowance is treated as a budget stop rather than as a mechanical failure. It does not self-route, and the stage is not invoked again.
+  - A workflow that declares no ceiling produces a run indistinguishable from today's — no refusal, no change in routing, no change to the arguments the runner is called with, and the shipped workflow declares no ceiling.
+  - A workflow-level max_run_cost_usd that is not a non-negative number, or that is a bool, is refused at pre-flight with a message naming the workflow and the offending value, leaving no run directory, no state.json and no branch, and invoking no agent.
+  - A per-stage max_stage_cost_usd is refused at pre-flight on the same terms, with a message naming the stage.
+  - A run whose entry spend has reached or passed a declared max_run_cost_usd does not invoke the next stage. It ends with the run's spend and the ceiling both named in the reason.
+  - A stage whose spend within the entry has reached or passed its declared max_stage_cost_usd is not invoked again. It ends with the stage, its spend and its ceiling all named in the reason.
+  - When both ceilings are past, the run ceiling is the one reported.
+  - A budget stop appends an event whose kind is distinct from the kind an escalation about the work appends, and that kind is one the execution-history schema declares.
+  - A ceiling of zero refuses before any agent is invoked at all, and an absent ceiling is a different internal value from a ceiling of zero rather than the same one.
+  - state.json carries what each stage has spent in the current entry, and the value the run ceiling is compared against is the sum of it rather than a second counter.
+  - cost.json records one entry per invocation that reported a cost, with the stage, the entry, the attempt and the cost, and a total. It validates against its schema, and its schema is listed in the manifest.
+  - The total cost.json reports equals the sum of the invocation costs for that run, across a run in which a stage was invoked more than once.
+  - A resume zeroes the allowance — a run stopped on a cost ceiling resumes and proceeds rather than stopping again on the same spend — while cost.json continues from where it stood rather than restarting at zero.
+  - cost.json stays at the run root when a re-entry archives the entry's artifacts, so a resumed run's record still accounts for the invocations of every earlier entry.
+  - A resume reports the accumulated spend recorded so far, and a resume of a run that stopped on a ceiling says that resuming funds a fresh allowance.
+  - A run that stopped on a cost ceiling is resumable even when the story, the branch and the harness are all establishably unchanged, which the unchanged-since-escalation guard refuses for every other escalation.
+  - A completed run's completion report states what the run cost, and an escalated run's summary does the same.
+  - The documentation states that a ceiling is enforced in two places — the coordinator refuses to start a stage with nothing left, and the invocation itself is given the remaining allowance so it cannot spend past it — and says which of the two a reader is looking at when a run stops.
+
+technical_plan:
+  implementation_steps:
+    - Add cost_usd to AgentResult with a None default and populate it in run_agent from the result event's total_cost_usd, alongside the result text already read there.
+    - Add max_budget_usd to run_agent as an optional keyword, appending --max-budget-usd to the command when it is set, in the shape the model and allowed-tools arguments already take.
+    - Add cost_ceiling_problems to the coordinator, beside self_route_problems and reading the same loaded workflow — the workflow-level ceiling and every stage's — and call it at pre-flight beside the other two validators, refusing in the shape _refuse_bad_self_routes takes.
+    - Add stage_cost_usd to RunState as a mapping from stage name to what that stage has spent in the current entry, defaulted empty so a state file written before it existed still loads. Add the flag recording that the run stopped on a ceiling, defaulted false.
+    - Add the cost record — its path, its load, and the append that adds one invocation and rewrites the total — beside the retry-record helpers, and add schemas/cost-record.schema.json and its manifest entry.
+    - Above the runner call, compare the sum of stage_cost_usd against the workflow ceiling and then the current stage's value against that stage's ceiling. A ceiling that is absent compares nothing. Route a breach through _escalate with the new event kind, having set the flag that records the stop.
+    - Compute the remaining allowance from the same two comparisons and pass the smaller remainder to the runner as max_budget_usd. The keyword is passed only when a ceiling is declared, so a run under no ceiling calls the runner with exactly the arguments it passes today and every fake runner in the suite keeps its signature.
+    - Below the runner call, add the reported cost to the stage's key in stage_cost_usd and append the invocation to cost.json. An invocation that reports no cost adds nothing to either.
+    - Then, before the mechanical-failure checks, ask whether the invocation exhausted its allowance — the same two comparisons, against the spend just recorded. It did, and the run stops on the ceiling; it did not, and the existing checks decide as they always have. Deciding it from the recorded spend rather than from the result event's own wording keeps the harness off a string it does not own, and keeps a budget stop out of the self-route path that would otherwise re-run the stage and spend the money again.
+    - Add the new event kind to the execution-history schema's enum.
+    - In the resume branch, clear stage_cost_usd where retry_count and verification_iterations are cleared, clear the stopped-on-cost flag, and append the note reporting the accumulated total and the fresh allowance.
+    - Exempt a run carrying the stopped-on-cost flag from the unchanged_since_escalation guard, at the call site where the guard's result is acted on, so the guard itself keeps saying only what it establishes.
+    - Confirm that the artifacts a re-entry moves do not include cost.json, and that the run total is stated in the completion report and the escalation summary.
+    - Write the tests, each building the workflow it needs and driving a fake runner that reports recorded costs.
+    - Document the ceilings and the split in ARCHITECTURE.md, and add cost.json to the run directory anatomy and cost-record to the schema list.
+  likely_file_changes:
+    - file: orchestration/agent_runner.py
+      stage: implementer
+      reason: AgentResult gains the cost field, run_agent reads total_cost_usd off the result event it already parses, and run_agent gains the budget it passes to the CLI.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The pre-flight validator, the live allowance on RunState, the cost record, the refusal above the invocation, the allowance handed to each invocation, the budget stop, the resume reset and report, and the totals in the two reports.
+    - file: schemas/cost-record.schema.json
+      stage: implementer
+      reason: New — the shape of the run's recorded cost.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: The new schema is listed there.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: The event kind a budget stop appends has to be one the enum declares.
+    - file: tests/test_cost_ceiling.py
+      stage: tester
+      reason: New — the ceilings, the budget each invocation is handed, the pre-flight refusals, the allowance-and-record split across a resume, and the zero-versus-absent distinction.
+    - file: tests/test_stage_tool_grants.py
+      stage: tester
+      reason: The command run_agent builds is asserted there against a fake Popen, and it now carries a budget argument when one is given and none when one is not.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: A fourth pre-flight validator now decides whether the shipped definition is well-formed, and this module is where that assertion and its control belong.
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: Where the coordinator's state fields and event kinds are held to their contract, both of which this story adds to.
+    - file: tests/test_artifact_schemas.py
+      stage: tester
+      reason: The new schema and its manifest entry are held to the same coverage assertion every other schema is.
+    - file: tests/test_execution_history.py
+      stage: tester
+      reason: The new event kind appears in the structured history and is asserted there.
+    - file: tests/test_escalation_resume.py
+      stage: tester
+      reason: A budget stop is a resumable stop with an exemption from the unchanged guard, which is this module's subject.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The two ceilings, the live-allowance and recorded-total split, cost.json in the run directory anatomy, and the new schema in the schema list.
+
+scope:
+  modify:
+    - orchestration/agent_runner.py
+    - orchestration/story_coordinator.py
+    - schemas/
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - orchestration/harness_config.py
+    - orchestration/context_assembler.py
+    - orchestration/run_status.py
+    - orchestration/plan_validation.py
+    - scripts/
+    - prompts/
+    - README.md
+
+verification_requirements:
+  - Confirm a target that declares no ceiling behaves exactly as it does today, including the arguments the runner is called with and the command run_agent builds from them, and that the shipped workflow declares neither ceiling. This is the compatibility property and it is the one most easily lost.
+  - Confirm a stage running under a declared ceiling is handed the remaining allowance, that the allowance is the smaller of the two remainders when both ceilings are declared, and that run_agent turns it into --max-budget-usd. This is what makes the ceiling a ceiling rather than a gate that opens onto an unbounded invocation, and it is the half a between-stages check cannot deliver.
+  - Confirm an invocation that exhausted its allowance stops the run on the ceiling rather than being read as a mechanical failure, so it does not self-route and spend the allowance again.
+  - Confirm a run whose spend has passed a declared run ceiling refuses to enter the next stage, that the refusal names the ceiling and the spend, and that the event it appends is distinguishable in events.log from an escalation about the work.
+  - Confirm the same for a stage that has passed its own ceiling, and that a run past both reports the run ceiling.
+  - Confirm the allowance and the record behave differently across a resume, both halves. A resumed run gets a full allowance again, so a run stopped on cost resumes and proceeds rather than stopping again, while its recorded total continues from where it stood rather than restarting at zero.
+  - Confirm the resume reports the accumulated spend, since that is what makes the reset a decision rather than an accident.
+  - Confirm the total the harness reports matches the sum of the result records for that run, against a run with at least one retry so more than one invocation of a stage is counted.
+  - Confirm a ceiling of zero refuses before any agent is invoked, and that an absent ceiling and a zero ceiling are not the same value internally.
+  - Confirm a malformed ceiling is refused at pre-flight, leaving no run directory and invoking no agent, and that the validator is shown to report a violating definition rather than only to pass a clean one.
+  - Confirm a run that stopped on a ceiling resumes with the story, the branch and the harness all unchanged, and that every other escalation is still refused on that evidence.
+  - Confirm cost.json validates against its schema and survives a re-entry at the run root.
+  - Confirm the full suite passes, including every test that existed before this story.
+
+constraints:
+  - The cost is read from the result event the runner already parses. Nothing re-derives it by reading the log back, which would be a second parser of the harness's own output.
+  - No routing decision reads the history or the cost record. state.json remains the coordinator's only routing source, and every routing decision stays reconstructable from state.json and events.log.
+  - The coordinator stays deterministic and calls no model. Only agent_runner.py talks to one, and the tests substitute a fake runner.
+  - Absent is unbounded and is the default. A run under a definition declaring no ceiling is unchanged in every observable way, including its artifacts, its event stream, and the arguments the runner and the agent CLI are given.
+  - A budget stop is decided from the spend the harness recorded, never from the wording of a result the harness does not own.
+  - Zero and absent are different values internally, not one falsy value serving both.
+  - The live allowance and the recorded total are two facts with two lifetimes, and one name does not serve both.
+  - The entry spend the run ceiling is compared against is derived from the per-stage mapping rather than kept as a second counter, so the two ceilings cannot disagree about what has been spent.
+  - Nothing rewrites, repairs or prunes the cost record. It is evidence, and a re-entry leaves it at the run root.
+  - max_retries and max_self_routes are untouched. Cost is a peer of the retry ceiling and is not derived from it.
+  - A budget stop is a reason to stop, never a reason to wait. Nothing here retries, sleeps or backs off.
+  - The ceilings are declared in the workflow definition, which is one place. No ceiling value is read from the execution rules or from the target's configuration.
+  - Tests build the workflow they need rather than reading the shipped definition, except where the shipped definition is itself the subject.
+  - No existing assertion is weakened, skipped or deleted to make the suite pass.
