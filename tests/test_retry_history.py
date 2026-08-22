@@ -654,8 +654,13 @@ def test_the_new_artifact_did_not_displace_the_guidance_in_the_prompt_context(
 #: recorded fact into a human report is not a routing decision: nothing
 #: branches on what it reads and the summary routes nothing, which is exactly
 #: what the scan below and its planted control still hold everywhere else.
+#: Since story-062 the same reasoning admits the function that totals the
+#: attempts a resumed run has taken in all. Counting a record is not a routing
+#: decision either: nothing branches on what it reads, and the number it
+#: returns is reported to a developer rather than compared against a ceiling —
+#: retry_count is still the only thing max_retries is weighed against.
 RECORD_AWARE = ("_retry_record_file", "load_retry_records", "append_retry_record",
-                "_retry_history_section")
+                "_retry_history_section", "accumulated_attempts")
 
 #: The three ways a function could reach the artifact.
 RECORD_REFERENCES = ("load_retry_records", "_retry_record_file", "retry-history")
@@ -684,9 +689,10 @@ COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
 
 def test_no_routing_decision_reads_the_retry_history():
     assert record_readers(COORDINATOR_SOURCE) == []
-    # The reads in the module are the writer appending to what is there, and
-    # the escalation summary rendering it.
-    assert COORDINATOR_SOURCE.count("load_retry_records(") == 3
+    # The reads in the module are the writer appending to what is there, the
+    # escalation summary rendering it, and — since story-062 — the total the
+    # summary and l5-status report of a resumed run.
+    assert COORDINATOR_SOURCE.count("load_retry_records(") == 4
     body = ast.unparse(next(
         node for node in ast.parse(COORDINATOR_SOURCE).body
         if isinstance(node, ast.FunctionDef) and node.name == "append_retry_record"

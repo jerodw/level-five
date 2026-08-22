@@ -87,6 +87,15 @@ def format_detail(target_root: Path, story_id: str) -> str:
         ("retry count", str(state.retry_count)),
         ("branch", state.branch),
         ("verification iterations", str(state.verification_iterations)),
+        # The two counters above are scoped to the entry now running: a resume
+        # restores the run's attempt allowance by zeroing them. Read alone they
+        # would understate a resumed run, so the entry index and the total the
+        # records actually hold sit beside them rather than in place of them.
+        ("entry index", str(state.resume_count)),
+        (
+            "attempts this run",
+            str(story_coordinator.accumulated_attempts(run_dir, state)),
+        ),
     ]
     width = max(len(label) for label, _ in fields)
     lines = [f"{label.ljust(width)}  {value}" for label, value in fields]

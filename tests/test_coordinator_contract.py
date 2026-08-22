@@ -181,6 +181,14 @@ def state_contract_problems(state: dict) -> list[str]:
         # bound is one pass per run and that bound is what makes the mechanism
         # terminate.
         "correction_pass_count": int,
+        # story-062's entry index: which entry of the run is now executing,
+        # zero for the first and one higher after each resume. Defaulted like
+        # the fields above, so a state file written before it existed reads as
+        # the first entry. It is what namespaces the counter-keyed artifacts an
+        # entry leaves behind, which is what lets a resume zero retry_count and
+        # verification_iterations without writing over an earlier entry's
+        # evidence.
+        "resume_count": int,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []
