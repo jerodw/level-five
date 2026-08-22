@@ -2858,20 +2858,76 @@ def completion_commit_subject(story_id: str, title: str) -> str:
     return f"{story_id}: {title}"
 
 
-def completion_commit_message(state: RunState, title: str) -> str:
+#: The paragraph the amended completion commit carries in addition to the
+#: marker. Amending this story's escalation commit rewrites the only
+#: trunk-visible record of the escalation, so what that record said has to
+#: survive into the message replacing it: that the run escalated, that this
+#: commit carries the whole working tree the escalation committed, and that
+#: the escalation's undo command no longer describes the branch.
+AMENDED_COMPLETION_NOTE = (
+    "This run escalated before it finished, and this commit is that "
+    "escalation's, amended rather than added to. It carries the whole "
+    "working tree the escalation committed, and the escalation's undo "
+    f"command ({ESCALATION_UNDO_COMMAND}) no longer applies to it."
+)
+
+
+def completion_commit_message(
+    state: RunState, title: str, *, amended: bool = False
+) -> str:
     """The completion commit's message: the story it finished, and by what.
 
-    Byte for byte what `_complete` composed inline before it was extracted.
-    The subject names the story as a reader scanning the branch would want it
-    named; the body is the single marker sentence, which is what makes the
-    commit recognizable as a finished run's rather than as anyone's commit
-    about the story.
+    Without `amended` this is byte for byte what `_complete` composed inline
+    before it was extracted. The subject names the story as a reader scanning
+    the branch would want it named; the body is the single marker sentence,
+    which is what makes the commit recognizable as a finished run's rather
+    than as anyone's commit about the story.
+
+    `amended` is for the one case in which `_complete` rewrites a commit
+    instead of adding one — a clean tree standing on this story's own
+    escalation commit, see `_complete`. It adds a paragraph *below* the
+    marker: the subject and the marker sentence are unchanged, so the amended
+    commit is recognised by exactly what recognises every other completion,
+    and there is still one composition of both.
     """
+    body = COMPLETION_COMMIT_MARKER
+    if amended:
+        body = f"{body}\n\n{AMENDED_COMPLETION_NOTE}"
     return (
         f"{completion_commit_subject(state.story_id, title)}\n"
         f"\n"
-        f"{COMPLETION_COMMIT_MARKER}"
+        f"{body}"
     )
+
+
+#: What a squash merge writes before each folded commit's subject when it
+#: composes the merge commit's body. Stripped before a line is compared
+#: against the completion subject shape, so a completion that reaches the
+#: trunk as one bullet of a squashed body is still recognised.
+MERGE_BULLETS = ("* ", "- ")
+
+
+def _carries_completion_subject(message: str, story_id: str) -> bool:
+    """Whether any line of `message` names `story_id` in the completion shape.
+
+    Any line rather than the subject line, because a merge method decides
+    where a commit's subject ends up: a squash merge writes the pull request's
+    title as the subject and the folded commits' messages into the body, so
+    the completion subject arrives as a bulleted line partway down. The bullet
+    is stripped before the comparison; nothing else about the line is
+    tolerated, so a commit whose message merely mentions the story is not a
+    completion.
+    """
+    prefix = completion_commit_subject(story_id, "")
+    for line in message.splitlines():
+        text = line.strip()
+        for bullet in MERGE_BULLETS:
+            if text.startswith(bullet):
+                text = text[len(bullet):].strip()
+                break
+        if text.startswith(prefix) and text != prefix:
+            return True
+    return False
 
 
 def completion_commits(target_root: Path, branch: str, story_id: str) -> list[str]:
@@ -2879,10 +2935,23 @@ def completion_commits(target_root: Path, branch: str, story_id: str) -> list[st
 
     One "<abbrev sha> <subject>" line per match, newest first, and an empty
     list when there is nothing to say. A commit qualifies on two pieces of
-    evidence together: a subject of the completion shape for *this* story, and
-    a body carrying `COMPLETION_COMMIT_MARKER`. Neither alone is enough — the
-    subject shape is one a hand-written commit can wear, and the marker without
-    the subject would report another story's run.
+    evidence together: a line of the completion shape for *this* story, and
+    `COMPLETION_COMMIT_MARKER`. Neither alone is enough — the subject shape is
+    one a hand-written commit can wear, and the marker without a line naming
+    this story would report another story's run.
+
+    Both are required *anywhere in the message*, subject and body together,
+    rather than in particular fields of it, and that is what makes a
+    squash-merged completion recognisable: a squash writes the pull request's
+    title as the subject and the folded commits' messages into the body, so
+    matching the completion subject against `%s` alone found nothing however
+    the run had ended. Requiring both together still holds, so a commit
+    carrying only the subject shape and one carrying only the marker are both
+    rejected. Together with `_complete` amending this story's escalation
+    commit rather than adding an empty one on top of it, no merge method can
+    drop the completion any longer: a merge commit keeps it, a rebase has a
+    non-empty commit to replay, and a squash folds its message into the body
+    where this reads it.
 
     Reachability from the branch is the whole test, deliberately rather than
     `<base>..<branch>`. Being ahead of a base is no longer the same thing as
@@ -2910,11 +2979,14 @@ def completion_commits(target_root: Path, branch: str, story_id: str) -> list[st
         if len(fields) != 3:
             continue
         sha, subject, body = fields
-        prefix = completion_commit_subject(story_id, "")
-        if not subject.startswith(prefix) or subject == prefix:
+        message = f"{subject}\n{body}"
+        if COMPLETION_COMMIT_MARKER not in message:
             continue
-        if COMPLETION_COMMIT_MARKER not in body:
+        if not _carries_completion_subject(message, story_id):
             continue
+        # The commit's real subject, not the line that matched: a squashed
+        # completion's subject is the pull request's title, and that is what a
+        # reader scanning the trunk sees.
         found.append(f"{sha} {subject}")
     return found
 
@@ -2947,6 +3019,22 @@ def escalated_story(subject: str) -> str | None:
     pattern = pattern.replace(re.escape("{stage}"), r"\S.*")
     match = re.fullmatch(pattern, subject.strip())
     return match.group("story_id") if match else None
+
+
+def _head_escalated(target_root: Path) -> str | None:
+    """The story id HEAD's subject names as an escalation, or None.
+
+    Reads only, and answers None whenever it cannot establish otherwise — an
+    unreadable HEAD, a root that is not a git repository, a subject of any
+    other shape. `_complete` amends only on a positive answer, the same
+    one-directional bias `completion_commits` and `dirty_paths` take: the cost
+    of answering None is the empty commit the harness already wrote, and the
+    cost of a false yes is a rewritten commit that was not this run's.
+    """
+    result = _git(target_root, "log", "-1", "--format=%s")
+    if result.returncode != 0:
+        return None
+    return escalated_story(result.stdout.strip())
 
 
 def escalation_commit_message(state: RunState, reason: str) -> str:
@@ -3602,16 +3690,37 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     )
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
     _git(target_root, "add", "-A")
-    # `--allow-empty`, for the reason the escalation commits carry it: the
-    # commit is how a finished run is recognised — completion_commits reads it,
-    # and the pre-flight that refuses a re-run onto a finished branch reads
-    # that — so a run whose last stage changed no repository file must still
-    # leave one. Before story-045 the documenter ran last and all but
-    # guaranteed a dirty tree here; with the verifier last, a run that entered
-    # at it writes only run-directory artifacts, which a repository ignoring
-    # its run directory has nothing to commit from.
-    _git(target_root, "commit", "--allow-empty", "-m",
-         completion_commit_message(state, title))
+    # Three outcomes, decided by what staging left and by what the branch tip
+    # is. `--allow-empty` in two of them, for the reason the escalation commits
+    # carry it: the commit is how a finished run is recognised —
+    # completion_commits reads it, and the pre-flight that refuses a re-run
+    # onto a finished branch reads that — so a run whose last stage changed no
+    # repository file must still leave one. Before story-045 the documenter ran
+    # last and all but guaranteed a dirty tree here; with the verifier last, a
+    # run that entered at it writes only run-directory artifacts, which a
+    # repository ignoring its run directory has nothing to commit from.
+    #
+    # The middle case is the one story-065 adds. An empty commit exists on the
+    # branch and says the story finished, but a rebase merge discards it and a
+    # squash folds it, so a run that escalated and then resumed reached the
+    # trunk with nothing saying it had ended. When the tree is clean *and* the
+    # branch tip is an escalation commit of the story being run, the completion
+    # message amends that commit instead: the trunk then sees one commit that
+    # both carries the work the escalation committed and says the story
+    # finished, which every merge method preserves. The amend is confined to
+    # exactly that shape — the escalation is recognised through
+    # `escalated_story`, by what the commit says about itself rather than by
+    # its position or by counting — because rewriting anyone else's commit,
+    # including another story's escalation, is not this run's to do.
+    if _git(target_root, "diff", "--cached", "--quiet").returncode != 0:
+        _git(target_root, "commit", "--allow-empty", "-m",
+             completion_commit_message(state, title))
+    elif _head_escalated(target_root) == state.story_id:
+        _git(target_root, "commit", "--amend", "--allow-empty", "-m",
+             completion_commit_message(state, title, amended=True))
+    else:
+        _git(target_root, "commit", "--allow-empty", "-m",
+             completion_commit_message(state, title))
     append_event(
         run_dir,
         f"story completed on branch {state.branch}",

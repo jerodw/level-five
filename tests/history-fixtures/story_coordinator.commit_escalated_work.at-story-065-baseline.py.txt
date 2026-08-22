@@ -1,0 +1,39 @@
+def commit_escalated_work(
+    target_root: Path,
+    state: RunState,
+    reason: str,
+    *,
+    run_dir: Path | None = None,
+) -> str:
+    """Open the escalation's commit of what the run left, and name it.
+
+    This is the first of the two commits an escalation makes: the run's own
+    record of the escalation — state.json, both renderings of the event stream
+    — so that the sha it returns can be written into state.json and committed,
+    with the work, by `commit_escalated_tree` on top of it. A commit cannot
+    carry its own sha, and that is the whole reason the record and the work are
+    two commits rather than one.
+
+    Returns the commit, or "" when the escalated run left nothing to commit at
+    all — an escalation with a clean tree records no commit, commits nothing
+    further, and is not an error. It establishes nothing about the tree it
+    commits, exactly as _complete does not: both stage whatever the working
+    tree holds.
+
+    `--allow-empty`, because a repository that ignores its run directory has no
+    record to commit here and must still leave the same two-commit shape: the
+    undo command named in the message names one revision and has to be right in
+    both shapes.
+    """
+    if not _git(target_root, "status", "--porcelain").stdout.strip():
+        return ""
+    if run_dir is not None:
+        _git(target_root, "add", "-A", "--", str(run_dir))
+    committed = _git(
+        target_root,
+        "commit",
+        "--allow-empty",
+        "-m",
+        escalation_commit_message(state, reason),
+    )
+    return _revision(target_root) if committed.returncode == 0 else ""

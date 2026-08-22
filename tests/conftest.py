@@ -834,11 +834,19 @@ def _escalation_message(story_id: str, stage: str) -> str:
         state, "the constructed story stopped here")
 
 
-def _completion_message(story_id: str, title: str) -> str:
-    """The message the coordinator writes when a run finishes, likewise."""
+def _completion_message(story_id: str, title: str, *,
+                        amended: bool = False) -> str:
+    """The message the coordinator writes when a run finishes, likewise.
+
+    `amended` asks for the form `_complete` writes when it rewrites this
+    story's own escalation commit rather than adding a commit on top of it.
+    Composed through the coordinator either way, so a constructed history
+    never carries a second spelling of the subject or the marker.
+    """
     state = story_coordinator.RunState(story_id=story_id,
                                        branch=f"story/{story_id}")
-    return story_coordinator.completion_commit_message(state, title)
+    return story_coordinator.completion_commit_message(state, title,
+                                                       amended=amended)
 
 
 def escalating_story(tmp_path: Path, *,
@@ -848,6 +856,7 @@ def escalating_story(tmp_path: Path, *,
                      resumed: bool = True,
                      respected: Sequence[str] = (),
                      violated: Sequence[str] = (),
+                     amended: bool = False,
                      validation_rel: str = CONSTRUCTED_VALIDATION_REL,
                      name: str = "escalating-story") -> Path:
     """A repository in which one story escalated with its file already written.
@@ -866,6 +875,14 @@ def escalating_story(tmp_path: Path, *,
 
     With `resumed` false there is no completion commit at all: a story that
     escalated and has not resumed.
+
+    With `amended` the resumed run found nothing to commit and stood on its own
+    escalation commit, so the completion message *amends* the last escalation
+    instead of being added after it: the branch tip then carries the completion
+    subject and marker over the tree the escalation committed, and the story
+    has one commit fewer than the `amended`-false shape. That is what
+    `_complete` leaves behind since story-065, and the two shapes side by side
+    are what an assertion about either end of a range is told apart by.
     """
     root = Path(tmp_path) / name
     root.mkdir(parents=True)
@@ -885,7 +902,13 @@ def escalating_story(tmp_path: Path, *,
                    + f"\n# what attempt {index + 1} had written\n")
         _commit(root, _escalation_message(story_id, stage))
 
-    if resumed:
+    if resumed and amended:
+        if violated:
+            raise ValueError("an amended completion commits nothing of its "
+                             "own, so it cannot be the commit that touches a "
+                             "violated path")
+        _amend(root, _completion_message(story_id, title, amended=True))
+    elif resumed:
         _write(root, "unrelated.txt", "the story's own legitimate change\n")
         for guarded in violated:
             subject, _ = _sample_under(guarded)
@@ -968,6 +991,150 @@ def squash_onto(root: Path, base: str, message: str = "squashed") -> str:
     return _commit(root, message)
 
 
+#: The trunk a constructed story branch is cut from and merged back into.
+#: Named rather than left to `git init`'s default, which differs by git
+#: version and by the developer's own configuration.
+CONSTRUCTED_TRUNK = "trunk"
+
+
+#: The three branch shapes a completion can reach a trunk in. The keys are
+#: what `story_branch_on_trunk` builds and what a parametrised test derives
+#: its cases from, so no module writes a fourth name of its own.
+#:
+#:   `amended`      -- one commit carrying both the work the escalation
+#:                     committed and the completion message: what `_complete`
+#:                     leaves since story-065.
+#:   `added`        -- the escalation commit with a separate *empty* completion
+#:                     commit on top of it: the way the harness built one
+#:                     before story-065, and the shape a rebase drops.
+#:   `unescalated`  -- one ordinary completion commit carrying the work: a run
+#:                     that never escalated.
+BRANCH_SHAPES = ("amended", "added", "unescalated")
+
+#: What the story's own commit writes into the branch, so that every shape
+#: above carries the same tree and the shapes differ in their commits alone.
+CONSTRUCTED_WORK_REL = "work.py"
+
+
+def story_branch_on_trunk(tmp_path: Path, *, shape: str,
+                          story_id: str = CONSTRUCTED_STORY_ID,
+                          title: str = CONSTRUCTED_STORY_TITLE,
+                          stage: str = "verifier",
+                          name: str | None = None) -> Path:
+    """A repository with a moved-on trunk and a story branch of `shape`.
+
+    The input a merge assertion needs: `CONSTRUCTED_TRUNK` holds the pre-story
+    commit and one commit of its own made after the branch was cut -- so a
+    merge is a real merge and a rebase has something to replay onto -- and
+    `story/<story_id>` holds the story, built in one of `BRANCH_SHAPES`.
+
+    Every shape leaves the same tree on the branch. What differs is the commits
+    the trunk is asked to take, which is the whole subject of a merge-method
+    assertion.
+    """
+    if shape not in BRANCH_SHAPES:
+        raise ValueError(f"shape must be one of {BRANCH_SHAPES}, not {shape!r}")
+    root = Path(tmp_path) / (name or f"{shape}-branch")
+    root.mkdir(parents=True)
+    _run_git(root, "init", "-q")
+    _run_git(root, "config", "user.email", "t@t")
+    _run_git(root, "config", "user.name", "t")
+    _write(root, "unrelated.txt", "something the story may touch\n")
+    _commit(root, "pre-story")
+    _run_git(root, "branch", "-M", CONSTRUCTED_TRUNK)
+
+    _run_git(root, "checkout", "-q", "-b", f"story/{story_id}")
+    _write(root, CONSTRUCTED_WORK_REL, "the work the story committed\n")
+    if shape == "unescalated":
+        _commit(root, _completion_message(story_id, title))
+    else:
+        _commit(root, _escalation_message(story_id, stage))
+        if shape == "amended":
+            _amend(root, _completion_message(story_id, title, amended=True))
+        else:
+            _commit(root, _completion_message(story_id, title))
+
+    _run_git(root, "checkout", "-q", CONSTRUCTED_TRUNK)
+    _write(root, "trunk-moved.txt", "a commit the trunk took meanwhile\n")
+    _commit(root, "the trunk moved on while the story was in flight")
+    return root
+
+
+def merge_commit(root: Path, branch: str, trunk: str = CONSTRUCTED_TRUNK
+                 ) -> str:
+    """`branch` taken by `trunk` as a merge commit: every commit preserved."""
+    root = Path(root)
+    _run_git(root, "checkout", "-q", trunk)
+    _run_git(root, "merge", "-q", "--no-ff", "-m",
+             f"Merge branch '{branch}'", branch)
+    return _run_git(root, "rev-parse", "HEAD").strip()
+
+
+#: What a squash merge writes before each folded commit when it composes the
+#: merge commit's body. The forge's own default, reproduced here because the
+#: body is exactly what decides whether a completion survives a squash.
+SQUASH_BULLET = "* "
+
+
+def squash_merge(root: Path, branch: str, trunk: str = CONSTRUCTED_TRUNK, *,
+                 pull_request_title: str = "Land the story (#7)") -> str:
+    """`branch` taken by `trunk` as one squashed commit.
+
+    A real `git merge --squash` for the tree, then the commit the forge makes
+    of it: the pull request's *title* as the subject -- which is why matching a
+    completion against `%s` alone found nothing -- and the folded commits'
+    whole messages as the body, oldest first, each led by `SQUASH_BULLET`.
+
+    The body is composed from the branch's own commits rather than from
+    `.git/SQUASH_MSG`, whose `Squashed commit of the following:` form is git's
+    and not the one a story reaches a trunk in.
+    """
+    root = Path(root)
+    _run_git(root, "checkout", "-q", trunk)
+    _run_git(root, "merge", "-q", "--squash", branch)
+    log = _run_git(root, "log", "--reverse", "--format=%B%x00",
+                   f"{trunk}..{branch}")
+    folded = [message.strip("\n") for message in log.split("\0")
+              if message.strip()]
+    body = "\n\n".join(
+        SQUASH_BULLET + message.replace("\n", "\n  ").strip()
+        for message in folded)
+    _run_git(root, "commit", "-q", "-m", pull_request_title, "-m", body)
+    return _run_git(root, "rev-parse", "HEAD").strip()
+
+
+def rebase_merge(root: Path, branch: str, trunk: str = CONSTRUCTED_TRUNK
+                 ) -> str:
+    """`branch` replayed onto `trunk` and fast-forwarded, as a forge rebases.
+
+    `--no-keep-empty --empty=drop` rather than the bare command, because bare
+    `git rebase` *keeps* a commit that was already empty before the replay and
+    a forge's rebase-merge does not -- it replays each commit as a cherry-pick,
+    and a cherry-pick of an empty commit produces nothing. Dropping is what
+    this repository's own trunk shows: two escalated stories reached it
+    carrying their escalation commit and nothing saying they had finished,
+    which is the defect story-065 exists to repair. Reproducing the forge
+    rather than the local default is the whole point of driving a real rebase
+    here.
+    """
+    root = Path(root)
+    _run_git(root, "checkout", "-q", branch)
+    _run_git(root, "rebase", "-q", "--no-keep-empty", "--empty=drop", trunk)
+    _run_git(root, "checkout", "-q", trunk)
+    _run_git(root, "merge", "-q", "--ff-only", branch)
+    return _run_git(root, "rev-parse", "HEAD").strip()
+
+
+#: The three ways a trunk takes a branch, by the name a reader knows each by.
+#: A module parametrises over this mapping rather than naming the methods
+#: itself, so a method added here is a method every merge assertion drives.
+MERGE_METHODS = {
+    "merge commit": merge_commit,
+    "squash merge": squash_merge,
+    "rebase merge": rebase_merge,
+}
+
+
 def _write(root: Path, relative: str, text: str) -> Path:
     path = Path(root) / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -984,6 +1151,14 @@ def _commit(root: Path, message: str) -> str:
     _run_git(root, "add", "-A")
     _run_git(root, "-c", "user.email=t@t", "-c", "user.name=t",
              "commit", "-q", "--allow-empty", "-m", message)
+    return _run_git(root, "rev-parse", "HEAD").strip()
+
+
+def _amend(root: Path, message: str) -> str:
+    """HEAD's message replaced, its tree kept: the shape `_complete` amends to."""
+    _run_git(root, "add", "-A")
+    _run_git(root, "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "--amend", "--allow-empty", "-m", message)
     return _run_git(root, "rev-parse", "HEAD").strip()
 
 

@@ -1,0 +1,16 @@
+def commit_escalated_tree(target_root: Path, state: RunState, reason: str) -> None:
+    """Commit the work the escalated run left, on top of its record.
+
+    The second of the two commits, and the branch tip an escalation leaves. It
+    carries the same message as the commit it sits on, because it is the same
+    escalation: a reader scanning the branch should meet the escalation rather
+    than a bookkeeping entry.
+    """
+    _git(target_root, "add", "-A")
+    _git(
+        target_root,
+        "commit",
+        "--allow-empty",
+        "-m",
+        escalation_commit_message(state, reason),
+    )
