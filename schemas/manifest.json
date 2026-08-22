@@ -4,6 +4,7 @@
     "claim-support-result",
     "clean-clone-result",
     "correction-pass",
+    "cost-record",
     "execution-history",
     "harness-config",
     "retry-guidance",

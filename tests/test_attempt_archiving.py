@@ -123,7 +123,7 @@ class StampingRunner:
         self.attempts_dirs_seen: list[tuple[str, list[str]]] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None):
+                 allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         attempts = self.run_dir / "attempts"
         self.attempts_dirs_seen.append((

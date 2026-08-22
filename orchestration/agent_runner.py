@@ -25,6 +25,12 @@ GUARD_PLACEHOLDER = "{guard_path}"
 class AgentResult:
     ok: bool
     result_text: str
+    #: What the invocation reported spending, in US dollars, taken from the
+    #: total_cost_usd the result event already carries. Defaulted to None so a
+    #: caller constructing a result without one — every fake runner the suite
+    #: injects — is unchanged, and so that "this invocation reported no cost"
+    #: stays distinguishable from "this invocation cost nothing".
+    cost_usd: float | None = None
 
 
 def hooks_dir(harness_root: Path | None = None) -> Path:
@@ -60,12 +66,20 @@ def run_agent(
     permission_mode: str = "acceptEdits",
     model: str | None = None,
     allowed_tools: list[str] | None = None,
+    max_budget_usd: float | None = None,
 ) -> AgentResult:
     """Run `claude -p` with the rendered prompt on stdin.
 
     Raw stream-json output is appended to log_path so every run remains
     inspectable after the fact. The agent's final result message is
-    returned to the coordinator.
+    returned to the coordinator, along with what the invocation reported
+    spending.
+
+    `max_budget_usd` is the allowance this one invocation may spend. It is
+    handed to the CLI, so the invocation stops itself rather than being stopped
+    afterwards — which is what makes a ceiling a ceiling rather than a gate
+    between stages. Unset, no budget argument appears in the command at all and
+    it is exactly the command this built before the parameter existed.
     """
     cmd = [
         "claude",
@@ -80,6 +94,10 @@ def run_agent(
         cmd += ["--model", model]
     if allowed_tools:
         cmd += ["--allowedTools", *allowed_tools]
+    # `is not None` rather than truthiness: zero is a deliberate refusal to
+    # spend anything and must reach the CLI, where an unset budget must not.
+    if max_budget_usd is not None:
+        cmd += ["--max-budget-usd", str(max_budget_usd)]
     # Every stage invocation carries the deny-only Bash guard. It is resolved
     # here rather than passed in, so run_agent's signature is unchanged and no
     # caller — including the fake runners the suite injects — has to know the
@@ -90,6 +108,7 @@ def run_agent(
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     result_text = ""
+    cost_usd: float | None = None
     with open(log_path, "a", encoding="utf-8") as log:
         log.write(f"\n===== stage: {stage} =====\n")
         proc = subprocess.Popen(
@@ -117,7 +136,16 @@ def run_agent(
                 continue
             if event.get("type") == "result":
                 result_text = event.get("result") or ""
+                # The cost is carried, not computed. It is read off the same
+                # result event the text is read off, so nothing re-derives it
+                # by reading the log back — that would be a second parser of
+                # the harness's own output.
+                reported = event.get("total_cost_usd")
+                if isinstance(reported, (int, float)) and not isinstance(
+                    reported, bool
+                ):
+                    cost_usd = float(reported)
         writer.join()
         code = proc.wait()
 
-    return AgentResult(ok=(code == 0), result_text=result_text)
+    return AgentResult(ok=(code == 0), result_text=result_text, cost_usd=cost_usd)

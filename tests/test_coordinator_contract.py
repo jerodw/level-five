@@ -189,6 +189,19 @@ def state_contract_problems(state: dict) -> list[str]:
         # verification_iterations without writing over an earlier entry's
         # evidence.
         "resume_count": int,
+        # story-063's live cost allowance: what the current entry of the run
+        # has spent, which is what the run ceiling is compared against.
+        # Defaulted like the fields above, so a state file written before it
+        # existed loads as having spent nothing. It is the *allowance*, not the
+        # record: it is entry-scoped and a resume zeroes it, while cost.json
+        # accounts for the whole run and is never reset.
+        "entry_cost_usd": float,
+        # story-063's budget-stop flag: whether the run stopped on a cost
+        # ceiling. Defaulted like the fields above, and false means it stopped
+        # for some other reason or has not stopped. It is what exempts such a
+        # run from the unchanged-since-escalation guard, which would otherwise
+        # refuse the resume the ceiling exists to allow.
+        "stopped_on_cost": bool,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []
@@ -205,7 +218,13 @@ def state_contract_problems(state: dict) -> list[str]:
         if field not in state:
             continue
         value = state[field]
-        if isinstance(value, bool) or not isinstance(value, expected):
+        # A bool is an int to `isinstance`, so a field pinned as an int must
+        # reject one — that exclusion is why this reads the way it does. Since
+        # story-063 one field is pinned as a bool, and excluding bools there
+        # would reject the only value it can hold, so the exclusion applies to
+        # every field the contract does not pin as a bool.
+        wrong_bool = isinstance(value, bool) and expected is not bool
+        if wrong_bool or not isinstance(value, expected):
             problems.append(
                 f"{field}: expected {expected.__name__}, found "
                 f"{type(value).__name__} ({value!r})"
@@ -422,7 +441,7 @@ class FakeRunner:
             json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None):
+                 allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         if stage == WRITING:
             self._write_json(conftest.CHANGED_FILES, {

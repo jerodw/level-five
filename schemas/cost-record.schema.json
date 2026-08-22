@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cost-record",
+  "description": "What a run cost: one entry per stage invocation that reported a cost, and their total. Coordinator-written rather than stage-written, so it appears in no stage's schemas map, no agent is asked to satisfy it, and the coordinator does not validate its own write at run time. It is the *record* half of this harness's cost tracking, and the live allowance on state.json is the other: a record accounts for the whole run and is never reset, while the allowance is policy and is zeroed when a human re-enters the run. So this file stays at the run root when a re-entry archives an entry's artifacts, and a resumed run's record still accounts for the invocations of every earlier entry. Nothing rewrites, repairs or prunes it, and no routing decision reads it -- the ceiling is compared against state.json, which is the coordinator's only routing source.",
+  "type": "object",
+  "required": ["total_usd", "invocations"],
+  "properties": {
+    "total_usd": {
+      "type": "number",
+      "description": "The sum of every invocation's cost_usd below, in US dollars. Rewritten each time an invocation is appended, so it is always the total of the list beside it rather than a figure that can disagree with it."
+    },
+    "invocations": {
+      "type": "array",
+      "description": "One entry per stage invocation that reported a cost, in the order they were invoked. An invocation reporting none adds nothing here and nothing to the total, so the absence of an entry means the harness was told no cost rather than that the invocation was free.",
+      "items": {
+        "type": "object",
+        "required": ["stage", "entry", "attempt", "cost_usd"],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "description": "The workflow stage that was invoked."
+          },
+          "entry": {
+            "type": "integer",
+            "description": "Which entry of the run this invocation belongs to: zero for the first, one after the first resume, and so on -- the same number state.json records as resume_count. It is here because the allowance resets at a re-entry and this record does not, so an entry index is what lets a reader see which invocations a given allowance covered."
+          },
+          "attempt": {
+            "type": "integer",
+            "description": "The 1-based attempt within that entry, the same number the rendered prompt filename carries. A self-route does not move it, so a stage invoked twice within one attempt appears twice under the same number."
+          },
+          "cost_usd": {
+            "type": "number",
+            "description": "What this one invocation reported spending, in US dollars, exactly as the result event reported it. It is carried, never computed: nothing re-derives it by reading the agent log back."
+          }
+        }
+      }
+    }
+  }
+}

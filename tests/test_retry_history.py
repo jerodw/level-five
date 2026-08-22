@@ -178,7 +178,7 @@ class RetryRunner:
         self.history_seen: list[tuple[str, bool]] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None):
+                 allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
         self.history_seen.append((stage, (self.run_dir / ARTIFACT).is_file()))
         if self.delete_history_each_stage:

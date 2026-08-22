@@ -35,6 +35,7 @@
           "correction-pass-routed",
           "correction-pass-recorded",
           "self-routed",
+          "budget-stopped",
           "escalated",
           "story-completed",
           "note"
