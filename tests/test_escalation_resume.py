@@ -307,13 +307,43 @@ def creates_a_module(root: Path, attempt: int) -> dict:
     return {"modified": [], "created": [f"src/attempt_{attempt}.py"], "deleted": []}
 
 
+def attempt_directories(run_dir: Path) -> list[str]:
+    """Every archived attempt in the run, wherever an entry boundary put it.
+
+    A resume moves attempts/ under the entry directory it opens, so a listing
+    of the run root alone stops seeing the attempts an earlier entry took. The
+    names are what the assertions here compare, so both places are searched and
+    the subject stays "which attempts were archived". The directory name is
+    derived from `attempt_dir` rather than written here.
+    """
+    attempts = story_coordinator.attempt_dir(run_dir, 1).parent.name
+    return sorted(path.name for path in run_dir.glob(f"**/{attempts}/*"))
+
+
+def archived_attempt(run_dir: Path, attempt: int, entry: int = 1) -> Path:
+    """Where the archive of one attempt is found after the resume that made it.
+
+    A resume archives the interrupted attempt into attempts/attempt-N/ and then
+    moves attempts/ into the entry it opens, so the archive is one directory
+    further down than `attempt_dir` alone names. Composed from the two helpers
+    that name those directories, so neither is spelled here.
+    """
+    return story_coordinator.entry_dir(run_dir, entry) / (
+        story_coordinator.attempt_dir(run_dir, attempt).relative_to(run_dir)
+    )
+
+
 class Runner:
     """A fake agent runner: each stage writes its artifacts, and a stage
     holding an edit also makes that edit in the target's working tree.
 
     It records, at the entry to every stage, which attempt directories already
     existed — which is how "archived *before* the resumed stage runs" is
-    checked as a fact about the run rather than about its final state.
+    checked as a fact about the run rather than about its final state. The
+    listing covers the whole run directory rather than its root alone, because
+    a resume moves attempts/ into the entry it opens and the subject of every
+    assertion below is *which* attempts have been archived rather than which
+    entry is holding them.
     """
 
     def __init__(self, target_root: Path, edits: dict | None = None,
@@ -338,10 +368,7 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None):
         self.calls.append(stage)
-        archives = self.run_dir / "attempts"
-        self.archives_seen.append(
-            (stage, sorted(p.name for p in archives.glob("*")) if archives.is_dir() else [])
-        )
+        self.archives_seen.append((stage, attempt_directories(self.run_dir)))
         attempt = max(1, self.calls.count(RETRY_STAGE))
 
         if stage == WRITING:
@@ -1038,27 +1065,44 @@ def test_a_crashed_run_still_resumes_exactly_as_it_did(target, harness_root):
     first_stage, archives_at_entry = crashed.archives_seen[0]
     assert first_stage == VALIDATING
     assert archives_at_entry == ["attempt-1"]
-    assert story_coordinator.attempt_dir(run_dir, 1).is_dir()
+    assert archived_attempt(run_dir, 1).is_dir()
 
 
 # --------------------------------------------------------------------------
-# The counters are carried forward, and the escalated attempt survives
+# The counters are reset, and the escalated attempt survives anyway
+#
+# These two used to assert the counters were carried across a resume, and the
+# second was the control saying why they had to be: a reset would have written
+# over the escalated attempt's verification iteration. story-062 reverses the
+# policy and keeps the evidence by moving the entry rather than by refusing to
+# reset, so each states the guarantee that now holds. The subject of the pair
+# is unchanged — the escalated attempt's rendered prompt and its verification
+# iteration are still readable, unmodified, after the resumed run finishes.
 # --------------------------------------------------------------------------
 
 
-def test_a_resumed_run_carries_the_counters_and_preserves_the_attempt(
+def test_a_resumed_run_restores_the_counters_and_preserves_the_attempt(
     target, harness_root,
 ):
-    """The whole point of not reinitializing: the escalated attempt's rendered
-    prompt and its verification iteration are still there, unmodified, after
-    the resumed run has finished."""
+    """The escalated attempt's rendered prompt and verification iteration are
+    still there after the resumed run has finished — under the entry directory
+    the resume archived them into, at the bytes they had before it ran — while
+    the counters have gone back to zero and the resumed run's own writing is at
+    the run root under the names a first attempt uses.
+
+    Compared against content captured before the resume rather than against a
+    path existing, and both copies are asserted, so an archive that had simply
+    copied the fresh rendering back over itself fails here.
+    """
     escalate(target, harness_root, AFTER_A_RETRY)
     escalated = state_of(target)
     assert escalated["retry_count"] == 1
     assert escalated["verification_iterations"] == 2
+    assert escalated["resume_count"] == 0
 
     run_dir = run_dir_of(target)
-    prompt = (run_dir / "prompt-verifier-attempt-2.md").read_text()
+    prompt_name = story_coordinator.prompt_file(VERIFIER_STAGE["name"], 2)
+    prompt = (run_dir / prompt_name).read_text()
     iteration_1 = (run_dir / "verification" / "iteration-1.json").read_text()
     iteration_2 = (run_dir / "verification" / "iteration-2.json").read_text()
 
@@ -1068,44 +1112,69 @@ def test_a_resumed_run_carries_the_counters_and_preserves_the_attempt(
     assert code == 0
 
     state = state_of(target)
-    assert state["retry_count"] == 1
-    assert state["verification_iterations"] == 3
-    assert (run_dir / "verification" / "iteration-1.json").read_text() == iteration_1
-    assert (run_dir / "verification" / "iteration-2.json").read_text() == iteration_2
+    assert state["retry_count"] == 0
+    assert state["verification_iterations"] == 1
+    assert state["resume_count"] == 1
+
+    entry = story_coordinator.entry_dir(run_dir, 1)
+    assert (entry / "verification" / "iteration-1.json").read_text() == iteration_1
+    assert (entry / "verification" / "iteration-2.json").read_text() == iteration_2
+    assert (entry / prompt_name).read_text() == prompt
+    # The escalated entry's copy of the interrupted attempt is archived under
+    # it too, and the run root now holds the resumed run's own writing.
+    assert (archived_attempt(run_dir, 2) / prompt_name).read_text() == prompt
     assert json.loads(
-        (run_dir / "verification" / "iteration-3.json").read_text()) == PASS
-    # The rendered prompt of the interrupted attempt, kept where the archive
-    # put it: the resumed stage re-renders under the same attempt number and
-    # writes over the copy at the run root, which is why the archive exists.
-    assert (story_coordinator.attempt_dir(run_dir, 2)
-            / "prompt-verifier-attempt-2.md").read_text() == prompt
+        (run_dir / "verification" / "iteration-1.json").read_text()) == PASS
+    fresh = run_dir / story_coordinator.prompt_file(VERIFIER_STAGE["name"], 1)
+    assert fresh.is_file()
+    assert fresh.read_text() != prompt
     assert resumed.calls == stages_from(VERIFIER_STAGE["name"])
 
 
-def test_resetting_the_counters_would_have_overwritten_that_evidence(
+def test_the_move_is_what_makes_resetting_the_counters_safe(
     target, harness_root,
 ):
-    """The control for the test above, and the reason carrying the counters
-    forward is a constraint rather than a convenience.
+    """The control for the test above, and the reason the entry directory is a
+    constraint rather than a convenience.
 
-    The same escalated run, resumed with `verification_iterations` reset the
-    way a reinitializing resume would leave it: the resumed verifier writes
-    iteration-1.json, and the escalated attempt's verdict is gone.
+    The same escalated run resumed twice: once by the coordinator, whose reset
+    lands the resumed verifier back on iteration-1.json with the escalated
+    verdict preserved under the entry it opened, and once against a run
+    directory where that move is prevented — the entry directory occupied
+    beforehand — which refuses rather than writing over the verdict.
     """
     escalate(target, harness_root)
     run_dir = run_dir_of(target)
-    iteration_1 = json.loads((run_dir / "verification" / "iteration-1.json").read_text())
-    assert iteration_1 == FAIL_AT_ONCE
+    escalated_verdict = (run_dir / "verification" / "iteration-1.json").read_text()
+    assert json.loads(escalated_verdict) == FAIL_AT_ONCE
 
     change_the_code(target)
-    write_state(target, verification_iterations=0)
     ready_to_resume(target)
     code, _ = run(target, harness_root, verdicts=[PASS])
 
     assert code == 0
+    # The reset put the resumed verification back on iteration 1, and the
+    # escalated one is still readable with the content it had.
     assert json.loads(
         (run_dir / "verification" / "iteration-1.json").read_text()) == PASS
-    assert not (run_dir / "verification" / "iteration-2.json").exists()
+    assert (story_coordinator.entry_dir(run_dir, 1) / "verification"
+            / "iteration-1.json").read_text() == escalated_verdict
+
+    # The control: the same reset with the move prevented writes nothing at all.
+    blocked_target = build_target(target.parent / "move-blocked")
+    escalate(blocked_target, harness_root)
+    blocked_dir = run_dir_of(blocked_target)
+    occupied = story_coordinator.entry_dir(blocked_dir, 1)
+    occupied.mkdir(parents=True)
+    change_the_code(blocked_target)
+    ready_to_resume(blocked_target)
+    blocked = Runner(blocked_target)
+    assert story_coordinator.run_story(
+        STORY_ID, harness_root, blocked_target, blocked) == 1
+    assert blocked.calls == []
+    assert json.loads((blocked_dir / "verification"
+                       / "iteration-1.json").read_text()) == FAIL_AT_ONCE
+    assert state_of(blocked_target)["verification_iterations"] == 1
 
 
 # --------------------------------------------------------------------------
@@ -1133,7 +1202,7 @@ def test_the_interrupted_attempt_is_archived_before_the_resumed_stage_runs(
     assert first_stage == VERIFIER_STAGE["name"]
     assert archives_at_entry == ["attempt-1"]
 
-    archived = story_coordinator.attempt_dir(run_dir, 1)
+    archived = archived_attempt(run_dir, 1)
     assert (archived / "verification-result.json").read_text() == escalated_verdict
     assert (archived / "prompt-verifier-attempt-1.md").read_text() == escalated_prompt
     # The stage artifacts the workflow declares are archived too, so the
@@ -1220,8 +1289,7 @@ def crashed(target_root: Path) -> None:
 
 
 def archived_names(run_dir: Path, attempt: int) -> list[str]:
-    return sorted(p.name for p in story_coordinator.attempt_dir(
-        run_dir, attempt).iterdir())
+    return sorted(p.name for p in archived_attempt(run_dir, attempt).iterdir())
 
 
 def test_a_crashed_resume_archives_under_the_attempt_number_its_counters_resolve_to(
@@ -1268,21 +1336,29 @@ def test_the_crashed_attempts_prompt_is_archived_beside_the_fresh_rendering(
     asserting the two copies are equal would pass if the archive had simply
     copied the fresh rendering back over itself — so both halves are here: the
     archived copy equals what was captured, and the live copy does not.
+
+    The resume restores the allowance, so the fresh rendering is the entry's
+    attempt 1 rather than a second file under the interrupted attempt's number.
+    Both names come off `prompt_file`, and the two numbers come off the
+    counters either side of the reset rather than being written here.
     """
     escalate(target, harness_root, AFTER_A_RETRY)
     run_dir = run_dir_of(target)
-    rendered = story_coordinator.prompt_file(RESUMED_STAGE, 2)
+    interrupted_attempt = state_of(target)["retry_count"] + 1
+    rendered = story_coordinator.prompt_file(RESUMED_STAGE, interrupted_attempt)
     interrupted = (run_dir / rendered).read_bytes()
     crashed(target)
 
     code, _ = run(target, harness_root, verdicts=[PASS])
     assert code == 0
 
-    archived = story_coordinator.attempt_dir(run_dir, 2) / rendered
+    archived = archived_attempt(run_dir, interrupted_attempt) / rendered
     assert archived.read_bytes() == interrupted
-    live = run_dir / rendered
+    live = run_dir / story_coordinator.prompt_file(RESUMED_STAGE, 1)
     assert live.is_file()
     assert live.read_bytes() != interrupted
+    # And the interrupted attempt's name is not reused at the run root at all.
+    assert not (run_dir / rendered).exists()
 
 
 def test_the_crashed_archive_holds_what_that_attempt_wrote_and_skips_the_rest(
@@ -1337,7 +1413,7 @@ def test_a_crashed_attempt_that_wrote_nothing_still_refuses_a_second_resume(
 
     code, _ = run(target, harness_root, verdicts=[PASS])
     assert code == 0
-    assert story_coordinator.attempt_dir(run_dir, 1).is_dir()
+    assert archived_attempt(run_dir, 1).is_dir()
     assert archived_names(run_dir, 1) == []
 
     crashed(target)
@@ -1691,20 +1767,28 @@ def test_a_truncated_artifact_the_dying_stage_left_is_archived_as_it_is(
     code, _ = run(target, harness_root, verdicts=[PASS])
 
     assert code == 0
-    archived = story_coordinator.attempt_dir(run_dir, 1) / conftest.VERIFICATION_RESULT
+    archived = archived_attempt(run_dir, 1) / conftest.VERIFICATION_RESULT
     assert archived.read_text() == half_written
 
 
 def test_an_escalated_resume_gives_the_guarantee_it_gave_before_this_story(
     target, harness_root,
 ):
-    """story-020's behaviour is not what this story fixes, so it is restated
+    """story-020's archive is not what this story changes, so it is restated
     whole here beside the crashed cases above: the same archive, at the same
-    point, under the same number, with the counters carried forward and the
-    escalated attempt's verification iteration untouched."""
+    point, under the same number, with the escalated attempt's rendered prompt
+    and verification iteration untouched.
+
+    What story-062 does change is where that archive comes to rest and what the
+    counters read afterwards, so those two are stated as the guarantee that now
+    holds rather than dropped: the entry the resume opened holds the archive
+    and the escalated iteration, and the counters are back at the start of a
+    fresh allowance.
+    """
     escalate(target, harness_root, AFTER_A_RETRY)
     run_dir = run_dir_of(target)
-    rendered = story_coordinator.prompt_file(RESUMED_STAGE, 2)
+    interrupted_attempt = state_of(target)["retry_count"] + 1
+    rendered = story_coordinator.prompt_file(RESUMED_STAGE, interrupted_attempt)
     interrupted = (run_dir / rendered).read_bytes()
     iteration_2 = (run_dir / "verification" / "iteration-2.json").read_bytes()
     change_the_code(target)
@@ -1718,13 +1802,18 @@ def test_an_escalated_resume_gives_the_guarantee_it_gave_before_this_story(
     assert first_stage == RESUMED_STAGE
     assert archives_at_entry == [story_coordinator.attempt_dir(run_dir, 1).name,
                                  story_coordinator.attempt_dir(run_dir, 2).name]
-    assert (story_coordinator.attempt_dir(run_dir, 2)
+    assert (archived_attempt(run_dir, interrupted_attempt)
             / rendered).read_bytes() == interrupted
-    assert (run_dir / rendered).read_bytes() != interrupted
+    assert not (run_dir / rendered).exists()
+    entry = story_coordinator.entry_dir(run_dir, 1)
+    assert (entry / "verification" / "iteration-2.json").read_bytes() == iteration_2
     state = state_of(target)
-    assert state["retry_count"] == 1
-    assert state["verification_iterations"] == 3
-    assert (run_dir / "verification" / "iteration-2.json").read_bytes() == iteration_2
+    assert state["retry_count"] == 0
+    assert state["verification_iterations"] == 1
+    assert state["resume_count"] == 1
+    # The escalated entry's iteration is under the entry and nowhere else: the
+    # run root is the resumed entry's, which has taken one verification.
+    assert not (run_dir / "verification" / "iteration-2.json").exists()
 
 
 # --------------------------------------------------------------------------
@@ -2268,7 +2357,7 @@ NEW_FIELDS = {"story_digest", "escalation_commit", "harness_revision"}
 #: records it here deliberately, so a field that appears without anyone
 #: noticing still turns the assertion below red.
 FIELDS_ADDED_SINCE = {"self_route_count", "guidance_in_force",
-                      "correction_pass_count"}
+                      "correction_pass_count", "resume_count"}
 
 
 def pre_story_state_fields() -> list[str]:

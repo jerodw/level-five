@@ -85,6 +85,14 @@ class RunState:
     #: spends, so this is a separate count and neither reads nor writes
     #: retry_count.
     correction_pass_count: int = 0
+    #: Which entry of the run is now executing: zero for the first, one after
+    #: the first resume, and so on. A run is re-entered rather than restarted,
+    #: and each re-entry opens an entry whose counter-keyed artifacts are kept
+    #: under their own directory, so retry_count and verification_iterations
+    #: can be reset without an earlier entry's evidence being written over.
+    #: Defaulted like every field beside it, so a state file written before it
+    #: existed still loads and reads as the first entry.
+    resume_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -747,6 +755,19 @@ def attempt_dir(run_dir: Path, attempt: int) -> Path:
     return run_dir / "attempts" / f"attempt-{attempt}"
 
 
+def entry_dir(run_dir: Path, entry: int) -> Path:
+    """Where one entry of the run keeps its counter-keyed artifacts.
+
+    A run is re-entered rather than restarted, and re-entry K opens
+    resumes/resume-K/ holding everything the entry it ends had written under a
+    name keyed by a counter the re-entry resets. The one place that directory
+    is named, in attempt_dir's shape and for attempt_dir's reason: the move
+    that writes it and the refusal that guards it both derive it from here, so
+    the two cannot disagree about where an entry's evidence went.
+    """
+    return run_dir / "resumes" / f"resume-{entry}"
+
+
 def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[str]:
     """Copy the superseded attempt's artifacts into attempts/attempt-N/.
 
@@ -796,6 +817,85 @@ def interrupted_attempt_artifacts(
     if run_dir is not None:
         names += self_route_artifacts(run_dir, stages, attempt)
     return names
+
+
+def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
+    """The run-root names a reset of the counters would re-land on.
+
+    Everything at the run root whose name is keyed by retry_count or by
+    verification_iterations: the attempt-numbered prompts, the try-suffixed
+    prompts and self-route records those attempts wrote, the verification
+    iteration files, and the attempts/ directory. Zeroing the counters puts the
+    next attempt back on attempt 1 and iteration 1, so these are exactly the
+    names an entry has to take with it.
+
+    The prompt and self-route names come through prompt_file and
+    self_route_result_file with the attempt and the try number wildcarded, the
+    way self_route_artifacts already discovers what a discarded count wrote, so
+    discovery cannot drift from writing; the stage names come off the loaded
+    workflow. The attempts directory is derived from attempt_dir for the same
+    reason. Names are run-relative, so a move keeps each one's position beneath
+    the run directory rather than flattening it.
+
+    The record is not here and must not be: the run's retry record, its two
+    renderings of the event stream, its state file and its escalation summary
+    account for the whole run, are never keyed by a counter, and stay at the
+    root. Nor is any stage artifact a resumed stage reads as input — those keep
+    canonical names a reset does not touch.
+    """
+    names: list[str] = []
+    for stage in stages:
+        for pattern in (
+            prompt_file(stage["name"], "*"),
+            prompt_file(stage["name"], "*", "*"),
+            self_route_result_file(stage["name"], "*", "*"),
+        ):
+            names.extend(path.name for path in run_dir.glob(pattern))
+    names.extend(
+        str(path.relative_to(run_dir))
+        for path in run_dir.glob("verification/iteration-*.json")
+    )
+    attempts = attempt_dir(run_dir, 1).parent
+    if attempts.is_dir():
+        names.append(attempts.name)
+    return sorted(set(names))
+
+
+def move_entry_artifacts(
+    run_dir: Path, names: list[str], destination: Path
+) -> list[str]:
+    """Move one entry's counter-keyed artifacts under the entry directory.
+
+    Each name keeps its position relative to the run directory, so
+    verification/iteration-1.json lands at verification/iteration-1.json inside
+    the destination rather than beside it. Nothing here parses, validates or
+    repairs what it moves: a truncated file a dying stage left is moved exactly
+    as it is, which is the same claim archive_attempt declines to make about
+    what it copies. Returns the names actually moved.
+    """
+    moved = []
+    for name in names:
+        source = run_dir / name
+        if not source.exists():
+            continue
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        moved.append(name)
+    return moved
+
+
+def accumulated_attempts(run_dir: Path, state: RunState) -> int:
+    """How many attempts this run has taken, across every entry of it.
+
+    retry_count is entry-scoped — a resume restores the allowance by zeroing it
+    — so the run's total cannot be read off the live counter and is composed
+    from the record instead. One attempt opens each entry, and
+    retry-history.json holds one entry per retry actually taken, on both sides
+    of every resume. Records are never reset, which is what makes the addition
+    sound.
+    """
+    return state.resume_count + 1 + len(load_retry_records(run_dir))
 
 
 def conditional_artifacts(stage: dict) -> list[str]:
@@ -2906,6 +3006,22 @@ def _recommended_investigation_section(run_dir: Path, state: RunState) -> str:
             f"branch. To put those changes back in the working tree:\n\n"
             f"    {ESCALATION_UNDO_COMMAND}"
         )
+    # A developer deciding whether to resume should decide with the run's whole
+    # cost in front of them, and with the allowance the resume restores stated
+    # rather than inferred. Both are facts every escalation has, so neither
+    # branches on the reason's text. The total comes from the record and the
+    # entry index rather than from retry_count, which this story made
+    # entry-scoped.
+    blocks.append(
+        f"This run has taken {accumulated_attempts(run_dir, state)} attempt(s) "
+        f"in all, across {state.resume_count + 1} entry(s) of it. Resuming "
+        f"opens another entry and restores the run's attempt allowance: the "
+        f"retry count goes back to zero, so a failing verdict after the resume "
+        f"takes a retry rather than stopping the run again at the ceiling. "
+        f"Nothing already taken is discarded — the run's records account for "
+        f"every attempt on both sides of a resume, and each earlier entry's "
+        f"artifacts move under resumes/resume-K/."
+    )
     blocks.append(
         f"Once you have made a change, `l5-run {state.story_id}` resumes this "
         f"run at the stage it stopped at ({state.current_stage}); `--stage "
@@ -3523,10 +3639,28 @@ def run_story(
         # A resume, of a crashed run or an escalated one. Chapter 18 treats
         # the two identically and so does this: restore nothing, because the
         # artifacts and the state are already here, and continue at the
-        # recorded stage. Nothing is reinitialized — retry_count and
-        # verification_iterations key the rendered prompt and verification
-        # iteration filenames, so resetting them would overwrite the evidence
-        # of the attempt being resumed.
+        # recorded stage.
+        #
+        # What the resume does reinitialize is the run's attempt allowance. A
+        # counter routes and a record accounts; a counter is reset by the
+        # decision to continue and a record is never reset at all. Carrying
+        # retry_count forward meant a run that escalated at the ceiling resumed
+        # with its attempts already spent, so the first failing verdict
+        # escalated it again — a second escalation rather than a resume. So
+        # retry_count and verification_iterations go to zero here, and
+        # self_route_count keeps the zeroing it already had: the three counters
+        # agreeing is the point rather than a coincidence.
+        #
+        # What must not be reset is the record, and the reset would land the
+        # next attempt straight back on names the earlier attempts occupy. So
+        # the run is *re-entered* rather than restarted: re-entry K opens
+        # resumes/resume-K/ and every counter-keyed name at the run root moves
+        # into it, keeping its position. attempt-N therefore keeps meaning the
+        # Nth attempt of one entry. What stays at the root is the half that
+        # accounts for the whole run — retry-history.json,
+        # execution-history.json, events.log, state.json, the escalation
+        # summary — together with every stage artifact the resumed stage reads
+        # as input, whose names no counter keys.
         if state.status == "escalated":
             # Resuming is inferred from the recorded status and from nothing
             # else. What the guard adds is a refusal in the one case where a
@@ -3579,11 +3713,35 @@ def run_story(
                 file=sys.stderr,
             )
             return 1
+        # The entry directory this re-entry opens, refused rather than written
+        # over for the archive's own reason: it is where the previous entry's
+        # evidence goes, so writing over it would destroy exactly what the move
+        # exists to keep. Decided here, above the archive and the move, so a
+        # refused resume archives nothing, moves nothing and resets nothing.
+        entry = state.resume_count + 1
+        opened = entry_dir(run_dir, entry)
+        if opened.exists():
+            print(
+                f"{opened} already holds an archived entry, and resuming "
+                f"{story_id} would open entry {entry} over it. Move or remove "
+                f"it if that entry is not worth keeping, then run the story "
+                f"again.",
+                file=sys.stderr,
+            )
+            return 1
         archive_attempt(
             run_dir,
             interrupted_attempt_artifacts(stages, attempt, run_dir=run_dir),
             attempt,
         )
+        # The move runs below the archive, so the attempt it archives is
+        # numbered by the counters as they stood and travels into the entry
+        # directory with the rest of attempts/, and above the reset, so the
+        # counters still describe the entry being closed while it is closed.
+        moved = move_entry_artifacts(run_dir, entry_artifacts(run_dir, stages), opened)
+        state.resume_count = entry
+        state.retry_count = 0
+        state.verification_iterations = 0
         if state.status == "escalated":
             state.status = "running"
             save_state(run_dir, state)
@@ -3591,6 +3749,19 @@ def run_story(
             run_dir,
             f"resumed at stage {state.current_stage}",
             kind="resumed",
+            stage=state.current_stage,
+        )
+        # What moved and where, said once. A retry record written before the
+        # move names its archive as a path relative to the run directory, and
+        # that path is now one directory further down; the record is evidence
+        # and evidence is never rewritten, so the log is what resolves it. Both
+        # halves are run-relative for exactly that reason, and the names are
+        # written out rather than counted so the resolution needs nothing else.
+        append_event(
+            run_dir,
+            f"entry {entry} archived under {opened.relative_to(run_dir)}: "
+            + ", ".join(moved),
+            kind="note",
             stage=state.current_stage,
         )
     else:

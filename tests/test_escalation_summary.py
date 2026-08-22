@@ -43,13 +43,15 @@ Nothing here invokes a model: every run goes through a fake agent runner and
 every clone source is a local filesystem path.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from conftest import BASELINE, ENDPOINT, first_retry_route, function_source
+from conftest import (BASELINE, ENDPOINT, first_retry_route, function_source,
+                      load_mutant)
 import conftest
 
 import harness_config
@@ -1014,3 +1016,145 @@ def test_every_shape_satisfies_the_standing_contract(shape, request):
                          if verdict.get("status") == "failed" else []),
         retries=retry_records(run_dir),
     ) == []
+
+
+# --------------------------------------------------------------------------
+# What the run has cost, and what a resume restores
+#
+# story-062 made retry_count entry-scoped: a resume restores the run's attempt
+# allowance by zeroing it. The book asks that a resumed run report the
+# accumulated total, so a developer decides with the number in front of them,
+# and the section a developer reads for that decision is this one. Both
+# additions are facts every escalation has, so they are asserted on every
+# shape rather than on the one that has a retry history.
+# --------------------------------------------------------------------------
+
+
+def stated_total(investigation: str) -> int:
+    """The number of attempts the section says the run has taken.
+
+    Read out of the prose rather than compared with a rendered sentence, so
+    the assertion is about the count being right rather than about the wording
+    carrying it.
+    """
+    stated = re.findall(r"(\d+) attempt", investigation)
+    assert len(stated) == 1, investigation
+    return int(stated[0])
+
+
+@pytest.mark.parametrize("shape", ALL_SHAPES)
+def test_every_escalation_reports_what_the_run_has_cost_so_far(shape, request):
+    """The accumulated total, checked against the record rather than against
+    the way the coordinator composes it: one attempt opens the entry and
+    `retry-history.json` holds one record per retry taken, so a run in its
+    first entry has taken one more attempt than it has records.
+
+    A run resumed more than once is the case this arithmetic could still get
+    wrong, and it is asserted where such a run exists —
+    `tests/test_resume_restores_the_allowance.py` drives one and compares the
+    number against the attempts its own runner counted.
+    """
+    target = request.getfixturevalue(shape)
+    investigation = section(summary_of(target), "Recommended Investigation")
+    state = state_of(target)
+
+    assert state["resume_count"] == 0, "these shapes are all first entries"
+    assert stated_total(investigation) == len(retry_records(run_dir_of(target))) + 1
+
+
+@pytest.mark.parametrize("shape", ALL_SHAPES)
+def test_every_escalation_says_a_resume_restores_the_allowance(shape, request):
+    """Stated on every shape, including the ones that never reached a verdict
+    and never took a retry: what a resume does to the allowance is the same
+    fact whatever stopped the run, and a developer reading a summary decides
+    from it. Nothing here branches on the reason, which
+    `test_no_section_is_keyed_off_the_escalation_reasons_text` states from the
+    other side."""
+    target = request.getfixturevalue(shape)
+    investigation = section(summary_of(target), "Recommended Investigation").lower()
+
+    assert "allowance" in investigation
+    assert "restores" in investigation
+    assert "retry count goes back to zero" in investigation
+
+
+def test_the_added_sentences_claim_no_commit_on_a_run_that_recorded_none(
+    escalated_without_a_commit,
+):
+    """The story forbids the word this section already uses for a committed
+    escalation from appearing in what it added, because an existing assertion
+    requires its absence from a run that recorded no commit. Stated over the
+    added text itself so the constraint is checked where it applies rather
+    than only over the section as a whole.
+
+    The control is the run beside it, which did record a commit and does say
+    so — `test_the_commit_claim_is_made_only_when_a_commit_was_recorded` holds
+    that pairing, and this states the added paragraph is not what would break
+    it.
+    """
+    investigation = section(summary_of(escalated_without_a_commit),
+                            "Recommended Investigation")
+    added = [block for block in investigation.split("\n\n")
+             if "allowance" in block]
+
+    assert len(added) == 1, investigation
+    assert "committed" not in added[0]
+
+
+#: The paragraph story-062 added to this section, as it stands in the composing
+#: source. Taking it out leaves the summary the story found, which is what the
+#: sections it left alone are compared against. `load_mutant` fails if the
+#: anchor has moved, so this cannot quietly become a mutation that changes
+#: nothing.
+THE_ADDED_PARAGRAPH = """\
+    blocks.append(
+        f"This run has taken {accumulated_attempts(run_dir, state)} attempt(s) "
+        f"in all, across {state.resume_count + 1} entry(s) of it. Resuming "
+        f"opens another entry and restores the run's attempt allowance: the "
+        f"retry count goes back to zero, so a failing verdict after the resume "
+        f"takes a retry rather than stopping the run again at the ceiling. "
+        f"Nothing already taken is discarded — the run's records account for "
+        f"every attempt on both sides of a resume, and each earlier entry's "
+        f"artifacts move under resumes/resume-K/."
+    )
+"""
+
+
+def test_the_summary_is_unchanged_apart_from_the_paragraph_this_story_added(
+    exhausted_escalation, tmp_path,
+):
+    """The whole summary, either side of the addition, composed against one run
+    directory: the heading and every section but Recommended Investigation are
+    byte for byte what they were, and that one section gains a paragraph and
+    keeps the ones it had.
+
+    The comparison is against today's composing source with the added
+    paragraph taken out — a working-tree mutation, which is what a control
+    demonstrating that a change is confined is allowed to be. That this is not
+    two readings of one unchanged file is the first assertion: the two
+    summaries differ, and the last says where.
+    """
+    run_dir = run_dir_of(exhausted_escalation)
+    state = story_coordinator.RunState(**state_of(exhausted_escalation))
+    reason = story_coordinator.escalation_reason(run_dir)
+    without = load_mutant(COORDINATOR_PATH, [(THE_ADDED_PARAGRAPH, "")],
+                          name="coordinator_without_the_added_paragraph",
+                          tmp_path=tmp_path)
+
+    text = story_coordinator.escalation_summary(run_dir, state, reason)
+    before = without.escalation_summary(run_dir, state, reason)
+
+    assert text != before
+    assert text.splitlines()[0] == before.splitlines()[0]
+    assert list(sections(text)) == list(sections(before))
+    for heading in sections(before):
+        if heading == "Recommended Investigation":
+            continue
+        assert section(text, heading) == section(before, heading), heading
+
+    kept = section_body(before, "Recommended Investigation").split("\n\n")
+    now = section_body(text, "Recommended Investigation").split("\n\n")
+    assert [block for block in kept if block not in now] == []
+    added = [block for block in now if block not in kept]
+    assert len(added) == 1, added
+    assert "allowance" in added[0]

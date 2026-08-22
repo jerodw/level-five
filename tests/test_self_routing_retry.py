@@ -2399,8 +2399,13 @@ def archived_attempt_dir(target_root: Path) -> Path:
     Read off the run directory rather than written here, so the attempt number
     stays the coordinator's answer — a self-route must not move it, which
     `test_a_self_route_moves_none_of_the_retry_bookkeeping` holds separately.
+
+    Searched wherever the run directory holds it rather than at its root
+    alone: since story-062 a resume moves attempts/ into the entry it opens,
+    and what this helper is for is the attempt's number and its contents, not
+    which entry ended up holding them.
     """
-    directories = sorted((run_dir_of(target_root) / "attempts").glob("attempt-*"))
+    directories = sorted(run_dir_of(target_root).glob("**/attempts/attempt-*"))
     assert len(directories) == 1, [p.name for p in directories]
     return directories[0]
 
