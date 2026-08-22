@@ -18,7 +18,9 @@ Do not:
 - create tests, or
 - rewrite documentation sections the story did not affect.
 
-When you finish, write these files to the run directory at {{run_dir}}:
+When you finish, write these files to the run directory at {{run_dir}}.
+Ending your turn is how this stage ends — there is no later invocation to
+write them in, and a stage that ends without them has produced nothing:
 
 documentation-report.md: which documents you updated and why, or a
 statement that no documentation change was needed and why.

@@ -102,7 +102,9 @@ still, before building any history at all, check whether the assertion
 needs one: a sentence you construct in the test asserts the same behaviour
 with nothing to resolve and nothing to move under it.
 
-When you finish, write these files to the run directory at {{run_dir}}:
+When you finish, write these files to the run directory at {{run_dir}}.
+Ending your turn is how this stage ends — there is no later invocation to
+write them in, and a stage that ends without them has produced nothing:
 
 test-results.json, the structured outcome of the validation you ran. It
 must satisfy this schema:
@@ -126,6 +128,14 @@ the current run and identify which files need validation. Generate and
 execute tests that validate the story's acceptance criteria. Run the full
 test suite:
 {{test_command}}
+
+That run is your stage's whole point and it takes as long as the target's
+suite takes — here, minutes rather than seconds. Two things make it end
+your turn instead of finishing it. Do not pipe it through `tail`, `head` or
+a pager: those buffer everything until the process exits, so a running
+suite looks like a hung one. And if your tooling moves the command to the
+background, keep waiting for it — polling is fine, giving up is not. There
+is no later turn in which the result arrives.
 
 [Runtime State Layer]
 The coordinator injects the current workflow state below. Treat the
