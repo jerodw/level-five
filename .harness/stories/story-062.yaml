@@ -1,0 +1,205 @@
+story:
+  id: story-062
+  title: A resume restores the run's attempt allowance and archives the entry it ends
+  description: |
+    retry_count and verification_iterations survive a resume today, so a run that
+    escalated at the retry ceiling resumes with its attempts already spent and the
+    first failing verdict escalates it again. Nobody chose that. It is a
+    consequence of those counters keying artifact filenames, and the comment at the
+    resume branch says so outright - it explains what resetting would overwrite,
+    which is a statement about names rather than about policy.
+
+    Chapter 18's Restartability and Resilience section settles the policy against
+    the way the harness behaves: a counter routes and a record accounts, counters
+    are reset by the decision to continue, and records are never reset at all. It
+    names this exact failure - a harness that resumes with the ceiling still spent
+    "stops again on the first failure, which is not a resume so much as a second
+    escalation". So the reset is conformance, and what must be preserved is the
+    record: retry-history.json, execution-history.json, events.log, and the
+    artifacts of every attempt already taken.
+
+    The whole difficulty is naming, because the book's own scheme creates it.
+    Appendix A derives the artifact index from state.retry_count + 1, so the
+    counter the book tells us to reset is the counter its filenames are keyed by.
+    Reset alone and the resumed run re-lands on prompt-<stage>-attempt-1.md,
+    verification/iteration-1.json and attempts/attempt-1/, all of which the earlier
+    attempts already occupy.
+
+    The book is silent on the layout that resolves this, on what an attempt number
+    means, and on whether a resume index belongs on the state or is derived from
+    disk. Those are decided here, from its principles rather than from its text,
+    and the decisions are recorded as ours:
+
+    A run is re-entered rather than restarted, and each re-entry opens an entry
+    whose artifacts are namespaced. When a run is re-entered, its counter-keyed
+    artifacts and its attempts/ directory move under resumes/resume-K/ and the
+    counters go to zero. attempt-N therefore keeps meaning the Nth attempt of one
+    entry, which is Chapter 17's argument against a shared self-route budget -
+    "a retry count of two should mean two verification failures, not one forgotten
+    file and one" - applied to a case the book applies it to. A monotonic index
+    that never reset would satisfy "records are never reset" equally well and was
+    rejected for that reason alone: it splits the number that names files from the
+    number that is checked against max_retries, and every site deriving
+    state.retry_count + 1 would then have to say which it meant.
+
+    The resume index is a field on state.json rather than a count of directories on
+    disk, because the coordinator routes from state and state.json is the record of
+    what is true now. The book states that principle repeatedly and never addresses
+    scanning a filesystem, so this is our application of it.
+
+    Two riders come with the reset. The book asks that a resumed run report the
+    accumulated total, so a developer decides with the number in front of them - it
+    says so of a cost ceiling and the reasoning is general. And it requires an
+    escalation reason to be a category naming a distinct developer response, with
+    the budget category already defined: work possibly sound, the question is
+    whether to fund more. A ceiling escalation carries both facts, that the run
+    stopped converging and that it did so inside its allowance, and the summary
+    should say both.
+
+    Neither rider changes an escalation reason string. Those strings are quoted
+    verbatim across the suite, two modules holding them as coordinator source
+    excerpts, and the category a developer reads is the summary rather than the
+    stored reason. The summary's Where Execution Stopped section is left byte for
+    byte for the same reason and one more: the section that branches does so on
+    facts and never on the reason's text, which is the property the summary is held
+    to.
+
+    self_route_count needs nothing. story-036 already zeroes it where a stage is
+    entered other than by a self-route, and on resume. This story makes the other
+    two agree with it, and the three counters ending up consistent is the point
+    rather than a coincidence.
+
+    A re-run - deleting the run directory and running the story again - already
+    starts from nothing, so it agrees with this by construction and nothing about
+    it changes.
+
+tasks:
+  - Add a defaulted resume_count field to RunState in orchestration/story_coordinator.py, documented as the index of the entry now running, so a state file written before this story still loads and reads as the first entry.
+  - Add a helper naming where one entry's artifacts are kept, resumes/resume-K/, as the one place that directory is named - the model being attempt_dir, which both the archive that writes it and the refusal that guards it derive from.
+  - Add a helper collecting the run-root artifact names this story's reset would re-land on, derived through prompt_file and self_route_result_file with the try number wildcarded so discovery cannot drift from writing, together with the verification iteration files and the attempts/ directory.
+  - Move that set into resumes/resume-K/ on the resume path, preserving each name's position relative to the run directory, and zero retry_count and verification_iterations after the move.
+  - Refuse rather than overwrite when resumes/resume-K/ already exists, in the shape story-061's archive refusal established, naming the directory, the story and the entry.
+  - Leave the interrupted-attempt archive story-061 hoisted exactly where it is and unchanged, above the move, so the attempt it archives is numbered by the counters as they stood and the archive travels into the entry directory with the rest of attempts/.
+  - Append one event naming what moved and where, so a retry record's archive_directory written before the move stays resolvable from the log without any record being rewritten.
+  - Extend the escalation summary's Recommended Investigation section with the attempts accumulated across the whole run and the fact that resuming restores the allowance, leaving every other section of the summary and every escalation reason string as they are.
+  - Add the entry index and the accumulated attempt total to what orchestration/run_status.py prints, beside the live counters rather than in place of them.
+  - Repoint the assertions in tests/test_escalation_resume.py that require today's carry-forward or today's archive location, keeping each test's subject.
+  - Add a test module for the reset itself - the allowance restored, the entry archived, a second resume, the records intact, and verification_iterations behaving as retry_count does.
+  - Update the "Resuming a run" section of .harness/docs/ARCHITECTURE.md, whose "Nothing is reinitialized" paragraph this story makes false and whose neighbouring paragraphs justify the interrupted-attempt archive by the carry-forward being permanent.
+
+acceptance_criteria:
+  - A run that escalated at the retry ceiling and is then resumed takes a retry on its first failing verdict rather than escalating, and the same run before this story escalates - asserted at both ends, so the criterion is about the change rather than about the end state.
+  - state.retry_count and state.verification_iterations are both zero in the state saved by a resumed run before its first stage is invoked, and state.resume_count is one higher than it was.
+  - A state.json written before this story loads without error and reads as resume_count zero, so a run escalated before this story resumes rather than failing to parse.
+  - Resuming moves the run root's attempt-numbered prompts, the try-suffixed prompts and self-route results those attempts wrote, the verification/iteration-*.json files and the attempts/ directory into resumes/resume-K/, each keeping its position relative to the run directory.
+  - Every moved artifact is byte-identical after the move to what it was before it, compared by content rather than by the path existing.
+  - retry-history.json, execution-history.json, events.log, state.json and escalation-summary.md are at the run-directory root after a resume, and retry-history.json and execution-history.json carry every attempt the run took before the resume as well as every attempt it takes after.
+  - The stage artifacts the resumed stage reads as inputs are at the run-directory root after the move, unmoved and unmodified, so a resume at a later stage still assembles the context it assembled before.
+  - The resumed stage's freshly rendered prompt is at the run-directory root under the attempt-1 name, and the entry's copy of the earlier attempt-1 prompt is under resumes/resume-1/ - both present, and differing.
+  - A verification taken by a resumed run writes verification/iteration-1.json at the run root, and the escalated entry's iteration-1.json is readable under resumes/resume-1/ with the content it had.
+  - A resume onto an existing resumes/resume-K/ exits non-zero, moves nothing, resets nothing, and prints a message naming that directory.
+  - A second resume of the same run writes resumes/resume-2/ and collides with neither resumes/resume-1/ nor the entry now running.
+  - The interrupted-attempt archive story-061 hoisted still runs on both resumed statuses, still numbers the attempt from the counters as they stood before the reset, and its output is found under resumes/resume-K/attempts/ after the move.
+  - One event records what moved and where, and a retry record written before the move is resolvable to its archived artifacts using that event alone - no retry record's contents are altered.
+  - The escalation summary's Recommended Investigation section states the attempts accumulated across the run and that resuming restores the allowance, and does not contain the word committed on an escalation that recorded no commit.
+  - The escalation summary's heading, Status, Reason, Where Execution Stopped and Where to Look sections are byte for byte what they were, and no escalation reason string passed to _escalate is changed.
+  - l5-status prints the entry index and the accumulated attempt total alongside the retry count and verification iterations it already printed, and prints the pre-existing lines unchanged.
+  - Deleting the run directory and running the story again is unaffected by this story - it begins with no state, no entry directory and zeroed counters, exactly as it did.
+  - The full suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the resume branch in orchestration/story_coordinator.py from the comment that opens it through append_event, and the retry branch that archives with archivable_artifacts, so the two archive points are held in view together.
+    - Add resume_count to RunState beneath the other defaulted fields, with a comment saying it indexes the entry now running and that a state file predating it reads as the first entry.
+    - Add the entry-directory helper beside attempt_dir and in its shape, so the directory is named once and both the move and its refusal derive from it.
+    - Add the helper collecting the counter-keyed run-root names. Derive them through prompt_file and self_route_result_file with the try number wildcarded, the way self_route_artifacts already discovers what a discarded count wrote, and take the stage names off the loaded workflow. No stage name and no artifact name is written in orchestration.
+    - Place the move in the resume branch below the interrupted-attempt archive, so that archive still numbers its attempt from the counters as they stood, and above the counter reset. Refuse first, then move, then zero the counters, then let the escalated-only status transition and the resumed event run as they do.
+    - Append the event naming the entry directory and what went into it, through the existing append_event path, so events.log and execution-history.json stay two renderings of one write.
+    - Rewrite the resume branch's opening comment. It currently explains why nothing is reinitialized, which this story reverses, and should explain instead what resets, what moves, what stays at the root and why the records are the half that never moves.
+    - Extend _recommended_investigation_section with the accumulated total and the allowance sentence. Compute the total from load_retry_records and resume_count rather than from the live counters, since the live counters are entry-scoped by this story. Avoid the word committed in the added sentence - an existing test asserts its absence from a run that recorded no commit.
+    - Add the two lines to orchestration/run_status.py beside the existing counter rows rather than in place of them.
+    - Repoint the reddened assertions in tests/test_escalation_resume.py in the same commit as the coordinator change - test_a_resumed_run_carries_the_counters_and_preserves_the_attempt and test_resetting_the_counters_would_have_overwritten_that_evidence assert the carry-forward directly, and the archive tests assert where the archive is found. Each keeps its subject and states the guarantee that now holds. These are modifications reverting to a red suite, which is the rule story-017 established for deciding a test edit and story-042 for assigning an existing module to the implementer.
+    - Write the new coverage against content captured before the resume, not against what the resumed run leaves behind. An assertion that a directory exists would pass while the wrong file was preserved.
+    - Revise the ARCHITECTURE.md section once the coordinator and the tests agree.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The state field, the entry directory and its helpers, the move and its refusal, the counter reset, the event, and the summary's Recommended Investigation section. This is the story's behavioural change.
+    - file: orchestration/run_status.py
+      stage: implementer
+      reason: It prints the retry count and verification iterations, which this story makes entry-scoped, so a reading of them alone becomes misleading without the entry index and the accumulated total beside them.
+    - file: tests/test_escalation_resume.py
+      stage: implementer
+      reason: Assertions there require the counters to be carried forward and require the interrupted attempt's archive at the run root. The reset reddens them, so reverting the edit leaves the suite red against the new coordinator and deferring it would have the implementer hand on a knowingly red tree.
+    - file: tests/test_resume_restores_the_allowance.py
+      stage: tester
+      reason: The reset's own coverage - the ceiling case retrying after a resume where it escalated before, the entry archived byte for byte, the second resume, the records intact across the move, and verification_iterations behaving as retry_count does.
+    - file: tests/test_escalation_summary.py
+      stage: tester
+      reason: Coverage for the accumulated total and the allowance sentence in Recommended Investigation, and for the sections this story leaves byte for byte.
+    - file: tests/test_run_status.py
+      stage: tester
+      reason: Coverage for the entry index and the accumulated total, and that the lines already printed are unchanged.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The "Resuming a run" section states that nothing is reinitialized and justifies the interrupted-attempt archive by the carry-forward. Both statements change, and the entry directory, the move and the two riders are undocumented.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_escalation_resume.py
+    reason: The reset reddens assertions in that module which require the counters to survive a resume and require the interrupted attempt's archive at the run root. The implementer must repoint them in the same commit as the coordinator change or hand on a knowingly red tree, so the story declares this one file the implementer's for its duration. The grant names the file rather than the tests/ prefix, so every other path beneath tests/ stays governed - including the new module and the tester's additions to the summary and status modules, which are ordinary tester work and need no grant.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/run_status.py
+    - tests/test_escalation_resume.py
+    - tests/test_resume_restores_the_allowance.py
+    - tests/test_escalation_summary.py
+    - tests/test_run_status.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/
+    - workflows/
+    - prompts/
+    - scripts/
+    - orchestration/context_assembler.py
+    - tests/test_attempt_archiving.py
+    - tests/test_self_routing_retry.py
+    - tests/test_retry_history.py
+    - tests/test_coordinator_contract.py
+    - tests/history-fixtures/
+
+verification_requirements:
+  - Confirm the motivating case at both ends - a run escalated at the retry ceiling escalates on the first failing verdict after a resume before this story, and retries after it. A test asserting only the new behaviour would not establish that anything changed.
+  - Confirm every artifact moved into resumes/resume-K/ is byte-identical to what it was before the move, by comparing content captured beforehand. Confirm the assertions distinguish the archived copy from the resumed run's fresh writing at the run root rather than asserting a path exists.
+  - Confirm retry-history.json and execution-history.json still hold every attempt the run took on both sides of the resume, and that no record's contents were altered by the move.
+  - Confirm the artifacts the resumed stage reads as inputs stayed at the run-directory root, by resuming at a stage whose context is assembled from an earlier stage's output.
+  - Confirm a second resume of the same run neither collides with the first entry nor is refused by it, and that a resume onto an existing entry directory refuses, moves nothing and resets nothing.
+  - Confirm verification_iterations resets and archives on exactly the same terms as retry_count, and that a resumed run's first verification does not overwrite the escalated entry's last one.
+  - Confirm the interrupted-attempt archive is unchanged in what it copies and in the attempt number it uses, and that story-061's guarantees for both resumed statuses still hold with their assertions unweakened.
+  - Confirm a state.json written before this story loads and resumes without a false refusal.
+  - Confirm the escalation summary's heading, Status, Reason, Where Execution Stopped and Where to Look sections are byte for byte what they were, that no escalation reason string changed, and that the added Recommended Investigation text is present on every escalation shape and claims no commit where none was recorded.
+  - Confirm the accumulated total the summary and l5-status report matches the attempts the records actually hold, on a run that has been resumed more than once.
+  - Confirm the l5-status lines that existed before this story print unchanged.
+  - Confirm no stage name and no artifact name was written into orchestration by this story - the moved set is derived from the loaded workflow and from the functions that write those names.
+  - Confirm the "Resuming a run" section of .harness/docs/ARCHITECTURE.md agrees with the coordinator statement by statement about what resets, what moves, what stays, and the order the resume branch runs in, and that no sentence there still says nothing is reinitialized.
+  - Confirm the full test suite passes.
+
+constraints:
+  - Do not rewrite a record. retry-history.json, execution-history.json, events.log and the escalation summary keep their contents across a resume, and a stale path inside one is resolved by the event this story appends rather than by editing the record.
+  - Do not move retry-history.json, execution-history.json, events.log, state.json or escalation-summary.md into the entry directory. They are the record and they stay at the run-directory root.
+  - Do not move a stage artifact the resumed stage reads as input. Only names keyed by a counter this story resets are moved.
+  - Do not move or rename the correction-pass records. correction_pass_count is cumulative across the run and is not reset by a resume, so its names do not collide.
+  - Do not reset correction_pass_count. The budget is one pass per run and a resumed run must not spend it a second time.
+  - Do not change how self_route_count is handled. story-036 already zeroes it where a stage is entered other than by a self-route, and this story makes the other counters agree with it rather than the reverse.
+  - Do not change the value of max_retries, and do not change which conditions escalate.
+  - Do not change any escalation reason string, any retry reason string, or the escalation summary's heading, Status, Reason, Where Execution Stopped or Where to Look sections.
+  - Do not branch the escalation summary on the reason's text. The added sentences state facts every escalation has.
+  - Do not use the word committed in the sentences added to Recommended Investigation - an existing assertion requires its absence from a run that recorded no commit.
+  - Do not introduce a second counter that names files while another is checked against the ceiling. state.retry_count + 1 stays the one expression that numbers an attempt.
+  - Do not change what a resume re-enters at, or anything about the --stage argument.
+  - Do not change the unchanged-since-escalation guard, the dirty-tree pre-flight, the finished-branch refusal or either terminal commit.
+  - Do not add a flag, environment variable or configuration key that skips the move, the refusal or the reset.
+  - Do not validate, parse or repair a moved artifact. A truncated file a dying stage left is moved exactly as it is.
+  - Preserve the order the resume branch runs in - guard, stage, interrupted-attempt archive, move, reset, state, event - since the archive numbers its attempt from counters the reset has not yet touched, and a guard evaluated after the state was rewritten would be deciding about a run that no longer exists.
