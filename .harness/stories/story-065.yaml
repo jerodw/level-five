@@ -1,0 +1,111 @@
+story:
+  id: story-065
+  title: The completion commit survives any merge
+  description: |
+    A story that escalated and then resumed leaves an empty completion commit,
+    because the escalation already committed the whole working tree and the
+    resumed entry changed nothing on disk. `_complete` writes that commit with
+    `--allow-empty`, so it exists on the branch and is then discarded by a
+    rebase merge and folded by a squash. story-061 and story-063 both merged to
+    `main` with no commit saying they finished; story-062, which never
+    escalated, landed correctly because its completion commit carried the work.
+
+    A squash merge fails for a second, independent reason: it writes the pull
+    request's title as the subject and the branch's commit messages into the
+    body, and `completion_commits` matches the completion subject against `%s`
+    alone. So even a non-escalated story is unrecognisable after a squash.
+
+    This story makes the completion land under all three merge methods, by
+    moving the writing of the completion marker and the reading of it together.
+    When the tree is unchanged and HEAD is this story's escalation commit,
+    `_complete` amends that commit's message rather than adding a commit of its
+    own, so the trunk sees one commit that both carries the work and says the
+    story finished. `completion_commits` stops requiring its two pieces of
+    evidence to sit in particular fields of the message and requires only that
+    both are in it, which is what recognises a squash-merged completion.
+
+    A run whose completion commit has content is written exactly as it is
+    today. The escalation's two-commit shape and its capture of the whole tree
+    are unchanged: the empty completion is a consequence of that being right,
+    not a defect in it.
+
+tasks:
+  - Split `_complete`'s single commit into the three cases the completion now has - content to commit, nothing to commit on top of this story's own escalation commit, and nothing to commit anywhere else - leaving the first and third byte-identical to today's behaviour.
+  - Amend this story's escalation commit, in the second case, so that the branch tip carries the completion subject and marker instead of the escalation's, recognising the escalation through `escalated_story` rather than by ordering, counting or position.
+  - Give the amended commit a body that keeps the marker byte-identical and additionally records that the run escalated, that this commit carries the work the escalation committed, and that the escalation's undo instruction no longer applies - so that amending does not destroy the only trunk-visible record of the escalation.
+  - Relax `completion_commits` to require its two pieces of evidence anywhere in a commit's full message rather than in particular fields of it, tolerating the leading bullet a squash merge writes, so a squash-merged completion is recognised while a commit carrying only the subject shape still is not.
+  - Confirm by test, without changing it, that `conftest.story_commit_range` resolves an escalated story's endpoint to the amended commit.
+  - Write the validation module that drives all three merge methods against constructed repositories, with a demonstration beside each assertion that it can fail.
+
+acceptance_criteria:
+  - A run that finishes with something to commit writes its completion commit exactly as it does today - same message, no amend, no extra file - and a test drives that path and asserts the branch gained a commit rather than having one rewritten.
+  - A run that finishes with a clean tree, standing on an escalation commit of its own story, leaves a branch tip whose subject is the completion subject and whose body carries `COMPLETION_COMMIT_MARKER`, and whose tree is the tree the escalation committed.
+  - The amended commit's body also states that the run escalated and that the escalation's undo command no longer applies, and a test asserts that text is present.
+  - A run that finishes with a clean tree while standing on something that is not an escalation commit of its own story still leaves the empty commit `--allow-empty` produces today.
+  - `_complete` never amends a commit that is not an escalation commit of the story being run, and a test drives a clean-tree completion on top of an escalation commit belonging to a *different* story and asserts that commit's message is unchanged.
+  - After each of merge commit, squash merge and rebase merge of an escalated-and-resumed branch, `completion_commits` reports a completion for that story on the trunk.
+  - After each of the same three merges of a branch built the way the harness builds one today - a separate empty completion commit on top of the escalation - `completion_commits` reports nothing on the trunk for the rebase and the squash, which is the failure this story repairs and the demonstration that the criterion above is not vacuous.
+  - After each of the same three merges of a *non-escalated* branch, `completion_commits` reports a completion, including the squash case that fails today.
+  - `completion_commits` still reports nothing for a commit whose message carries the completion subject shape without the marker, and nothing for a commit whose message carries the marker without a subject line naming this story.
+  - `refuse_rerun_onto_finished_work` refuses a re-run when the story branch points at a trunk that has taken the escalated story by any of the three merge methods.
+  - `claim_support_check` treats such a story as having merged work - it reads `completion_commits` against the run's base, and that base is the trunk the merge landed on.
+  - `conftest.story_commit_range` resolves the endpoint of an escalated-and-resumed story to the commit that completed it when that commit is the amended escalation tip, and the module asserts this against a constructed repository of that shape.
+  - `commit_escalated_work` and `commit_escalated_tree` are unchanged, and reverting the change to `_complete` alone makes the new validation module fail.
+  - The completion subject and marker are still composed in one place and read from that same place, with no second spelling of either introduced.
+
+technical_plan:
+  implementation_steps:
+    - In `orchestration/story_coordinator.py`, after `_complete` stages the tree, decide between three outcomes rather than always committing with `--allow-empty`.
+    - When staging left something to commit, commit with `completion_commit_message` as now.
+    - When it left nothing, read HEAD's subject and put it to `escalated_story`. When that names the story being run, `git commit --amend` with the completion message; otherwise commit with `--allow-empty` as now.
+    - Extend `completion_commit_message` so the amended case can add its paragraph without changing the subject or the marker sentence, keeping one composition of both.
+    - In `completion_commits`, search a commit's whole message - subject and body together - for a line that names this story in the completion subject shape, stripping a leading `* ` or `- ` bullet before the comparison, and for the marker; keep requiring both together and keep returning the commit's real subject in each reported line.
+    - Update the docstrings of `_complete`, `completion_commit_message` and `completion_commits` to state the amend case and why a merge method can no longer drop the completion.
+    - Add to `tests/conftest.py` the ability to build the amended shape - an escalated story whose tip carries the completion message and the escalation's tree - beside the shape `escalating_story` builds today.
+    - Write `tests/test_completion_survives_merge.py`, driving constructed repositories in `tmp_path` through real `git merge --no-ff`, `git merge --squash` followed by a commit with a pull-request-style subject and the default bulleted body, and `git rebase`.
+    - Record the change in the architecture document, including the reason the amend is confined to a clean tree standing on the story's own escalation commit.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: "`_complete` gains the amend case, `completion_commit_message` gains the amended body, and `completion_commits` stops requiring its evidence in particular fields."
+    - file: tests/test_completion_survives_merge.py
+      stage: tester
+      reason: The validation module for this story, driving all three merge methods against constructed repositories.
+    - file: tests/conftest.py
+      stage: tester
+      reason: The shared fixture builders gain the amended-escalation-tip shape and the merge-method helpers the new module needs.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The record of how a finished run is recognised on a trunk changes, and the amend case is a new rule about when the harness rewrites a commit.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/stories/
+    - .harness/workflows/
+    - schemas/
+    - scripts/
+    - prompts/
+
+verification_requirements:
+  - Confirm the three completion outcomes are driven separately and that the content-bearing one is unchanged - the same message, a new commit rather than a rewritten one, and no new file.
+  - Confirm each of merge commit, squash merge and rebase merge is performed for real against a constructed repository, not reasoned about or simulated by hand-writing the commit a merge would have produced.
+  - Confirm each merge-method assertion sits beside the same merge of a branch built the way the harness builds one today, so a green result proves the repair rather than restating the merge's behaviour.
+  - Confirm the escalation path is untouched - `commit_escalated_work` and `commit_escalated_tree` are unchanged, and the escalation still commits the whole working tree.
+  - Confirm the amend is refused for a commit that is not an escalation commit of the story being run, driven with an escalation commit belonging to another story.
+  - Confirm `completion_commits` still rejects a commit carrying only the subject shape and one carrying only the marker.
+  - Confirm reverting the change to `_complete` makes the new validation module fail, and reverting the change to `completion_commits` makes it fail, so neither half is passing on the other's behalf.
+  - Confirm the architecture document's statement of how a completion is recognised matches what the code does.
+  - Confirm no story artifact under `.harness/stories/` was rewritten, and that story-061 and story-063 have not been retroactively repaired.
+
+constraints:
+  - The escalation commit's two-commit shape and its capture of the whole working tree are load-bearing and must not be weakened; escalated work has to survive a checkout of another branch.
+  - A run that never escalated must commit exactly what it commits today, with no new tracked artifact and no rewritten commit.
+  - The writing of the completion marker and the reading of it are one fact - the subject and the marker are composed in one place, and the reader derives what it matches from that same place.
+  - No repository merge setting is part of the fix; all three merge methods must work without one.
+  - story-061 and story-063 are not retroactively repaired, and no marker commit is manufactured for either.
+  - The amend applies only when the tree is clean and HEAD is an escalation commit of the story being run; in every other case the commit is added, never rewritten.
+  - Nothing here reads or writes `.harness/runs/` as a tracked path; the run directory stays ignorable by the target repository.
