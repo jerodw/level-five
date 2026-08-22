@@ -37,20 +37,22 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install pytest
-      # One retry, of the failures only, and only here. The clean-clone and
-      # revert checks clone the target repository with `--no-hardlinks`, which
+      # One retry, of the failures only, and only here. It was added while the
+      # clean-clone and revert checks still cloned with `--no-hardlinks`, which
       # copies .git/objects as a directory tree: git enumerates the tree, then
-      # copies it, and three CI runs have failed because a file vanished in
-      # between. One names objects/pack/multi-pack-index.lock, which exists
-      # only while something is writing a multi-pack index in the *source*
-      # repository — so the source is being repacked while the clone reads it,
-      # and copying a live object store cannot be correct under that condition.
+      # copies it, and three CI runs failed because a file vanished in between.
+      # One named objects/pack/multi-pack-index.lock, which exists only while
+      # something is writing a multi-pack index in the *source* repository.
       #
-      # This retry does not fix that. The fix is one call site,
-      # orchestration/story_coordinator.py:984, and it belongs in a story:
-      # .harness/requests/clone-without-copying-a-live-object-store.md. This
-      # keeps one flake from blocking a merge while that lands, and stays
-      # afterwards for the next unknown.
+      # story-033 removed that cause. Both checks now clone over git's normal
+      # transport (`--no-local`), which negotiates a pack over a pipe and never
+      # reads the source's object files at all, so a concurrent writer in the
+      # source cannot reach the clone. The failure this step was added for is
+      # impossible rather than unlikely, and no call site is outstanding.
+      #
+      # The step stays anyway, for the reason it always named as its second
+      # purpose: the next unknown. It is not evidence of a known flake, and a
+      # green job that used it still says so below.
       #
       # The retry lives here rather than in orchestration/ deliberately. A
       # harness that retries its own clone behaves differently depending on
