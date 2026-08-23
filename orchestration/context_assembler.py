@@ -218,6 +218,7 @@ def build_context(
     allowed_tools: list[str] | None = None,
     self_route_result: str | None = None,
     correction_pass_result: str | None = None,
+    suite_run_result: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -294,6 +295,14 @@ def build_context(
         # coordinator's to compose. Defaulted to None so a call that omits it
         # renders exactly what it rendered before.
         "correction_pass_result": correction_pass_result,
+        # The coordinator's own record of the suite it ran after a stage's turn
+        # ended: the exit status of a subprocess it owns, rather than an
+        # agent's assertion about a run it made itself. Passed in for the
+        # reason the two records above it are — the artifact's name is
+        # declared on a workflow stage, which is the coordinator's to read —
+        # and defaulted to None so a call that omits it renders exactly what it
+        # rendered before.
+        "suite_run_result": suite_run_result,
         "retry_state": retry_state,
         "testing_standards": _read(standards_dir / "testing.md"),
     }

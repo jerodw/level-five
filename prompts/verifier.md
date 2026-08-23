@@ -176,12 +176,15 @@ acceptance criteria while preserving accepted workflow behavior. Read the
 repository directly, and run whichever tests confirm the evidence you
 need: {{test_command}}
 
-The whole suite has already been run by the stage that wrote
-test-results.json, and it is run again in a fresh clone after your verdict.
-Running all of it here confirms nothing those two do not, and it takes long
-enough that a stage which starts it late in its turn can end the turn still
-waiting for it. Run the modules the story touched; take the whole-suite
-result from test-results.json.
+The whole suite has already been run by the coordinator, as a subprocess
+after the stage that authored the validation ended its turn, and it is run
+again in a fresh clone after your verdict. Running all of it here confirms
+nothing those two do not, and it takes long enough that a stage which starts
+it late in its turn can end the turn still waiting for it. Run the modules
+the story touched; take the whole-suite verdict from the injected suite run
+result — its exit code — and read the file its output_path names when you
+need more than the tail it carries. test-results.json is the authoring
+stage's record of what it wrote, not an account of a run it made.
 
 If retry state is active, evaluate whether the targeted verifier findings
 were resolved, and confirm the retry stayed within its authorized scope.
@@ -220,8 +223,14 @@ and whether anything the repository tracks could support them:
 Implementation summary:
 {{implementation_summary}}
 
-Test results:
+Test results (the authoring stage's record of the validation it wrote):
 {{test_results}}
+
+Suite run result — the coordinator's record of the configured test command,
+run as a subprocess after the authoring stage's turn ended. Its exit code is
+the whole-suite verdict, and output_path names the file holding that run's
+whole combined output, where a failure early in a long run survives the tail:
+{{suite_run_result}}
 
 Repository standards:
 {{repository_standards}}

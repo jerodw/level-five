@@ -2219,6 +2219,21 @@ DECLARED_LIVE_ARTIFACT_READERS = {
     "test_contract_assertions_bite.py":
         "its subject is whether this repository's own contract assertions fail "
         "when violated, which is a claim about the artifacts it ships",
+    "test_coordinator_runs_the_suite.py":
+        "every run it drives goes through a workflow it builds, where the "
+        "suite-run declaration, the stage names and the artifact names are "
+        "inputs. What remains has what is shipped as its subject: the schemas "
+        "this repository ships for the suite-run record, the test results and "
+        "the two existing check records, together with the inventory the new "
+        "one is registered in; the shipped workflow, because "
+        "'the coordinator writes this record so no stage is asked to satisfy "
+        "it' is a claim about what this repository deploys, and because which "
+        "shipped schemas describe a coordinator suite record is answered by "
+        "the artifacts this repository's own declarations name; and "
+        "prompts/verifier.md and prompts/tester.md, which are where a stage "
+        "reads who runs the suite and what it is given afterwards, so the "
+        "words those templates carry are the criterion rather than an input "
+        "to one",
     "test_correction_pass.py":
         "its runs are driven against a workflow it builds, where the "
         "declaration, the categories and the artifact name are inputs. What "

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "suite-run-result",
+  "description": "The coordinator's record of the suite run a workflow stage declares: the target's configured test_command, run as a subprocess with the target repository as its working directory, after that stage's agent turn has ended. It exists because a stage that authors validation cannot also run a suite that outlasts its own turn — the command is forced into the background, the stage polls, and the turn ends on a result that only arrives if the turn continues — while a subprocess cannot end its turn. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it, following clean-clone-result and revert-check-result. WHAT IT DOES NOT CARRY: no count of tests run, passed or failed, and no list of failing test names. The coordinator reads the exit status and nothing else; deriving a count would be a contract on the target's test framework, which is exactly the assumption this record exists to avoid. A zero exit advances the workflow; a non-zero exit brings the declaring stage back in place on its own self-route budget, spending no retry. Optional fields are expressed by absence rather than by null, as clean-clone-result does: a check that did not run has no exit code to report.",
+  "type": "object",
+  "required": ["ran", "command", "runner"],
+  "properties": {
+    "ran": {
+      "type": "boolean",
+      "description": "Whether the configured test command actually ran. False when the check could not run — the target configures no test_command, or the command could not be started at all — in which case reason says why, exit_code, output_tail and output_path are absent, and the run escalates rather than being permitted."
+    },
+    "command": {
+      "type": "string",
+      "description": "The command executed with the target repository as its working directory: the target's configured test_command, exactly as written. Nothing substitutes its first word here. verification_runner is not read for this run, deliberately — that key exists so the clean-clone check can exercise an environment other than the one the developer works in, and this run is in the tree the developer works in."
+    },
+    "runner": {
+      "type": "string",
+      "description": "The executable the run used, which is the configured test_command's own first word."
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "The suite's exit status, which is the whole of what the coordinator reads from the run. Zero advances the workflow to the next stage with no further invocation of the declaring stage; non-zero self-routes that stage. Absent when ran is false."
+    },
+    "output_tail": {
+      "type": "string",
+      "description": "The tail of the run's combined stdout and stderr, kept so this artifact is readable on its own without opening the file named below. A tail loses a failure that happened early in a long run, which is what output_path is for. Absent when ran is false."
+    },
+    "output_path": {
+      "type": "string",
+      "description": "Where the run's whole combined stdout and stderr was written, in the run directory. This is what a self-routed stage diagnoses a failure from: reading a file costs nothing and cannot time out, where re-running the suite is the command the stage no longer runs. Absent when ran is false."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why the run did not happen, naming what stopped it. Absent when ran is true."
+    }
+  }
+}

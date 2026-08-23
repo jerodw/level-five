@@ -24,7 +24,11 @@ Do not:
 Workflow state (state.json) tells you what is true now. The event history
 (events.log) tells you how the run got there. Stage artifacts
 (verification-result.json, test-results.json, retry-guidance.json) tell
-you what each stage saw and decided. Ground every explanation in those
+you what each stage saw and decided, and the coordinator's own records
+(clean-clone-result.json, revert-check-result.json, suite-run-result.json)
+tell you what it computed between them — a suite run's verdict is an exit
+code in one of those, not a claim in a stage's artifact, and each names the
+file holding that run's whole output. Ground every explanation in those
 artifacts and cite the files you used.
 
 When you propose a harness improvement, express it as a story request the

@@ -1339,6 +1339,7 @@ class CleanCloneResult:
     clone_path: str | None = None
     exit_code: int | None = None
     output_tail: str | None = None
+    output_path: str | None = None
     reason: str | None = None
 
     def as_record(self) -> dict:
@@ -1347,10 +1348,39 @@ class CleanCloneResult:
             "clone_path": self.clone_path,
             "exit_code": self.exit_code,
             "output_tail": self.output_tail,
+            "output_path": self.output_path,
             "reason": self.reason,
         }
         record.update({key: value for key, value in optional.items() if value is not None})
         return record
+
+
+def suite_output_file(artifact: str) -> str:
+    """Where a suite run's full combined output is written, from its result name.
+
+    The one place a full-output filename is shaped, so no call site spells one:
+    each of the coordinator's suite runs already knows the artifact it writes,
+    and the output beside it is named from that. The tail stays in the record
+    whatever this holds, so each artifact remains readable on its own; what the
+    file adds is what a tail loses, which is everything that happened early in
+    a long run.
+    """
+    stem = artifact[: -len(".json")] if artifact.endswith(".json") else artifact
+    return f"{stem}-output.txt"
+
+
+def _write_suite_output(destination: Path | None, output: str) -> str | None:
+    """Write a suite run's whole combined output, and say where it went.
+
+    Returns None when the caller named no destination, which is the optional-
+    by-absence convention the surrounding records use: a run whose output was
+    not kept records no path rather than a null one.
+    """
+    if destination is None:
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(output, encoding="utf-8")
+    return str(destination)
 
 
 def _resolve_interpreter(target_root: Path, interpreter: str) -> Path | None:
@@ -1525,6 +1555,7 @@ def run_clean_clone(
     destination: Path,
     revert: list[str] | tuple[str, ...] = (),
     baseline: Path | None = None,
+    output_path: Path | None = None,
 ) -> CleanCloneResult:
     """Run the configured test command in a fresh clone with the story committed.
 
@@ -1545,6 +1576,11 @@ def run_clean_clone(
     default to reverting nothing, so the clean-clone check runs exactly as it
     did; the revert check is this same operation with the governed paths
     restored to the state the stage found them in rather than applied.
+
+    `output_path` is where the run's whole combined output is written. The
+    caller names it, because the caller is the one that knows which result
+    artifact this run is recorded under and the name is derived from that. It
+    defaults to writing nothing, so a caller that names none records none.
     """
     argv = shlex.split(test_command)
     runner = verification_runner or argv[0]
@@ -1580,6 +1616,7 @@ def run_clean_clone(
         clone_path=str(clone),
         exit_code=result.returncode,
         output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
+        output_path=_write_suite_output(output_path, output),
     )
 
 
@@ -1650,6 +1687,7 @@ def clean_clone_check(
             config["test_command"],
             config.get("verification_runner"),
             scratch,
+            output_path=run_dir / suite_output_file(artifact),
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -1720,6 +1758,140 @@ def _clean_clone_failures(output: str) -> str:
     if len(failures) > 5:
         return "; ".join(failures[:5]) + f"; and {len(failures) - 5} more"
     return "; ".join(failures)
+
+
+# --------------------------------------------------------------------------
+# The suite run a stage declares
+#
+# A stage that authors validation used to run the target's whole suite inside
+# its own turn. On a target whose suite outlasts the agent tool's per-call
+# ceiling that cannot work: the command is forced into the background, the
+# stage polls, and the turn ends on a result that only arrives if the turn
+# continues. It is arithmetic rather than misbehaviour — the command cannot
+# complete inside one call.
+#
+# The other whole-suite runs in a cycle are coordinator subprocesses, and
+# neither has ever failed that way, because a subprocess cannot end its turn.
+# So this is a third one: the stage authors and records, and the coordinator
+# runs the configured test command after the turn ends and reads its exit
+# status. Zero advances; non-zero brings the stage back in place.
+#
+# It is declared on a stage rather than written into the orchestration, the
+# way revert_check, clean_clone, claim_support and correction_pass are, so a
+# target whose stage should keep running its own suite declares nothing and is
+# left exactly as it is.
+#
+# The exit status is the whole of what the coordinator reads. Nothing here
+# parses the output for a count of tests, a framework's summary line or a list
+# of failing names: that would be a contract on the target's test framework,
+# which is the assumption the harness spent two stories removing.
+
+
+def suite_run_declaration(stages: list[dict]) -> dict:
+    """The workflow's suite-run declaration, wherever a stage carries it.
+
+    Read off the loaded definition rather than looked up by stage name, in the
+    shape `correction_pass_declaration` established, so a workflow that moves
+    the declaration is followed and one that declares it nowhere disables the
+    mechanism entirely. The first declaration wins; a definition carrying two
+    would be declaring one mechanism twice.
+    """
+    for stage in stages:
+        declaration = stage.get("suite_run")
+        if declaration:
+            return declaration
+    return {}
+
+
+def suite_run_check(
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    artifact: str,
+    *,
+    stage_name: str,
+) -> CleanCloneResult:
+    """Run the target's configured test command in its own working tree.
+
+    No clone: the question this asks is whether the suite passes where the
+    stage left the tree, which is exactly the run the stage used to make
+    itself. The record it writes is shaped like the other two suite runs'
+    because it is the same fact — a command, the executable it ran under, an
+    exit status, the tail and the path to the whole output.
+
+    The announcement is made here rather than at the call site, so it cannot
+    happen without the check running: removing the `suite_run` declaration
+    silences the announcement and the result together. `stage_name` is
+    required and keyword-only for the reason `clean_clone_check`'s is — a
+    defaulted argument would let a later call site silence the announcement by
+    omission.
+
+    The configured command is run exactly as written, with no substitution of
+    its first word. `verification_runner` is deliberately not read here: that
+    key exists so the clean-clone check can exercise an environment other than
+    the one the developer works in and find an incompatibility before CI does,
+    and this run is *in* the tree the developer works in — it is the run the
+    stage used to make for itself, made where the stage would have made it.
+    The record's `runner` is therefore the command's own first word.
+
+    A target that configures no test command has nothing to run, which is
+    reported as a check that did not run rather than as a pass; nothing is
+    announced on that path, because nothing is about to take a suite run's
+    worth of time.
+    """
+    command = config.get("test_command")
+    if not command:
+        return CleanCloneResult(
+            ran=False,
+            command="",
+            runner="",
+            reason=(
+                "the target configures no test_command, so there is no suite "
+                "for the coordinator to run"
+            ),
+        )
+
+    argv = shlex.split(command)
+    runner = argv[0]
+    named = shlex.join(argv)
+
+    _suite_rerun_started(
+        run_dir,
+        stage_name,
+        artifact,
+        "in the target's own working tree, because the stage that authors the "
+        "validation no longer runs it",
+    )
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=target_root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        decided = CleanCloneResult(
+            ran=False,
+            command=named,
+            runner=runner,
+            reason=f"the configured test command could not be run: {error}",
+        )
+    else:
+        output = result.stdout + result.stderr
+        decided = CleanCloneResult(
+            ran=True,
+            command=named,
+            runner=runner,
+            exit_code=result.returncode,
+            output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
+            output_path=_write_suite_output(
+                run_dir / suite_output_file(artifact), output
+            ),
+        )
+    (run_dir / artifact).write_text(
+        json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
+    )
+    return decided
 
 
 # --------------------------------------------------------------------------
@@ -2005,6 +2177,7 @@ def revert_check(
                 scratch,
                 revert=list(paths),
                 baseline=resolved,
+                output_path=run_dir / suite_output_file(artifact),
             )
         except (RuntimeError, OSError) as error:
             result = CleanCloneResult(
@@ -2427,6 +2600,13 @@ AGENT_PROCESS_FAILED = "agent-process-failed"
 MISSING_REQUIRED_ARTIFACTS = "missing-required-artifacts"
 STALE_REQUIRED_ARTIFACTS = "stale-required-artifacts"
 
+#: The suite a stage declared, run by the coordinator after the stage's turn
+#: ended, exiting non-zero. It belongs beside the others for the reason
+#: defective-retry-guidance does rather than because it is mechanical: it is a
+#: fact computed from what the stage produced — an exit status from a
+#: subprocess the coordinator owns — and not a judgement about the work.
+SUITE_FAILED = "suite-failed"
+
 
 def self_route_result_file(
     stage_name: str, attempt: int, try_number: int | str
@@ -2498,6 +2678,19 @@ def self_route_statement(
     out verbatim rather than counted.
     """
     named = ", ".join(artifacts)
+    if failure == SUITE_FAILED:
+        return (
+            f"The coordinator ran the configured test command after your turn "
+            f"ended, and it exited non-zero. This is not a judgement about the "
+            f"work — no verifier saw it — and it is not an assertion by any "
+            f"agent: it is the exit status of a subprocess the coordinator "
+            f"owns. Its record and the whole of its combined output are "
+            f"{named}; read the output file rather than re-running the suite "
+            f"yourself, which is the command this stage no longer runs. Repair "
+            f"what failed and record what you wrote; the coordinator runs the "
+            f"suite again after this turn ends. No retry has been spent and no "
+            f"attempt archived; this is the same attempt, running again."
+        )
     if failure == DEFECTIVE_RETRY_GUIDANCE:
         listed = "; ".join(entries or [])
         return (
@@ -4098,6 +4291,20 @@ def run_story(
                 if record.is_file():
                     correction_pass_result = record.read_text(encoding="utf-8")
 
+        # The coordinator's record of the suite it ran after some stage's turn
+        # ended. Read back off the artifact rather than passed along in memory,
+        # for the reason the two records above are, and named off the
+        # workflow's own declaration wherever a stage carries it, so no stage
+        # name and no artifact name is written here. It renders as None for
+        # every stage of a run under a workflow that declares no suite run, and
+        # for the stages that run before the first one.
+        suite_run_result = None
+        declared_suite = suite_run_declaration(stages).get("result")
+        if declared_suite:
+            record = run_dir / declared_suite
+            if record.is_file():
+                suite_run_result = record.read_text(encoding="utf-8")
+
         context = context_assembler.build_context(
             story_text=story_text,
             story=reading.parsed,
@@ -4113,6 +4320,7 @@ def run_story(
             allowed_tools=config.get("allowed_tools"),
             self_route_result=self_route_result,
             correction_pass_result=correction_pass_result,
+            suite_run_result=suite_run_result,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
@@ -4468,6 +4676,68 @@ def run_story(
                 story_id,
             )
             _claim_support_recorded(run_dir, name, claim_artifact, supported)
+
+        # The suite run a stage declares, run here because the stage that
+        # authors validation cannot run a command longer than its own turn. It
+        # sits below the required-output, freshness and schema checks, so a
+        # stage that produced nothing is not charged a suite run, and above the
+        # advance, so the workflow moves on only over a green suite. The
+        # declaration is read off the loaded stage dict, so no stage name
+        # appears here and a workflow declaring it nowhere runs the stage
+        # exactly as it ran before this existed.
+        suite_run = stage.get("suite_run") or {}
+        suite_artifact = suite_run.get("result")
+        if suite_artifact:
+            ran = suite_run_check(
+                run_dir, target_root, config, suite_artifact, stage_name=name
+            )
+            if not ran.ran:
+                # A check that could not run permits nothing, as the
+                # clean-clone check's own could-not-run path already decides.
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"the suite run declared on {name} could not run: "
+                    f"{ran.reason}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
+            if ran.exit_code != 0:
+                # A red suite is a fact computed from what the stage produced,
+                # so it takes the route the other such facts take: the stage
+                # runs again in place on the budget it already declares,
+                # spending no retry, archiving no attempt and appending no
+                # retry-history entry. Routed through the existing self_route
+                # decision, so an exhausted budget escalates with the reason
+                # that decision already returns rather than through a second
+                # escalation path written for this.
+                decision = self_route(
+                    run_dir,
+                    state,
+                    stage,
+                    failure=SUITE_FAILED,
+                    reason=(
+                        f"the suite the coordinator ran after {name} exited "
+                        f"{ran.exit_code}: {_clean_clone_failures(ran.output_tail or '')}"
+                    ),
+                    # The record and the whole output, so the statement the
+                    # re-running stage reads names both and the record's own
+                    # artifacts array carries both.
+                    artifacts=[suite_artifact, ran.output_path or suite_artifact],
+                    attempt=attempt,
+                )
+                if decision.taken:
+                    self_routed = True
+                    continue
+                return _escalate(
+                    run_dir,
+                    state,
+                    decision.reason,
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
 
         if name == "verifier":
             verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))

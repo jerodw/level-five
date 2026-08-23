@@ -797,7 +797,8 @@ def test_no_union_keyword_appears_anywhere_in_the_schema():
 def test_optional_fields_are_expressed_by_absence_from_required():
     assert set(SCHEMA["required"]) == {"ran", "command", "runner"}
     optional = set(SCHEMA["properties"]) - set(SCHEMA["required"])
-    assert optional == {"clone_path", "exit_code", "output_tail", "reason"}
+    assert optional == {"clone_path", "exit_code", "output_tail", "output_path",
+                        "reason"}
 
 
 def test_the_schema_catches_a_record_missing_a_required_field():
