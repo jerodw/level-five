@@ -57,6 +57,7 @@ Each story below is a step the book's roadmap calls for, or a failure the build 
 | 061 | A crashed run's resume archives the interrupted attempt before re-running the stage, and refuses rather than overwrites — a run that stopped for a reason nobody recorded is where a partial artifact is most likely to be the only account of what happened | Ch. 17, retry evidence; Ch. 18 |
 | 062 | A resume restores the run's attempt allowance and archives the entry it ends, so a run that escalated at its ceiling does not resume with nothing left to spend | Ch. 17, retry evidence; Ch. 18 |
 | 063 | A run has a cost ceiling: one for the run and one per stage execution, declared with the reasoning behind each figure, with every invocation's cost recorded in `cost.json` | Ch. 18, hardening |
+| 066 | The coordinator runs the target's configured suite and the tester only authors: an eleven-minute command no longer sits inside a ten-minute agent turn, the verdict is an exit code rather than a stage's account of one, and every coordinator suite run keeps its full output rather than a tail | Ch. 18, hardening |
 
 Still ahead, in the order Chapters 18 and 19 recommend: per-agent logs and a watcher, a fuller hook-based tool policy in place of the static `allowed_tools` allowlist, an adjudicator, an inspector, pause-and-resume on capacity exhaustion, git worktrees and parallel story execution, a real initialization library, and a `.harness/history/` record across runs.
 
