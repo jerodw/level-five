@@ -1,0 +1,180 @@
+story:
+  id: story-066
+  title: The coordinator runs the suite the tester authors
+  description: |
+    The tester runs the target's whole suite inside its own turn. On this
+    repository that command exceeds the agent tool's per-call ceiling — the
+    suite takes about eleven minutes and clean-clone-result.json records
+    667.00s — so the command is forced into the background, the stage polls,
+    and the turn ends on a result that only arrives if the turn continues.
+    story-065 escalated at the tester three times this way, spending $11.95
+    and producing nothing. It is arithmetic rather than misbehaviour: the
+    command cannot complete inside one call.
+
+    The other two whole-suite runs in a cycle — the revert check and the
+    clean-clone check — are coordinator subprocesses, and neither has ever
+    failed this way, because a subprocess cannot end its turn.
+
+    This story moves the tester's suite run to the coordinator and narrows the
+    tester to what only an agent can do. The tester authors tests and records
+    what it wrote, executing nothing. The coordinator runs the configured
+    test_command as a subprocess after the stage ends and reads its exit
+    status: zero advances the workflow, non-zero self-routes the tester with
+    the coordinator's own record and the path to the full output injected.
+
+    The check is declared on a stage rather than written into the
+    orchestration, the way revert_check, clean_clone, claim_support and
+    correction_pass already are, so a target whose tester should keep running
+    its own suite declares nothing and is left exactly as it is today.
+
+    The structured counts come out of the tester's contract and are not
+    replaced. tests_run, tests_passed, tests_failed and failures exist today
+    only because the tester parses its own suite output, and any contract
+    requiring them is a contract on the target's test framework — the
+    assumption story-040 and story-041 removed from harness source. Moving
+    that parsing into a prompt would not be removing it. What replaces status
+    is stronger than what it replaces: an exit code from a subprocess the
+    coordinator owns rather than an agent's assertion about its own run.
+
+    Each of the three coordinator suite runs also writes its full output to a
+    file in the run directory and names the path in its result. The tail stays
+    so each artifact is readable alone, but a self-routed tester has to
+    diagnose a failure from this artifact, and a tail loses a failure that
+    happened early in a long run. Reading a file costs nothing and cannot time
+    out, which is why it closes that gap without reintroducing a command an
+    agent must survive.
+
+tasks:
+  - Add an optional suite_run stage key to the workflow definition, declared on the tester as the artifact name the check writes, read off the loaded stage dict the way revert_check, clean_clone, claim_support and correction_pass are, so a workflow that declares it nowhere disables the mechanism with no change to the orchestration.
+  - Add a coordinator check that runs the target's configured test_command as a subprocess with the target repository as its working directory, announces itself through the existing suite-rerun announcement before it starts, and records ran, command, runner, exit_code, output_tail and the path to the full output. It reads an exit status and nothing else.
+  - Write the full combined stdout and stderr of every coordinator suite run to a file in the run directory, and name that path in the result the run writes. The output filename is derived from the declared artifact name by one helper, so no output filename is spelled at any call site, and the existing tail is kept beside it.
+  - Add a suite-failed self-route failure with its own coordinator statement, naming the result artifact and the path to the full output, and route a non-zero exit through the existing self-route decision so the stage runs again in place on the budget it already declares.
+  - Escalate when the check reports that it could not run, with the reason the check recorded, as the clean-clone check already does.
+  - Narrow schemas/test-results.schema.json to what the author knows: require tests_written and remove status, tests_run, tests_passed, tests_failed and failures. Say in the schema description what a reader loses and why the counts cannot be asked of a target.
+  - Add schemas/suite-run-result.schema.json describing the coordinator's record, and register it in schemas/manifest.json. It is coordinator-written, so it appears in no stage's schemas map, following clean-clone-result and revert-check-result.
+  - Add output_path to schemas/clean-clone-result.schema.json and schemas/revert-check-result.schema.json.
+  - Inject the coordinator's suite-run record into the verifier's context, and change prompts/verifier.md so the whole-suite verdict is taken from that record and the output path is named as where more detail lives.
+  - Remove from prompts/tester.md the instruction to run the full test suite and the guidance about piping and backgrounding that goes with it. State that the stage authors validation and executes no test command, that the coordinator runs the suite after the turn ends, and that a red suite brings the stage back in place with the result and the output path.
+  - Correct prompts/implementer.md where it names the stage that writes test-results.json as the thing that runs the suite, and prompts/assist.md where it lists the artifacts that say what each stage saw and decided.
+  - Record the change in the configured architecture document: who runs each of the three suite runs, what the coordinator's record carries, and why the counts are gone.
+  - Write validation for all of the above, driven through the coordinator's own run loop against a temporary target repository with the agent runner faked.
+
+acceptance_criteria:
+  - A workflow stage declaring suite_run causes the coordinator to run the configured test_command as a subprocess after that stage's agent turn ends, and to write the declared result artifact into the run directory.
+  - The recorded result carries ran, command, runner, exit_code, output_tail and the path to the full output, and carries no count of tests run, passed or failed.
+  - A run whose declared suite run exits zero advances to the next stage with no further invocation of the stage that declared it, so the passing case costs one invocation of that stage.
+  - A run whose declared suite run exits non-zero re-runs the declaring stage in place, writing a self-route record whose failure is the new suite-failed value and whose statement names both the result artifact and the path to the full output.
+  - That re-run leaves retry_count unchanged, writes no attempts/attempt-N/ directory and appends nothing to retry-history.json.
+  - When the declaring stage has no self-route budget left and the suite is still failing, the run escalates with the reason the self-route decision returns.
+  - When the check reports that it could not run, the run escalates naming the reason the check recorded.
+  - A workflow whose stages declare no suite_run runs the declaring stage exactly as it runs today: no suite is run by the coordinator, no result artifact is written, and no self-route is taken on that account.
+  - Each of the three coordinator suite runs — the revert check, the declared suite run and the clean-clone check — writes its full combined output to a file in the run directory and names that path in its own result.
+  - Content that appears early in a long run's output and falls outside the retained tail is present in the file the result names.
+  - schemas/test-results.schema.json requires tests_written and defines none of status, tests_run, tests_passed, tests_failed or failures, and its description says why the counts are not replaced.
+  - schemas/suite-run-result.schema.json exists and is listed in schemas/manifest.json.
+  - The rendered verifier prompt injects the coordinator's suite-run record and names it as the source of the whole-suite verdict.
+  - prompts/tester.md instructs the stage to author validation and record what it wrote, contains no instruction to run the test command, and carries no guidance about piping or backgrounding a suite run.
+  - No module under orchestration/ derives a count of tests from a suite run's output; the output is stored and passed on as text.
+
+technical_plan:
+  implementation_steps:
+    - Add the suite_run declaration to the tester stage in workflows/story-workflow.json, naming the result artifact it writes.
+    - Add a helper in story_coordinator.py that derives a full-output filename from a declared result artifact name, and use it at all three suite-run sites so the name is composed in one place.
+    - Give CleanCloneResult an output_path field, written into the record by absence when there is none, matching the optional-by-absence convention the surrounding records already use, and have the shared runner write the combined output to the destination the caller names.
+    - Add the coordinator check that runs the configured test_command in the target working tree, announcing itself through the existing suite-rerun announcement so the console cannot sit silent for the length of a suite run.
+    - Add the suite-failed failure constant and its statement beside the existing mechanical-failure statements, and add the value to the self-route-result schema's failure enum.
+    - Call the check in the stage loop after the stage's required-output, freshness and schema checks have passed and before the workflow advances, reading the declaration off the loaded stage dict so no stage name appears at the call site. Route a non-zero exit through the existing self-route decision and escalate on its refusal, and escalate directly when the check reports it did not run.
+    - Narrow the test-results schema, add the suite-run-result schema, register it in the manifest, and add output_path to the two existing check schemas.
+    - Read the suite-run record into the assembled context under its own name, and rewrite the passage in prompts/verifier.md that today points at test-results.json for the whole-suite result.
+    - Rewrite the tester's stage layer so it authors and records rather than executes, and correct the two other prompts that describe who runs the suite.
+    - Write the validation modules and the architecture document entry.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Declares the suite_run check on the tester stage.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The check itself, the full-output helper, the output_path field, the suite-failed failure and statement, and the call site in the stage loop.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Injects the coordinator's suite-run record into stage context.
+    - file: schemas/test-results.schema.json
+      stage: implementer
+      reason: Narrowed to what the author knows, with the reasoning for the removal recorded in its description.
+    - file: schemas/suite-run-result.schema.json
+      stage: implementer
+      reason: New schema for the coordinator's record.
+    - file: schemas/clean-clone-result.schema.json
+      stage: implementer
+      reason: Gains output_path.
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: Gains output_path.
+    - file: schemas/self-route-result.schema.json
+      stage: implementer
+      reason: The failure enum gains the suite-failed value and its description.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: Registers the new schema.
+    - file: prompts/tester.md
+      stage: implementer
+      reason: The stage authors validation and executes nothing; the suite-run instruction and its piping and backgrounding guidance are removed.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: Takes the whole-suite verdict from the coordinator's record and names the output path for anything more.
+    - file: prompts/implementer.md
+      stage: implementer
+      reason: Corrects the clause naming the stage that writes test-results.json as the thing that runs the suite.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: The artifacts that say what each stage saw now include the coordinator's suite-run record.
+    - file: tests/test_coordinator_runs_the_suite.py
+      stage: tester
+      reason: New validation for the declared check, the self-route on a red suite, the untouched retry budget, the disabled-by-absence case and the retained full output.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records who runs each of the three suite runs, what the coordinator's record carries, and why the structured counts are gone.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - schemas/
+    - prompts/tester.md
+    - prompts/verifier.md
+    - prompts/implementer.md
+    - prompts/assist.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/config.yaml
+    - prompts/documenter.md
+    - prompts/planner.md
+    - prompts/harness-layer.md
+    - prompts/prose-layer.md
+    - scripts/
+    - orchestration/plan_validation.py
+    - orchestration/plan_commit.py
+
+verification_requirements:
+  - Confirm that a run driven through the coordinator's run loop, against a temporary target repository with the agent runner faked, self-routes the declaring stage when the declared suite run exits non-zero, and that the self-route record and the injected context carry both the result and the path to the full output.
+  - Confirm that the same route leaves retry_count unchanged, archives no attempt and appends nothing to retry-history.json.
+  - Confirm that a run whose declared suite run exits zero advances with one invocation of the declaring stage.
+  - Confirm that a fixture workflow declaring no suite_run runs the declaring stage exactly as it runs without this change, writing no result artifact and taking no self-route on that account.
+  - Confirm that the coordinator's record carries an exit code and no count of tests, and that no module under orchestration/ derives a count from a suite run's output.
+  - Confirm that all three coordinator suite runs write their full output to a file and name its path, and that content falling outside the retained tail is recoverable from that file.
+  - Confirm that the rendered verifier prompt injects the coordinator's suite-run record and names it as the source of the whole-suite verdict.
+  - Confirm that prompts/tester.md carries no instruction to run the test command and no guidance about piping or backgrounding a suite run.
+  - Confirm that the new validation drives the coordinator rather than calling the check function alone, so the routing decision under test is the shipped one.
+  - Confirm that the new validation derives stage names, artifact names and restricted prefixes from a workflow definition rather than writing them, and that it builds a fixture workflow wherever the shipped definition would be an input rather than the subject.
+
+constraints:
+  - The coordinator reads the suite run's exit status and nothing else. No module under orchestration/ may parse a suite run's output for a count of tests, a framework's summary line or a list of failing test names.
+  - The check is enabled by a declaration on a stage and by nothing else, so a workflow that declares it nowhere behaves exactly as this repository behaves before this story.
+  - The failure route is a self-route and not a retry: it spends no retry budget, archives no attempt and writes no retry-history entry.
+  - The tester's declared self-route budget is unchanged by this story.
+  - The number of whole-suite runs in a cycle is unchanged: this story moves one run from an agent to the coordinator and removes none.
+  - The retained output tail stays in every record beside the new path, so each artifact remains readable on its own.
+  - No stage name, artifact name or restricted prefix is written at a call site in orchestration/ that could read it off the loaded workflow definition.
+  - The revert check and the clean-clone check keep their present behaviour: what they run, where they run it, and what they decide are unchanged apart from gaining the full-output file and the path to it.
