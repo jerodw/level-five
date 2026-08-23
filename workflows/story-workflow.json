@@ -28,6 +28,9 @@
       "max_self_routes": 2,
       "max_execution_cost_usd": 75,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=35, p50 $3.27, p90 $12.99, max $52.56. This one is the deliberate one. The tester's expensive invocations are story-053's single legitimate $52.56 conversion and four from story-048's failing run, and no cap distinguishes them, so $75 leaves the legitimate one alone while stopping a call at well past the worst ever seen. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "suite_run": {
+        "result": "suite-run-result.json"
+      },
       "max_self_routes_reason": "Two, where every other budget in this workflow is one. The tester is the stage most often asked to produce something it has not produced before -- a new rule, a new idiom, a new fixture shape -- and a stage learning what to produce is the stage most likely to fail mechanically on a first attempt and then again while correcting itself. One budget covers the dropped connection; the second covers the first correction landing incomplete. Nothing reads this key; it records the judgement where a reader of the definition meets the budget.",
       "schemas": {
         "test-results.json": "test-results",

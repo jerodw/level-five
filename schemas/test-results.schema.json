@@ -1,48 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "test-results",
-  "description": "The tester stage's structured result: what validation was written, what was run, and what failed.",
+  "description": "The tester stage's structured record of the validation it authored. The stage executes no test command: on a target whose suite outlasts an agent's per-call ceiling that run cannot complete inside one turn, so the coordinator runs the configured test_command as a subprocess after the turn ends and records the result in suite-run-result.json. WHAT A READER LOSES AND WHY IT IS NOT REPLACED: this artifact used to carry status, tests_run, tests_passed, tests_failed and failures, so a reader could see a pass or a failure count without opening another file. Those fields existed only because the stage parsed its own suite output, and any contract requiring them is a contract on the target's test framework — the assumption the harness removed from its source when it stopped naming a language or a runner. Moving that parsing into a prompt would not be removing it, so the counts are removed rather than reproduced. What replaces the verdict is stronger than what it replaces: an exit code from a subprocess the coordinator owns, in suite-run-result.json, beside the path to the run's whole output. What is left here is what the author knows without running anything.",
   "type": "object",
-  "required": ["status"],
+  "required": ["tests_written"],
   "properties": {
-    "status": {
-      "type": "string",
-      "description": "Whether the executed suite passed.",
-      "enum": ["passed", "failed"]
-    },
     "tests_written": {
       "type": "integer",
-      "description": "Number of new tests this stage authored."
-    },
-    "tests_run": {
-      "type": "integer",
-      "description": "Number of tests executed."
-    },
-    "tests_passed": {
-      "type": "integer",
-      "description": "Number of tests that passed."
-    },
-    "tests_failed": {
-      "type": "integer",
-      "description": "Number of tests that failed."
-    },
-    "failures": {
-      "type": "array",
-      "description": "One entry per failing test.",
-      "items": {
-        "type": "object",
-        "required": ["test", "issue"],
-        "properties": {
-          "test": {
-            "type": "string",
-            "description": "Name of the failing test."
-          },
-          "issue": {
-            "type": "string",
-            "description": "What the failure shows."
-          }
-        }
-      }
+      "description": "Number of new tests this stage authored. A fact about what was written, which is what this stage does, rather than about what running them produced."
     }
   }
 }

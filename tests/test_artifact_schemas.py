@@ -246,7 +246,7 @@ def test_an_extra_key_anywhere_validates(harness_root):
 VALID_CHANGED_FILES = {"modified": ["src/app.py"], "created": [], "deleted": []}
 VALID_TESTER_RECORD = {"modified": [], "created": ["tests/test_app.py"], "deleted": []}
 VALID_DOCUMENTER_RECORD = {"modified": [], "created": [], "deleted": []}
-VALID_TEST_RESULTS = {"status": "passed", "tests_run": 1, "tests_passed": 1}
+VALID_TEST_RESULTS = {"tests_written": 1}
 VALID_VERDICT = {
     "status": "passed",
     "blocking_issues": [],

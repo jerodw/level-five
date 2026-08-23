@@ -648,8 +648,13 @@ FAILURE_IDS = [name for name, _ in FAILURES]
 #: retry guidance that was met in full by an attempt the same verdict then
 #: failed is a fact computed from what the stage produced, not a stage failing
 #: to produce what it declared, so it has no plan here and is driven by
-#: tests/test_defective_retry_guidance.py instead.
-NON_MECHANICAL_FAILURES = ["defective-retry-guidance"]
+#: tests/test_defective_retry_guidance.py instead. story-066 added the second
+#: on the same terms: a suite the coordinator ran after the stage's turn ended
+#: and that exited non-zero is a fact computed from what the stage produced —
+#: an exit status of a subprocess the coordinator owns — rather than the stage
+#: failing to produce what it declared, so it has no plan here either and is
+#: driven by the module validating that check.
+NON_MECHANICAL_FAILURES = ["defective-retry-guidance", "suite-failed"]
 
 
 def test_every_failure_class_the_schema_declares_is_accounted_for():

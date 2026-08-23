@@ -12,6 +12,7 @@
     "revert-check-result",
     "self-route-result",
     "story",
+    "suite-run-result",
     "test-results",
     "verification-result"
   ]

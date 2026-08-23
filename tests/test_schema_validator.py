@@ -156,7 +156,12 @@ def test_shipped_schemas_require_the_fields_the_coordinator_routes_on():
         "status",
         "retry_recommended",
     }
-    assert "status" in schema_validator.load_schema("test-results")["required"]
+    # The authoring stage records what it wrote; the whole-suite verdict is an
+    # exit code the coordinator records in suite-run-result.json, which no
+    # stage is asked to satisfy. So what this artifact must carry is the count
+    # of tests authored, not a status the stage would have had to run a suite
+    # to know.
+    assert "tests_written" in schema_validator.load_schema("test-results")["required"]
     assert set(schema_validator.load_schema("changed-files")["required"]) == {
         "modified",
         "created",

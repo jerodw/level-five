@@ -1017,8 +1017,8 @@ def test_a_single_file_mixing_a_repair_and_an_addition_is_permitted(
     assert record["permitted"] is True
     assert record["paths"] == ["tests/test_app.py"]
     assert set(record) <= {"ran", "paths", "command", "runner",
-                           "clone_path", "exit_code", "output_tail", "permitted",
-                           "baseline", "reason"}
+                           "clone_path", "exit_code", "output_tail", "output_path",
+                           "permitted", "baseline", "reason"}
 
 
 def test_the_addition_inside_that_file_needed_no_change_to_pass(tmp_path):

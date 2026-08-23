@@ -19,12 +19,13 @@
     },
     "failure": {
       "type": "string",
-      "description": "Which failure occurred. None of the four is a judgement about the work, which is why running the stage again is a plausible answer to all of them and why a boundary or schema violation is not among them. The first three are mechanical: the stage simply did not produce what it declared. The fourth, defective-retry-guidance, belongs beside them for the same reason rather than because it is mechanical — it is a fact computed from what the stage produced, that the retry guidance in force was met in full and the verdict failed the work anyway, so the guidance sanctioned the outcome it fails. Nothing there reads a guidance entry, an unmet reason or a blocking issue as language; the whole comparison is set equality over strings the verifier echoed.",
+      "description": "Which failure occurred. None of the four is a judgement about the work, which is why running the stage again is a plausible answer to all of them and why a boundary or schema violation is not among them. The first three are mechanical: the stage simply did not produce what it declared. The fourth, defective-retry-guidance, belongs beside them for the same reason rather than because it is mechanical — it is a fact computed from what the stage produced, that the retry guidance in force was met in full and the verdict failed the work anyway, so the guidance sanctioned the outcome it fails. Nothing there reads a guidance entry, an unmet reason or a blocking issue as language; the whole comparison is set equality over strings the verifier echoed. The fifth, suite-failed, belongs beside them on the same terms: the suite a stage declared, run by the coordinator as a subprocess after that stage's turn ended, exited non-zero. It is an exit status the coordinator owns rather than an agent's assertion about a run it made itself, and nothing reads the run's output for a count of tests or a list of failing names.",
       "enum": [
         "agent-process-failed",
         "missing-required-artifacts",
         "stale-required-artifacts",
-        "defective-retry-guidance"
+        "defective-retry-guidance",
+        "suite-failed"
       ]
     },
     "reason": {
@@ -37,7 +38,7 @@
     },
     "artifacts": {
       "type": "array",
-      "description": "The artifacts the failure named, as the check reported them: the required outputs that were missing or stale, or — for a defective retry guidance — the artifacts the contradiction is between, the guidance that was met and the verdict that failed it anyway. Absent for a failed agent process, which names none.",
+      "description": "The artifacts the failure named, as the check reported them: the required outputs that were missing or stale, or — for a defective retry guidance — the artifacts the contradiction is between, the guidance that was met and the verdict that failed it anyway, or — for a failed suite run — the coordinator's record of that run and the path to its whole output. Absent for a failed agent process, which names none.",
       "items": { "type": "string" }
     }
   }

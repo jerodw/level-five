@@ -36,7 +36,11 @@
     },
     "output_tail": {
       "type": "string",
-      "description": "The tail of the reverted run's combined stdout and stderr — for a permitted set, the failures the reverted edits were repairing. Absent when ran is false."
+      "description": "The tail of the reverted run's combined stdout and stderr — for a permitted set, the failures the reverted edits were repairing — kept so this artifact is readable on its own. A tail loses a failure that happened early in a long run, which is what output_path is for. Absent when ran is false."
+    },
+    "output_path": {
+      "type": "string",
+      "description": "Where the reverted run's whole combined stdout and stderr was written, in the run directory. Reading a file costs nothing and cannot time out, so this is where more detail lives than the tail above can hold. Absent when ran is false."
     },
     "baseline": {
       "type": "string",

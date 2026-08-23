@@ -345,10 +345,10 @@ def build_harness(tmp_path: Path) -> Path:
     `prompts/`, `rules/` and `schemas/` are the shipped ones, copied rather
     than symlinked so nothing here can reach back into this repository.
     `workflows/` carries the shipped definition under the configured name,
-    with the two suite-executing checks removed — the clean-clone check and
-    the revert check both run the configured `test_command`, which in this
-    fixture is deliberately not a command that exists — and with one extra
-    stage no shipped workflow defines.
+    with every suite-executing check removed — the clean-clone check, the
+    revert check and the declared suite run each run the configured
+    `test_command`, which in this fixture is deliberately not a command that
+    exists — and with one extra stage no shipped workflow defines.
     """
     root = tmp_path / "xyzzy-harness"
     ignore = shutil.ignore_patterns("__pycache__")
@@ -362,6 +362,7 @@ def build_harness(tmp_path: Path) -> Path:
     for stage in shipped["stages"]:
         stage.pop("clean_clone", None)
         stage.pop("revert_check", None)
+        stage.pop("suite_run", None)
     shipped["stages"].append({
         "name": AUDIT_STAGE,
         "prompt": "documenter.md",
