@@ -22,8 +22,9 @@ reports the violation it exists to catch:
 
   * "the trunk carries a completion after this merge" for the repaired shape
     sits beside the same merge of the shape the harness built *before* this
-    story, which is what makes a green result the repair rather than a
-    restatement of what merges do;
+    story — which the rebase loses, so a green result there is the repair
+    rather than a restatement of what a rebase does — and, for the squash,
+    beside the same merge read by the pre-story reader, which loses it;
   * "`completion_commits` reports nothing" for a subject without the marker,
     for a marker without a line naming this story, and for a message that
     merely mentions the story mid-line, each sit beside a commit carrying both
@@ -403,9 +404,10 @@ def test_every_merge_method_carries_the_repaired_completion_onto_the_trunk(
     A positive assertion, so what it needs is not a demonstration that it can
     fail — it fails on its own the moment a merge drops the completion — but a
     demonstration that it is not restating what merges already did. That is
-    `test_the_pre_story_shape_is_lost_by_the_rebase_and_by_the_squash`, which
-    puts the identical merge to a branch built the way the harness built one
-    before this story.
+    `test_the_pre_story_shape_is_lost_by_the_rebase_alone`, which puts the
+    identical merge to a branch built the way the harness built one before this
+    story, and `test_reverting_the_reader_alone_makes_this_module_fail`, which
+    puts the identical squash to the pre-story reader.
     """
     subject = merged(tmp_path, "amended", method, name="repaired")
     assert reported_on(subject), \
@@ -432,34 +434,36 @@ def test_every_merge_method_carries_a_non_escalated_completion_too(
 
 
 @pytest.mark.parametrize("method", [m for _, m in METHODS], ids=METHOD_IDS)
-def test_the_pre_story_shape_is_lost_by_the_rebase_and_by_the_squash(
-        tmp_path, method):
+def test_the_pre_story_shape_is_lost_by_the_rebase_alone(tmp_path, method):
     """The criterion that the repair is not vacuous, driven per method.
 
     A branch built the way the harness built one before this story — the
     escalation commit with a separate *empty* completion commit above it — is
-    asked of the trunk after each merge. The story requires the rebase and the
-    squash to report nothing, which is what says those two methods were losing
-    the completion and that the test above is measuring the repair.
+    asked of the trunk after each merge, and each method's answer is asserted
+    as the answer it has:
 
-    The control is the same merge of the repaired shape, which does report.
+      * the **rebase** reports nothing. An empty commit is not replayed, so the
+        only thing on that branch that said the story finished never reaches
+        the trunk. This is the defect story-065 was written from, the one
+        `main` carries for story-061 and story-063, and it is what makes the
+        test above a measurement of the repair rather than a restatement of
+        what a merge does;
+      * the **merge commit** reports. It preserves every commit of the branch,
+        empty ones included, so it was never losing the completion;
+      * the **squash** reports, because a squash folds each commit's *whole
+        message* into the body — which is what makes the marker travel at all,
+        and is therefore also what carries the empty completion commit's own
+        marker onto the trunk. The two shapes leave the trunk the same evidence
+        and the reader is right not to distinguish them: withholding the folded
+        bodies here would withhold them for the repaired and the never-escalated
+        shapes too. The squash's failure before this story was in the reader,
+        not in the branch's shape, and
+        `test_reverting_the_reader_alone_makes_this_module_fail` is where that
+        is driven.
 
-    The squash case does not hold, and the assertion is left standing rather
-    than adjusted, because it cannot hold under any implementation. What a
-    squash puts on the trunk is one commit whose body is the folded commits'
-    messages. The pre-story shape's empty completion commit *has* a message,
-    marker and all, so the trunk carries the same two pieces of evidence the
-    repaired shape leaves there and no reader can tell them apart:
-
-      * with the folded bodies included - which is what makes the marker travel
-        at all - this criterion fails and the two criteria above pass;
-      * with only the folded subjects included, this criterion passes and the
-        two above both fail, because then no marker reaches the trunk in any
-        shape.
-
-    The rebase half is the defect the story actually observed, and it is
-    reproduced here. The squash half of the same criterion asks for a
-    distinction the evidence on the trunk does not carry.
+    The control for the absence is the same merge of the repaired shape, which
+    does report — so a rebase reporting nothing here is this branch's shape and
+    not the rebase, the reader or the constructed repository.
     """
     control = merged(tmp_path, "amended", method, name="repaired-control")
     assert reported_on(control), \
@@ -467,22 +471,15 @@ def test_the_pre_story_shape_is_lost_by_the_rebase_and_by_the_squash(
         "to be about the old shape rather than about the reader"
 
     root = merged(tmp_path, "added", method, name="pre-story-shape")
-    if method is conftest.merge_commit:
-        assert reported_on(root), \
-            "a merge commit preserves every commit, so the empty completion " \
-            "is still on the trunk: this method never lost it"
+    if method is conftest.rebase_merge:
+        assert reported_on(root) == [], \
+            "a rebase drops the empty completion commit, so a branch built " \
+            "the way the harness built one before this story must reach the " \
+            "trunk carrying nothing this reader recognises"
     else:
-        assert reported_on(root) == [], (
-            "a branch built the way the harness built one before this story "
-            "must reach the trunk carrying nothing this reader recognises, "
-            "which is the defect story-065 repairs. For the squash this is "
-            "unreachable: the empty completion commit's own message, marker "
-            "included, is folded into the squashed body, so the trunk carries "
-            "the identical evidence the repaired shape leaves there. Excluding "
-            "the folded bodies would satisfy this and break the two criteria "
-            "requiring the repaired and the never-escalated shapes to survive "
-            "a squash. See this test's docstring."
-        )
+        assert reported_on(root), \
+            "this method carries the empty completion commit's own message " \
+            "onto the trunk, so the pre-story shape is recognised there"
 
 
 # --------------------------------------------------------------------------
