@@ -1,0 +1,158 @@
+story:
+  id: story-067
+  title: A correction pass costs a correction, not a re-run
+  description: |
+    A correction pass re-enters the workflow at the stage its findings'
+    categories name and then runs forward from there, so the price of a
+    one-word fix is every stage after the entry point. story-063 escalated
+    over a line wrap: its finding was categorised implementation, the pass
+    re-entered at the implementer, and the run spent an implementer
+    invocation and two self-routes without producing the edit's artifacts,
+    while a fully verified story sat blocked on whitespace.
+
+    Three changes, together because they are one defect seen from either
+    end. First, the entry stage becomes a declared property of the workflow
+    rather than something derived from a finding's category: the
+    correction_pass declaration gains a stage key, the shipped workflow
+    names the documenter, and a pass costs documenter then verifier
+    whatever category the finding carried. Every correction recorded so far
+    -- story-047's, story-048's, story-049's and story-063's -- was prose,
+    and the documenter is the one prose stage no may_not_create declaration
+    governs, so these edits are its own work rather than a compromise.
+
+    Second, the statement the coordinator hands the entered stage stops
+    telling it the suite must pass unchanged across the pass. That
+    instruction is what sent story-063's implementer into a full suite run
+    it could not wait for. The constraint is unchanged and still stated
+    where the verifier reads what may go in the field; what changes is who
+    is asked to prove it, and the answer is the clean-clone check that
+    already runs the whole suite in a fresh clone after the verdict.
+
+    Third, that check runs once rather than on both sides of the pass. The
+    order becomes verify, correct, verify, clean-clone. This reverses the
+    ordering story-055 chose deliberately, and the reversal is only
+    defensible while a correction changes prose alone, so the comment where
+    the ordering lives says so rather than letting a later reader take the
+    new order for the obvious one.
+
+    Together, story-063's line wrap would have cost roughly one documenter
+    invocation, one verification and one suite run, instead of forty
+    minutes and an escalation. The saving matters more against a target
+    whose suite is slow than against this repository's own.
+
+tasks:
+  - Add a stage key to the verifier's correction_pass declaration in workflows/story-workflow.json, naming the documenter, shaped as clean_clone's retry_stage is.
+  - Change correction_destination so the entry stage is the one the declaration names rather than the earliest stage the findings' categories route to, while it still walks the categories to collect the ones the workflow does not declare.
+  - Keep the unknown-category escalation exactly as it behaves today - a finding naming a category the workflow does not declare escalates, naming the unknown category and the declared ones - so category remains a required, validated field even though it no longer selects a destination.
+  - Refuse at pre-flight a correction_pass declaration whose stage names a stage the loaded workflow does not define, in the manner the coordinator already cross-checks a story's stage_exceptions.
+  - Remove from correction_pass_statement the clause telling the stage the suite must pass unchanged across the pass, and say instead that the correction must not change behaviour and that the clean-clone check confirms it after the pass.
+  - Make the same change to the correction-pass paragraph in prompts/documenter.md, so the prompt and the coordinator's statement agree.
+  - Add to prompts/verifier.md the instruction not to record a correctable finding against the approved story artifact, and to correction_pass_statement the instruction that the entered stage never edits it.
+  - Move the clean-clone check so that on a passing verdict the correction block is read first: when a pass routes, the check is skipped and runs on the verification the pass returns to; when nothing routes, it runs where it runs today.
+  - Record in the comment where that ordering lives the trade being made - one fewer suite run against a correction performed on a tree not yet known clean-clone-good - and that the trade holds only while a correction changes prose and never behaviour.
+  - Update schemas/correction-pass.schema.json's stage description and schemas/verification-result.schema.json's category description, both of which state that the destination is read off the retry_routing table.
+  - Extend tests/test_correction_pass.py to cover the declared destination, the single clean-clone, and the statement's new wording, and update the tests that assert today's ordering.
+  - Record the change in .harness/docs/ARCHITECTURE.md and add the story's row to the README's story table.
+
+acceptance_criteria:
+  - A run whose passing verdict carries a correctable finding categorised for the implementer re-enters at the documenter, demonstrated by driving a run rather than by calling correction_destination directly.
+  - A run whose passing verdict carries a correctable finding categorised for the tester also re-enters at the documenter, and no correction pass under any category invokes the tester.
+  - The stage a pass enters at comes off the workflow's correction_pass declaration: a fixture workflow naming a different stage enters at that stage instead, with no change to orchestration source.
+  - No stage name and no category name the correction pass routes on appears in orchestration source, which the existing check on that property continues to assert.
+  - A correction_pass declaration whose stage names a stage the loaded workflow does not define is refused before any run state is created, and the refusal names the undefined stage.
+  - A finding naming a category the workflow does not declare still escalates the run, naming the unknown category and the categories the workflow does declare, and spends no retry budget.
+  - The rendered correction_pass_statement contains no clause instructing the stage that the suite must pass unchanged across the pass, and does state that the clean-clone check confirms the correction changed no behaviour.
+  - The correction-pass paragraph in prompts/documenter.md carries the same two properties as the statement - no instruction to run or prove the suite, and a statement that the clean-clone check confirms it.
+  - prompts/verifier.md instructs the verifier not to record a correctable finding against the approved story artifact, and the rendered statement instructs the entered stage not to edit it.
+  - The constraint that a correction changes words and never behaviour is still stated in schemas/verification-result.schema.json where the verifier reads what may go in correctable_findings.
+  - On a run that takes a correction pass, the clean-clone check runs exactly once, and it runs after the pass rather than before it.
+  - On a run that takes no correction pass, the clean-clone check runs where it runs today - after a passing verdict, before the run completes - and the run's shape is otherwise unchanged.
+  - A correction that does break the suite is still caught, by the clean-clone check that now runs after the pass, and routes as a clean-clone failure does today.
+  - A run whose correction-pass budget is spent runs the clean-clone check on the verification that records the remaining findings, so a spent budget does not leave a run unchecked.
+  - A workflow declaring no correction_pass key behaves exactly as it does today, including where its clean-clone check runs.
+  - A docstring reflow in orchestration/story_coordinator.py - story-063's own finding, outside the documenter's usual files - is an edit the documenter is permitted and instructed to make.
+
+technical_plan:
+  implementation_steps:
+    - Add "stage": "documenter" to the verifier's correction_pass object in workflows/story-workflow.json, beside result and budget.
+    - Change correction_destination to take the declaration as well as the findings and the routes, returning the declared stage as the destination while still iterating the findings to collect unknown categories. The routes table is still needed for that check, so its parameter stays.
+    - Update the CorrectionRouting docstring and correction_destination's own so they describe the destination as declared rather than derived, and keep the standing claim that no category or stage name is written in the module true.
+    - In the pre-flight the coordinator already runs against the loaded workflow, refuse a correction_pass whose stage is not among the workflow's stage names, with a message naming the undefined stage and the stages the workflow defines.
+    - Rewrite the last third of correction_pass_statement - drop "and the suite must pass unchanged across this pass", say the correction must not change behaviour and that the clean-clone check the coordinator runs after the pass confirms it, and add that the approved story artifact is never edited by a pass.
+    - Reorder the passing-verdict block in the verifier branch so the correction block is evaluated before the clean_clone block. When a pass routes, continue without running the check. When the findings are absent, the declaration is absent, or the budget is spent, fall through to the clean-clone check unchanged.
+    - Rewrite the comment above the reordered blocks to record what the reordering costs and why it is acceptable, naming story-055's opposite choice and the condition under which it would have to be restored.
+    - Update the paragraph in prompts/documenter.md that repeats the statement's wording, and add the story-artifact instruction to prompts/verifier.md beside its existing correction-pass guidance.
+    - Update the two schema descriptions that say the destination is read off the retry_routing table, in schemas/correction-pass.schema.json and schemas/verification-result.schema.json.
+    - Extend tests/test_correction_pass.py with cases for the declared destination, the fixture workflow naming a different stage, the pre-flight refusal, the single clean-clone and its position, and the statement's wording; and update test_the_pass_is_read_after_the_clean_clone_check_has_passed and test_a_clean_clone_failure_routes_before_any_correction_pass_is_read, both of which assert the old order.
+    - Record the change in .harness/docs/ARCHITECTURE.md, in the workflow-declaration paragraph that describes correction_pass and in the "A minor, correct finding has somewhere to go" section, and add story-067's row to the README's story table.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The correction_pass declaration gains the stage key that names where a pass enters.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: correction_destination, correction_pass_statement, the pre-flight check on the declaration, and the order of the clean-clone and correction blocks in the verifier branch.
+    - file: schemas/correction-pass.schema.json
+      stage: implementer
+      reason: The stage field's description states the destination is the earliest stage the findings' categories route to, which stops being true.
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: The category field's description states the coordinator reads the destination off the retry_routing table, which stops being true.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: Its correction-pass paragraph repeats the statement's instruction that the suite must pass unchanged, and must change with it.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: Gains the instruction not to record a correctable finding against the approved story artifact.
+    - file: tests/test_correction_pass.py
+      stage: tester
+      reason: Covers the declared destination, the pre-flight refusal, the single clean-clone and its position, and the statement's wording; two existing cases assert the old ordering and change with it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the correction pass declares its destination and that the clean-clone check now runs after the pass.
+    - file: README.md
+      stage: documenter
+      reason: The story table gains this story's row.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - schemas/correction-pass.schema.json
+    - schemas/verification-result.schema.json
+    - prompts/documenter.md
+    - prompts/verifier.md
+    - tests/test_correction_pass.py
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - prompts/implementer.md
+    - prompts/tester.md
+    - .harness/stories/
+    - .harness/requests/
+    - orchestration/context_assembler.py
+
+verification_requirements:
+  - Confirm by driving a real run, not by calling the routing function, that a passing verdict carrying a finding categorised for the implementer enters at the documenter.
+  - Confirm the tester is not invoked by a correction pass under any category the shipped workflow declares.
+  - Confirm the entry stage is read off the workflow declaration, by running the same verdict under a fixture workflow that names a different stage and seeing the pass enter there.
+  - Confirm a correction_pass declaration naming a stage the workflow does not define is refused at pre-flight, before any run state exists.
+  - Confirm a finding naming an undeclared category still escalates with the same reason and spends no retry budget.
+  - Confirm the clean-clone check runs once on a run that takes a correction pass, and that it runs after the pass rather than before it.
+  - Confirm a correction that does break the suite is still caught - story-053's case, where a documenter wrote a tests/ path a rename had removed, is the fixture.
+  - Confirm a run that takes no correction pass runs the clean-clone check exactly where it runs today, so the reordering costs an unchanged run nothing.
+  - Confirm a run whose correction-pass budget is spent still runs the clean-clone check.
+  - Confirm the rendered statement no longer instructs the stage that the suite must pass unchanged, does say the clean-clone check confirms it, and says the approved story artifact is not edited by a pass.
+  - Confirm a workflow declaring no correction_pass key behaves exactly as it does today, including the position of its clean-clone check.
+  - Confirm no stage name and no category name this mechanism routes on has entered orchestration source.
+
+constraints:
+  - Whether a correction pass happens at all, and the budget bounding it, are story-055's and are unchanged by this story.
+  - What the verifier judges correctable is unchanged: the classification is not in scope and no criterion here widens or narrows it.
+  - prompts/implementer.md's standing instruction to run the full suite is a separate request and is not touched.
+  - A correction pass still corrects words and never behaviour; only the question of who proves it moves.
+  - The cascade after the entry point is unchanged - the pass still runs through to verification and the verifier still re-judges.
+  - Nothing rewrites an approved story artifact mid-run, and this story adds no mechanism that could.
+  - Removing the correction_pass declaration from a workflow still disables the whole mechanism with no change to orchestration source.
+  - The correction-pass record is still written per pass under a name keyed by the pass number, and still spends no retry budget, archives no attempt and appends no retry-history entry.
+  - This story does not claim to stop a re-entered stage failing for its own reasons; a documenter that burns its budget on something else still blocks the run.
