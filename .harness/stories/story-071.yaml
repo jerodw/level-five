@@ -1,0 +1,197 @@
+story:
+  id: story-071
+  title: A prompt's filename says which workflow owns it
+  description: |
+    `prompts/` names its files after stages. That was unambiguous while one
+    workflow shipped; since story-070 a second one does, and it brought
+    `refactor-implementer.md` and `refactor-verifier.md` with it. The
+    unprefixed names now silently mean "story-workflow's", which is tribal
+    knowledge rather than something the filename says.
+
+    This story renames the prompts a single workflow owns so the filename says
+    which: `implementer.md` becomes `story-implementer.md`, `verifier.md`
+    becomes `story-verifier.md`, and `tester.md` becomes `story-tester.md`.
+    `documenter.md` and `planner.md` are deliberately not renamed, and that is
+    the convention rather than an omission from it — `documenter.md` is named
+    by both shipped workflows, and `planner.md` is the planning session's,
+    outside any workflow. The rule story-070 recorded in
+    `.harness/docs/ARCHITECTURE.md` is the one held to here: a prompt prefixed
+    with a workflow's name belongs to that workflow; an unprefixed prompt is
+    shared by every workflow.
+
+    It runs under `refactor-workflow` and is the first real work for the
+    workflow story-070 shipped. The fit is exact: the change is
+    behaviour-preserving by construction and almost all of its edits are to
+    tests, which is precisely the shape that cannot pass `story-workflow`'s
+    revert check — reverting the test edits leaves the suite green, because the
+    point of the edits is that nothing behaves differently. Stories 015, 016
+    and 026 met that wall and each granted a `create` exception to disable a
+    `modify` check. This one needs no grant at all. It is also a live exercise
+    of the census: a rename moves no counter, so the census should permit it,
+    and if it does not that is worth knowing before the workflow is trusted.
+
+    The story adds one thing beyond the rename: a standing test module that
+    asserts the convention over the shipped `prompts/` directory and the
+    shipped workflow definitions. The convention has been prose in
+    `ARCHITECTURE.md` since story-070, and this repository has twice recorded
+    an injected written rule failing to hold. A check is what keeps it true
+    after this story.
+  workflow: refactor-workflow
+
+tasks:
+  - Rename `prompts/implementer.md` to `prompts/story-implementer.md`, `prompts/verifier.md` to `prompts/story-verifier.md`, and `prompts/tester.md` to `prompts/story-tester.md`, using `git mv` so the rename is recorded as one rather than as a delete and an add. Leave `prompts/documenter.md`, `prompts/planner.md`, `prompts/refactor-implementer.md`, `prompts/refactor-verifier.md`, `prompts/harness-layer.md`, `prompts/prose-layer.md` and `prompts/assist.md` exactly where they are.
+  - Repoint the `prompt` values of the implementer, tester and verifier stages in `workflows/story-workflow.json` at the new filenames. This is the only change outside `tests/`, `prompts/` and the documentation - no module under `orchestration/` or `scripts/` names any of the three, because a stage's prompt filename reaches the code only off the loaded workflow definition. `scripts/l5-plan` names `planner.md`, which is not renamed.
+  - Sweep the live references under `tests/` onto the new names. Both kinds count - string literals the suite resolves (path joins, `context_assembler.load_template` calls, `parametrize` lists, module-level template constants) and docstring or comment prose in a live module that names the file - so that no live module describes a file that does not exist.
+  - Leave every reference that is about a past revision resolving to the old name. `tests/test_documented_claim_support.py` reaches its baseline text through a fixture filename derived from the prompt name, so its endpoint read takes the new name while the fixture keeps the old one and the call site holds both. `tests/test_baseline_honesty.py`'s `REPAIRED_SUBJECTS` and `tests/test_shared_baseline_resolution.py`'s scope parametrization name `prompts/tester.md` and `prompts/implementer.md` as subjects a past story's scope declared, and run against synthetic repositories rather than this one, so those strings stay as they are.
+  - Add `tests/test_prompt_workflow_ownership.py`, a standing check of the convention: every file under `prompts/` that a single shipped workflow names carries that workflow's name as its filename prefix, every file named by more than one carries no prefix, and every prompt a shipped workflow names is a file that exists. Give it the negative controls this repository requires - each assertion re-run over a constructed arrangement that violates the rule, where it must report.
+  - Update the convention paragraph in `.harness/docs/ARCHITECTURE.md` so it describes what the tree now holds. It currently records the rule and then names these prompts as still owed a prefix they do not carry, which this story discharges, and it should name the module that now checks the rule.
+
+acceptance_criteria:
+  - "`prompts/story-implementer.md`, `prompts/story-verifier.md` and `prompts/story-tester.md` exist and `prompts/implementer.md`, `prompts/verifier.md` and `prompts/tester.md` do not."
+  - "`prompts/documenter.md` and `prompts/planner.md` are byte-identical to what they were before this story, and no other file under `prompts/` moved or changed name."
+  - The implementer, tester and verifier stages of `workflows/story-workflow.json` name the new filenames, and every `prompt` value in both shipped workflow definitions resolves to a file that exists.
+  - No file under `orchestration/` or `scripts/` mentions any of the old three names, and none needed to change for this story - `scripts/l5-plan`'s reference to `planner.md` is the only prompt filename in either directory and it is untouched.
+  - The full suite passes, and no assertion changed its subject or its strength - every edit under `tests/` is a filename substitution, a prose correction naming the same subject, or the new module.
+  - "`tests/test_prompt_workflow_ownership.py` exists and each of its assertions is shown to report over an arrangement that breaks the convention it checks: a single-workflow prompt with no prefix, a prefixed prompt named by a workflow other than its prefix, a shared prompt carrying a prefix, and a workflow naming a prompt file that is absent."
+  - Nothing under `.harness/stories/`, `tests/history-fixtures/` or `.harness/runs-archive/` is added, modified or deleted. Those are execution records and recovered history: they name the old filenames correctly, as they stood at the revisions they describe.
+  - A test that reads a historical revision of a prompt still reads the old name at that revision, and a test that reads the shipped prompt reads the new one. `tests/test_documented_claim_support.py` is the site where both meet, and its baseline control still distinguishes the two texts rather than passing vacuously.
+  - The convention paragraph in `.harness/docs/ARCHITECTURE.md` no longer says these prompts are owed a prefix, and names the module that checks the rule.
+  - The implementer's `census-result.json` records that the change moved no counter, and the census permitted the run.
+
+technical_plan:
+  implementation_steps:
+    - "Run `git mv` for each of the three prompts, then edit the three `prompt` values in `workflows/story-workflow.json`. At this point the harness is consistent and only the suite is red."
+    - Sweep `tests/` for the old names. The mechanical part is the executable literals; the judgement is deciding, for each hit, whether it names the shipped prompt or a past revision of it. The rule for the decision - if the read resolves against this repository as it now stands, it takes the new name; if it resolves against a fixture, a synthetic repository, or a named past revision, it does not.
+    - "Attend to `tests/test_documented_claim_support.py:1480` first, because it is the one site where the rule cuts through a single function: `shipped_template` derives the baseline fixture's filename from the prompt name it is handed, so handing it the new name would look for a fixture that does not exist. The endpoint branch takes the new name, the baseline branch keeps `prompts-verifier.at-this-storys-baseline.md.txt`, and a comment says why the two disagree."
+    - "Check `tests/test_refactor_workflow.py`'s `PRE_EXISTING_PROMPTS`. It reads the live `prompts/` directory, so it takes the new names even though it is phrased as a claim about what story-070 left alone; what story-070 left alone is these files, whatever they are now called."
+    - Write `tests/test_prompt_workflow_ownership.py`. Derive the mapping from the shipped workflow definitions rather than restating it, so the module keeps checking when a third workflow arrives. Build each control by constructing a `prompts/` directory and workflow definitions in a temporary directory rather than by editing the shipped ones.
+    - Run the suite. Any red the rename did not cause is reported in the implementation summary rather than fixed here.
+  likely_file_changes:
+    - file: prompts/implementer.md
+      stage: implementer
+      reason: Renamed to `prompts/story-implementer.md`. Content unchanged.
+    - file: prompts/verifier.md
+      stage: implementer
+      reason: Renamed to `prompts/story-verifier.md`. Content unchanged.
+    - file: prompts/tester.md
+      stage: implementer
+      reason: Renamed to `prompts/story-tester.md`. Content unchanged.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The implementer, tester and verifier stages name the renamed prompts. This is the only place in the harness where the mapping from stage to prompt filename is written.
+    - file: tests/test_prompt_workflow_ownership.py
+      stage: implementer
+      reason: The new standing check that the naming convention holds, with its negative controls.
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: Iterates the three prompt filenames.
+    - file: tests/test_changed_files_records.py
+      stage: implementer
+      reason: Reads the tester and verifier prompts by path.
+    - file: tests/test_configured_test_location.py
+      stage: implementer
+      reason: Holds the tester prompt as a module constant and names it in prose.
+    - file: tests/test_baseline_honesty.py
+      stage: implementer
+      reason: Names the tester and verifier prompts in prose and in the `TESTER_TEMPLATE` constant. Its `REPAIRED_SUBJECTS` entry naming `prompts/tester.md` is a past story's scope claim over a synthetic repository and stays as it is.
+    - file: tests/test_coordinator_runs_the_suite.py
+      stage: implementer
+      reason: Reads the verifier and tester prompts as module constants and names them in prose.
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: Loads the implementer template by name.
+    - file: tests/test_documented_claim_support.py
+      stage: implementer
+      reason: Loads the verifier template at the endpoint by name, while reaching its baseline through a fixture whose filename is derived from that name. The two now disagree and the call site has to hold both.
+    - file: tests/test_context_assembler.py
+      stage: implementer
+      reason: Iterates the stage templates and keys a mapping by prompt filename.
+    - file: tests/test_correction_pass.py
+      stage: implementer
+      reason: Reads the verifier prompt by path.
+    - file: tests/test_no_target_stack_in_harness_source.py
+      stage: implementer
+      reason: Lists the tester prompt among the scanned paths, and uses the implementer prompt as a clean control.
+    - file: tests/test_documenter_before_verification.py
+      stage: implementer
+      reason: Names the verifier prompt in prose.
+    - file: tests/test_defective_retry_guidance.py
+      stage: implementer
+      reason: Names the verifier prompt in prose.
+    - file: tests/test_retry_routing.py
+      stage: implementer
+      reason: Names the verifier prompt in prose.
+    - file: tests/test_shared_baseline_resolution.py
+      stage: implementer
+      reason: Renders the tester and verifier templates by name. Its scope parametrization naming `prompts/implementer.md` is story-015's scope claim over a synthetic repository and stays as it is.
+    - file: tests/test_planner_injection.py
+      stage: implementer
+      reason: Iterates the three prompt filenames.
+    - file: tests/test_stage_output_ownership.py
+      stage: implementer
+      reason: Loads the implementer template by name.
+    - file: tests/test_tester_prompt_fixture_guidance.py
+      stage: implementer
+      reason: Holds the tester template as a module constant.
+    - file: tests/test_validation_module_naming.py
+      stage: implementer
+      reason: Reads the tester prompt by path and names it in prose.
+    - file: tests/test_schema_inventory_location.py
+      stage: implementer
+      reason: Reads the implementer prompt by path and names the tester prompt in prose.
+    - file: tests/test_unfinishable_retry_verdict.py
+      stage: implementer
+      reason: Names the verifier prompt in prose.
+    - file: tests/test_stage_tool_grants.py
+      stage: implementer
+      reason: Iterates the prompt filenames.
+    - file: tests/test_turn_ending_instructions.py
+      stage: implementer
+      reason: Holds the verifier and implementer templates as module constants.
+    - file: tests/test_harness_layer_extraction.py
+      stage: implementer
+      reason: Iterates the stage templates and the carriers of the shared partial.
+    - file: tests/test_plan_commit.py
+      stage: implementer
+      reason: Loads the implementer template by name.
+    - file: tests/test_refactor_workflow.py
+      stage: implementer
+      reason: Its `PRE_EXISTING_PROMPTS` reads the live `prompts/` directory, and its control for the refactor implementer prompt reads the story implementer prompt by name.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The convention paragraph records the rule and then names these prompts as still owed a prefix. This story discharges that, and the paragraph should name the module that now checks the rule.
+
+scope:
+  modify:
+    - prompts/
+    - workflows/story-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/stories/
+    - tests/history-fixtures/
+    - .harness/runs-archive/
+    - orchestration/
+    - scripts/
+    - schemas/
+    - workflows/refactor-workflow.json
+    - templates/
+
+verification_requirements:
+  - Confirm the rename landed as a rename - the new filenames exist, the old ones do not, and the content of each moved file is unchanged from its predecessor.
+  - Confirm every `prompt` value in both shipped workflow definitions resolves to a file that exists under `prompts/`, and that `refactor-workflow.json` was not edited.
+  - Confirm no live reference to the old names survives under `tests/` except those that resolve against a fixture, a synthetic repository or a named past revision, and that each surviving one is correct for the revision it describes.
+  - Confirm nothing under `.harness/stories/`, `tests/history-fixtures/` or `.harness/runs-archive/` was added, modified or deleted.
+  - "Confirm `tests/test_documented_claim_support.py` still distinguishes its baseline text from its endpoint text: the baseline control must still be able to report, rather than passing because both branches now read the same thing or because a fixture read silently fell back."
+  - Confirm `tests/test_prompt_workflow_ownership.py` checks what it claims to. Each assertion must be shown to report over an arrangement that breaks its rule, and the mapping it checks must be derived from the shipped workflow definitions rather than restated in the module.
+  - Confirm the change is behaviour-preserving - that no assertion changed its subject or its strength, and that every edit under `tests/` is a filename substitution, a prose correction naming the same subject, or the new module.
+  - Confirm the suite passes in a clean clone with the story committed.
+  - Report on the census as evidence about the workflow rather than only about this story. A rename moves no counter, so the census permitting it is the expected result; a census that refused or that recorded a moved counter is a finding about `refactor-workflow` worth stating even though the story would otherwise pass.
+
+constraints:
+  - No behaviour change of any kind. If the suite would go red for a reason other than a moved filename, that is a finding to report rather than a thing to fix here.
+  - Do not rename workflow stage names. `implementer` is a stage in both shipped workflows, so the stage name is correct in both; only the prompt files are ambiguous.
+  - Do not rename check result artifacts. `revert-check-result.json` and its siblings are named for the check that writes them, and the check is what owns them.
+  - Do not rename `prompts/documenter.md` or `prompts/planner.md`. Being unprefixed is a claim of shared ownership, not an absence of one, and renaming either would break the convention this story exists to make legible.
+  - Preserve the content of every moved file exactly. A rename that also edits the prompt is no longer behaviour-preserving by construction, and the verifier cannot tell the two apart from the diff alone.
+  - "`.claude/settings.local.json` mentions one of the old filenames and is deliberately out of scope: it is ignored by git, so it reaches no clone and is the developer's own local permission allowlist."
