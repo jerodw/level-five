@@ -79,8 +79,11 @@ Correction pass — present only when you are running because a passing
 verification recorded findings it judges correct, too small to fail the run,
 and fixable in the words alone. The coordinator wrote it, not an agent. Correct
 the words each finding names and nothing else: this changes prose and never
-behaviour, so nothing you change for it may alter what any test asserts, and
-the suite must pass unchanged. No retry was spent and the verdict still stands:
+behaviour, so nothing you change for it may alter what any test asserts. You
+are not asked to establish that — the clean-clone check the coordinator runs
+after the pass confirms the correction changed no behaviour. The approved story
+artifact is never edited by a pass; if a finding names it, correct nothing and
+say so in your report. No retry was spent and the verdict still stands:
 {{correction_pass_result}}
 
 Retry guidance:

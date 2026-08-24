@@ -69,7 +69,8 @@
       },
       "correction_pass": {
         "result": "correction-pass.json",
-        "budget": 1
+        "budget": 1,
+        "stage": "documenter"
       },
       "on_failure": {
         "retry_routing": {
