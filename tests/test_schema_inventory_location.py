@@ -247,7 +247,7 @@ def _per_prompt_values(tree: ast.Module) -> set[int]:
     """Collections that are a dict value under a prompt-filename key.
 
     The one structure in the suite that legitimately lists schema names:
-    `{"tester.md": ["test-results", "changed-files"]}` in
+    `{"story-tester.md": ["test-results", "changed-files"]}` in
     `tests/test_context_assembler.py` says which schemas *that prompt*
     injects. It is not an inventory — adding a seventh schema would not
     change the line, because it never claimed to enumerate what the harness
@@ -690,7 +690,7 @@ def test_no_prompt_template_asks_for_a_manifest_placeholder():
 
     # The control: the placeholders that *are* injected do appear, so the scan
     # reads the files the renderer reads.
-    implementer = (REPO_ROOT / "prompts" / "implementer.md").read_text(encoding="utf-8")
+    implementer = (REPO_ROOT / "prompts" / "story-implementer.md").read_text(encoding="utf-8")
     assert "{{changed_files_schema}}" in implementer
 
 

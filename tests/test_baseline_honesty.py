@@ -20,7 +20,7 @@ idiom above; it does not catch the general class of vacuous assertions, and
 nothing here should be read as claiming it does. An assertion can still be
 empty on both sides of an honest baseline, tautological, or aimed at the
 wrong subject, and no AST scan will say so — that is what the negative
-control now required of absence assertions in `prompts/tester.md` is for.
+control now required of absence assertions in `prompts/story-tester.md` is for.
 
 The regression set is committed evidence rather than a constructed fixture:
 the four merged instances are recovered from git history at the revision
@@ -1649,6 +1649,12 @@ def synthetic_story(tmp_path: Path, validation_rel: str, guarded: list[str], *,
 
 
 #: Every subject the four repaired files assert their story left alone.
+#:
+#: These paths are the ones those stories' scopes declared, and they resolve
+#: against the synthetic repository `synthetic_story` builds rather than
+#: against this one — so `prompts/tester.md` keeps the name it carried when
+#: story-010 named it, and does not follow story-071's rename of the shipped
+#: template to `prompts/story-tester.md`.
 REPAIRED_SUBJECTS = [
     ("tests/test_story_007_validation.py", ".harness/stories/story-007.yaml"),
     ("tests/test_story_008_validation.py", "scripts/l5-assist"),
@@ -1824,7 +1830,7 @@ def test_the_resolution_raises_when_the_run_commit_has_no_parent(tmp_path):
 # can then find it only by grep. story-038 renamed thirty-four such modules;
 # the convention that keeps them renamed is held by three mechanisms — a
 # plan-time refusal in `orchestration/plan_validation.py`, this scan, and one
-# sentence in `prompts/tester.md`. The prompt is the layer that failed at this
+# sentence in `prompts/story-tester.md`. The prompt is the layer that failed at this
 # twice before and is not the one relied on.
 #
 # It matches on the *digits*, which is the whole of what makes such a name a
@@ -1973,7 +1979,7 @@ def test_the_scan_leaves_the_two_modules_named_for_a_story_subject_alone():
 #
 #   * **an equivalent read of some other artifact reached through a
 #     helper in another module.** `harness_config.load_rules(REPO_ROOT)` and
-#     `context_assembler.load_template(REPO_ROOT, "implementer.md")` resolve
+#     `context_assembler.load_template(REPO_ROOT, "story-implementer.md")` resolve
 #     live artifacts and are not reported: the path is joined inside the helper,
 #     in a module this scan is not looking at while it reads this one, and only
 #     the two *workflow* resolvers are named above. The scan reads what a
@@ -2132,7 +2138,7 @@ def live_artifact_reads(source: str, module: str) -> list[Flag]:
     not this rule's business.
 
     Only the outermost join of a chain is reported, so
-    `REPO_ROOT / "prompts" / "tester.md"` is one read rather than two.
+    `REPO_ROOT / "prompts" / "story-tester.md"` is one read rather than two.
 
     No exemption is applied, here or by any caller. The grandfathered list is
     not an exemption: it is asserted equal to what this returns, so it records
@@ -2230,7 +2236,7 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "it' is a claim about what this repository deploys, and because which "
         "shipped schemas describe a coordinator suite record is answered by "
         "the artifacts this repository's own declarations name; and "
-        "prompts/verifier.md and prompts/tester.md, which are where a stage "
+        "prompts/story-verifier.md and prompts/story-tester.md, which are where a stage "
         "reads who runs the suite and what it is given afterwards, so the "
         "words those templates carry are the criterion rather than an input "
         "to one",
@@ -2240,7 +2246,7 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "remains has what is shipped as its subject: the schemas this "
         "repository ships for the correction-pass record and the verification "
         "result, the inventory the first is registered in, the retry ceiling "
-        "in rules/execution-rules.json, and prompts/verifier.md, which is "
+        "in rules/execution-rules.json, and prompts/story-verifier.md, which is "
         "where a verifier reads what may go in the field and so is the only "
         "place the words-and-never-behaviour constraint can be asserted",
     "test_documented_claim_support.py":
@@ -2248,7 +2254,7 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "declaration story-051 adds is an input. What remains has what is "
         "shipped as its subject: the schema this repository ships for the "
         "claim-support record and the inventory it is listed in; and "
-        "prompts/verifier.md and prompts/documenter.md, whose new criteria "
+        "prompts/story-verifier.md and prompts/documenter.md, whose new criteria "
         "are asserted on the rendered prompt because what reaches the agent "
         "is the claim — a rendering that needs the shipped workflow to "
         "resolve the routing table the verifier's own template prints, and "
@@ -2265,7 +2271,7 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "arguments back to itself. test_the_template_restates_no_category_"
         "destination_or_when, test_the_template_declares_both_placeholders "
         "and test_the_role_layer_says_the_documenters_output_is_part_of_the_"
-        "subject read prompts/verifier.md, the template this repository ships",
+        "subject read prompts/story-verifier.md, the template this repository ships",
     "test_escalation_summary.py":
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json, "
@@ -2313,6 +2319,15 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "rather than inputs to the test — together with the one end-to-end "
         "case that drives l5-plan, which resolves this repository as its own "
         "harness root and so can only be compared against what is deployed",
+    "test_prompt_workflow_ownership.py":
+        "the shipped prompts and the shipped workflow definitions are the "
+        "whole of its subject: it asks whether the file this repository holds "
+        "under prompts/ is named for the workflow this repository's own "
+        "definitions say owns it. A built definition could not carry that "
+        "claim — it would assert the builder's own arguments back to itself — "
+        "and every rule the module states is asserted a second time over an "
+        "arrangement constructed under tmp_path, which is where the inputs "
+        "are built rather than read",
     "test_refactor_workflow.py":
         "the two shipped definitions are the whole of its subject: it asks "
         "whether this repository ships a refactor workflow that drops the "
@@ -2431,7 +2446,7 @@ def test_every_declared_reader_states_why_the_shipped_artifact_is_its_subject():
                  "workflows", id="the-shipped-workflow"),
     pytest.param("P = REPO_ROOT / 'rules' / 'execution-rules.json'\n",
                  "rules", id="the-execution-rules"),
-    pytest.param("T = (HARNESS_ROOT / 'prompts' / 'tester.md').read_text()\n",
+    pytest.param("T = (HARNESS_ROOT / 'prompts' / 'story-tester.md').read_text()\n",
                  "prompts", id="a-prompt-template"),
     pytest.param("S = REPO_ROOT / 'schemas' / 'story.schema.json'\n",
                  "schemas", id="a-schema"),
@@ -3333,7 +3348,7 @@ def test_the_declared_history_list_is_a_list_and_not_a_derivation():
 #: No stage name is written here: the template is loaded directly, so the
 #: workflow's own naming of the stage that carries it is not something this
 #: section has to restate.
-TESTER_TEMPLATE = "tester.md"
+TESTER_TEMPLATE = "story-tester.md"
 
 #: Where the commit-graph half of the guidance begins, and where the role layer
 #: ends. The cut for the control below is made at these rather than at a column.

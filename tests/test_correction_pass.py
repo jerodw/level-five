@@ -1412,7 +1412,7 @@ def verifier_field_section() -> str:
     The shipped template is the subject: what tells the verifier what may go in
     `correctable_findings` is this repository's own instruction to it.
     """
-    prompt = (REPO_ROOT / "prompts" / "verifier.md").read_text(encoding="utf-8")
+    prompt = (REPO_ROOT / "prompts" / "story-verifier.md").read_text(encoding="utf-8")
     assert "correctable_findings" in prompt
     return prompt[prompt.index("correctable_findings"):]
 

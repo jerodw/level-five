@@ -996,7 +996,7 @@ def test_the_implementer_prompt_states_the_create_modify_distinction():
     the fixture generated could not carry it, so this reads what is deployed
     and says why."""
     shipped = Path(story_coordinator.__file__).resolve().parents[1]
-    text = context_assembler.load_template(shipped, "implementer.md").lower()
+    text = context_assembler.load_template(shipped, "story-implementer.md").lower()
     do_not = text.split("do not:")[1].split("[workflow layer]")[0]
     assert "modify" in do_not
     assert "create" in do_not

@@ -15,7 +15,7 @@ artifact name used below is read off *that* definition, so a workflow that
 grows a stage, gains a category or renames an artifact changes what these
 tests derive rather than reddening them.
 
-The two live artifacts this story does change — `prompts/verifier.md` and
+The two live artifacts this story does change — `prompts/story-verifier.md` and
 `schemas/verification-result.schema.json` — are the **subject** of the last
 two sections, not an input to them, so those runs are driven against the
 shipped harness root and the rendered prompt is read back out of the run

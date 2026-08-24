@@ -862,7 +862,7 @@ def test_the_stage_prompts_render_the_grants_through_the_shared_layer(target_roo
     asserted below to be exactly the set that does not inject the partial."""
     context = context_assembler.build_context(
         **_context(target_root, allowed_tools=GRANTS))
-    injecting = [name for name in ("implementer.md", "tester.md", "verifier.md",
+    injecting = [name for name in ("story-implementer.md", "story-tester.md", "story-verifier.md",
                                    "documenter.md")
                  if "{{harness_layer}}" in context_assembler.load_template(
                      HARNESS_ROOT, name)]
@@ -875,7 +875,7 @@ def test_the_stage_prompts_render_the_grants_through_the_shared_layer(target_roo
 
     # The control for the selection: the templates left out are left out
     # because they carry their own block, not because they render nothing.
-    for prompt_file in ("implementer.md", "tester.md", "verifier.md",
+    for prompt_file in ("story-implementer.md", "story-tester.md", "story-verifier.md",
                         "documenter.md"):
         rendered = context_assembler.render(
             context_assembler.load_template(HARNESS_ROOT, prompt_file), context)

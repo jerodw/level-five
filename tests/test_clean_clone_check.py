@@ -1428,7 +1428,7 @@ def test_the_placeholder_exists_in_the_prompt_and_in_the_context(
     """A subject read: the claim is about the template *this repository ships*,
     so it keeps reading what this repository ships."""
     harness_root = shipped_harness_root
-    template = context_assembler.load_template(harness_root, "implementer.md")
+    template = context_assembler.load_template(harness_root, "story-implementer.md")
     assert "{{clean_clone_result}}" in template
 
     run_dir = run_dir_of(story_target)
@@ -1447,7 +1447,7 @@ def test_the_placeholder_renders_when_the_check_has_not_run(
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
     context = build_context_for(story_target, harness_root, run_dir)
-    template = context_assembler.load_template(harness_root, "implementer.md")
+    template = context_assembler.load_template(harness_root, "story-implementer.md")
     assert "{{" not in context_assembler.render(template, context)
 
 

@@ -18,7 +18,7 @@ category, renames an artifact or moves a budget changes what these tests
 derive rather than reddening them.
 
 The artifacts this story does change — the four schemas and `prompts/
-verifier.md` — are the **subject** of the last two sections, not an input to
+story-verifier.md` — are the **subject** of the last two sections, not an input to
 them, so those are reached through the shipped readers (`schema_validator.
 load_schema`, `context_assembler.schema_context`) and the rendered prompt is
 read back out of a real run's directory. Reading a shipped artifact is right

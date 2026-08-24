@@ -1216,7 +1216,7 @@ def rendered(prompt_file: str, target_root: Path, harness_root: Path) -> str:
 def test_the_negative_control_guidance_reaches_the_rendered_tester_prompt(
     target_root, harness_root,
 ):
-    prompt = rendered("tester.md", target_root, harness_root)
+    prompt = rendered("story-tester.md", target_root, harness_root)
     for phrase in TESTER_GUIDANCE:
         assert phrase in prompt, phrase
     assert "positive" in prompt.lower()
@@ -1226,7 +1226,7 @@ def test_the_negative_control_guidance_reaches_the_rendered_tester_prompt(
 def test_the_corresponding_requirement_reaches_the_rendered_verifier_prompt(
     target_root, harness_root,
 ):
-    prompt = rendered("verifier.md", target_root, harness_root)
+    prompt = rendered("story-verifier.md", target_root, harness_root)
     for phrase in VERIFIER_GUIDANCE:
         assert phrase in prompt, phrase
     assert "{{" not in prompt
@@ -1240,7 +1240,7 @@ def test_the_guidance_is_read_from_the_render_and_not_from_the_template(
     up as a failure rather than as a silent pass."""
     monkeypatch.setattr(context_assembler, "load_template",
                         lambda root, name: "a template with no guidance\n")
-    prompt = rendered("tester.md", target_root, harness_root)
+    prompt = rendered("story-tester.md", target_root, harness_root)
     assert TESTER_GUIDANCE[0] not in prompt
 
 
@@ -1249,6 +1249,11 @@ def test_the_guidance_is_read_from_the_render_and_not_from_the_template(
 # --------------------------------------------------------------------------
 
 
+# `prompts/implementer.md` is the name story-015's scope declared and is not
+# followed forward by story-071's rename of the shipped template to
+# `prompts/story-implementer.md`: each path below is written into a synthetic
+# repository built by `committed_story` rather than resolved against this one,
+# so what it names is what that story's scope said.
 @pytest.mark.parametrize("rel", ["orchestration/", "workflows/", "schemas/",
                                  "scripts/", ".harness/runs-archive/",
                                  "prompts/implementer.md", "prompts/planner.md",
