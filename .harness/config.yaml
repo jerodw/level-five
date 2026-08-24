@@ -15,6 +15,14 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q
+# This repository's suite census: it prints a JSON object of counter names to
+# integers, and a stage declaring suite_census has it run in a clone at that
+# stage's baseline and again in the tree the stage left. The counters are this
+# repository's to choose and are phrased so that a larger number is a stronger
+# suite; the coordinator compares integers and interprets no name. It runs
+# under python3 rather than the project virtualenv because a clone is built
+# from tracked files and the virtualenv is not one of them.
+census_command: python3 .harness/census.py
 # Where this repository's tests live. It is what the workflow's {{tests_dir}}
 # token resolves to, so the stage restricted from creating tests is restricted
 # here and the stage that writes them is told to write them here. There is no

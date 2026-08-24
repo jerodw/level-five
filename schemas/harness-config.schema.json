@@ -23,6 +23,10 @@
       "type": "string",
       "description": "Prepended to a story id to form the story branch name. Defaults to story/."
     },
+    "census_command": {
+      "type": "string",
+      "description": "The command a stage declaring suite_census has run in a clone at its baseline and again in the tree it left. It must print to stdout a JSON object of counter names to integers. The target supplies it, chooses the counters, and phrases them so that a larger number is a stronger suite; the coordinator parses the object and interprets no name, which is what keeps the harness free of any knowledge of the target's test framework. Its absence disables the census: the check is recorded as one that did not run rather than as a pass, and nothing is announced, because nothing is about to take a census's worth of time."
+    },
     "logs_dir": {
       "type": "string",
       "description": "Directory, relative to the target root, holding raw agent output logs. Defaults to .harness/logs."

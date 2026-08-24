@@ -145,6 +145,17 @@ def add_commits(repo: Path, relative: str) -> list[str]:
                relative).split()
 
 
+def head_carries(repo: Path, relative: str) -> bool:
+    """Whether `repo`'s HEAD holds a blob at `relative`.
+
+    The question "has this module been committed yet", asked of the repository
+    rather than inferred from which module is asking.
+    """
+    return subprocess.run(["git", "-C", str(repo), "cat-file", "-e",
+                           f"HEAD:{relative}"],
+                          capture_output=True).returncode == 0
+
+
 def parent_of(repo: Path, commit: str) -> str:
     return git(repo, "rev-parse", "--verify", f"{commit}^").strip()
 
@@ -515,21 +526,51 @@ def committed_history_readers() -> list[str]:
 
     A module whose story is still in flight has no add-commit and so no
     endpoint — the case the resolution answers with None and the caller reads
-    the working tree for. While *this* story runs, this module is that case,
-    and once it commits it joins the rest. Any *other* module answering None
-    would be a resolution that had stopped resolving, so it is refused here
-    rather than quietly skipped, which is what stops the loops below emptying
-    themselves into green.
+    the working tree for. Any *other* module answering None would be a
+    resolution that had stopped resolving, so it is refused here rather than
+    quietly skipped, which is what stops the loops below emptying themselves
+    into green.
+
+    "Still in flight" is asked of the repository rather than assumed to be this
+    module: a module HEAD does not carry has no add-commit *because it has not
+    been committed yet*, which is the whole of the exemption. It was written as
+    `module == Path(__file__).name` while this module was the only history
+    reader whose story was in flight; story-070 added a second one, written by
+    the story that was running, and that spelling could not say so. A module
+    HEAD does carry and that still resolves to None is refused exactly as
+    before.
     """
     committed = []
     for module in DECLARED_HISTORY_READERS:
         if live_range(module).committed:
             committed.append(module)
         else:
-            assert module == Path(__file__).name, (
-                f"{module} resolves to no endpoint, and it is not the module "
-                f"whose own story is running")
+            assert not head_carries(REPO_ROOT, f"tests/{module}"), (
+                f"{module} resolves to no endpoint, and this repository's HEAD "
+                f"carries it, so its story is not the one still running")
     return committed
+
+
+def test_the_committed_question_answers_both_ways(tmp_path):
+    """The control for the exemption above.
+
+    An exemption that let everything through would empty the two loops below
+    into green, so the question it turns on is shown answering no as well as
+    yes — against a repository built here, where both states can be arranged.
+    """
+    root = tmp_path / "carried"
+    root.mkdir()
+    git(root, "init", "-q")
+    (root / "committed.py").write_text("carried\n", encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+        "-m", "one file")
+    (root / "not-yet.py").write_text("not carried\n", encoding="utf-8")
+
+    assert head_carries(root, "committed.py")
+    assert not head_carries(root, "not-yet.py")
+    # And against this repository, where this module itself is carried.
+    assert head_carries(REPO_ROOT, f"tests/{Path(__file__).name}")
 
 
 def test_no_declared_history_reader_ends_at_an_escalation_commit():

@@ -571,15 +571,21 @@ NEW_FIRST_SEEN = """            destination = directory / rel
 OLD_FIRST_SEEN = """            destination = directory / rel
 """
 
-NEW_CALL_SITE = """                declaration["baseline"],
+#: Repointed by story-070, which moved the capture behind a comprehension
+#: over the baselines a stage's declarations ask for, so the arguments the
+#: substitution has to reach are spelled as the comprehension's variables
+#: rather than read off one declaration. The mutation's meaning is unchanged:
+#: it puts back the attempt the pre-story signature took positionally and
+#: takes away the authorship narrowing it did not have.
+NEW_CALL_SITE = """                baseline,
                 name,
-                stage.get("may_not_create", []),
+                prefixes,
                 accounted_for=recorded_by_other_stages(run_dir, stages, name),
 """
-OLD_CALL_SITE = """                declaration["baseline"],
+OLD_CALL_SITE = """                baseline,
                 name,
                 attempt,
-                stage.get("may_not_create", []),
+                prefixes,
 """
 
 PRE_STORY_SUBSTITUTIONS = (
