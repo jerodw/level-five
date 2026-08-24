@@ -39,7 +39,7 @@ acceptance_criteria:
   - The rendered implementer prompt names the revert check, the stage that writes test-results.json, and the clean-clone check as the checks that each run the whole suite after it.
   - The rendered tester prompt and the rendered documenter prompt each carry the turn-ending sentence, and the wording of that sentence is identical in the implementer, tester, documenter and verifier renderings.
   - The test module derives the sentence it compares against from one of the renderings rather than restating it as a literal, so the four cannot drift into four statements of one rule without the module reporting it.
-  - The tester prompt still instructs the stage to run the full test suite, and test-results.json remains the run's record of the whole suite.
+  - This story narrows the implementer alone. The whole suite is still run after it, and this story removes or narrows none of those runs - the revert check when a governed path was edited, the coordinator's run after the stage that authors validation, and the clean-clone check. Written when the tester ran the suite itself and test-results.json recorded it; story-066 has since moved that run to the coordinator and reduced test-results.json to what the author knows, so the criterion is stated against where the whole-suite runs live rather than against which stage performs one.
   - Every absence the new module asserts is accompanied by a demonstration that the same check reports when the text it looks for is removed.
   - .harness/docs/ARCHITECTURE.md carries a section naming which stages run a targeted selection, which stages and checks run the whole suite, and why an implementer that selects too narrowly is caught before the story completes.
 
@@ -86,7 +86,7 @@ verification_requirements:
   - Confirm the turn-ending sentence is present in the implementer, tester and documenter renderings and that its wording matches the verifier's exactly.
   - Confirm the new module's comparison of that sentence is derived from a rendering rather than restated as a literal, and that removing the sentence from one prompt would redden it.
   - Confirm the revert check, the stage that writes test-results.json, and the clean-clone check are unchanged in what they run — this story changes an instruction, not a check.
-  - Confirm the tester prompt's full-suite instruction is intact and that test-results.json still records the whole suite.
+  - Confirm the whole suite is still run after the implementer and that this story narrowed none of those runs, reading the workflow's declarations rather than any one stage's prompt - which is where the answer moved when story-066 gave the coordinator the run the tester used to make.
   - Confirm every absence assertion in the new module carries a demonstration that it can fail.
 
 constraints:
