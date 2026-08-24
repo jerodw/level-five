@@ -1,0 +1,236 @@
+story:
+  id: story-070
+  title: A refactor runs under a workflow whose guard suits it
+  description: |
+    A refactor's correctness claim is "behavior unchanged". Two of the
+    declarations story-workflow makes on its implementer are wrong for that
+    claim. may_not_create stops the implementer adding a test, and the revert
+    check permits an edit to an existing one exactly when reverting it breaks
+    the suite. Both rest on an assumption that holds over stories and fails
+    over refactors: that every legitimate edit to a test is forced by a change
+    elsewhere. In a refactor the test edit is the work. Stories 015, 016 and
+    026 each worked around this by granting the implementer a create exception
+    it did not need, in order to disable a check about modification.
+
+    This story ships workflows/refactor-workflow.json, reachable per work item
+    through the story.workflow field story-069 added, and it does not merely
+    omit the two declarations. Omitting them removes enforcement, and a
+    refactor run under such a workflow would have no guard at all against the
+    threat a refactor actually carries: not authoring the validation that
+    judges your own work, but weakening the validation that already exists.
+    So the workflow declares a third proxy in their place.
+
+    The third proxy is a suite census. The target supplies a command that
+    prints a JSON object of counter names to integers. The coordinator runs it
+    in a clone at the stage's baseline and again in the tree as the stage left
+    it, and refuses the run when a counter present at the baseline is missing
+    afterwards or has decreased. The coordinator never learns what a counter
+    means: the target chooses the counters and phrases them so that a larger
+    number is a stronger suite, which is what keeps the harness free of any
+    knowledge of the target's test framework. This repository's census counts
+    unskipped tests and assertions, so deleting a test, marking one skipped or
+    xfailed, and removing an assertion are each caught, while renaming a test
+    and updating its call sites -- the case that motivated this whole thread
+    -- moves no counter and passes.
+
+    The proxy is deterministic, and it is narrow. It assumes weakening shows
+    up as a smaller count. A refactor that leaves every counter where it is
+    and loosens an assertion in place passes, and this story proves that it
+    passes rather than leaving a reader to infer coverage the check does not
+    have.
+
+    The refactor workflow has no tester stage. The working hypothesis had been
+    that a refactor tester stops authoring tests and starts proving the suite
+    is no weaker, and that turns out to be a cleaner statement than the
+    implementation supports: with the census run by the coordinator, and the
+    clean-clone check already running the suite at the verifier, a refactor
+    tester has nothing left to author. The obligation does not invert, it
+    moves -- to the coordinator, where it is a check rather than a judgement.
+    The suite_run declaration moves onto the implementer so the suite is still
+    gated in the working tree where the stage left it.
+
+    Two predictions were recorded before this work began, and this story
+    answers both, separately, because they are separate questions.
+
+    Was the layer wrong -- did making these declarations differ between
+    workflows require a coordinator change? No. Both are already read as
+    stage.get(...) and no-op when absent, and this story proves that against
+    the coordinator as it stood before this story touched it.
+
+    Does a refactor workflow need coordinator change at all? Yes, for reasons
+    having nothing to do with the first question: the third proxy needs an
+    evaluator, and that is a new workflow key plus the coordinator logic to
+    read it.
+
+    The create-exception workaround is retired, and not by editing history.
+    The grants in stories 015, 016 and 026 live only in merged story
+    artifacts, which are execution records and are never rewritten. Nothing
+    live depends on them, and a stage exception applies to one run. Retirement
+    means the pattern stops being the lever for "this work is a different
+    kind", which is what happens the moment this workflow exists. A later
+    reader should not go looking for a migration that should not happen.
+
+    A refactor workflow is a workflow, not a new architectural category
+    alongside stories and epics.
+
+    Prompt naming: the workflow-owned prompts this story adds ship already
+    prefixed, as refactor-implementer.md and refactor-verifier.md, and the
+    convention they establish is written down -- a prompt prefixed with a
+    workflow's name belongs to that workflow, and an unprefixed prompt is
+    shared by every workflow. That makes documenter.md and planner.md
+    unprefixed on purpose rather than by omission. The three story-workflow
+    prompts still owed a prefix are named as owed; renaming them is
+    behavior-preserving work whose edits are almost entirely to tests, which
+    is to say it is a refactor, and it is left to a following story so that it
+    can be the first real work run under the workflow this story ships.
+
+  workflow: story-workflow
+
+tasks:
+  - Add a census-result schema and register it in the schema inventory, describing what a census records and what the comparison decided.
+  - Add a census_command key to the harness config schema and to this repository's own configuration, so the command the census runs is the target's to supply.
+  - Write this repository's census at .harness/census.py, emitting a JSON object of counter names to integers, counting unskipped tests and assertions, and stating in its own docstring what a counter cannot see.
+  - Add the suite_census check to the coordinator, declared on a stage and read the way revert_check is, resolving its baseline through the shared stage-baseline resolution and running the configured census command in a clone at that baseline and in the tree the stage left.
+  - Ship workflows/refactor-workflow.json with implementer, documenter and verifier stages, declaring suite_census and suite_run on the implementer, declaring neither may_not_create nor revert_check, and declaring retry routes only to stages it defines.
+  - Write prompts/refactor-implementer.md, telling the implementer that test edits are its work under this workflow and that the census is what governs them.
+  - Write prompts/refactor-verifier.md, whose question is whether the change is behavior-preserving rather than whether the acceptance criteria were met, and whose retry routing has no validation category to route to.
+  - Record in the architecture document the workflow-shaped threat model, the third proxy and its stated blind spot, the answers to both recorded predictions, the retirement of the create-exception workaround, and the prompt naming convention with the prompts still owed a prefix.
+
+acceptance_criteria:
+  - workflows/refactor-workflow.json exists, declares implementer, documenter and verifier stages in that order, and declares no tester stage.
+  - The refactor workflow's implementer stage declares neither may_not_create nor revert_check, and a run under it whose implementer creates and modifies files beneath the configured tests directory completes without an ownership refusal and without a revert check running.
+  - A run under story-workflow whose implementer creates a file beneath the configured tests directory is still refused, and one whose implementer modifies a test whose reversion leaves the suite green is still refused, so the same coordinator enforces differently under the two workflows.
+  - The refactor workflow's implementer stage declares suite_census, and its verifier declares retry routes only to stages the refactor workflow defines.
+  - A stage declaring suite_census has its census taken in a clone at that stage's baseline and again in the tree as the stage left it, and the result artifact records both censuses, the command that produced them, and the comparison's verdict.
+  - A stage whose census leaves every baseline counter at or above its baseline value advances.
+  - A stage whose census shows a baseline counter decreased does not advance, and the refusal names the counter, its baseline value and its value after the stage.
+  - A stage whose census omits a counter the baseline census carried does not advance, and the refusal names the missing counter.
+  - A stage whose census reports a counter the baseline census did not carry advances, so a target may add a counter without the addition reading as a violation.
+  - A workflow that declares no suite_census on any stage runs exactly as it does today, with no census taken and nothing announced.
+  - A target that configures no census_command has the check reported as one that did not run rather than as a pass, and nothing is announced, because nothing is about to take a census's worth of time.
+  - A census command that exits non-zero, prints output that is not a JSON object, or prints a value that is not an integer stops the run rather than being read as a pass, and the refusal says which of those happened.
+  - The census result artifact validates against a census-result schema that ships under schemas/ and is named in the schema inventory.
+  - census_command is declared in the harness config schema, is carried by this repository's own configuration, and a configuration carrying it is not refused as undeclared.
+  - .harness/census.py prints a JSON object of counter names to integers, counting tests that are neither skipped nor xfailed and counting assertions, and its docstring states that a weakening which moves no counter is invisible to it.
+  - A refactor that deletes a test is refused by the census, demonstrated by deleting one and running the check rather than by argument.
+  - A refactor that marks an existing test skipped, and one that marks an existing test xfailed, are each refused by the census, each demonstrated by doing it.
+  - A refactor that removes an assertion from an existing test is refused by the census, demonstrated by removing one.
+  - A refactor that renames a test and updates its call sites is permitted by the census, demonstrated by doing it, because it moves no counter.
+  - A refactor that replaces a specific assertion with a weaker one that still asserts something is permitted by the census, demonstrated by doing it and recorded as the blind spot the proxy has rather than as a case it handles.
+  - The coordinator's ownership check and revert check are each reached through a stage.get lookup that yields nothing when the declaration is absent, and the source of both lookups at the revision preceding this story is identical to their source after it, so making the two declarations differ between workflows required no coordinator change.
+  - prompts/refactor-implementer.md and prompts/refactor-verifier.md exist, are the prompts the refactor workflow's implementer and verifier stages name, and the story-workflow prompts are unchanged by this story.
+  - prompts/refactor-implementer.md tells the implementer that editing existing tests is within its work under this workflow and that the census governs those edits, and it does not tell the implementer that a tester stage owns new validation or that a revert check will run.
+  - prompts/refactor-verifier.md asks whether the change is behavior-preserving, and names only the retry categories the refactor workflow's verifier declares routes for.
+  - The architecture document records that a prompt prefixed with a workflow's name belongs to that workflow and an unprefixed prompt is shared, names implementer.md, verifier.md and tester.md as still owed a prefix, and records that documenter.md and planner.md are unprefixed because they are shared.
+  - The architecture document records the answer to each recorded prediction separately, states the third proxy's assumption and what it cannot see, and states that the create-exception grants in stories 015, 016 and 026 are execution records that are not migrated.
+  - No story artifact under .harness/stories/ other than this one is changed by this story, and workflows/story-workflow.json declares exactly what it declares today.
+
+technical_plan:
+  implementation_steps:
+    - Add schemas/census-result.schema.json describing a census result, and add its name to schemas/manifest.json.
+    - Add census_command to schemas/harness-config.schema.json with a description saying the target supplies the command and that its absence disables the census, and add the key to .harness/config.yaml pointing at this repository's census.
+    - Write .harness/census.py so that it prints a JSON object of counter names to integers on stdout, counting tests that are neither skipped nor xfailed and counting assertions, with a docstring stating what it cannot see.
+    - Add a suite_census check to orchestration/story_coordinator.py beside the revert check, shaped like it - a declaration read off the stage, a baseline resolved through the shared stage-baseline resolution, a clone built by the existing clone builder, and a result artifact written to the run directory. The coordinator parses only the JSON object of names to integers; it reads no framework output and interprets no counter name.
+    - Compare the two censuses in one place - every counter the baseline carries must be present afterwards and must not have decreased - and report the offending counter, its baseline value and its later value in the refusal.
+    - Ship workflows/refactor-workflow.json with implementer, documenter and verifier stages, the implementer carrying suite_census and suite_run and neither may_not_create nor revert_check, the documenter carrying claim_support as story-workflow's does, and the verifier carrying clean_clone, correction_pass and retry routes to only the stages this workflow defines. Give each declared cost ceiling a reason saying that this workflow has no cost corpus of its own yet and inherits story-workflow's figures until it has one.
+    - Write prompts/refactor-implementer.md and prompts/refactor-verifier.md as new files, leaving every existing prompt untouched.
+    - Record the threat model, the proxy, its blind spot, both prediction answers, the workaround's retirement and the prompt naming convention in .harness/docs/ARCHITECTURE.md, and note the new workflow in README.md.
+  likely_file_changes:
+    - file: schemas/census-result.schema.json
+      stage: implementer
+      reason: Declares what a census result records, so the artifact is validated like every other check's.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: The schema inventory names every schema that ships.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares census_command, without which a config carrying it is refused as undeclared.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Supplies this repository's census command.
+    - file: .harness/census.py
+      stage: implementer
+      reason: This target's census, holding the only knowledge of this repository's test framework that the census involves.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Adds the suite_census check, its baseline resolution, its comparison and its refusal.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: The workflow this story ships, declaring the third proxy in place of the two checks it drops.
+    - file: prompts/refactor-implementer.md
+      stage: implementer
+      reason: The refactor implementer's boundary differs, and the story-workflow prompt states the wrong one.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The refactor verifier's question is behavior preservation rather than acceptance criteria, and its retry routing has no validation category.
+    - file: tests/test_refactor_workflow.py
+      stage: tester
+      reason: The standing proof that the shipped refactor workflow declares what this story says it declares, and that a run under it is governed differently from one under story-workflow.
+    - file: tests/test_suite_census.py
+      stage: tester
+      reason: The standing proof of the census check - the cases it refuses, the cases it permits, and the weakening it cannot see.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: The shipped definitions are this module's subject, and a second one now ships.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: census_command is a configurable value and this repository proves every configurable value configurable.
+    - file: tests/test_undeclared_config_keys.py
+      stage: tester
+      reason: The declared key set is asserted against the keys the harness reads, and it gains one.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the threat model, the proxy and its blind spot, both prediction answers, the workaround's retirement and the prompt naming convention.
+    - file: README.md
+      stage: documenter
+      reason: A second workflow ships and the reader meets the workflows here.
+
+scope:
+  modify:
+    - workflows/refactor-workflow.json
+    - orchestration/story_coordinator.py
+    - schemas/census-result.schema.json
+    - schemas/harness-config.schema.json
+    - schemas/manifest.json
+    - .harness/config.yaml
+    - .harness/census.py
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - prompts/implementer.md
+    - prompts/verifier.md
+    - prompts/tester.md
+    - prompts/documenter.md
+    - prompts/planner.md
+    - .harness/stories/
+    - tests/history-fixtures/
+    - orchestration/harness_source.py
+    - orchestration/plan_validation.py
+    - scripts/l5-plan
+    - scripts/l5-run
+
+verification_requirements:
+  - Confirm a run under the refactor workflow is subject to neither the ownership check nor the revert check, and that a run under story-workflow is still subject to both, by running the same coordinator against each.
+  - Confirm the census refuses a deleted test, a test newly marked skipped, a test newly marked xfailed, and a removed assertion, each by constructing that change and running the check rather than by argument.
+  - Confirm the census permits a renamed test whose call sites were updated, and that it permits an assertion replaced by a weaker one, and that the second is recorded as the proxy's stated blind spot rather than as a case it covers.
+  - Confirm the census refuses a counter that disappeared and permits a counter that appeared, so the comparison is over the counters the baseline carried.
+  - Confirm a workflow declaring no suite_census takes no census and announces nothing, and that a target configuring no census_command has the check reported as one that did not run rather than as a pass.
+  - Confirm the coordinator required no change to make may_not_create and revert_check differ between workflows, by comparing the source of both lookups at the revision preceding this story against their source after it, and report it plainly if a change was in fact needed.
+  - Confirm the census check's own definition states its assumption and what it cannot see, in its own docstring, rather than leaving a reader to infer coverage it does not have.
+  - Confirm nothing under prompts/ that existed before this story was changed, that workflows/story-workflow.json is unchanged, and that no story artifact other than this one was edited.
+  - Confirm the tests build the fixture workflows they use wherever a workflow is the test's input rather than its subject, and read the shipped definitions only where the shipped definitions are the subject.
+
+constraints:
+  - The coordinator learns nothing about the target's test framework - it parses a JSON object of names to integers and interprets no name, reads no framework summary line and runs no framework command of its own.
+  - A workflow that declares no suite_census behaves exactly as it does today, so removing the declaration disables the check and its announcement together.
+  - workflows/story-workflow.json declares exactly what it declares today, and every prompt that existed before this story is unchanged by it.
+  - The merged story artifacts of 015, 016 and 026 are execution records and are not edited; the create-exception workaround is retired by the workflow existing, not by rewriting history.
+  - tests/history-fixtures/ is recovered history and is not rewritten.
+  - No stage exception is granted anywhere in this story; every file beneath the configured tests directory is the tester's.
+  - The refactor workflow introduces no new architectural category - it is a workflow, not a unit alongside stories and epics.
+  - Every declared cost ceiling in the new workflow carries a reason recording that this workflow has no cost corpus of its own and inherits story-workflow's figures until it has one.
+  - Renaming the story-workflow prompts is not part of this story; the convention is recorded and the prompts still owed a prefix are named.
