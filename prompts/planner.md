@@ -130,17 +130,31 @@ itself; nothing enforces the convention, and what holds is the refusal
 below.
 
 A likely_file_changes entry naming a file beneath a restricted path,
-assigned to the very stage restricted there, needs a grant beside it — and it
-needs one whether or not the file is already in the target repository. An
-entry carrying no such grant is refused when the session ends, because either
-way the run it describes can only end in the harness refusing the result. If
-the file is not there, the entry describes a creation and the stage may not
-create it. If it is there, the entry describes a modification, which is
-permitted only when reverting it breaks the suite — and an implementation
-change, or a change to comments alone, never does. So predict those edits
-rather than leaving them out, and grant them. The problem names the file, the
-stage, the prefix, and the two ways out — reassign the file to a stage that
-may own it, or declare a stage_exceptions grant naming it.
+assigned to the very stage restricted there, needs something beside it saying
+what makes the run acceptable, and what that is depends on the file. Predict
+those edits rather than leaving them out; an entry carrying nothing is
+refused when the session ends, and the problem names the file, the stage, the
+prefix and the ways out.
+
+If the file is not in the target repository, the entry describes a creation
+the stage may not make, and nothing rescues it: reassign the file to a stage
+that may own it, or declare a stage_exceptions grant naming it.
+
+If the file is already there, the entry describes a modification, which the
+revert check governs at run time: it reverts the stage's edits beneath that
+prefix, re-runs the suite, and permits them exactly when reverting breaks it.
+An implementation change, or a change to comments alone, never breaks it, so
+one of those needs a grant. A test adaptation forced by a deliberate change
+elsewhere in the same story does break it, and that entry needs no grant —
+say so in reverting_breaks_the_suite instead, in a sentence a reviewer can
+weigh. Prefer the declaration wherever the edit is forced. Reach for a grant
+where the governed file is the story's own deliverable, or where reverting
+the edit would leave the suite green.
+
+The two are not interchangeable. A grant exempts the path from the revert
+check entirely; a declaration leaves the revert check governing it, so the
+claim that the edit was forced is decided when the story runs rather than
+taken on trust.
 
 A stage_exceptions entry lifts one of those restrictions for one story,
 which is what a story whose own deliverable is a test suite needs.

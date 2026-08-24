@@ -68,6 +68,10 @@
               "stage": {
                 "type": "string",
                 "description": "The workflow stage the plan expects to change this file. Advisory only: it tells an agent reading the plan whether an entry is its own work, so a flat unowned list does not read as \"your job\" to whichever stage looks first. The coordinator never compares this to what a stage actually changed — a prediction that guesses wrong must not end a run. The enforced rule is may_not_create in the workflow definition."
+              },
+              "reverting_breaks_the_suite": {
+                "type": "string",
+                "description": "Optional. The planner's judgement that this entry is a test adaptation forced by a deliberate change elsewhere in the same story, so reverting it would break the suite. Its presence is what plan time reads: an entry beneath a prefix its own stage is restricted under, carrying this and naming a path the target root already holds, is accepted without a grant. The text is a judgement for a human reviewer — no check parses, matches or scores it — which is the shape stage_exceptions.reason already has. It is honoured only for a path the target root already holds: an entry naming a path the target lacks describes a creation the ownership check refuses outright, and a claim about reverting a file that does not exist asserts nothing. It is not a grant, and the difference is the point: no run-time check consults it, so the revert check governs a declared path exactly as it governs an undeclared one and adjudicates the claim itself. Where the deliverable is the governed file, a stage_exceptions grant is still the instrument."
               }
             }
           }

@@ -80,38 +80,56 @@ rephrasing at plan time, which is where a human is present to do it.
 
 What the fourth check is
 ------------------------
-A plan must not assign a governed path to a stage without granting it. A
-technical_plan.likely_file_changes entry offends when its file falls beneath
-a prefix the entry's own stage is restricted under and no grant on that stage
-covers it — whatever the filesystem holds. Two literals decide it, one in the
-artifact and one in the workflow definition, plus the story's own grants.
+A plan must not assign a governed path to a stage without saying what makes
+it acceptable. A technical_plan.likely_file_changes entry offends when its
+file falls beneath a prefix the entry's own stage is restricted under, no
+grant on that stage covers it, and — for a file the target root already holds
+— the entry does not declare the edit a forced test adaptation. Literals
+decide it: one in the artifact and one in the workflow definition, plus the
+story's own grants and the presence of the entry's own declaration.
 
-Two run-time checks act on a stage beneath a governed prefix, and between
-them they leave no version of that entry that a run can accept. The
-ownership check refuses a created file outright. The revert check restores
-the stage's edits beneath the governed prefixes and re-runs the suite,
-permitting an edit that was forced and escalating on one that was not — and
-an implementation change reverts cleanly by construction, because the
-assertion that would hold the new behaviour belongs to a later stage and has
-not been written yet; a comment-only change is refused by the same
-arithmetic. So the plan the harness accepts is a run the harness can only
-refuse, and the verdict carries no information about the work because it was
-structurally guaranteed.
+Two run-time checks act on a stage beneath a governed prefix, and an entry
+falls into one of three categories against them. A **creation** the ownership
+check refuses outright. An **unforced modification** the revert check
+refuses: it restores the stage's edits beneath the governed prefixes and
+re-runs the suite, and an implementation change reverts cleanly by
+construction — the assertion that would hold the new behaviour belongs to a
+later stage and has not been written yet — while a comment-only change is
+refused by the same arithmetic. A **forced test adaptation**, made necessary
+by a deliberate change elsewhere in the same story, is a modification the
+revert check *permits*, because reverting it does break the suite; five
+consecutive runs contain one being permitted while ungranted. Refusing that
+third category would refuse plans that would have run to completion.
 
-The grant is the reconciliation, and it already exists: a granted path is
-skipped by the revert check's governed_edits exactly as it is skipped by the
-ownership check, so a plan that assigns the file and grants it works today.
-What this check adds is requiring the plan to say so.
+Nothing at plan time can compute which category an entry is in — whether
+reverting an edit breaks the suite depends on an edit that does not exist yet
+— and nothing structural separates the second from the third either, since
+both name files the target root already holds. The judgement is the
+planner's, and the entry states it in reverting_breaks_the_suite. Its
+presence is the structural signal and its text is what a reviewer weighs, the
+shape stage_exceptions.reason already has; no check parses, matches or scores
+it.
 
-Existence decides the **wording** and not the verdict. An absent file
-describes a creation the ownership check refuses; a present one describes a
-modification the revert check governs and, for an implementation or
-comment-only change, can only refuse. Both wordings end with the same
-resolution clause — reassign the file to a stage that may own it, or declare
-a stage_exceptions grant naming that file for that stage, whose reason field
-is required — so a plan repaired at either fault is repaired the same way,
-and the grant is named because the failure mode this check exists against was
-not knowing the field exists.
+The grant remains the other reconciliation, and it already existed: a granted
+path is skipped by the revert check's governed_edits exactly as it is skipped
+by the ownership check. The two are not interchangeable and the difference is
+the point. A grant makes the revert check skip the path, which is what a
+story whose deliverable is the governed file itself needs; a declaration
+leaves the revert check governing it, so the half of the claim plan time
+cannot check is adjudicated at run time by the check that can. No run-time
+check is weakened, anticipated or told the declaration exists.
+
+Existence decides the **wording** of a refusal, and it decides whether the
+declaration is read at all. An absent file describes a creation the ownership
+check refuses, declaration or not, so it is refused exactly as it always was.
+A present one describes a modification the revert check governs. Both
+wordings open with the same resolution clause — reassign the file to a stage
+that may own it, or declare a stage_exceptions grant naming that file for
+that stage, whose reason field is required — so a plan repaired at either
+fault is repaired the same way, and the grant is named because the failure
+mode this check exists against was not knowing the field exists. A refused
+modification names a third way out after it, declaring the edit forced, which
+is a resolution only a file that exists can have.
 
 Existence is resolved against the **target root**, the repository the story
 will run in, which artifact_problems requires of its caller and passes down.
@@ -237,16 +255,21 @@ _CREATION_FAULT = (
     "which the stage output ownership check refuses outright."
 )
 
-#: The fault an offending entry describes when the file is already there. The
-#: revert check is the instrument, and stating what it does is what stops the
-#: message reading as a claim that modifying is forbidden: it is permitted
-#: exactly when reverting it breaks the suite, which an implementation change
-#: or a comment-only change never does.
+#: The fault an offending entry describes when the file is already there and
+#: the entry declares nothing. The revert check is the instrument, and stating
+#: what it does is what stops the message reading as a claim that modifying is
+#: forbidden: it is permitted exactly when reverting it breaks the suite,
+#: which an implementation change or a comment-only change never does — and
+#: which a test adaptation forced by a deliberate change elsewhere in the same
+#: story does. Plan time cannot compute which of those an entry is, because
+#: whether reverting an edit breaks the suite depends on an edit that does not
+#: exist yet, so an entry claiming the third category says so in
+#: reverting_breaks_the_suite and is accepted here without a grant.
 _MODIFICATION = (
     "The target root already holds that file, so the entry describes a "
     "modification, which the revert check governs: it restores the stage's "
     "edits beneath that prefix and re-runs the suite, and refuses them unless "
-    "reverting them breaks it."
+    "reverting them breaks it. The entry declares no such forced adaptation."
 )
 
 #: Both wordings end here, identically, so a plan repaired at either fault is
@@ -260,6 +283,21 @@ _RESOLUTIONS = (
     "required."
 )
 
+#: The third way out, and it applies to a modification alone: declaring
+#: nothing helps a file that is not there, because a claim about reverting a
+#: file that does not exist asserts nothing and the ownership check refuses a
+#: creation outright either way. It is named beside the grant, and against it:
+#: a grant makes the revert check skip the path, while a declaration leaves it
+#: governing, so the half of the claim plan time cannot check is adjudicated
+#: at run time by the check that can.
+_DECLARATION_RESOLUTION = (
+    " If instead this edit is a test adaptation forced by a deliberate change "
+    "elsewhere in this story, so that reverting it would break the suite, say "
+    "so in reverting_breaks_the_suite on the entry: unlike a grant, that "
+    "leaves the revert check governing '{path}' and deciding the claim when "
+    "the story runs."
+)
+
 
 def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str]:
     """Report plan entries assigning a file to a stage that cannot own it.
@@ -271,19 +309,19 @@ def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str
     restriction.
 
     An entry offends when its file falls beneath a prefix the entry's own
-    stage is restricted under and no grant on that stage covers the file. The
-    filesystem decides nothing about that: an entry naming a file the target
-    already holds is reported exactly as one naming a file it does not,
-    because both describe a run the harness can only refuse — the created file
-    outright by the ownership check, the modification by the revert check,
-    which reverts an implementation or comment-only change without breaking
-    the suite and so escalates on it. The grant is what reconciles them, and
-    the grant short-circuits above everything else here.
+    stage is restricted under, no grant on that stage covers the file, and it
+    is not a modification the entry declares forced. The grant short-circuits
+    above everything else here; the declaration is read only for a path the
+    target root already holds, because a claim about reverting a file that is
+    not there asserts nothing and the ownership check refuses a creation
+    outright whatever the entry says.
 
     Existence chooses between the two **wordings** once an entry has already
     been decided to offend, so the two faults read as what they are while
-    remaining one verdict. Both wordings end with the same resolution clause,
-    built once, so a plan repaired at either fault is repaired the same way.
+    remaining one verdict. Both wordings open with the same resolution clause,
+    built once, so a plan repaired at either fault is repaired the same way; a
+    modification carries a third way out beside it, since declaring the edit
+    forced is a resolution only a file that exists can have.
 
     `root` is the repository existence is resolved against — the target root,
     not the harness root and not the process working directory. It is required
@@ -314,17 +352,23 @@ def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str
         granted = story_coordinator.granted_paths(story, name)
         if story_coordinator.grant_covers(granted, path):
             continue
+        declared = entry.get("reverting_breaks_the_suite")
+        declares = isinstance(declared, str) and declared.strip() != ""
         for stage, prefix in restrictions:
             if stage != name or not path.startswith(prefix):
                 continue
-            fault = (
-                _MODIFICATION if (Path(root) / path).exists() else _CREATION_FAULT
-            )
+            present = (Path(root) / path).exists()
+            if present and declares:
+                continue
+            fault = _MODIFICATION if present else _CREATION_FAULT
+            resolutions = _RESOLUTIONS.format(path=path, stage=stage)
+            if present:
+                resolutions += _DECLARATION_RESOLUTION.format(path=path)
             problems.append(
                 f"$.technical_plan.likely_file_changes[{index}]: assigns "
                 f"'{path}' to stage '{name}', which the workflow declares: "
                 f"{stage} may not create files under {prefix}. {fault} "
-                + _RESOLUTIONS.format(path=path, stage=stage)
+                + resolutions
             )
     return problems
 
