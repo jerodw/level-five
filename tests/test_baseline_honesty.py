@@ -2313,6 +2313,14 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "rather than inputs to the test — together with the one end-to-end "
         "case that drives l5-plan, which resolves this repository as its own "
         "harness root and so can only be compared against what is deployed",
+    "test_refactor_workflow.py":
+        "the two shipped definitions are the whole of its subject: it asks "
+        "whether this repository ships a refactor workflow that drops the "
+        "ownership and revert declarations, and whether the same coordinator "
+        "enforces differently under it and under story-workflow. That "
+        "comparison is between the definitions this repository deploys, and a "
+        "built workflow could not make it. The prompts, the schemas and the "
+        "census it reads are shipped artifacts on the same terms",
     "test_retry_history.py":
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json "
@@ -2354,6 +2362,13 @@ DECLARED_LIVE_ARTIFACT_READERS = {
     "test_stage_tool_grants.py":
         "its subject is whether this deployment grants its stages the tools "
         "they need, which is a fact about what it ships",
+    "test_suite_census.py":
+        "the workflow it runs is built and the census those runs configure is "
+        "written by the fixture, because the comparison is a mechanism. What "
+        "it resolves live is this repository's own census at .harness/census.py "
+        "and the schema shipped for the record the check writes, both of which "
+        "are the subject: what this repository counts, and what a reader of "
+        "the artifact is told the count does not mean",
     "test_undeclared_config_keys.py":
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":
@@ -2872,6 +2887,15 @@ DECLARED_HISTORY_READERS = {
         "the story that removed it and absent at that story's baseline, and "
         "the archived copy is asserted still to hold what it held. That is a "
         "claim about this repository's own history of the defect",
+    "test_refactor_workflow.py":
+        "its subject includes what story-070 itself changed and left alone: "
+        "that no prompt which existed before it was touched, that "
+        "workflows/story-workflow.json declares exactly what it declared, that "
+        "no story artifact was edited, and that the two stage.get lookups read "
+        "the same line before and after. Each is a claim about this "
+        "repository's own change, which no constructed repository can answer; "
+        "the control that the resolution still reports a violation is built "
+        "under tmp_path rather than looked for here",
     "test_story_range_endpoint.py":
         "its subject is where this repository's own stories end: that the "
         "module validating story-038 had its path added by that story's "

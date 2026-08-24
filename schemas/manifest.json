@@ -1,5 +1,6 @@
 {
   "schemas": [
+    "census-result",
     "changed-files",
     "claim-support-result",
     "clean-clone-result",

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "census-result",
+  "description": "What the suite census did, as it is recorded in the run directory. A census is the target's own count of how strong its suite is: the configured census command prints an object of counter names to integers, the coordinator runs it in a clone at the stage's baseline and again in the tree as the stage left it, and refuses the run when a counter the baseline carried is missing afterwards or has decreased. The coordinator never learns what a counter means — the target chooses the counters and phrases them so that a larger number is a stronger suite, which is what keeps the harness free of any knowledge of the target's test framework. State the boundary here, where a reader meets the verdict and where a false reading of it would be formed: the proxy assumes a weakening shows up as a smaller count, so a change that leaves every counter where it is and loosens an assertion in place passes. `permitted` true is therefore not a statement that the suite is no weaker; it is a statement that no counter fell. Optional fields are expressed by absence rather than by null, following the other coordinator-written records: a census that could not be taken has no counts and no verdict, only a reason.",
+  "type": "object",
+  "required": ["ran", "command"],
+  "properties": {
+    "ran": {
+      "type": "boolean",
+      "description": "Whether both censuses were taken. False when the target configures no census command, when no baseline was captured for the stage, or when the command failed or printed something that is not an object of names to integers."
+    },
+    "command": {
+      "type": "string",
+      "description": "The census command as configured, run unchanged in both places. Empty when the target configured none."
+    },
+    "baseline": {
+      "type": "object",
+      "description": "The census taken in a clone at the stage's baseline: counter names to integers, exactly as the command printed them."
+    },
+    "after": {
+      "type": "object",
+      "description": "The census taken in the tree as the stage left it, in the same shape."
+    },
+    "baseline_path": {
+      "type": "string",
+      "description": "The run-directory baseline the clone was built from."
+    },
+    "permitted": {
+      "type": "boolean",
+      "description": "The comparison's verdict: true when every counter the baseline carried is still present and at or above its baseline value. Absent when the census did not run, because a census that could not be taken decided nothing and null would claim it decided something."
+    },
+    "regressions": {
+      "type": "array",
+      "description": "One entry per counter the baseline carried that the later census dropped or lowered. Empty on a permitted census.",
+      "items": {
+        "type": "object",
+        "required": ["counter", "baseline"],
+        "properties": {
+          "counter": {
+            "type": "string",
+            "description": "The counter name, as the target's census command spelled it."
+          },
+          "baseline": {
+            "type": "integer",
+            "description": "What that counter read in the clone at the stage's baseline."
+          },
+          "after": {
+            "type": "integer",
+            "description": "What it read in the tree as the stage left it. Absent when the later census does not carry the counter at all, which is its own kind of regression."
+          }
+        }
+      }
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why the census did not run, present only when it did not: which of the failures happened, and where."
+    }
+  }
+}

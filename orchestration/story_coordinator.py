@@ -1667,7 +1667,12 @@ def run_clean_clone(
 
 
 def _suite_rerun_started(
-    run_dir: Path, stage_name: str, artifact: str, phrase: str
+    run_dir: Path,
+    stage_name: str,
+    artifact: str,
+    phrase: str,
+    *,
+    cost: str = "this takes as long as a suite run",
 ) -> None:
     """Announce a check that is about to re-run the configured test command.
 
@@ -1685,12 +1690,15 @@ def _suite_rerun_started(
 
     No stage name and no artifact name is written here. Both come from the
     declaration the caller already read, and `phrase` says what is being re-run
-    and why, so both announcements come from this one function rather than
-    being spelled per check.
+    and why, so every announcement comes from this one function rather than
+    being spelled per check. `cost` is what the wait is worth defaulted to a
+    suite run, because a check that re-runs the whole suite is what this was
+    written for; a check whose wait is a different size says so rather than
+    claiming a suite run's.
     """
     append_event(
         run_dir,
-        f"re-running the suite {phrase}; this takes as long as a suite run",
+        f"re-running the suite {phrase}; {cost}",
         kind="suite-rerun-started",
         stage=stage_name,
         artifacts=[artifact],
@@ -2258,6 +2266,354 @@ def _revert_check_permitted(
         stage=stage_name,
         artifacts=[artifact],
     )
+
+
+# --------------------------------------------------------------------------
+# The suite census
+#
+# The ownership check and the revert check between them make one assumption:
+# that every legitimate edit to a stage's validation is forced by a change
+# elsewhere. That holds over a workflow whose stages implement a story and
+# fails over one whose whole correctness claim is that behaviour is unchanged,
+# because there the edit to the validation *is* the work. A workflow for such
+# work drops both declarations — and dropping them removes enforcement rather
+# than replacing it, leaving no guard at all against the threat that kind of
+# work actually carries: not authoring the validation that judges your own
+# work, but weakening the validation that already exists.
+#
+# So a third proxy stands in their place. The target supplies a command that
+# prints a JSON object of counter names to integers; the coordinator runs it
+# in a clone at the stage's baseline and again in the tree the stage left, and
+# refuses the run when a counter present at the baseline is missing afterwards
+# or has decreased. The coordinator never learns what a counter means. The
+# target chooses the counters and phrases them so that a larger number is a
+# stronger suite, which is the whole of what keeps the harness free of any
+# knowledge of the target's test framework: no framework summary line is read,
+# no framework command is run, and no counter name is interpreted.
+#
+# The proxy is deterministic, and it is narrow. It assumes weakening shows up
+# as a smaller count, so a change that leaves every counter where it is and
+# loosens an assertion in place passes. That is stated here, in the census
+# result's own schema description, and in the target's census command, rather
+# than left for a reader to infer coverage the check does not have.
+
+#: How much of a failing census command's output a refusal carries.
+CENSUS_OUTPUT_TAIL = 2000
+
+
+@dataclass(frozen=True)
+class CensusRegression:
+    """One counter the baseline carried that the later census did not keep.
+
+    `after` is None when the later census does not carry the counter at all,
+    which is its own kind of regression and is reported as one: a target that
+    stops counting something has stopped watching it.
+    """
+
+    counter: str
+    baseline: int
+    after: int | None
+
+    def as_record(self) -> dict:
+        record: dict = {"counter": self.counter, "baseline": self.baseline}
+        if self.after is not None:
+            record["after"] = self.after
+        return record
+
+    def describe(self) -> str:
+        if self.after is None:
+            return (
+                f"{self.counter} was {self.baseline} at the baseline and the "
+                f"later census does not carry it"
+            )
+        return (
+            f"{self.counter} fell from {self.baseline} at the baseline to "
+            f"{self.after}"
+        )
+
+
+@dataclass(frozen=True)
+class CensusResult:
+    """What the suite census did, as it is recorded in the run directory.
+
+    Optional fields are expressed by absence in the written record rather than
+    by null, matching the other coordinator-written records: a census that
+    could not be taken has no counts and no verdict, only a reason.
+    """
+
+    ran: bool
+    command: str
+    baseline: dict[str, int] | None = None
+    after: dict[str, int] | None = None
+    baseline_path: str | None = None
+    permitted: bool | None = None
+    regressions: tuple[CensusRegression, ...] = ()
+    reason: str | None = None
+
+    def as_record(self) -> dict:
+        record: dict = {"ran": self.ran, "command": self.command}
+        optional = {
+            "baseline": self.baseline,
+            "after": self.after,
+            "baseline_path": self.baseline_path,
+            "permitted": self.permitted,
+            "reason": self.reason,
+        }
+        record.update({key: value for key, value in optional.items() if value is not None})
+        if self.ran:
+            record["regressions"] = [item.as_record() for item in self.regressions]
+        return record
+
+
+def census_regressions(
+    baseline: dict[str, int], after: dict[str, int]
+) -> tuple[CensusRegression, ...]:
+    """Compare two censuses over the counters the *baseline* carried.
+
+    Every counter the baseline carries must still be there and must not have
+    fallen. A counter the later census reports and the baseline did not is no
+    violation and is not looked at, so a target may add a counter without the
+    addition reading as one.
+
+    This is the one place the comparison is made, and it reads no counter name:
+    the direction is the target's to establish by naming its counters so that
+    larger is stronger.
+    """
+    regressions = []
+    for counter, before in sorted(baseline.items()):
+        if counter not in after:
+            regressions.append(CensusRegression(counter, before, None))
+        elif after[counter] < before:
+            regressions.append(CensusRegression(counter, before, after[counter]))
+    return tuple(regressions)
+
+
+def census_paths(target_root: Path, baseline: Path, prefixes: list[str]) -> list[str]:
+    """The files a census clone restores, from a stage's declared paths.
+
+    The clone builder restores and deletes *files*, because the revert check
+    hands it the file paths a stage's own record named. A census declares
+    directories instead — the suite is the thing being counted, not one edit
+    to it — so the two sides are enumerated here and handed over as one set:
+    every file the tree now holds under a declared path, so one the stage
+    added is deleted in the clone, and every file the baseline captured under
+    it, so one the stage deleted is restored. The union is what makes the
+    clone hold the declared paths exactly as the stage first found them.
+
+    A declared path that names a single file rather than a directory works
+    unchanged, which is why the capture is asked whether it is a file before
+    it is walked as a directory.
+    """
+    paths: set[str] = set()
+    for prefix in prefixes:
+        listed = _git(
+            target_root,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            prefix,
+        ).stdout
+        paths.update(filter(None, listed.split("\0")))
+        captured = baseline / prefix
+        if captured.is_file():
+            paths.add(prefix)
+        elif captured.is_dir():
+            for path in captured.rglob("*"):
+                if path.is_file():
+                    paths.add(path.relative_to(baseline).as_posix())
+    return sorted(paths)
+
+
+def _take_census(command: str, cwd: Path, where: str) -> tuple[dict[str, int] | None, str]:
+    """Run the target's census command in one place and read what it printed.
+
+    Returns the object and an empty reason, or None and the reason it could
+    not be read. Each of the three ways this fails — a non-zero exit, output
+    that is not a JSON object, a value that is not an integer — is reported as
+    itself, because a refusal saying only that the census failed leaves the
+    developer to run the command by hand to find out which.
+
+    A bool is refused along with every other non-integer: `isinstance(True,
+    int)` holds, so a bare integer test would read a printed `true` as the
+    count 1.
+    """
+    try:
+        result = subprocess.run(
+            shlex.split(command), cwd=cwd, capture_output=True, text=True
+        )
+    except OSError as error:
+        return None, f"the census command could not be run {where}: {error}"
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout).strip()[-CENSUS_OUTPUT_TAIL:]
+        return None, (
+            f"the census command exited {result.returncode} {where}: {tail}"
+        )
+    try:
+        printed = json.loads(result.stdout)
+    except ValueError as error:
+        return None, (
+            f"the census command printed output that is not JSON {where}: {error}"
+        )
+    if not isinstance(printed, dict):
+        return None, (
+            f"the census command printed a JSON value that is not an object "
+            f"{where}: {result.stdout.strip()[:CENSUS_OUTPUT_TAIL]}"
+        )
+    for counter, value in sorted(printed.items()):
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None, (
+                f"the census command printed a value that is not an integer "
+                f"{where}: {counter} is {json.dumps(value)}"
+            )
+    return printed, ""
+
+
+def suite_census_check(
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    artifact: str,
+    paths: list[str],
+    baseline: Path | None = None,
+    *,
+    stage_name: str,
+) -> CensusResult:
+    """Take the census twice and record both, the command, and the verdict.
+
+    Shaped like the revert check beside it: the baseline comes from the shared
+    stage-baseline resolution, the clone is built by the existing clone builder
+    with the declared paths restored to what the stage first found, and the
+    scratch directory goes whatever the result.
+
+    Three conditions stop it, and none of them permits. A target that
+    configures no census command has nothing to take, which is recorded as a
+    check that did not run and announced nowhere, because nothing is about to
+    take a census's worth of time. A stage that declares the census with no
+    baseline captured has nothing to compare against. And a command that fails
+    or prints something the coordinator cannot read as an object of names to
+    integers is reported as the failure it was rather than read as a pass.
+
+    The announcement is made inside the branch that builds the clone, for the
+    reason the revert check's is: a path that runs nothing has nothing to
+    announce.
+    """
+    command = config.get("census_command")
+    if not command:
+        decided = CensusResult(
+            ran=False,
+            command="",
+            reason=(
+                "the target configures no census_command, so there is no "
+                "census for the coordinator to take"
+            ),
+        )
+        return _record_census(run_dir, artifact, decided)
+
+    resolved = baseline if baseline is not None and baseline.is_dir() else None
+    if resolved is None:
+        decided = CensusResult(
+            ran=False,
+            command=command,
+            reason=(
+                "no baseline was captured for the stage, so there is no state "
+                f"to take the earlier census at: {baseline}"
+            ),
+        )
+        return _record_census(run_dir, artifact, decided)
+
+    _suite_rerun_started(
+        run_dir,
+        stage_name,
+        artifact,
+        "in a clone at this stage's baseline and again in the tree as the "
+        "stage left it, to compare the suite census",
+        cost="this takes a census of the suite twice",
+    )
+
+    scratch = Path(tempfile.mkdtemp(prefix="l5-suite-census-"))
+    try:
+        clone = scratch / "clone"
+        _build_clone(
+            target_root,
+            clone,
+            revert=census_paths(target_root, resolved, list(paths)),
+            baseline=resolved,
+        )
+        before, reason = _take_census(command, clone, "in a clone at the stage's baseline")
+    except (RuntimeError, OSError) as error:
+        before, reason = None, (
+            f"the clone at the stage's baseline could not be built: {error}"
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    after: dict[str, int] | None = None
+    if before is not None:
+        after, reason = _take_census(
+            command, target_root, "in the tree as the stage left it"
+        )
+
+    if before is None or after is None:
+        decided = CensusResult(
+            ran=False,
+            command=command,
+            baseline=before,
+            baseline_path=str(resolved),
+            reason=reason,
+        )
+        return _record_census(run_dir, artifact, decided)
+
+    regressions = census_regressions(before, after)
+    decided = CensusResult(
+        ran=True,
+        command=command,
+        baseline=before,
+        after=after,
+        baseline_path=str(resolved),
+        permitted=not regressions,
+        regressions=regressions,
+    )
+    return _record_census(run_dir, artifact, decided)
+
+
+def _record_census(run_dir: Path, artifact: str, decided: CensusResult) -> CensusResult:
+    (run_dir / artifact).write_text(
+        json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
+    )
+    return decided
+
+
+def stage_baseline_requests(stage: dict) -> dict[str, list[str]]:
+    """The baseline captures a stage's declarations between them ask for.
+
+    Two declarations decide against what the stage first found — the revert
+    check, over the prefixes the stage may not create under, and the suite
+    census, over the paths it declares. Both name the run-directory directory
+    their baseline is kept in. They are collected into one capture per named
+    directory, with the union of the prefixes asked for it, because capturing
+    twice would make the second call a re-capture of the first's directory and
+    narrow what it may admit for a reason that has nothing to do with the stage
+    running again.
+
+    It names no stage, no prefix and no directory; all three come off the
+    loaded workflow, and a stage carrying neither declaration asks for nothing.
+    """
+    requests: dict[str, list[str]] = {}
+    asked = (
+        (stage.get("revert_check"), stage.get("may_not_create", [])),
+        (stage.get("suite_census"), (stage.get("suite_census") or {}).get("paths", [])),
+    )
+    for declaration, prefixes in asked:
+        if not declaration:
+            continue
+        collected = requests.setdefault(declaration["baseline"], [])
+        for prefix in prefixes:
+            if prefix not in collected:
+                collected.append(prefix)
+    return requests
 
 
 # --------------------------------------------------------------------------
@@ -4641,19 +4997,27 @@ def run_story(
         # re-entry may add to it is narrowed the other way, to the paths
         # another stage's own record accounts for, so a re-run is never decided
         # against the partial work a crashed invocation left behind.
+        # The suite census below decides against the same fact and resolves it
+        # the same way, so the two declarations are collected into one capture
+        # per baseline directory they name rather than each capturing for
+        # itself — a second capture of the same directory would be read as a
+        # re-capture and narrow what it may admit for a reason that has nothing
+        # to do with the stage running again.
         declaration = stage.get("revert_check") or {}
-        baseline_dir = (
-            capture_stage_baseline(
+        census_declaration = stage.get("suite_census") or {}
+        baselines = {
+            baseline: capture_stage_baseline(
                 run_dir,
                 target_root,
-                declaration["baseline"],
+                baseline,
                 name,
-                stage.get("may_not_create", []),
+                prefixes,
                 accounted_for=recorded_by_other_stages(run_dir, stages, name),
             )
-            if declaration
-            else None
-        )
+            for baseline, prefixes in stage_baseline_requests(stage).items()
+        }
+        baseline_dir = baselines.get(declaration.get("baseline"))
+        census_baseline = baselines.get(census_declaration.get("baseline"))
 
         # The run ceiling, compared immediately above the invocation it would
         # stop. It bounds *repetition* — how much a run may spend across every
@@ -4941,6 +5305,49 @@ def run_story(
                         duration_seconds=elapsed(),
                     )
                 _revert_check_permitted(run_dir, name, revert_artifact, edits)
+
+        # The suite census, declared like the checks above it: one key names
+        # the artifact and turns the check on, so no stage name appears here
+        # and a workflow declaring it nowhere takes no census and announces
+        # nothing. It stands in for the ownership and revert checks under a
+        # workflow whose stages legitimately edit the validation, and it reads
+        # the same stage baseline they do.
+        census_artifact = census_declaration.get("result")
+        if census_artifact:
+            census = suite_census_check(
+                run_dir,
+                target_root,
+                config,
+                census_artifact,
+                census_declaration.get("paths", []),
+                census_baseline,
+                stage_name=name,
+            )
+            # A census that could not be taken permits nothing, exactly as the
+            # revert check's own could-not-run path decides — except where the
+            # target configured no census command at all, which is a target
+            # declining the check rather than a check that failed.
+            if not census.ran and config.get("census_command"):
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"the suite census declared on {name} could not be taken: "
+                    f"{census.reason}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
+            if census.permitted is False:
+                fell = "; ".join(item.describe() for item in census.regressions)
+                return _escalate(
+                    run_dir,
+                    state,
+                    f"the suite census taken after {name} is weaker than the "
+                    f"one taken at its baseline: {fell}",
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
 
         # The claim-support check, declared like the two above: one key names
         # the artifact and turns the check on, so the stage it runs after is

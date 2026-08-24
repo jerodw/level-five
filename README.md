@@ -96,7 +96,9 @@ Example:
 
 ## Layout
 
-    workflows/       workflow definitions (stages, artifact routes, retry rules)
+    workflows/       workflow definitions (stages, artifact routes, retry rules):
+                     story-workflow.json, and since story-070
+                     refactor-workflow.json for behaviour-preserving work
     schemas/         JSON Schemas for the structured artifacts, plus their manifest
     prompts/         reusable agent prompt templates ({{placeholder}} injection)
     orchestration/   the Story Coordinator and its supporting modules
@@ -119,7 +121,7 @@ This repository is both the harness repository and its own first target reposito
 
 1. `l5-plan` runs an interactive planning session and writes an approved story artifact to `.harness/stories/`, then validates, commits and pushes it and offers to run it: Enter starts `l5-run` for the story just planned, anything else skips and prints the command that would have started it. When stdin is not a terminal the offer is not made at all and the command is printed, so a scripted invocation cannot hang on a prompt nothing can answer.
 2. `l5-run` hands the story to the Story Coordinator, which creates a story branch and a run directory under `.harness/runs/<story-id>/`.
-3. The coordinator advances the workflow stage by stage (implement → test → document → verify), assembling each stage's context, injecting it into the stage prompt, and invoking the agent headlessly (`claude -p`). The documenter runs before verification so that what it writes is judged rather than taken on trust.
+3. The coordinator advances the workflow stage by stage — implement → test → document → verify under `story-workflow.json`, or implement → document → verify under `refactor-workflow.json`, whose correctness claim is that behaviour is unchanged and whose implementer is guarded by a suite census rather than by the create and revert checks. A second workflow is not a second unit of work: the story is still the unit, and which definition its run loads is a field on the story artifact. The coordinator assembles each stage's context, injects it into the stage prompt, and invokes the agent headlessly (`claude -p`). The documenter runs before verification so that what it writes is judged rather than taken on trust.
 4. The verifier writes `verification-result.json`. The coordinator routes from that artifact: advance, retry, or escalate. A retry goes to the stage that owns the defect — named by the verifier as a category the workflow defines, with no default route — carrying structured guidance in `retry-guidance.json`. A verdict may also report that retrying cannot finish the work at all, which escalates immediately and leaves the retry budget unspent. On a passing verdict the coordinator re-runs the suite in a fresh clone with the story committed, because the working tree is the one place that commit does not yet exist.
 5. A stage that fails *mechanically* — rather than being judged wrong — runs again in place, on a separate per-stage budget that retries do not share.
 6. Every run leaves its state (`state.json`), the same events in two renderings (`events.log` and `execution-history.json`), a record of any retry (`retry-history.json`), and the artifacts each stage produced.

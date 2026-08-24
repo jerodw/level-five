@@ -321,6 +321,56 @@ def test_stage_exception_problems_accepts_a_grant_under_a_declared_prefix():
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# Every definition this repository ships, not only the one it configures
+#
+# story-070 shipped a second workflow, reachable per work item rather than by
+# configuration, and a definition nothing configures is a definition no
+# pre-flight has ever run over. The well-formedness validators above are asked
+# of all of them, discovered by glob so a third costs nothing to cover, while
+# the deployment assertions below stay pointed at the configured one — what
+# this project intends of its default is not a question about a workflow that
+# has to be asked for by name.
+# --------------------------------------------------------------------------
+
+
+def shipped_definitions() -> dict[str, dict]:
+    """Every workflow under `workflows/`, loaded the way a run loads it."""
+    return {path.stem: shipped_workflow(REPO_ROOT, path.stem)
+            for path in sorted((REPO_ROOT / "workflows").glob("*.json"))}
+
+
+def test_more_than_one_workflow_ships_so_the_sweep_below_sweeps_something():
+    """The companion assertion a glob needs: a sweep over one file, or none,
+    would agree with every definition being well-formed for the wrong reason."""
+    assert len(shipped_definitions()) >= 2
+    assert SHIPPED["name"] in shipped_definitions()
+
+
+@pytest.mark.parametrize("name", sorted(shipped_definitions()))
+def test_every_shipped_definition_is_well_formed(name):
+    """The same validators the pre-flight runs, over every definition that
+    ships. Their controls are the built definitions above: each of these three
+    is shown reporting a violation there, so a clean sweep here is a statement
+    about these definitions rather than about a validator that stopped
+    looking."""
+    definition = shipped_definitions()[name]
+    stages = definition["stages"]
+    assert stages, name
+    assert story_coordinator.self_route_problems(stages) == [], name
+    assert story_coordinator.retry_routing_problems(stages) == [], name
+    assert story_coordinator.cost_ceiling_problems(definition) == [], name
+    assert definition["name"] == name
+
+
+@pytest.mark.parametrize("name", sorted(shipped_definitions()))
+def test_every_shipped_definition_names_prompts_and_schemas_that_exist(name):
+    for stage in shipped_definitions()[name]["stages"]:
+        assert (REPO_ROOT / "prompts" / stage["prompt"]).is_file(), stage["name"]
+        for schema in stage.get("schemas", {}).values():
+            assert schema in schema_validator.shipped_schemas(), schema
+
+
 def test_the_shipped_workflow_is_the_one_this_repository_configures():
     """The definition asserted about below is the one a run of this repository
     would load, rather than a file that happens to sit beside it."""

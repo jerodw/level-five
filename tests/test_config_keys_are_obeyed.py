@@ -1,6 +1,7 @@
 """story-039 validation: every configured value is proven to govern.
 
-Thirteen keys are read out of `.harness/config.yaml`. Until this module, the
+The keys listed in `KEY_PROOFS` below are read out of `.harness/config.yaml`.
+Until this module, the
 suite could not tell a key that is obeyed from a key that was moved into
 configuration and then hardcoded to the same literal, because every fixture
 in the repository configured the value the harness would have picked anyway.
@@ -10,13 +11,13 @@ this harness would never choose — every one of them carries the token
 ``xyzzy`` — and the harness is then observed acting on that value:
 
 * `KEY_PROOFS` maps each declared key to the node id that proves it and to
-  what "proven" means for it. Ten keys are proven **behaviourally**: the
-  fixture configures the varying value and the run is observed following it.
-  Three — `model`, `permission_mode` and `allowed_tools` — are handed
-  straight to the agent runner and are observable nowhere else, so their
-  proof is an **argument-list** assertion on the invocation the coordinator
-  builds for a fake runner. `allowed_tools` covers both sites that pass it:
-  the runner call and the rendered prompt.
+  what "proven" means for it. Most are proven **behaviourally**: the fixture
+  configures the varying value and the run is observed following it. `model`,
+  `permission_mode` and `allowed_tools` are handed straight to the agent
+  runner and are observable nowhere else, so their proof is an
+  **argument-list** assertion on the invocation the coordinator builds for a
+  fake runner. `allowed_tools` covers both sites that pass it: the runner call
+  and the rendered prompt.
 
 * What the key set *is* comes from `schemas/harness-config.schema.json`,
   through `harness_config.declared_config_keys()`. Coverage is set equality
@@ -91,6 +92,7 @@ VARYING: dict[str, object] = {
     "architecture_docs": ["docs/xyzzy-architecture.md"],
     "base_branch": "xyzzy-base",
     "branch_prefix": "xyzzy-branch/",
+    "census_command": "xyzzy-census --count",
     "logs_dir": ".harness/xyzzy-logs",
     "model": "xyzzy-model",
     "permission_mode": "xyzzyPrompt",
@@ -105,14 +107,16 @@ VARYING: dict[str, object] = {
 
 #: What the harness uses when the key is absent, as written in the code that
 #: reads it. `None` is the answer for the four keys with no fallback at all:
-#: `allowed_tools`, `base_branch`, `verification_runner` and `model` are read
-#: with a bare `config.get`, and `test_command` is read with no default and
-#: no fallback, so a target that omits it cannot run the clean-clone check.
+#: `allowed_tools`, `base_branch`, `census_command`, `model` and
+#: `verification_runner` are read with a bare `config.get`, and `test_command`
+#: is read with no default and no fallback, so a target that omits it cannot
+#: run the clean-clone check.
 FALLBACKS: dict[str, object] = {
     "allowed_tools": None,
     "architecture_docs": [],
     "base_branch": None,
     "branch_prefix": "story/",
+    "census_command": None,
     "logs_dir": ".harness/logs",
     "model": None,
     "permission_mode": "acceptEdits",
@@ -162,6 +166,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "branch_prefix": Proof(
         "test_branch_prefix_names_the_branch_the_run_creates_and_works_on",
+        BEHAVIOURAL),
+    "census_command": Proof(
+        "test_census_command_is_the_command_the_suite_census_runs",
         BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
@@ -232,6 +239,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("branch_prefix", "story/")',
          '"story/"'),
+    ),
+    "census_command": (
+        ("orchestration/story_coordinator.py",
+         'config.get("census_command")',
+         "None"),
     ),
     "logs_dir": (
         ("orchestration/story_coordinator.py",
@@ -571,6 +583,7 @@ def clean_clone_record(run: Run) -> dict:
 
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
+    "census_command",
     "logs_dir", "model", "permission_mode", "runs_dir", "standards_dir",
     "stories_dir", "test_command", "tests_dir", "verification_runner",
     "workflow",
@@ -1002,6 +1015,42 @@ def test_test_command_is_the_command_the_clean_clone_path_builds(tmp_path):
     # The configured command's own arguments, under the configured
     # runner: `--all` is the half that comes from `test_command`.
     assert record["command"] == "/xyzzy/bin/interpreter --all"
+
+
+def census_record(run: Run) -> dict:
+    """What the census check builds for the fixture's configuration.
+
+    Observed rather than completed, for the reason `clean_clone_record` above
+    is: the configured census command names a program that does not exist, so
+    the check reports a census it could not take — carrying the command it was
+    asked to run and the reason it could not. That keeps the proof
+    deterministic and free of any dependency on a second toolchain.
+
+    Invoked by hand rather than reached through a run, because no shipped
+    definition declares the census on the stages this fixture's workflow
+    carries; which stage declares it is not what this proof is about, so the
+    stage is taken off the fixture's own definition rather than written down.
+    """
+    artifact = "xyzzy-census-result.json"
+    definition = json.loads(
+        (run.harness / "workflows" / f"{FIXTURE_WORKFLOW}.json").read_text(
+            encoding="utf-8"))
+    governed = [str(run.values["tests_dir"])]
+    baseline = story_coordinator.capture_stage_baseline(
+        run.run_dir, run.target, "xyzzy-stage-baseline", "xyzzy-stage",
+        governed, accounted_for=set())
+    story_coordinator.suite_census_check(
+        run.run_dir, run.target, run.config, artifact, governed, baseline,
+        stage_name=definition["stages"][-1]["name"])
+    return json.loads((run.run_dir / artifact).read_text(encoding="utf-8"))
+
+
+def test_census_command_is_the_command_the_suite_census_runs(tmp_path):
+    run = complete_run(tmp_path)
+    record = census_record(run)
+    assert record["command"] == "xyzzy-census --count"
+    assert record["ran"] is False
+    assert "xyzzy-census" in record["reason"]
 
 
 def test_verification_runner_is_the_executable_the_check_resolves(tmp_path):
