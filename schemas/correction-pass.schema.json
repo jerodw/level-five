@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "correction-pass",
-  "description": "The coordinator's record of one correction pass: a passing verdict carried correctable findings, and the workflow re-entered at the earliest stage the categories those findings name routes to, ran through to verification again, and completed. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a run directory can say why a stage ran again after a verification that passed, rather than the reason living only in the re-run's prompt. It is a retry's shape minus everything a retry spends: no retry_count, no attempts/attempt-N/ archive, no retry-history.json entry, and the verdict that routed it is unchanged — the archived verification iteration still records status passed. One is written per pass under a name keyed by the pass number, so no pass overwrites another. The findings are copied verbatim from the verdict rather than summarised, because the stage receiving the pass acts on the words the verifier wrote. Optional fields are expressed by absence rather than by null, as clean-clone-result and execution-history do.",
+  "description": "The coordinator's record of one correction pass: a passing verdict carried correctable findings, and the workflow re-entered at the stage its correction_pass declaration names, ran through to verification again, and completed. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a run directory can say why a stage ran again after a verification that passed, rather than the reason living only in the re-run's prompt. It is a retry's shape minus everything a retry spends: no retry_count, no attempts/attempt-N/ archive, no retry-history.json entry, and the verdict that routed it is unchanged — the archived verification iteration still records status passed. One is written per pass under a name keyed by the pass number, so no pass overwrites another. The findings are copied verbatim from the verdict rather than summarised, because the stage receiving the pass acts on the words the verifier wrote. Optional fields are expressed by absence rather than by null, as clean-clone-result and execution-history do.",
   "type": "object",
   "required": ["pass", "attempt", "stage", "findings"],
   "properties": {
@@ -15,7 +15,7 @@
     },
     "stage": {
       "type": "string",
-      "description": "The stage the workflow re-entered at: the earliest in workflow order among the stages the findings' categories route to, so a verdict naming two categories enters at the first of them and reaches the other on the way back to verification."
+      "description": "The stage the workflow re-entered at: the one the workflow's correction_pass declaration names. It is a property of the definition rather than something a finding's category selects, so every pass under a given workflow enters at the same stage whatever categories the findings carry, and a pass costs the stages after that entry point and no more."
     },
     "findings": {
       "type": "array",

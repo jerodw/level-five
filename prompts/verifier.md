@@ -96,11 +96,13 @@ not a finding, and nothing routes on it.
 A correction pass corrects words and never behaviour. Do not record a finding
 there whose repair would change what any test asserts about the system, or
 what the code does — that is a blocking issue if it matters and nothing if it
-does not. And do not record one no single stage can fix: the pass routes to one
+does not. And do not record one no single stage can fix: the pass enters at one
 stage and runs forward from there, so a finding needing two stages to
-coordinate is not one of these. The passing verdict stands: recording a finding
-does not fail the run, spends no retry, and leaves the verdict that carried it
-recorded as passed.
+coordinate is not one of these. Do not record one against the approved story
+artifact either: nothing rewrites that mid-run, and the stage the pass enters
+at is instructed to leave it alone, so such a finding has nowhere to be acted
+on. The passing verdict stands: recording a finding does not fail the run,
+spends no retry, and leaves the verdict that carried it recorded as passed.
 
 retry-guidance.json, written only when status is "failed" and a retry is
 recommended. It must satisfy this schema:

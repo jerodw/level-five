@@ -89,7 +89,7 @@
           },
           "category": {
             "type": "string",
-            "description": "The retry category that owns the prose being corrected, spelled exactly as the workflow's retry_routing table declares it. The field introduces no new vocabulary: the coordinator reads the destination off that same table, so a category the workflow does not declare escalates the run naming the categories it does, with the same strictness an unrecognised retry_target gets."
+            "description": "The retry category that owns the prose being corrected, spelled exactly as the workflow's retry_routing table declares it. The field introduces no new vocabulary and it does not choose where the pass goes: the entry stage comes off the workflow's own correction_pass declaration, so a pass enters at the same stage whatever category a finding carries. What the category still does is name the kind of prose, and it is still required and still checked against that table — one the workflow does not declare escalates the run naming the categories it does, with the same strictness an unrecognised retry_target gets."
           }
         }
       }
