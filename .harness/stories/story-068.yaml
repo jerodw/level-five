@@ -1,0 +1,253 @@
+story:
+  id: story-068
+  title: A plan may declare a forced test adaptation
+  description: |
+    story-057 refuses a plan that assigns a governed path to the stage
+    restricted there without a grant. The refusal is right for the two
+    categories it was reasoned from - a creation the ownership check refuses
+    outright, and a modification the revert check refuses because reverting an
+    implementation or comment-only change never breaks the suite - and wrong
+    for a third nobody separated from them: a test adaptation forced by a
+    deliberate change elsewhere in the same story. Reverting that does break
+    the suite, so the revert check permits it, and five consecutive runs
+    contain it being permitted while ungranted. Plan time therefore refuses
+    plans that would have run to completion, and it refuses them for being
+    accurate: the check reads likely_file_changes, so an edit the plan does not
+    predict is invisible to it, and prompts/planner.md instructs the planner to
+    predict exactly the edits that get it refused.
+
+    Nothing at plan time can compute which category an entry is in - whether
+    reverting an edit breaks the suite depends on an edit that does not exist
+    yet - and nothing structural separates the two committed cases either:
+    story-056's tests/conftest.py and story-060's
+    tests/test_shipped_workflow_is_valid.py both already existed at their plan
+    commits, so existence cannot decide it. The judgement is the planner's, and
+    story-060's plan already wrote the reasoning out in an entry's reason field
+    where nothing could read it.
+
+    This story gives that judgement a field of its own. A likely_file_changes
+    entry gains an optional reverting_breaks_the_suite, whose presence is the
+    structural signal and whose text is what a reviewer weighs - the shape
+    stage_exceptions.reason already has. An entry carrying it, naming a file
+    the target root already holds, is accepted without a grant. An entry naming
+    a file the target lacks is refused exactly as it is today, declaration or
+    not: that is a creation the ownership check refuses outright, and a claim
+    about reverting a file that does not exist asserts nothing.
+
+    The declaration is not a grant and the difference is the point. A grant
+    makes the revert check skip the path, which is what story-060 was forced
+    into; a declaration leaves the revert check governing it, so the
+    unfalsifiable half of the claim is adjudicated at run time by the check
+    that has decided this category correctly five times running. No run-time
+    check is weakened, anticipated or told the field exists.
+
+    Two prose passages state the removed premise as an absolute and are
+    corrected either way, because five runs contradict them.
+
+tasks:
+  - Declare reverting_breaks_the_suite on a likely_file_changes entry in
+    schemas/story.schema.json, as an optional string, with a description
+    saying what its presence decides at plan time and what it does not promise
+    about the run.
+  - Add the accepting branch to assignment_problems in
+    orchestration/plan_validation.py - a governed entry carrying the
+    declaration, whose file the target root already holds, yields no problem -
+    leaving the absent-file case, the undeclared case and the grant
+    short-circuit exactly as they are.
+  - Correct the _MODIFICATION comment and the "What the fourth check is"
+    section of the plan_validation.py module docstring so neither claims that
+    no ungranted governed entry can be accepted, and so both are true of all
+    three categories.
+  - Correct the paragraph in prompts/planner.md that tells a planner an entry
+    needs a grant whether or not the file is already in the target repository,
+    and say when the declaration is the right instrument and when a grant
+    still is.
+  - Correct the sentence in .harness/docs/ARCHITECTURE.md stating that between
+    the two run-time checks there is no version of an ungranted governed entry
+    a run can accept.
+  - Write the standing regression module for the new rule, covering the
+    accepting case, the corpus reconstructions of story-060 and story-056, the
+    absent-file refusal under a declaration, and the containment of the field
+    to one module - each absence assertion with its negative control.
+  - Correct the comment in tests/test_plan_assignment_refusal.py stating that a
+    grant is the only thing that silences the check.
+
+acceptance_criteria:
+  - schemas/story.schema.json declares reverting_breaks_the_suite as an
+    optional string property of a technical_plan.likely_file_changes item, and
+    story_parser reads a story carrying one into that entry as a string.
+  - A likely_file_changes entry beneath a prefix its own stage is restricted
+    under, carrying no grant, carrying reverting_breaks_the_suite, and naming a
+    path the target root holds, yields no problem from assignment_problems and
+    no problem from artifact_problems.
+  - The same entry with the declaration removed is still reported once, with
+    the modification wording, so the declaration is demonstrably what silences
+    it.
+  - The same declared entry resolved against a root that does not hold the
+    path is still reported, with the creation wording, so the declaration never
+    reaches the case the ownership check refuses outright.
+  - A test reconstructs story-060's plan entry for
+    tests/test_shipped_workflow_is_valid.py with the declaration in place of
+    its stage_exceptions grant, and artifact_problems reports nothing against a
+    root holding that file.
+  - A test reads story-056's committed artifact from disk, strips its grants,
+    and artifact_problems still reports its governed entries - the declaration
+    being absent, nothing about that case changed.
+  - The string reverting_breaks_the_suite appears in no module under
+    orchestration/ other than plan_validation.py, and in no file under
+    workflows/ or rules/, with a control asserting the search would find it
+    where it does live.
+  - Neither the revert check nor the stage output ownership check consults the
+    declaration - a run whose story carries one governs the declared path
+    exactly as a run whose story does not.
+  - The _MODIFICATION comment and the "What the fourth check is" docstring
+    section in orchestration/plan_validation.py no longer assert that the two
+    run-time checks leave no acceptable ungranted governed entry, and name the
+    forced-adaptation category alongside the two they already name.
+  - The sentence at .harness/docs/ARCHITECTURE.md that states the same
+    absolute no longer states it, and what replaces it is true of creations,
+    unforced modifications and forced adaptations alike.
+  - prompts/planner.md no longer tells a planner that a governed entry needs a
+    grant whether or not the file is already in the target repository, and
+    distinguishes the declaration from the grant by what each does to the
+    revert check.
+
+technical_plan:
+  implementation_steps:
+    - Add the property to the likely_file_changes item in
+      schemas/story.schema.json beside file, reason and stage, leaving the
+      required list untouched. Its description says that presence is what plan
+      time reads, that the text is a judgement for a reviewer rather than
+      anything a check parses, that it is honoured only for a path the target
+      root already holds, and that no run-time check consults it - the revert
+      check governs a declared path exactly as it governs an undeclared one.
+    - In assignment_problems, after the grant short-circuit and inside the
+      restriction loop, resolve existence once as it is resolved today and
+      accept the entry when the path exists and the entry carries a non-empty
+      reverting_breaks_the_suite. The existing fault selection stays as the
+      else, so the two wordings and the shared resolution clause are unchanged
+      and an absent path is refused whether or not the entry declares
+      anything.
+    - Extend the shared resolution wording so a refused modification names
+      three ways out rather than two - reassign, grant, or declare - and leave
+      the absent-file wording naming only the two that apply to it, since
+      declaring nothing helps a file that is not there.
+    - Rewrite the _MODIFICATION comment and the "What the fourth check is"
+      docstring section around the three categories, saying that the revert
+      check permits a forced adaptation, that plan time cannot compute which
+      category an entry is in, and that the declaration is where the planner
+      states it.
+    - Rewrite the ARCHITECTURE.md sentence and the paragraph in
+      prompts/planner.md to match, keeping the creation case and story-056's
+      case stated as they are.
+    - Write tests/test_forced_adaptation_declaration.py against fixture
+      workflows and fixture roots, plus the two corpus readings from
+      .harness/stories/, and correct the one stale comment in
+      tests/test_plan_assignment_refusal.py.
+  likely_file_changes:
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: declares the new optional field on a likely_file_changes entry
+        and carries what its presence does and does not promise, since the
+        schema is where a planner and the parser both meet the contract.
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: holds assignment_problems, the branch that accepts a declared
+        modification, the resolution wording, and both prose passages that
+        state the removed premise as an absolute.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: instructs the planner that a governed entry needs a grant
+        whether or not the file exists, which is the instruction this story
+        makes false and the one that produced the perverse incentive.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: states that between the two run-time checks there is no version
+        of an ungranted governed entry a run can accept, and must record the
+        third category, the declaration, and why the revert check still
+        governs a declared path.
+    - file: tests/test_forced_adaptation_declaration.py
+      stage: tester
+      reason: this story's standing regression module - the accepting case and
+        its control, the absent-file refusal under a declaration, the two
+        corpus reconstructions, and the containment of the field to one
+        module.
+    - file: tests/test_plan_assignment_refusal.py
+      stage: tester
+      reason: existing module whose comment beside
+        test_the_grant_is_what_silences_it_and_not_the_existence_question says
+        a grant is the only thing that silences the check, which stops being
+        true. A comment-only edit, so it belongs to the stage that owns
+        tests/ and needs no grant.
+
+scope:
+  modify:
+    - schemas/story.schema.json
+    - orchestration/plan_validation.py
+    - prompts/planner.md
+    - tests/test_forced_adaptation_declaration.py
+    - tests/test_plan_assignment_refusal.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_parser.py
+    - scripts/l5-plan
+    - scripts/l5-run
+    - workflows/story-workflow.json
+    - .harness/stories/story-056.yaml
+    - .harness/stories/story-060.yaml
+
+verification_requirements:
+  - Confirm that a governed likely_file_changes entry carrying
+    reverting_breaks_the_suite, resolved against a root holding the named
+    path, is reported by neither assignment_problems nor artifact_problems.
+  - Confirm the negative control: the same entry with the declaration removed
+    is reported once with the modification wording, so the acceptance is
+    attributable to the declaration and not to a check that stopped looking.
+  - Confirm story-060's plan entry for tests/test_shipped_workflow_is_valid.py,
+    reconstructed with the declaration replacing its grant, is accepted, and
+    that the same entry carrying neither is refused.
+  - Confirm story-056's committed artifact with its grants stripped is still
+    refused, and that its governed entries are still the kind this check is
+    about, so the acceptance above did not come from the check going quiet.
+  - Confirm a declared entry naming a path the target root does not hold is
+    still refused with the creation wording.
+  - Confirm the field name appears in no orchestration module besides
+    plan_validation.py and in no workflow or rules file, and that the same
+    search finds it in plan_validation.py, the schema and the new test module,
+    so the absence is a measured one.
+  - Confirm no run-time behaviour changed: the revert check's governed_edits
+    and the stage output ownership check reach the same verdicts for a story
+    carrying a declaration as for the same story without one.
+  - Confirm the corrected passages in orchestration/plan_validation.py,
+    prompts/planner.md and .harness/docs/ARCHITECTURE.md no longer assert that
+    no ungranted governed entry can be accepted, and that each replacement is
+    true of creations, unforced modifications and forced adaptations alike.
+  - Confirm the new test module is named for the behaviour it validates rather
+    than for a story number, and that it builds its workflow and its roots
+    from fixtures rather than reading the shipped workflow.
+
+constraints:
+  - Do not weaken, anticipate or duplicate either run-time check. What a stage
+    may do once a run has started is exactly what it was, and the declaration
+    is read at plan time only.
+  - Keep the creation case exactly as it is. An entry naming a path the target
+    root does not hold stays refused whether or not it carries a declaration,
+    because the ownership check refuses a created file beneath a governed
+    prefix outright.
+  - Keep the stage_exceptions mechanism as it is. A grant still silences the
+    check, still exempts the path from the revert check, and is still the
+    instrument for a story whose deliverable is the governed file itself.
+  - Read nothing as language. The declaration's presence decides; its text is
+    for a human reviewer and no check parses, matches or scores it.
+  - Write no stage name, restricted prefix or path literal into
+    orchestration/plan_validation.py. Both halves of a restriction keep coming
+    off story_coordinator.stage_restrictions and the path off the entry.
+  - Resolve existence against the target root the caller passes, with no
+    default, exactly as assignment_problems does today.
+  - Leave the strictness check and the module-naming check untouched; this
+    story changes the fourth check only.
+  - Leave story-056.yaml and story-060.yaml as they stand. They are records of
+    runs that happened, and the new mechanism is shown against reconstructions
+    of them rather than by rewriting them.
+  - Give every absence assertion a negative control, per the standing rule.
