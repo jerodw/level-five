@@ -3578,6 +3578,12 @@ def unchanged_since_escalation(
     target whose HEAD cannot be read, or a harness root that is not a git
     repository produces no refusal rather than a false one.
 
+    A run that stopped on an exhausted self-route budget is exempted ahead of
+    all three, and for a different reason than they are: not that the guard
+    cannot establish sameness, but that sameness is the wrong conclusion. The
+    resume zeroes `self_route_count`, so the stage is entered with a budget it
+    did not have when it stopped — the resource whose exhaustion stopped it.
+
     The third comparison has two forms, decided by whether the harness and the
     target are one checkout. When they are separate — the deployment the guard
     was written for — it is the recorded-revision comparison, unchanged. When
@@ -3596,6 +3602,22 @@ def unchanged_since_escalation(
     choose which directories count — a choice nothing else in the harness
     makes.
     """
+    # A run stopped on an exhausted self-route budget is exempted before any
+    # comparison, because for that run the guard's conclusion is false rather
+    # than unestablishable. The three comparisons below would all hold — the
+    # artifact, the branch and the harness are untouched — and the run would
+    # still not reach the same point the same way, because the resume restores
+    # the very resource whose exhaustion stopped it: the resume path sets
+    # `self_route_count` back to zero, saying in as many words that a resumed
+    # stage starts with its full budget. Refusing here tells a developer
+    # nothing has changed while the harness is about to change it.
+    #
+    # Read off the live counter rather than the escalation's reason text, which
+    # is prose the guard would have to match. The counter is what the budget
+    # comparison in `self_route` reads, so this asks the same question that
+    # stopped the run.
+    if state.self_route_count:
+        return []
     if not state.story_digest or state.story_digest != story_digest(story_text):
         return []
     evidence = [

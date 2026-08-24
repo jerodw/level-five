@@ -413,16 +413,29 @@ SHARED_ROOT_LEG = """    if same_repository(target_root, harness_root):
 """
 
 
-def pre_story_coordinator(tmp_path: Path):
-    """Today's coordinator with the shared-root leg removed.
+#: The exhausted-budget exemption, added after story-034. It is deleted beside
+#: the shared-root leg when reconstructing the pre-story guard, because the
+#: reconstruction's claim is about the text of a past function and every later
+#: addition stands between today's text and that one. A leg added here and not
+#: listed makes the reconstruction fail loudly rather than quietly reconstruct
+#: something else, which is the property that keeps this honest — and the
+#: signal that this list is a maintenance cost the next such addition pays.
+BUDGET_LEG = """    if state.self_route_count:
+        return []
+"""
 
-    This is the guard as it stood before this story, built by deleting what
-    the story added rather than by loading a module out of git history — a
+
+def pre_story_coordinator(tmp_path: Path):
+    """Today's coordinator with the additions since story-034 removed.
+
+    This is the guard as it stood before that story, built by deleting what
+    has been added since rather than by loading a module out of git history — a
     coordinator recovered from history runs against today's workflow, schemas
     and config and stops running as soon as any of them legitimately changes,
     which is why `conftest.load_mutant` takes a working-tree path.
     """
-    return load_mutant(COORDINATOR_PATH, [(SHARED_ROOT_LEG, "")],
+    return load_mutant(COORDINATOR_PATH,
+                       [(SHARED_ROOT_LEG, ""), (BUDGET_LEG, "")],
                        name="coordinator_before_story_034", tmp_path=tmp_path)
 
 
