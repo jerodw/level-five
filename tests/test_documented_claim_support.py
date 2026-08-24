@@ -1477,7 +1477,17 @@ def shipped_context(tmp_path, harness_root):
     )
 
 
-def shipped_template(name: str, *, bound: str) -> str:
+# The verifier prompt this repository ships is `prompts/story-verifier.md`
+# since story-071 renamed it; the fixture holding its text at this story's
+# baseline was captured while the file was still `prompts/verifier.md`, and a
+# committed fixture is named for the file it was lifted from. The two bounds
+# therefore spell the same subject differently, and the call site says so by
+# naming both.
+VERIFIER = "story-verifier.md"
+VERIFIER_AT_BASELINE = "verifier.md"
+
+
+def shipped_template(name: str, *, bound: str, baseline_name: str = "") -> str:
     """One shipped prompt template, at one end of this story's own range.
 
     The endpoint is the template this repository ships, read from the tree.
@@ -1491,17 +1501,24 @@ def shipped_template(name: str, *, bound: str) -> str:
     commit graph rather than on the template: a squash makes the range
     unresolvable in a clone, and a rename empties it silently. The text is the
     same text, lifted from exactly that baseline.
+
+    `baseline_name` is the filename the template carried at the baseline, for a
+    template that has since been renamed; it defaults to the endpoint's name,
+    which is what every template that has not been renamed wants.
     """
     if bound == BASELINE:
+        stem = (baseline_name or name).removesuffix(".md")
         return conftest.history_fixture(
-            f"prompts-{name.removesuffix('.md')}.at-this-storys-baseline.md.txt")
+            f"prompts-{stem}.at-this-storys-baseline.md.txt")
     assert bound == ENDPOINT, bound
     return (REPO_ROOT / "prompts" / name).read_text(encoding="utf-8")
 
 
-def rendered(name: str, context: dict, *, bound: str = ENDPOINT) -> str:
+def rendered(name: str, context: dict, *, bound: str = ENDPOINT,
+             baseline_name: str = "") -> str:
     return " ".join(context_assembler.render(
-        shipped_template(name, bound=bound), context).lower().split())
+        shipped_template(name, bound=bound, baseline_name=baseline_name),
+        context).lower().split())
 
 
 def test_the_rendered_verifier_prompt_carries_the_record(shipped_context):
@@ -1509,7 +1526,7 @@ def test_the_rendered_verifier_prompt_carries_the_record(shipped_context):
     assert PLANTED in shipped_context["claim_support_result"]
 
     prompt = context_assembler.render(
-        shipped_template("verifier.md", bound=ENDPOINT), shipped_context)
+        shipped_template(VERIFIER, bound=ENDPOINT), shipped_context)
 
     assert shipped_context["claim_support_result"].strip() in prompt
     assert PLANTED in prompt
@@ -1526,8 +1543,9 @@ def test_the_rendered_verifier_prompt_says_what_a_report_means_and_settles_it(
     at this story's baseline, which says none of it — so a check looking at the
     wrong text would report these missing from both.
     """
-    today = rendered("verifier.md", shipped_context)
-    before = rendered("verifier.md", shipped_context, bound=BASELINE)
+    today = rendered(VERIFIER, shipped_context)
+    before = rendered(VERIFIER, shipped_context, bound=BASELINE,
+                      baseline_name=VERIFIER_AT_BASELINE)
 
     for phrase in VERIFIER_CRITERIA:
         assert phrase in today, phrase
@@ -1594,7 +1612,7 @@ def test_a_stage_running_before_the_check_reads_no_record(tmp_path, harness_root
         retry_count=0,
     )
     prompt = context_assembler.render(
-        shipped_template("verifier.md", bound=ENDPOINT), context)
+        shipped_template(VERIFIER, bound=ENDPOINT), context)
 
     assert context["claim_support_result"] is None
     assert PLANTED not in prompt

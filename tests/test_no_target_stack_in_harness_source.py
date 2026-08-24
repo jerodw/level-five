@@ -16,7 +16,7 @@ lists, so what is validated here is the scan's *reach* and the lists'
   * **the burn-down, now complete.** `TEMPORARY_TIES` is empty: the audit's
     five ties are all repaired — two in `orchestration/story_coordinator.py`
     by the-interpreter-is-not-assumed-to-be-python, and the remaining three
-    in `workflows/story-workflow.json` and `prompts/tester.md` by
+    in `workflows/story-workflow.json` and `prompts/story-tester.md` by
     the-test-location-comes-from-configuration. What is asserted is that the
     scan reports *nothing* in either repaired file, by running the scan
     rather than by reading the empty list, with each historical tie replanted
@@ -79,7 +79,7 @@ DECLARING_MODULE = "orchestration/harness_source.py"
 #: separately below because one permanent mention legitimately survives there.
 REPAIRED_FILES = (
     "workflows/story-workflow.json",
-    "prompts/tester.md",
+    "prompts/story-tester.md",
 )
 
 #: The exact lines that used to sit in those files, kept verbatim so each can
@@ -88,9 +88,9 @@ REPAIRED_FILES = (
 #: put the tie back and the same scan reports it.
 HISTORICAL_TIES = (
     ("workflows/story-workflow.json", '      "may_not_create": ["tests/"],'),
-    ("prompts/tester.md",
+    ("prompts/story-tester.md",
      "New tests belong in tests/ and become permanent repository assets."),
-    ("prompts/tester.md", "shared resolution in `tests/conftest.py`."),
+    ("prompts/story-tester.md", "shared resolution in `tests/conftest.py`."),
 )
 
 
@@ -487,7 +487,7 @@ def test_a_planted_tie_in_a_clean_file_is_reported_and_turns_the_lists_red(
 ):
     """The control for the equality assertion, in the direction that
     matters: a tie that lands tomorrow cannot join a list quietly."""
-    clean = "prompts/implementer.md"
+    clean = "prompts/story-implementer.md"
     assert not [f for f in harness_source.scan(throwaway) if f.path == clean], \
         f"{clean} is no longer clean, so it cannot serve as the plant site"
 
@@ -497,7 +497,7 @@ def test_a_planted_tie_in_a_clean_file_is_reported_and_turns_the_lists_red(
     assert [f.token.lower() for f in planted] == ["pytest"]
     problems = list_problems(harness_source.scan(throwaway))
     assert len(problems) == 1, problems
-    assert problems[0].startswith("unexpected: prompts/implementer.md:")
+    assert problems[0].startswith("unexpected: prompts/story-implementer.md:")
 
 
 def test_a_list_entry_left_behind_after_its_tie_is_removed_turns_the_lists_red(

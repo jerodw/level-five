@@ -40,7 +40,7 @@ from test_changed_files_records import StageRunner
 #: carries it is derived from the workflow rather than written out, so a
 #: workflow that renames or moves the stage reddens here rather than silently
 #: leaving this module reading nothing.
-TESTER_TEMPLATE = "tester.md"
+TESTER_TEMPLATE = "story-tester.md"
 
 #: The question the guidance is built around, and the two halves of the
 #: distinction it draws. Phrases rather than sentences, so rewording the prose

@@ -393,7 +393,7 @@ def test_build_context_still_resolves_every_stage_schema_placeholder(
         key = path.name[: -len(".schema.json")].replace("-", "_") + "_schema"
         assert context[key] == path.read_text(encoding="utf-8"), key
 
-    for name in ("implementer.md", "tester.md", "verifier.md"):
+    for name in ("story-implementer.md", "story-tester.md", "story-verifier.md"):
         rendered = context_assembler.render(
             context_assembler.load_template(harness_root, name), context
         )

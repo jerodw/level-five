@@ -22,7 +22,7 @@ and deriving them from what this repository deploys would make a deployment
 fact into something this module enforces. Every name is still derived rather
 than written — from the fixture's definition rather than from the shipped one.
 The two places the shipped artifacts *are* the subject — what
-`prompts/verifier.md` and `prompts/tester.md` say, and what the schemas
+`prompts/story-verifier.md` and `prompts/story-tester.md` say, and what the schemas
 declare — read what this repository ships, deliberately.
 
 The target's suite is a script this module writes into the target: it prints
@@ -48,7 +48,7 @@ Every absence asserted here carries a demonstration that it can fail:
     three coordinator suite runs;
   * "the stage was told nothing of a suite run on its first invocation" sits
     beside its second invocation, which carries the record;
-  * "prompts/tester.md carries no instruction to run the suite" sits beside
+  * "prompts/story-tester.md carries no instruction to run the suite" sits beside
     the same scan over a text carrying the instruction that was removed, which
     the scan reports;
   * "no orchestration module derives a count of tests" sits beside the same
@@ -1022,9 +1022,9 @@ def test_every_coordinator_suite_record_declares_the_output_path(stem):
 # --------------------------------------------------------------------------
 
 
-VERIFIER_PROMPT = (REPO_ROOT / "prompts" / "verifier.md").read_text(
+VERIFIER_PROMPT = (REPO_ROOT / "prompts" / "story-verifier.md").read_text(
     encoding="utf-8")
-TESTER_PROMPT = (REPO_ROOT / "prompts" / "tester.md").read_text(encoding="utf-8")
+TESTER_PROMPT = (REPO_ROOT / "prompts" / "story-tester.md").read_text(encoding="utf-8")
 
 PLACEHOLDER = f"{{{{{SUITE_FIELD}}}}}"
 

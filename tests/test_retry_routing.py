@@ -1010,8 +1010,9 @@ def test_a_further_category_changes_the_prompt_with_no_edit_to_the_template(
     """The routes are injected, not restated.
 
     A workflow with one more category than the shipped one renders a verifier
-    prompt naming it, while `prompts/verifier.md` is byte-identical in both
-    harness roots. The added name is whatever the shipped workflow lacks:
+    prompt naming it, while the template that stage declares is byte-identical
+    in both harness roots — the built template, since both roots are built
+    ones. The added name is whatever the shipped workflow lacks:
     it was `documentation` until story-045 shipped that category, and the
     subject is the injection rather than any particular category.
     """

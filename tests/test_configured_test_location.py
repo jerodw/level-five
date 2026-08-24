@@ -3,7 +3,7 @@ configuration.
 
 The harness used to write a target repository's test layout into its own
 definitions — `workflows/story-workflow.json` declared the implementer's create
-restriction as the literal `tests/`, and `prompts/tester.md` told every tester
+restriction as the literal `tests/`, and `prompts/story-tester.md` told every tester
 that new tests belong there. A target keeping its tests anywhere else was
 governed in the wrong place, and a target with no test directory at all could
 not be expressed.
@@ -29,7 +29,7 @@ Four altitudes:
     location by running the coordinator, with a real suite under `xyzzy-spec/`
     for the two that need one.
   * **the prompt.** The tester prompt is rendered against two different configs
-    with `prompts/tester.md` itself unedited between the renderings.
+    with `prompts/story-tester.md` itself unedited between the renderings.
 
 Every absence asserted here carries a demonstration that it can fail:
 
@@ -737,7 +737,7 @@ def test_the_same_target_with_no_configured_location_reverts_nothing(
 # 8. The rendered tester prompt
 # --------------------------------------------------------------------------
 
-TESTER_PROMPT = REPO_ROOT / "prompts" / "tester.md"
+TESTER_PROMPT = REPO_ROOT / "prompts" / "story-tester.md"
 
 
 def rendered_tester_prompt(target_root: Path, config: dict) -> str:
@@ -758,7 +758,7 @@ def rendered_tester_prompt(target_root: Path, config: dict) -> str:
         retry_count=0,
     )
     return context_assembler.render(
-        context_assembler.load_template(REPO_ROOT, "tester.md"), context)
+        context_assembler.load_template(REPO_ROOT, "story-tester.md"), context)
 
 
 def test_the_rendered_tester_prompt_names_the_configured_location(target_root):
@@ -773,7 +773,7 @@ def test_the_rendered_tester_prompt_names_the_configured_location(target_root):
 
 
 def test_changing_the_configured_location_changes_the_rendered_prompt(target_root):
-    """With `prompts/tester.md` unedited between the two renderings — asserted
+    """With `prompts/story-tester.md` unedited between the two renderings — asserted
     by reading the file's bytes before and after, so "no prompt edit" is
     observed rather than assumed."""
     base = harness_config.load_config(target_root)

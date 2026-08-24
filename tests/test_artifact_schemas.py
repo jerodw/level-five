@@ -429,7 +429,7 @@ def test_the_section_list_tracks_the_schema_file_rather_than_a_constant(tmp_path
 
 def test_the_three_rewritten_prompts_contain_no_inline_json_body(harness_root):
     """Once placeholders are stripped, no JSON object punctuation survives."""
-    for name in ("implementer.md", "tester.md", "verifier.md"):
+    for name in ("story-implementer.md", "story-tester.md", "story-verifier.md"):
         text = (harness_root / "prompts" / name).read_text()
         stripped = PLACEHOLDER.sub("", text)
         assert not set(stripped) & set("{}"), name

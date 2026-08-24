@@ -47,7 +47,7 @@ import story_coordinator
 import story_parser
 from agent_runner import AgentResult
 
-STAGE_TEMPLATES = ("implementer.md", "tester.md", "documenter.md")
+STAGE_TEMPLATES = ("story-implementer.md", "story-tester.md", "documenter.md")
 
 REPO_ROOT = Path(context_assembler.__file__).resolve().parents[1]
 
@@ -61,6 +61,14 @@ PROSE_LAYER = context_assembler.PROSE_LAYER
 #: its create restrictions, its retry routes — into every stage prompt.
 WORKFLOW = conftest.shipped_workflow(
     Path(context_assembler.__file__).resolve().parents[1], "story-workflow")
+
+
+#: Template filename -> the stage that declares it, read off the definition
+#: rather than derived by stripping `.md`. The two coincided until story-071
+#: renamed the prompts a single workflow owns, and the declaration is what the
+#: coordinator loads.
+STAGE_OF_TEMPLATE = {stage["prompt"]: stage["name"]
+                     for stage in WORKFLOW["stages"]}
 
 
 def parsed_story(story_text: str) -> dict:
@@ -130,7 +138,7 @@ def test_verifier_and_non_stage_prompts_are_intact(harness_root):
     """AC3: verifier keeps its distinct evidence-discipline harness layer and
     is not switched to the shared placeholder; planner and assist have no
     harness layer at all."""
-    verifier = context_assembler.load_template(harness_root, "verifier.md")
+    verifier = context_assembler.load_template(harness_root, "story-verifier.md")
     assert "{{harness_layer}}" not in verifier
     assert "All verification claims must:" in verifier      # its own, distinct block
     assert "All work must:" not in verifier
@@ -369,7 +377,7 @@ def test_the_harness_layer_partial_still_reaches_the_stages_it_reached(
     _, run_dir = rendered_run
     prompts = rendered_stage_prompts(run_dir)
     for name in STAGE_TEMPLATES:
-        stage = name[:-len(".md")]
+        stage = STAGE_OF_TEMPLATE[name]
         assert "[Harness Layer]" in prompts[stage], stage
         assert "All work must:" in prompts[stage], stage
 
@@ -479,7 +487,7 @@ def test_one_file_edit_changes_the_prose_layer_of_every_prompt_carrying_it(
     fake_root = tmp_path / "harness"
     prompts_dir = fake_root / "prompts"
     prompts_dir.mkdir(parents=True)
-    carriers = (*STAGE_TEMPLATES, "verifier.md", "planner.md")
+    carriers = (*STAGE_TEMPLATES, "story-verifier.md", "planner.md")
     for name in (*carriers, "harness-layer.md", PROSE_LAYER):
         (prompts_dir / name).write_text(
             (harness_root / "prompts" / name).read_text(encoding="utf-8"),

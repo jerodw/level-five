@@ -974,7 +974,7 @@ def test_no_other_prompt_or_script_asks_an_agent_to_commit_the_artifact():
     planted = "5. Commit that file, and only that file, on the branch you are on."
     assert commit_instructions(planted) != []
     assert commit_instructions(instructive_text(HARNESS_ROOT / "prompts" /
-                                                "implementer.md") + planted) != []
+                                                "story-implementer.md") + planted) != []
 
 
 # --------------------------------------------------------------------------

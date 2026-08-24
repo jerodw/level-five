@@ -78,7 +78,7 @@ def test_workflow_declares_per_stage_changed_files_records(harness_root):
 
 
 def test_tester_prompt_requires_tester_changed_files_record(harness_root):
-    prompt = (harness_root / "prompts" / "tester.md").read_text()
+    prompt = (harness_root / "prompts" / "story-tester.md").read_text()
     assert "tester-changed-files.json" in prompt
     assert "same schema as changed-files.json" in prompt
     for group in ("modified", "created", "deleted"):
@@ -86,7 +86,7 @@ def test_tester_prompt_requires_tester_changed_files_record(harness_root):
 
 
 def test_verifier_prompt_injects_both_records_with_distinct_guidance(harness_root):
-    prompt = (harness_root / "prompts" / "verifier.md").read_text()
+    prompt = (harness_root / "prompts" / "story-verifier.md").read_text()
     assert "{{changed_files}}" in prompt
     assert "{{tester_changed_files}}" in prompt
     implementer_pos = prompt.index("{{changed_files}}")
@@ -255,7 +255,7 @@ def test_documenter_prompt_requires_the_record_with_the_schema_injected(harness_
     # and the second is this same template with the schema pasted in where the
     # placeholder stands. Both must be reported, or the check above is passing
     # because it has stopped seeing field names at all.
-    tester_prompt = (harness_root / "prompts" / "tester.md").read_text()
+    tester_prompt = (harness_root / "prompts" / "story-tester.md").read_text()
     assert _fields_stated_in_prose(tester_prompt, fields) == fields
     pasted = prompt.replace(
         "{{changed_files_schema}}",

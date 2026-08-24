@@ -16,7 +16,7 @@ implementation. Four subjects, each asserted at the altitude it lives at:
     directly, then end to end through the real `scripts/l5-plan` against a
     throwaway repository with a stub `claude` on PATH, reusing the fixture
     story-023, story-025 and story-032 built.
-  * **the prose.** `prompts/tester.md` and `.harness/docs/ARCHITECTURE.md` are
+  * **the prose.** `prompts/story-tester.md` and `.harness/docs/ARCHITECTURE.md` are
     read and searched, never eyeballed.
 
 Every absence asserted here carries a demonstration that it can fail:
@@ -83,7 +83,7 @@ STAGES = WORKFLOW["stages"]
 #: own run directory that way.
 STORIES_DIR = REPO_ROOT.joinpath(".harness", "stories")
 
-TESTER_PROMPT = REPO_ROOT / "prompts" / "tester.md"
+TESTER_PROMPT = REPO_ROOT / "prompts" / "story-tester.md"
 ARCHITECTURE = REPO_ROOT.joinpath(".harness", "docs", "ARCHITECTURE.md")
 
 

@@ -69,10 +69,10 @@ from test_tester_prompt_fixture_guidance import flat
 #: of the four that carry it, chosen because it is the prompt the sentence was
 #: written into first; which one it is does not matter to the comparison, only
 #: that the comparison has exactly one source.
-SENTENCE_SOURCE_TEMPLATE = "verifier.md"
+SENTENCE_SOURCE_TEMPLATE = "story-verifier.md"
 
 #: The template whose rendering carries the test-selection instruction.
-IMPLEMENTER_TEMPLATE = "implementer.md"
+IMPLEMENTER_TEMPLATE = "story-implementer.md"
 
 #: The layer header that follows the implementer's stage layer. Used to bound
 #: the cut that removes the passage naming the whole-suite checks, so the

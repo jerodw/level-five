@@ -608,6 +608,13 @@ REFACTOR_IMPLEMENTER = "refactor-implementer.md"
 REFACTOR_VERIFIER = "refactor-verifier.md"
 
 #: The prompts that existed before this story, and which it must not touch.
+#: These are the names those files carried at the revisions story-070's commit
+#: range spans, and they are deliberately *not* carried forward by story-071's
+#: rename: the constant is used once, as a git pathspec over that fixed
+#: historical range, where `prompts/story-implementer.md` and its two siblings
+#: do not exist and would therefore match nothing. A pathspec naming a file
+#: absent at both bounds of a range turns an emptiness assertion into one that
+#: cannot report, which is why the historical spelling is the correct one here.
 PRE_EXISTING_PROMPTS = ("implementer.md", "tester.md", "verifier.md",
                         "documenter.md", "planner.md")
 
@@ -634,7 +641,7 @@ def test_the_implementer_prompt_names_no_tester_stage_and_no_revert_check():
 
     The control is that prompt, which says both: a scan that had stopped
     matching would report the pair absent from it too."""
-    shipped = prompt_text("implementer.md").lower()
+    shipped = prompt_text("story-implementer.md").lower()
     assert "tester stage" in shipped
     assert "revert check" in shipped
 
@@ -710,6 +717,29 @@ def test_the_resolution_this_story_is_bounded_at_sees_what_it_changed():
 
 def test_this_story_changed_no_prompt_that_existed_before_it():
     assert this_story_diff([f"prompts/{name}" for name in PRE_EXISTING_PROMPTS]) == ""
+
+
+#: A module whose own story's commit range edited one of the prompts above,
+#: under the spelling that prompt carried then. It is named rather than pinned
+#: to a revision, so the control survives a rebase or a squash exactly as every
+#: other bounded assertion here does.
+PROMPT_EDITING_STORY = Path(__file__).with_name("test_coordinator_runs_the_suite.py")
+
+
+def test_the_prompt_pathspecs_report_over_a_story_that_did_edit_one():
+    """The control the assertion above needs, and the shared control cannot give.
+
+    The shared control is read over `COORDINATOR_REL`, so it shows only that the
+    resolution still resolves; it says nothing about whether *these* pathspecs
+    can match. This is the same call over the same pathspecs, bounded at a story
+    that did edit one of those prompts, required to be non-empty — and the same
+    call under story-071's new spellings, required to be empty, which is what
+    makes naming the historical spelling above load-bearing rather than
+    cosmetic."""
+    historical = [f"prompts/{name}" for name in PRE_EXISTING_PROMPTS]
+    assert story_diff(historical, validation_file=PROMPT_EDITING_STORY) != ""
+    renamed = [f"prompts/story-{name}" for name in PRE_EXISTING_PROMPTS[:3]]
+    assert story_diff(renamed, validation_file=PROMPT_EDITING_STORY) == ""
 
 
 def test_this_story_left_the_story_workflow_definition_exactly_as_it_was():

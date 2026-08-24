@@ -44,7 +44,7 @@ restated at each assertion below:
     to itself;
   * that the reorder changed no other stage declaration, read at the two ends
     of this story's own commit range out of git history;
-  * that `prompts/verifier.md` — the template this repository ships — declares
+  * that `prompts/story-verifier.md` — the template this repository ships — declares
     both documenter placeholders, says in its role layer that the documenter's
     output is part of the verifier's subject, and restates no category,
     destination or `when` of its own.
@@ -71,7 +71,7 @@ red under the order this story replaced:
   * "the reordered workflow has no routing problems" sits beside the same
     check over the old order with the route left in place, which reports the
     documentation route by name;
-  * "`prompts/verifier.md` restates no category, destination or `when`" sits
+  * "`prompts/story-verifier.md` restates no category, destination or `when`" sits
     beside the prompt rendered from that same template, which carries all
     three;
   * "the verifier's prompt carries the documenter's artifacts" sits beside
@@ -215,7 +215,11 @@ DOCUMENTER = "documenter"
 SHIPPED_ORDER = ["implementer", "tester", "documenter", "verifier"]
 SHIPPED_PREVIOUS_ORDER = ["implementer", "tester", "verifier", "documenter"]
 
-VERIFIER_TEMPLATE_PATH = REPO_ROOT / "prompts" / f"{SHIPPED_VERIFIER_NAME}.md"
+# The template comes off the stage's own `prompt` declaration rather than off
+# its stage name. The two coincided until story-071 renamed the prompts a
+# single workflow owns; the declaration is what the coordinator loads, so it
+# is what this reads.
+VERIFIER_TEMPLATE_PATH = REPO_ROOT / "prompts" / SHIPPED_VERIFIER["prompt"]
 VERIFIER_TEMPLATE = VERIFIER_TEMPLATE_PATH.read_text(encoding="utf-8")
 
 RULES = harness_config.load_rules(REPO_ROOT)

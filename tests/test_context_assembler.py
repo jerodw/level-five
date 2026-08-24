@@ -45,14 +45,14 @@ def test_real_templates_render_without_leftover_placeholders(target_root, harnes
         workflow=WORKFLOW,
         retry_count=0,
     )
-    for prompt_file in ("implementer.md", "tester.md", "verifier.md", "documenter.md"):
+    for prompt_file in ("story-implementer.md", "story-tester.md", "story-verifier.md", "documenter.md"):
         template = context_assembler.load_template(harness_root, prompt_file)
         rendered = context_assembler.render(template, context)
         assert "{{" not in rendered, prompt_file
         assert "Sample story for coordinator tests" in rendered
 
     implementer = context_assembler.render(
-        context_assembler.load_template(harness_root, "implementer.md"), context
+        context_assembler.load_template(harness_root, "story-implementer.md"), context
     )
     assert "- rules/" in implementer          # blocked paths injected
     assert "echo tests-ok" in implementer     # test command injected
@@ -108,7 +108,7 @@ def test_tester_changed_files_renders_none_when_absent(target_root, harness_root
     )
     assert context["tester_changed_files"] is None
     verifier = context_assembler.render(
-        context_assembler.load_template(harness_root, "verifier.md"), context
+        context_assembler.load_template(harness_root, "story-verifier.md"), context
     )
     assert "{{" not in verifier
 
@@ -122,7 +122,7 @@ def test_harness_layer_is_single_source_of_truth(target_root, harness_root, tmp_
 
     # Mirror the real prompts into a throwaway harness so we can edit the
     # shared partial without mutating the repository.
-    stages = ("implementer.md", "tester.md", "documenter.md")
+    stages = ("story-implementer.md", "story-tester.md", "documenter.md")
     fake_root = tmp_path / "harness"
     prompts = fake_root / "prompts"
     prompts.mkdir(parents=True)
@@ -187,9 +187,9 @@ def test_every_schema_is_exposed_under_its_placeholder_name(target_root, harness
 
 
 def test_prompts_carry_schema_placeholders_not_inline_json(harness_root):
-    implementer = (harness_root / "prompts" / "implementer.md").read_text()
-    tester = (harness_root / "prompts" / "tester.md").read_text()
-    verifier = (harness_root / "prompts" / "verifier.md").read_text()
+    implementer = (harness_root / "prompts" / "story-implementer.md").read_text()
+    tester = (harness_root / "prompts" / "story-tester.md").read_text()
+    verifier = (harness_root / "prompts" / "story-verifier.md").read_text()
 
     assert "{{changed_files_schema}}" in implementer
     assert "{{test_results_schema}}" in tester
@@ -208,9 +208,9 @@ def test_prompts_carry_schema_placeholders_not_inline_json(harness_root):
 def test_rendered_prompts_contain_the_resolved_schema_text(target_root, harness_root):
     context = _context(target_root, harness_root)
     expected = {
-        "implementer.md": ["changed-files"],
-        "tester.md": ["test-results", "changed-files"],
-        "verifier.md": ["verification-result", "retry-guidance"],
+        "story-implementer.md": ["changed-files"],
+        "story-tester.md": ["test-results", "changed-files"],
+        "story-verifier.md": ["verification-result", "retry-guidance"],
     }
     for prompt_file, schema_names in expected.items():
         rendered = context_assembler.render(
