@@ -1,0 +1,131 @@
+story:
+  id: story-069
+  title: A run executes the workflow its work item names
+  description: |
+    The coordinator loads its workflow with config.get("workflow",
+    "story-workflow") — one workflow per repository, and a second one
+    unreachable without editing .harness/config.yaml between runs. This story
+    makes the choice reachable per work item: a story artifact may name the
+    workflow it runs under, l5-plan takes that name as an argument so the
+    stage facts it injects are the facts of the workflow the story will
+    actually run under, and the run records what it loaded so a resume loads
+    the same definition.
+
+    Where the declaration lives was this story's decision. It lives in two
+    places that agree: the artifact names the workflow, so the choice is
+    attached to the work item and survives every later invocation, and
+    l5-plan takes the same name as an argument, because the planner's
+    workflow facts are injected before the interview that would otherwise
+    choose. A planning session whose artifact names a workflow other than the
+    one the session was rendered against is refused, and that refusal is what
+    keeps the injected facts trustworthy rather than merely usual.
+
+    An artifact that names no workflow runs the configured default, exactly
+    as every artifact does today. That is the compatibility property this
+    story must not break: no committed story artifact changes, and no run
+    under one behaves differently than it did.
+
+    No second workflow ships. The properties are proved against fixture
+    workflows built by the tests that need them, which is what this
+    repository already does wherever a workflow is a test's input rather than
+    its subject. The refactor workflow, workflow composition, and any change
+    to what story-workflow.json declares are all out of scope.
+
+tasks:
+  - Add an optional workflow field to the story schema's story object, describing what its absence means.
+  - Add named-workflow resolution and its refusal to harness_config, so a name with no definition under workflows/ is reported by name alongside the definitions that are there, from one place both l5-plan and the coordinator use.
+  - Give l5-plan a --workflow argument, parsed ahead of the request text the way --base is, that selects the definition the planner prompt is rendered against and is refused before the session starts when it names no definition.
+  - Inject the selected workflow's name into the planner prompt and tell the planner to record it in the artifact it writes.
+  - Extend plan-time validation to refuse an artifact whose story.workflow names no definition, and to refuse one naming a workflow other than the one the planning session was rendered against.
+  - Resolve the coordinator's workflow name from the resumed run's record, then the story artifact, then the configured default, reordering pre-flight so the story artifact and any existing run state are read before the workflow is loaded.
+  - Record the resolved workflow name in state.json and load the recorded definition when a run resumes.
+
+acceptance_criteria:
+  - A story artifact may carry story.workflow, and the story schema declares it as optional with a description saying that an absent field means the configured default.
+  - A run whose story artifact names a workflow executes that workflow's stages, in that workflow's order, while the target configuration names a different one.
+  - A run whose story artifact names no workflow executes the workflow the target configuration names, and every story artifact already committed under .harness/stories/ is unchanged by this story.
+  - A run whose story artifact names a workflow that has no definition under workflows/ is refused at pre-flight, before any run directory, state file, branch or agent invocation exists, and the refusal names the workflow asked for and the definitions the harness holds.
+  - l5-plan accepts --workflow <name> ahead of the request text, and the planner prompt it renders carries the stages and create restrictions of the named workflow rather than the configured one.
+  - l5-plan given a --workflow naming no definition refuses before starting the session, and the refusal names the workflow asked for and the definitions the harness holds.
+  - The planner prompt carries the name of the selected workflow, resolved from the same argument the injection is resolved from.
+  - A planning session whose artifact names a workflow with no definition is refused, the artifact is left in the working tree, and nothing is committed.
+  - A planning session whose artifact names a workflow other than the one the session was rendered against is refused, the refusal names both, the artifact is left in the working tree, and nothing is committed.
+  - state.json records the name of the workflow the run loaded, and a state file written before that field existed still loads and reads as no recorded workflow.
+  - A resumed run loads the workflow its state.json records, and loads it even when the story artifact has since been amended to name another.
+  - The coordinator resolves the configured default through the expression config.get("workflow", "story-workflow"), unchanged, so the standing proof that the workflow config key is obeyed still bites.
+  - Every workflow pre-flight the coordinator already performs — retry routing, the self-route budget, the correction-pass entry stage, the cost ceilings, an unresolved configuration token, and a --stage the workflow does not define — runs against the workflow that was selected, and each still refuses before any run directory, state file, branch or agent invocation exists.
+
+technical_plan:
+  implementation_steps:
+    - Add the workflow property to the story object in schemas/story.schema.json, optional, with a description saying it names the workflow definition the run loads and that its absence means the target configuration's default.
+    - Add to orchestration/harness_config.py a way to name the workflow definitions present under a harness root, and an error carrying the name asked for and those names, raised where a named definition cannot be read. Leave load_workflow's signature as it is.
+    - Parse --workflow in scripts/l5-plan alongside --base, resolve the definition it names through that new refusal, and render the planner template against it. Add the selected name to the context so the template can carry it.
+    - Add the workflow name to the planner template's injected facts in prompts/planner.md, and a short instruction that the artifact must record the workflow the session was started for.
+    - Add to orchestration/plan_validation.py the two checks against a story's declared workflow — one that it has a definition, one that it is the workflow the session was rendered against — and thread the harness root and the selected name in through artifact_problems, requiring both of the one caller rather than defaulting either.
+    - Reorder the pre-flight in orchestration/story_coordinator.py so the story artifact is read and any existing run state is loaded before the workflow is resolved; the run directory is derived from configuration alone, so loading state moves up without moving anything else. Then resolve the name from the recorded run, the artifact and the configured default in that order, load it, and run every existing workflow pre-flight against what was loaded.
+    - Add a workflow field to RunState, defaulted like the fields beside it, set it where a run's state is first written, and read it where a resumed run resolves its workflow.
+  likely_file_changes:
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: Declares the optional workflow field the artifact carries.
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: Names the definitions a harness root holds and refuses a name that has none.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Takes --workflow, renders the planner against the named definition, and passes the name to validation.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Carries the selected workflow's name and the instruction to record it.
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: Refuses an artifact naming an undefined workflow, and one disagreeing with the session's.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Resolves the run's workflow from the record, the artifact and the default, and records what it loaded.
+    - file: tests/test_workflow_selection.py
+      stage: tester
+      reason: The standing proof of every property this story adds, built on fixture workflows.
+    - file: tests/test_planner_injection.py
+      stage: tester
+      reason: The planner's injected facts gain the workflow's name, which this module is the standing proof of.
+    - file: tests/test_harness_config.py
+      stage: tester
+      reason: The refusal for a name with no definition belongs beside the other harness_config proofs.
+
+scope:
+  modify:
+    - schemas/story.schema.json
+    - orchestration/harness_config.py
+    - orchestration/plan_validation.py
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - prompts/planner.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - .harness/config.yaml
+    - .harness/stories/
+    - scripts/l5-run
+    - orchestration/context_assembler.py
+
+verification_requirements:
+  - Confirm a run executes the workflow the story artifact names while the target configuration names a different one, and that the stages executed are the named workflow's.
+  - Confirm a story artifact naming no workflow runs the configured default, and that no artifact under .harness/stories/ was changed by this story.
+  - Confirm a story naming a workflow with no definition is refused at plan time and again at pre-flight, that the pre-flight refusal leaves no run directory, state file, branch or agent invocation, and that both refusals name the workflow asked for and the definitions available.
+  - Confirm l5-plan renders the planner prompt against the workflow --workflow names, by observing a stage or a create restriction that only the named workflow declares.
+  - Confirm a planning session whose artifact names a workflow other than the invocation's is refused with both names reported, and that the artifact remains in the working tree uncommitted.
+  - Confirm state.json records the workflow the run loaded, that a state file lacking the field still loads, and that a resumed run loads the recorded workflow even when the artifact now names another.
+  - Confirm the tests build the fixture workflows they use rather than reading the shipped definition, since the shipped definition is these tests' input and not their subject.
+  - Confirm every pre-flight refusal the coordinator already made still happens, still before any run state exists, and still with its own wording.
+
+constraints:
+  - A story artifact carrying no workflow field behaves exactly as it does today; no committed story artifact is edited by this story.
+  - The configured default is resolved through the expression config.get("workflow", "story-workflow"), spelled as it is today in orchestration/story_coordinator.py.
+  - No second workflow definition ships; every new proof builds the fixture workflows it needs.
+  - workflows/story-workflow.json declares exactly what it declares today.
+  - l5-run gains no workflow argument; the artifact and the run's own record are where the choice is read from.
+  - load_workflow keeps its signature, so every existing caller and every recovered historical caller in tests/history-fixtures/ keeps working.
+  - Every pre-flight refusal keeps its exit status and its wording, and still leaves no run directory, state file, log, branch or agent invocation behind.
