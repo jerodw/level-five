@@ -855,6 +855,27 @@ story-066 **moved** one run from an agent to the coordinator and removed none, s
 
 **No new event kind.** The check announces itself through the existing `suite-rerun-started` kind and emits no result event of its own on a pass, so `execution-history.schema.json`'s closed enum needed no addition and the modules pinning a clean run's whole event stream stayed green untouched — they already drop announcements by kind and hold each to standing immediately before an event of the same stage. A passing suite makes no routing decision the advance was not already going to make, and the record on disk says it ran.
 
+## A stage runs a selection; the checks run the whole suite
+
+**No agent stage runs the target's whole suite, and none has since story-066.** The whole-suite runs are the coordinator subprocesses tabulated in the section above; what a stage is told to run is a selection, or nothing. The division is the same fact from two sides — a command longer than a turn cannot be run by something that has to end its turn, and a subprocess has no turn to end.
+
+| Stage | What it is told to run | Why |
+| --- | --- | --- |
+| Implementer | The tests its change touches — the modules the story's plan names, and the modules whose subject is the code it changed | Enough to tell the stage whether its change is sound; the whole of it runs afterwards without the stage's involvement |
+| Tester | No test command at all | It authors validation and records what it wrote; the coordinator runs the configured command after the turn ends |
+| Documenter | No test command at all | It edits documents and asserts nothing a suite could confirm |
+| Verifier | The modules the story touched, to confirm the evidence it needs | The whole-suite verdict is already on disk as an exit code the coordinator owns, and is taken from `suite-run-result.json` rather than re-derived |
+
+**Each stage's prompt states its instruction once.** The implementer's told it three separate times to run the whole suite; a stage that starts a run of it late in its turn can end the turn still holding it, having written none of its artifacts — the failure `.harness/stories/story-064.yaml` records story-061's verifier having had, and records recurring at story-063's implementer under the same instruction. Three statements were also three places a later edit could change one of, which is why the standing check is that *every* directive in the rendering ending in "before completing" names the same selection, rather than that the selection appears somewhere.
+
+**Why narrowing at the implementer is safe: it is delegation, and the delegates are named in the prompt.** An implementer that selects too narrowly and breaks a module it did not think to run is caught before the story completes, by whichever of the three whole-suite runs reaches the breakage first — the revert check, the coordinator's run after the authoring stage's turn, or the clean-clone check. The first two land before the verifier's verdict, so the failure surfaces while the story can still be routed back into a stage; the clean-clone check catches what only fails outside the developer's tree. None of them depends on the implementer having chosen well, which is the property that makes the instruction safe to give.
+
+**The prompt's count of those runs is held by an assertion rather than by prose.** `tests/test_turn_ending_instructions.py` counts the workflow stages carrying a `revert_check`, `suite_run` or `clean_clone` declaration and requires the rendered implementer prompt to state that number, so a workflow that gained or lost a coordinator-run whole-suite check reddens there instead of leaving the prompt claiming a number nothing checks.
+
+**The turn-ending sentence is one statement of one rule.** Every stage that writes artifacts to the run directory carries, at the same point — after the sentence naming the run directory, before the list of files — the same sentence saying that ending the turn is how the stage ends and that a stage ending without them has produced nothing. It is cheap insurance rather than the fix; a stage holding a command it cannot finish is not talked out of it. Because a rule stated in four prompts is four statements that can drift, the standing module takes the sentence **out of one rendering** and looks for that string in the others, deriving the templates from the workflow rather than listing them, so a stage added later is held to the same wording and a reworded copy reddens rather than passing as a paraphrase.
+
+**These are prompt properties, so they are checked against renderings, not templates.** The module drives a coordinator run against the shipped harness root and reads each prompt back out of the run directory, for the reason the fixture-guidance module does: a phrase that is still a placeholder when the stage reads it instructs nobody. Every absence it asserts carries a control — the removed whole-suite directive planted back in, and the passage naming the checks cut out between the rendered test command and the following layer header — so each check is shown reporting. Nothing asserts that a stage *followed* either instruction; there is no deterministic check for that and the module does not build one that looks like one.
+
 ## Run directory anatomy
 
     .harness/runs/story-001/
