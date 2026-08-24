@@ -272,11 +272,11 @@ _MODIFICATION = (
     "reverting them breaks it. The entry declares no such forced adaptation."
 )
 
-#: Both wordings end here, identically, so a plan repaired at either fault is
-#: repaired the same way. The grant is named because not knowing the field
-#: exists is the failure this check is written against, and its required
-#: reason is stated because that is what makes the grant a judgement a
-#: reviewer can weigh.
+#: Both wordings open with this clause, identically, and a refused
+#: modification names a third way out after it. The grant is named because
+#: not knowing the field exists is the failure this check is written against,
+#: and its required reason is stated because that is what makes the grant a
+#: judgement a reviewer can weigh.
 _RESOLUTIONS = (
     "Either assign '{path}' to a stage that may own it, or declare a "
     "stage_exceptions grant naming '{path}' for {stage}, whose reason field is "
