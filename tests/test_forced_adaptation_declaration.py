@@ -135,7 +135,15 @@ DECLARED = ("the survey change in this story renames the datum this chart "
 #: story-060's committed plan and story-056's were written against this
 #: deployment's restriction, and reconstructing them against a fixture would be
 #: reconstructing a different story.
-SHIPPED_STAGES = conftest.shipped_workflow(HARNESS_ROOT, "story-workflow")["stages"]
+SHIPPED_WORKFLOW = conftest.shipped_workflow(HARNESS_ROOT, "story-workflow")
+SHIPPED_STAGES = SHIPPED_WORKFLOW["stages"]
+
+#: The workflow a planning session was rendered against, which
+#: artifact_problems requires beside the harness root. No artifact this module
+#: puts to it declares a workflow of its own, so the check it feeds reports
+#: nothing here; it is supplied because the function requires it rather than
+#: because anything in this module is about it.
+RENDERED_AGAINST = SHIPPED_WORKFLOW["name"]
 
 
 def plan(*entries: dict) -> dict:
@@ -515,14 +523,17 @@ def test_artifact_problems_accepts_the_declared_artifact_against_either_reading(
                                 "story-901.yaml")
 
     assert plan_validation.artifact_problems(
-        [declared], FIXTURE_STAGES, holding) == {}
+        [declared], FIXTURE_STAGES, holding,
+        HARNESS_ROOT, RENDERED_AGAINST) == {}
 
     (from_empty,) = plan_validation.artifact_problems(
-        [declared], FIXTURE_STAGES, empty)[declared]
+        [declared], FIXTURE_STAGES, empty,
+        HARNESS_ROOT, RENDERED_AGAINST)[declared]
     assert "creation" in fault(from_empty), from_empty
 
     (undeclared_problem,) = plan_validation.artifact_problems(
-        [undeclared], FIXTURE_STAGES, holding)[undeclared]
+        [undeclared], FIXTURE_STAGES, holding,
+        HARNESS_ROOT, RENDERED_AGAINST)[undeclared]
     assert "modification" in fault(undeclared_problem), undeclared_problem
 
 
@@ -618,7 +629,8 @@ def test_story_060s_plan_with_the_declaration_in_place_of_its_grant_is_accepted(
         "story-960.yaml")
 
     assert plan_validation.artifact_problems(
-        [reconstructed], SHIPPED_STAGES, HARNESS_ROOT) == {}
+        [reconstructed], SHIPPED_STAGES, HARNESS_ROOT,
+        HARNESS_ROOT, RENDERED_AGAINST) == {}
 
 
 def test_the_same_plan_carrying_neither_grant_nor_declaration_is_reported(
@@ -633,7 +645,8 @@ def test_the_same_plan_carrying_neither_grant_nor_declaration_is_reported(
                               "story-961.yaml")
 
     (problem,) = plan_validation.artifact_problems(
-        [stripped], SHIPPED_STAGES, HARNESS_ROOT)[stripped]
+        [stripped], SHIPPED_STAGES, HARNESS_ROOT,
+        HARNESS_ROOT, RENDERED_AGAINST)[stripped]
 
     assert STORY_060_FILE in problem
     assert "describes a modification" in problem, problem
@@ -655,7 +668,8 @@ def test_story_056s_artifact_with_its_grants_stripped_is_still_reported(
     stripped = write_artifact(tmp_path, without_grants(text), "story-957.yaml")
 
     assert plan_validation.artifact_problems(
-        [committed_path], SHIPPED_STAGES, HARNESS_ROOT) == {}
+        [committed_path], SHIPPED_STAGES, HARNESS_ROOT,
+        HARNESS_ROOT, RENDERED_AGAINST) == {}
 
     story = story_coordinator.read_story(without_grants(text)).parsed
     restricted = {stage for stage, _ in
@@ -670,7 +684,8 @@ def test_story_056s_artifact_with_its_grants_stripped_is_still_reported(
     assert not any(item.get(FIELD) for item in governed)
 
     problems = plan_validation.artifact_problems(
-        [stripped], SHIPPED_STAGES, HARNESS_ROOT)[stripped]
+        [stripped], SHIPPED_STAGES, HARNESS_ROOT,
+        HARNESS_ROOT, RENDERED_AGAINST)[stripped]
     assert len(problems) == len(governed)
     for named, problem in zip(governed, problems):
         assert named["file"] in problem

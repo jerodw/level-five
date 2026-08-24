@@ -463,7 +463,8 @@ def test_every_artifact_this_file_uses_is_what_it_claims_to_be():
 
 def test_artifact_problems_reports_the_new_class(tmp_path: Path):
     path = write_artifact(tmp_path, CONFLICTING_ARTIFACT)
-    found = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT)
+    found = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT,
+        HARNESS_ROOT, WORKFLOW['name'])
     assert list(found) == [path]
     assert any(STORY_031_FILE in problem for problem in found[path])
 
@@ -471,7 +472,8 @@ def test_artifact_problems_reports_the_new_class(tmp_path: Path):
 def test_artifact_problems_holds_the_clean_resolutions_back(tmp_path: Path):
     for index, text in enumerate((REASSIGNED_ARTIFACT, GRANTED_ARTIFACT)):
         path = write_artifact(tmp_path, text, f"story-90{index}.yaml")
-        assert plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT) == {}
+        assert plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT,
+        HARNESS_ROOT, WORKFLOW['name']) == {}
 
 
 def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: Path):
@@ -481,7 +483,8 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: P
     check — the second half below.
     """
     unparseable = write_artifact(tmp_path, "this: is: not: a story\n\t- ?\n")
-    found = plan_validation.artifact_problems([unparseable], STAGES, ABSENT_ROOT)
+    found = plan_validation.artifact_problems([unparseable], STAGES, ABSENT_ROOT,
+        HARNESS_ROOT, WORKFLOW['name'])
     assert found[unparseable]
     assert not any(STORY_031_FILE in problem for problem in found[unparseable])
 
@@ -490,14 +493,16 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: P
         tmp_path,
         CONFLICTING_ARTIFACT.replace("tasks:\n  - do the sample work\n", ""),
         "story-901.yaml")
-    found = plan_validation.artifact_problems([invalid], STAGES, ABSENT_ROOT)
+    found = plan_validation.artifact_problems([invalid], STAGES, ABSENT_ROOT,
+        HARNESS_ROOT, WORKFLOW['name'])
     assert found[invalid]
     assert not any(STORY_031_FILE in problem for problem in found[invalid])
 
     reached = write_artifact(tmp_path, CONFLICTING_ARTIFACT, "story-902.yaml")
     assert any(STORY_031_FILE in problem
                for problem in plan_validation.artifact_problems(
-                   [reached], STAGES, ABSENT_ROOT)[reached])
+                   [reached], STAGES, ABSENT_ROOT,
+                   HARNESS_ROOT, WORKFLOW["name"])[reached])
 
 
 def test_the_strictness_check_still_reports_beside_the_new_one(tmp_path: Path):
@@ -509,7 +514,8 @@ def test_the_strictness_check_still_reports_beside_the_new_one(tmp_path: Path):
               f"entirely\n"
             + plan_block((STORY_031_FILE, STORY_031_STAGE)))
     path = write_artifact(tmp_path, both)
-    problems = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT)[path]
+    problems = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT,
+        HARNESS_ROOT, WORKFLOW['name'])[path]
     assert any("states a restriction the workflow does not" in p for p in problems)
     assert any("a stage that may own it" in p for p in problems)
 
@@ -1460,20 +1466,27 @@ def test_a_relative_root_is_still_the_root_it_was_given(tmp_path: Path,
 
 def test_neither_function_hides_the_root_behind_a_default():
     """A two-argument call raises rather than falling back to the cwd."""
+    # No parameter of either carries a default, so the root cannot be omitted
+    # in favour of the process working directory. artifact_problems carries
+    # more parameters than the root — the harness root and the workflow the
+    # planning session was rendered against are required of it too — so the
+    # claim is made about defaults rather than about how many there are.
     for function in (plan_validation.assignment_problems,
                      plan_validation.artifact_problems):
         parameters = list(inspect.signature(function).parameters.values())
-        assert len(parameters) == 3, function.__name__
-        assert parameters[-1].default is inspect.Parameter.empty, function.__name__
+        assert parameters[2].name == "root", function.__name__
+        for parameter in parameters:
+            assert parameter.default is inspect.Parameter.empty, function.__name__
 
     with pytest.raises(TypeError):
         plan_validation.assignment_problems(PRESENT, STAGES)
     with pytest.raises(TypeError):
         plan_validation.artifact_problems([], STAGES)
-    # Control: the three-argument calls those two are missing an argument for
-    # do not raise.
+    # Control: the fully-argumented calls those two are missing an argument
+    # for do not raise.
     assert plan_validation.assignment_problems(PRESENT, STAGES, ABSENT_ROOT) != []
-    assert plan_validation.artifact_problems([], STAGES, ABSENT_ROOT) == {}
+    assert plan_validation.artifact_problems(
+        [], STAGES, ABSENT_ROOT, HARNESS_ROOT, WORKFLOW["name"]) == {}
 
 
 def test_the_two_checks_that_read_no_filesystem_keep_their_signatures():
@@ -1526,7 +1539,8 @@ def test_artifact_problems_reports_against_either_root_and_words_it_from_one(
     path = write_artifact(tmp_path, text, "story-903.yaml")
 
     for root, expected in ((holding, "modification"), (empty, "creation")):
-        (problem,) = plan_validation.artifact_problems([path], STAGES, root)[path]
+        (problem,) = plan_validation.artifact_problems([path], STAGES, root,
+        HARNESS_ROOT, WORKFLOW['name'])[path]
         assert PRESENT_FILE in problem
         assert expected in fault(problem), root
 
@@ -1535,7 +1549,8 @@ def test_artifact_problems_reports_against_either_root_and_words_it_from_one(
         text + exceptions_block(RESTRICTED_STAGE, PRESENT_FILE),
         "story-904.yaml")
     for root in (holding, empty):
-        assert plan_validation.artifact_problems([granted], STAGES, root) == {}
+        assert plan_validation.artifact_problems([granted], STAGES, root,
+        HARNESS_ROOT, WORKFLOW['name']) == {}
 
 
 # --------------------------------------------------------------------------
@@ -1575,7 +1590,8 @@ def test_story_056s_committed_artifact_carrying_its_grants_is_reported_by_nothin
     """
     path, story = story_on_disk("story-056")
 
-    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT) == {}
+    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT,
+        HARNESS_ROOT, WORKFLOW['name']) == {}
 
     governed = governed_entries(story)
     assert governed, "story-056 no longer carries the entries this is about"
@@ -1710,9 +1726,9 @@ def test_report_passes_the_target_root_it_was_given_to_the_check(
 
     original = plan_validation.artifact_problems
 
-    def spy(artifacts, stages, root):
+    def spy(artifacts, stages, root, harness_root, selected):
         seen.append(root)
-        return original(artifacts, stages, root)
+        return original(artifacts, stages, root, harness_root, selected)
 
     monkeypatch.setattr(plan_validation, "artifact_problems", spy)
 

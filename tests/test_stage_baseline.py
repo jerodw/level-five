@@ -116,7 +116,14 @@ WORKFLOW = conftest.build_workflow(
             "stage": conftest.StageRef(0),
             "when": "the behaviour the story asked for is missing"}}),
     escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
-    name="stage-baseline-workflow",
+    #: Named so that it shares no substring with the baseline directory the
+    #: first stage declares above. story-069 made state.json record the name of
+    #: the workflow a run loaded, so a fixture workflow named after the baseline
+    #: would put that token into state.json without the baseline ever being
+    #: recorded there -- and the absence asserted below would redden for a
+    #: reason that has nothing to do with what it watches. The guard that keeps
+    #: the two names disjoint sits beside that assertion.
+    name="pre-stage-capture-workflow",
 )
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
@@ -1175,6 +1182,11 @@ def test_state_json_gains_no_field_and_never_names_the_baseline(
     assert run(target, harness_root, TWO_ATTEMPT_SHAPE, [FAIL, PASS])[0] == 0
     state_text = (run_dir_of(target) / "state.json").read_text()
     fields = set(json.loads(state_text))
+
+    # The guard the fixture's name is chosen for: state.json legitimately
+    # records the workflow the run loaded, so the absence below only says
+    # anything about the baseline while the two fixture names stay disjoint.
+    assert BASELINE not in WORKFLOW["name"]
 
     assert [name for name in fields if "baseline" in name] == []
     assert BASELINE not in state_text

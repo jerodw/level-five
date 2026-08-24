@@ -9,10 +9,10 @@ the commit it makes after: a failing artifact is left in the working tree,
 uncommitted, with its problems reported, which is the state a developer can
 fix and re-run from.
 
-Five classes of problem are reported and this module invents none of the
-first two. Schema conformance is story_coordinator.read_story; agreement of a
-story's stage_exceptions with the loaded workflow is
-story_coordinator.stage_exception_problems. Neither parsing, schema
+The classes of problem reported here are listed below, and this module
+invents neither of the first two. Schema conformance is
+story_coordinator.read_story; agreement of a story's stage_exceptions with
+the loaded workflow is story_coordinator.stage_exception_problems. Neither parsing, schema
 validation nor the exception cross-check is reimplemented here — a plan-time
 check with its own reader is the divergence story-005 existed to remove — and
 the messages are the coordinator's own, so a given defect reads the same at
@@ -21,7 +21,9 @@ plan time as at pre-flight.
 The third, fourth and fifth classes are this module's own and all three run
 at plan time only, for one shared reason: none is refused by l5-run, because
 adding it to pre-flight would, for each of the three, start refusing
-committed artifacts that have already run. They are otherwise unlike each other, and the
+committed artifacts that have already run. The sixth is this module's own
+too and is described at the end, and it is the one class of which pre-flight
+also refuses a half. They are otherwise unlike each other, and the
 difference is worth stating rather than blending. The third scans English
 prose and carries the hedging that entails. The fourth and fifth are
 structural — a literal in the artifact against a literal in the workflow
@@ -180,6 +182,21 @@ path prefix. A module wearing a story number is the same planning error
 wherever it is put, and the pattern being independent of location is what
 lets the promise above stay true.
 
+What the sixth check is
+-----------------------
+A story artifact may name the workflow definition its run loads, and neither
+thing that can be wrong with that name survives to run time usefully. A name
+with no definition under workflows/ refuses the run at pre-flight, so
+catching it here is catching it where the session that could repair it is
+still open; the wording comes from harness_config, so the two refusals are
+one fact rather than two spellings. A name other than the one this planning
+session was rendered against is refused here and only here: the planner's
+stage list and create restrictions are injected before the interview, so an
+artifact declaring another workflow was planned against facts that are not
+its own, and refusing it is what makes those injected facts trustworthy
+rather than merely usual. An artifact naming no workflow is nothing to
+report — its run loads the target configuration's default.
+
 Nothing here repairs an artifact and nothing here deletes one. The problems
 are returned rather than printed, and the caller decides.
 """
@@ -189,6 +206,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
+import harness_config
 import story_coordinator
 
 #: The free-text arrays a story is evaluated against.
@@ -422,8 +440,58 @@ def naming_problems(story: dict) -> list[str]:
     return problems
 
 
+def workflow_problems(story: dict, harness_root: Path, selected: str) -> list[str]:
+    """Report a story whose declared workflow cannot be the one it will run under.
+
+    A story artifact may name the workflow its run loads. Two things can be
+    wrong with that name and both are decidable the moment the artifact is
+    written. It may have no definition under workflows/, which is refused with
+    the harness's own wording — the name asked for beside the names the
+    harness holds — from harness_config, so plan time and pre-flight report an
+    unknown workflow identically rather than from two spellings that agree
+    today. And it may name a workflow other than the one this planning session
+    was rendered against, which is refused naming both: the planner's stage
+    list and create restrictions are injected before the interview that would
+    otherwise choose, so an artifact disagreeing with the invocation is a plan
+    written against facts that are not the facts of the workflow it declares.
+    That refusal is what makes the injected facts trustworthy rather than
+    merely usual.
+
+    An artifact naming no workflow yields nothing: its run loads the target
+    configuration's default, exactly as every artifact written before the
+    field existed does.
+
+    Both `harness_root` and `selected` are required and neither is defaulted.
+    Defaulting the root would resolve the definitions against whatever
+    directory the process stands in, and defaulting the selection would let a
+    caller check agreement against a workflow it never rendered.
+    """
+    declared = story.get("story", {}).get("workflow")
+    if not declared:
+        return []
+    problems: list[str] = []
+    if declared not in harness_config.workflow_names(harness_root):
+        problems += harness_config.UnknownWorkflow(
+            declared, harness_config.workflow_names(harness_root)
+        ).problems
+    if declared != selected:
+        problems.append(
+            f"$.story.workflow: names '{declared}', but this planning session "
+            f"was rendered against '{selected}'. The planner's stage list and "
+            f"create restrictions are injected before the session starts, so a "
+            f"plan declaring another workflow was written against facts that "
+            f"are not that workflow's. Re-plan with --workflow {declared}, or "
+            f"name '{selected}' in the artifact."
+        )
+    return problems
+
+
 def artifact_problems(
-    artifacts: Iterable[Path], stages: list[dict], root: Path
+    artifacts: Iterable[Path],
+    stages: list[dict],
+    root: Path,
+    harness_root: Path,
+    selected: str,
 ) -> dict[Path, list[str]]:
     """Validate each artifact a planning session added; report what is wrong.
 
@@ -449,6 +517,10 @@ def artifact_problems(
     resolve existence against the process working directory without saying so.
     The two checks that read no filesystem — strictness_problems and
     naming_problems — keep their signatures.
+
+    `harness_root` and `selected` are required for workflow_problems, which
+    needs both of its one caller: the root is where the definitions live, and
+    the selection is the workflow this session rendered the planner against.
     """
     problems: dict[Path, list[str]] = {}
     for artifact in artifacts:
@@ -461,6 +533,7 @@ def artifact_problems(
             found += strictness_problems(reading.parsed, stages)
             found += assignment_problems(reading.parsed, stages, root)
             found += naming_problems(reading.parsed)
+            found += workflow_problems(reading.parsed, harness_root, selected)
         if found:
             problems[Path(artifact)] = found
     return problems

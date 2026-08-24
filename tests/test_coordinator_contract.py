@@ -202,6 +202,13 @@ def state_contract_problems(state: dict) -> list[str]:
         # run from the unchanged-since-escalation guard, which would otherwise
         # refuse the resume the ceiling exists to allow.
         "stopped_on_cost": bool,
+        # story-069's record of what the run loaded: the name of the workflow
+        # definition this run is executing. Defaulted like the fields above, so
+        # a state file written before it existed reads as no recorded workflow.
+        # It is what makes a resume load the definition the run was executing
+        # rather than resolving the choice again against a story artifact that
+        # may since have been amended to name another.
+        "workflow": str,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []

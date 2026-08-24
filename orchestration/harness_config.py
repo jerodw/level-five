@@ -137,6 +137,44 @@ def workflow_token_values(config: dict) -> dict[str, str | None]:
     return {"tests_dir": config.get("tests_dir")}
 
 
+def workflow_names(harness_root: Path) -> tuple[str, ...]:
+    """The names of the workflow definitions a harness root holds, sorted.
+
+    A name here is a name `load_workflow` takes: the stem of a definition
+    under workflows/, so the two cannot disagree about what a workflow is
+    called. It exists so a refusal can list what is available beside what was
+    asked for, and both l5-plan and the coordinator report an unknown name
+    from this one place.
+
+    A root with no workflows directory holds no definitions rather than
+    raising, so the refusal it produces says exactly that.
+    """
+    directory = harness_root / "workflows"
+    if not directory.is_dir():
+        return ()
+    return tuple(sorted(path.stem for path in directory.glob("*.json")))
+
+
+class UnknownWorkflow(ValueError):
+    """A workflow was asked for by a name no definition under workflows/ has.
+
+    Carries `problems` in the shape every pre-flight refusal enumerates, like
+    UnresolvedWorkflowToken beside it, so a caller turns it into a refusal
+    rather than composing its own wording. The problem names the workflow
+    asked for and the definitions the harness holds, so it is actionable
+    without listing the directory.
+    """
+
+    def __init__(self, workflow: str, names: tuple[str, ...]):
+        self.workflow = workflow
+        self.names = names
+        listed = ", ".join(names) if names else "no workflow definitions"
+        self.problems = [
+            f"'{workflow}' is not a workflow the harness defines; it defines: {listed}"
+        ]
+        super().__init__(self.problems[0])
+
+
 class UnresolvedWorkflowToken(ValueError):
     """A loaded workflow carries a reference the configuration cannot answer.
 
@@ -198,9 +236,19 @@ def load_workflow(harness_root: Path, name: str, config: dict) -> dict:
     defaulted: a caller that omitted it would silently load a definition with
     the configured entries missing, which is a quieter wrong answer than a
     TypeError.
+
+    A name with no definition raises UnknownWorkflow naming what the harness
+    does hold. The signature is unchanged by that: the refusal is raised where
+    the definition cannot be read, so every existing caller keeps working and
+    the two callers that let a work item choose a name report an unknown one
+    identically.
     """
     path = harness_root / "workflows" / f"{name}.json"
-    definition = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise UnknownWorkflow(name, workflow_names(harness_root)) from error
+    definition = json.loads(text)
     unresolved: list[str] = []
     resolved = _resolve_tokens(definition, workflow_token_values(config), unresolved)
     if unresolved:

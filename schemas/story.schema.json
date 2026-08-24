@@ -28,6 +28,10 @@
         "description": {
           "type": "string",
           "description": "What the story changes and why."
+        },
+        "workflow": {
+          "type": "string",
+          "description": "Optional. Names the workflow definition under workflows/ this story's run loads, so the choice of workflow is attached to the work item rather than to the target's configuration. Its absence means the run loads the workflow the target configuration names, which is what every artifact written before this field existed does. A name with no definition under workflows/ is refused when the planning session ends and again at pre-flight, and a planning session whose artifact names a workflow other than the one the session was rendered against is refused too, because the planner's stage facts are injected before the interview that would otherwise choose. A resumed run loads the workflow its state.json records rather than re-reading this field."
         }
       }
     },

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plan a story interactively with the planner agent.
 
-Usage: l5-plan [--base <branch>] "<story request>"
+Usage: l5-plan [--base <branch>] [--workflow <name>] "<story request>"
 Starts an interactive Claude Code session carrying the planner prompt.
 The planner interviews you, iterates on the plan, and writes the approved
 story artifact to .harness/stories/. When the session ends, this script
@@ -11,6 +11,12 @@ mechanism rather than something an agent is asked to remember.
 The commit lands on whatever branch is checked out, so the same base check
 l5-run runs at pre-flight runs here before the commit: an unstated base is
 the repository's own default branch, and --base states another deliberately.
+
+--workflow states the workflow the planner is rendered against, so the stage
+facts injected into the prompt are the facts of the workflow the story will
+actually run under. Unstated, it is the workflow the target configuration
+names. A name with no definition refuses before the session starts, and an
+artifact naming another workflow is refused when the session ends.
 """
 import subprocess
 import sys
@@ -31,20 +37,34 @@ import story_coordinator  # noqa: E402
 def main() -> None:
     argv = sys.argv[1:]
     base = None
-    # --base comes ahead of the request; everything after it is the request
-    # text, passed to the session unchanged.
-    if argv[:1] == ["--base"]:
+    selected = None
+    # --base and --workflow come ahead of the request; everything after them
+    # is the request text, passed to the session unchanged. A loop rather than
+    # two positional cases, so neither option's presence decides whether the
+    # other can be given.
+    while argv[:1] in (["--base"], ["--workflow"]):
         if len(argv) < 2:
             sys.exit(__doc__.strip())
-        base, argv = argv[1], argv[2:]
+        if argv[0] == "--base":
+            base = argv[1]
+        else:
+            selected = argv[1]
+        argv = argv[2:]
     if not argv:
         sys.exit(__doc__.strip())
     request = " ".join(argv)
     target_root = harness_config.find_target_root(Path.cwd())
     config = harness_config.load_config(target_root)
-    workflow = harness_config.load_workflow(
-        HARNESS_ROOT, config.get("workflow", "story-workflow"), config
-    )
+    # The workflow the planner is rendered against: what --workflow named, or
+    # the one the target configuration names. A name with no definition is
+    # refused here, before the session starts, through the coordinator's own
+    # refusal so an unknown workflow reads the same at plan time as at
+    # pre-flight.
+    workflow_name = selected or config.get("workflow", "story-workflow")
+    try:
+        workflow = harness_config.load_workflow(HARNESS_ROOT, workflow_name, config)
+    except harness_config.UnknownWorkflow as unknown:
+        sys.exit(story_coordinator.refuse_unknown_workflow(unknown))
     rules = harness_config.load_rules(HARNESS_ROOT)
     # The planner is not a workflow stage, so no coordinator renders its
     # template. Render it here against the same schema and workflow context
@@ -54,6 +74,11 @@ def main() -> None:
     template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
     context = context_assembler.schema_context(HARNESS_ROOT)
     context.update(context_assembler.workflow_context(workflow, rules))
+    # The name the injected facts came from, so the planner can record in the
+    # artifact the workflow the session was started for. It is the name
+    # load_workflow was given rather than a second reading of the definition,
+    # so what the prompt says and what was loaded cannot differ.
+    context["workflow_name"] = workflow_name
     # The shared prose partial, resolved through the same helper build_context
     # uses, so the planner is held to the rule every stage that writes prose is
     # held to — the first of the stale counts it exists against was written in
@@ -96,12 +121,26 @@ def main() -> None:
     # wins; the commit's is what is left to say when the session ended
     # cleanly and the push did not.
     committing = report(
-        target_root, stories_dir, before, workflow["stages"], config, base
+        target_root,
+        stories_dir,
+        before,
+        workflow["stages"],
+        config,
+        base,
+        workflow_name,
     )
     sys.exit(status or committing)
 
 
-def report(target_root: Path, stories_dir: Path, before, stages, config=None, base=None) -> int:
+def report(
+    target_root: Path,
+    stories_dir: Path,
+    before,
+    stages,
+    config=None,
+    base=None,
+    selected=None,
+) -> int:
     """Say what plan_validation and plan_commit did with the session's artifacts.
 
     Both modules return what happened rather than printing it, so this is
@@ -125,7 +164,13 @@ def report(target_root: Path, stories_dir: Path, before, stages, config=None, ba
     # repository the story will run in whether a file it names is already
     # there, and that repository is the one find_target_root resolved, never
     # the harness root and never wherever this process was started from.
-    problems = plan_validation.artifact_problems(artifacts, stages, target_root)
+    # The workflow this session was rendered against goes with them: an
+    # artifact naming another one was planned against facts that are not its
+    # own, and an artifact naming one with no definition would refuse the run.
+    rendered_against = selected or (config or {}).get("workflow", "story-workflow")
+    problems = plan_validation.artifact_problems(
+        artifacts, stages, target_root, HARNESS_ROOT, rendered_against
+    )
     if problems:
         for path, found in problems.items():
             # The coordinator's own refusal helper, so the text a developer

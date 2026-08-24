@@ -112,6 +112,15 @@ class RunState:
     #: and refusing it would refuse the resume this ceiling exists to allow.
     #: Cleared by the resume, like the allowance it accompanies.
     stopped_on_cost: bool = False
+    #: The name of the workflow definition this run loaded. Recorded so a
+    #: resume loads the same definition it was executing rather than
+    #: re-resolving the choice: amending the story artifact to name another
+    #: workflow must not change what an interrupted run is resumed under, and
+    #: the run's own record is the only thing that can say so. Defaulted like
+    #: every field beside it, so a state file written before it existed still
+    #: loads and reads as no recorded workflow — which resolves exactly as a
+    #: fresh run does.
+    workflow: str = ""
 
 
 @dataclass(frozen=True)
@@ -3792,6 +3801,27 @@ def _budget_stopped(run_dir: Path, stage_name: str, reason: str) -> None:
     )
 
 
+def refuse_unknown_workflow(unknown: harness_config.UnknownWorkflow) -> int:
+    """Refuse a workflow asked for by a name no definition under workflows/ has.
+
+    Thin, like every other caller of `refuse`. The problem it enumerates is
+    composed by harness_config and names the workflow asked for beside the
+    definitions the harness holds, so the refusal is actionable without
+    listing the directory.
+
+    Public for the reason `refuse_bad_story` is: a story artifact naming an
+    undefined workflow is refused when the planning session ends and again at
+    pre-flight, and the two must report it identically rather than from two
+    wordings that agree today.
+    """
+    return refuse(
+        f"No workflow definition named '{unknown.workflow}':",
+        unknown.problems,
+        "Name a workflow the harness defines, or add its definition under "
+        "workflows/, before running a story under it.",
+    )
+
+
 def _refuse_unresolved_workflow_token(
     unresolved: harness_config.UnresolvedWorkflowToken,
 ) -> int:
@@ -4059,15 +4089,55 @@ def run_story(
     if undeclared:
         return _refuse_undeclared_config_keys(target_root, undeclared)
 
+    # The story artifact and any existing run state are read before the
+    # workflow, because both can name the workflow this run loads. Reading
+    # them here creates nothing — the run directory is derived from
+    # configuration alone, and load_state reads a file rather than requiring a
+    # directory — so every refusal below still leaves no run directory, no
+    # state.json, no log, no branch and no agent invoked.
+    story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
+    if not story_path.is_file():
+        print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
+        return 1
+    story_text = story_path.read_text(encoding="utf-8")
+
+    # Pre-flight: refuse a bad story before any run state exists, so a
+    # rejection leaves no run directory, no state.json, and no new branch.
+    # The schema ships with the harness code, so it is resolved by
+    # schema_validator relative to its own module, not from harness_root.
+    reading = read_story(story_text)
+    if reading.problems:
+        return refuse_bad_story(story_path, reading.problems)
+
+    run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
+    state = load_state(run_dir)
+
+    # Which workflow this run executes, in this order: what a resumed run
+    # recorded loading, then what the story artifact names, then what the
+    # target configuration names. The recorded run comes first because a
+    # resume must load the definition it was executing — amending the artifact
+    # between two entries of one run must not change what the second entry
+    # runs under. The artifact comes next because the choice belongs to the
+    # work item. The configured default is last and is spelled exactly as it
+    # always was, so an artifact naming no workflow runs precisely what it ran
+    # before this field existed.
+    declared = (reading.parsed or {}).get("story", {}).get("workflow")
+    workflow_name = (
+        (state.workflow if state else "")
+        or declared
+        or config.get("workflow", "story-workflow")
+    )
+
     # The definition may reference the target's configuration, so it is loaded
     # against the config that has just been read. A reference the config
-    # cannot answer is a defect in the definition that every run under it
-    # carries, so it is refused here, beside the other pre-flight refusals and
-    # above everything a run creates: no run directory, no state.json, no log,
-    # no branch, and no agent invoked.
-    workflow_name = config.get("workflow", "story-workflow")
+    # cannot answer, and a name no definition answers, are both defects every
+    # run under that choice carries, so both are refused here, beside the
+    # other pre-flight refusals and above everything a run creates: no run
+    # directory, no state.json, no log, no branch, and no agent invoked.
     try:
         workflow = harness_config.load_workflow(harness_root, workflow_name, config)
+    except harness_config.UnknownWorkflow as unknown:
+        return refuse_unknown_workflow(unknown)
     except harness_config.UnresolvedWorkflowToken as unresolved_token:
         return _refuse_unresolved_workflow_token(unresolved_token)
     rules = harness_config.load_rules(harness_root)
@@ -4123,30 +4193,13 @@ def run_story(
     if ceiling_problems:
         return _refuse_bad_cost_ceilings(workflow, ceiling_problems)
 
-    story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
-    if not story_path.is_file():
-        print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
-        return 1
-    story_text = story_path.read_text(encoding="utf-8")
-
-    # Pre-flight: refuse a bad story before any run state exists, so a
-    # rejection leaves no run directory, no state.json, and no new branch.
-    # The schema ships with the harness code, so it is resolved by
-    # schema_validator relative to its own module, not from harness_root.
-    reading = read_story(story_text)
-    if reading.problems:
-        return refuse_bad_story(story_path, reading.problems)
-
     # Conformance is one question, agreement with this workflow another. A
-    # stage exception is checked here rather than inside read_story so schema
-    # reading stays schema reading, and both refusals stay above run-directory
-    # creation.
+    # stage exception is checked against the workflow that was selected, so it
+    # sits below the load rather than beside read_story; both refusals stay
+    # above run-directory creation.
     exception_problems = stage_exception_problems(reading.parsed, stages)
     if exception_problems:
         return refuse_bad_story(story_path, exception_problems)
-
-    run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
-    state = load_state(run_dir)
 
     # Pre-flight: refuse a run onto a branch that already holds this story's
     # finished work. `_checkout_story_branch` reuses an existing branch rather
@@ -4365,6 +4418,11 @@ def run_story(
         state.entry_cost_usd = 0.0
         stopped_on_cost = state.stopped_on_cost
         state.stopped_on_cost = False
+        # Record what this entry loaded. For a run resumed from a state file
+        # written before the field existed this is the first time the run says
+        # so; for every other resume it is the name the resume resolved from,
+        # written back unchanged.
+        state.workflow = workflow_name
         if state.status == "escalated":
             state.status = "running"
             save_state(run_dir, state)
@@ -4416,6 +4474,11 @@ def run_story(
             # Recorded from the same text read_story was given, so the digest
             # and the run's one reading describe one artifact.
             story_digest=story_digest(story_text),
+            # Recorded from the name this run resolved and loaded, so a resume
+            # loads the definition this entry executed rather than resolving
+            # the choice again against an artifact that may since have been
+            # amended.
+            workflow=workflow_name,
         )
         save_state(run_dir, state)
         append_event(

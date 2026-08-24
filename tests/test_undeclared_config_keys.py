@@ -483,20 +483,27 @@ def test_the_refusal_precedes_the_workflow_being_loaded_at_all(
     are different in kind rather than in wording.
 
     A workflow name nothing ships cannot be loaded: without the undeclared
-    key the run raises reading it. With the undeclared key it refuses
-    cleanly, which can only happen if the undeclared-key check ran first —
-    and the routing and self-route pre-flights read that workflow, so they
-    are below it too.
+    key the run refuses naming that workflow. With the undeclared key it
+    refuses naming the key instead, which can only happen if the
+    undeclared-key check ran first — and the routing and self-route
+    pre-flights read that workflow, so they are below it too.
     """
-    configure(sound_target, workflow="xyzzy-no-such-workflow")
-    with pytest.raises(OSError):
-        run(sound_target, harness_root)
+    absent = "xyzzy-no-such-workflow"
+    configure(sound_target, workflow=absent)
+    workflow_code, workflow_runner, _ = run(sound_target, harness_root)
+    workflow_refusal = capsys.readouterr().err
+    assert workflow_code == 1
+    assert absent in workflow_refusal, workflow_refusal
+    assert offending_key not in workflow_refusal, workflow_refusal
+    assert workflow_runner.calls == []
 
     configure(sound_target, **{offending_key: "whatever"})
     code, runner, _ = run(sound_target, harness_root)
 
+    refusal = capsys.readouterr().err
     assert code == 1
-    assert offending_key in capsys.readouterr().err
+    assert offending_key in refusal
+    assert absent not in refusal, refusal
     assert runner.calls == []
 
 
