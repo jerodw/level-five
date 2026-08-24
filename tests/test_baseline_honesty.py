@@ -2270,6 +2270,21 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json, "
         "which a summary written *at* the ceiling is a summary about",
+    "test_forced_adaptation_declaration.py":
+        "its plan-time half runs against a fixture workflow and fixture roots "
+        "it builds, where the restricted stage and its prefix are inputs. What "
+        "remains has what is shipped as its subject: the story schema this "
+        "repository ships, which is where the declaration's contract is "
+        "stated; orchestration/plan_validation.py's own prose and "
+        "prompts/planner.md, whose corrected passages are the story's "
+        "criterion rather than an input to one; this repository's committed "
+        "stories, because the two runs the rule was reasoned from are "
+        "reconstructed rather than invented; the shipped workflow, because "
+        "those reconstructions were planned against this deployment's "
+        "restriction and against any other they would be reconstructions of a "
+        "different story; and the scan over workflows/, rules/, schemas/ and "
+        "prompts/, whose subject is which of the files this repository ships "
+        "name the field at all",
     "test_harness_layer_extraction.py":
         "its subject is which prompts this repository ships carry a shared "
         "partial and which do not, so the templates, the two partials and the "

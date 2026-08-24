@@ -1079,23 +1079,33 @@ def test_the_planner_prompt_states_the_refusal_and_both_resolutions():
     assert not re.search(r"(?i)reason field is required", prompt), prompt
 
 
-def test_the_planner_prompt_says_the_grant_is_needed_whether_or_not_it_exists():
+def test_the_planner_prompt_says_what_a_governed_entry_needs_beside_it():
     """The rule the artifact is now held to, in the paragraph that governs it.
 
-    Beside the sentence story-042 wrote, which said the opposite and which
-    this story removed — so the absence is asserted as well as the presence.
+    story-042 wrote that a governed entry needs a grant whether or not the file
+    is already in the target repository. story-068 removed that: a grant is one
+    of the things such an entry may carry, not the only one, so what the
+    paragraph must say is that something is needed and that which one depends
+    on the file. Both the removed sentence and the one story-042 itself removed
+    are asserted absent, each beside a reading that finds it planted back in.
     """
     prompt = flowed(planner_prompt())
+    retired = ("it needs a grant beside it whether or not the file is already "
+               "in the target repository, and an entry that is not refused")
 
-    assert re.search(r"(?i)needs a grant beside it", prompt)
-    assert re.search(r"(?i)whether or not the file is already in the target",
-                     prompt)
+    assert re.search(r"(?i)needs something beside it", prompt)
+    assert re.search(r"(?i)depends on the file", prompt)
     # Both faults are stated, so a planner reads why either way refuses.
     assert re.search(r"(?i)describes a creation", prompt)
     assert re.search(r"(?i)describes a modification", prompt)
-    assert re.search(r"(?i)reverting it breaks the suite", prompt)
-    # And the sentence that exempted the existing file is gone.
+    assert re.search(r"(?i)reverting breaks it", prompt)
+    # And neither retired sentence is stated, each beside its own control.
+    assert not re.search(r"(?i)whether or not the file is already in the target",
+                         prompt), prompt
+    assert re.search(r"(?i)whether or not the file is already in the target",
+                     f"{prompt} {retired}")
     assert not re.search(r"(?i)is not refused", prompt), prompt
+    assert re.search(r"(?i)is not refused", f"{prompt} {retired}")
 
 
 def test_the_planner_prompt_still_names_no_stage_and_no_restricted_prefix():
@@ -1275,11 +1285,19 @@ def test_an_entry_naming_a_file_that_exists_beneath_the_root_is_still_reported(
     assert len(plan_validation.assignment_problems(PRESENT, STAGES, empty)) == 1
 
 
-def test_the_two_messages_differ_only_in_the_fault_they_describe(tmp_path: Path):
+def test_the_two_messages_differ_in_the_fault_and_in_one_resolution(
+        tmp_path: Path):
     """One verdict, two wordings: the present file names the revert check.
 
-    Non-vacuous in both directions — the two faults are required to be
-    different sentences, and everything around them to be the same one.
+    The two used to differ in the fault alone. story-068 gave a modification a
+    third way out — declaring the adaptation forced — and withheld it from a
+    creation, where declaring nothing helps a file that is not there, so the
+    messages now differ in that clause too. What is still identical is
+    everything before the fault and the two resolutions a creation does get, so
+    both are compared here rather than only the leading half.
+
+    Non-vacuous in both directions — the faults and the trailing clauses are
+    required to differ, and the shared parts to be the same sentence.
     """
     holding, empty = roots(tmp_path)
 
@@ -1287,7 +1305,18 @@ def test_the_two_messages_differ_only_in_the_fault_they_describe(tmp_path: Path)
     (absent,) = plan_validation.assignment_problems(PRESENT, STAGES, empty)
 
     assert fault(present) != fault(absent)
-    assert present.replace(fault(present), "") == absent.replace(fault(absent), "")
+    # Everything up to the fault: the assignment, the stage and the declared
+    # restriction, which neither root changes.
+    assert (present.split(fault(present), 1)[0]
+            == absent.split(fault(absent), 1)[0])
+    # And the absent message's resolutions are exactly the opening of the
+    # present one's, which then goes on to name the declaration.
+    present_resolutions = present.split(fault(present), 1)[1].strip()
+    absent_resolutions = absent.split(fault(absent), 1)[1].strip()
+    assert present_resolutions.startswith(absent_resolutions)
+    extra = present_resolutions[len(absent_resolutions):]
+    assert "reverting_breaks_the_suite" in extra, extra
+    assert "reverting_breaks_the_suite" not in absent, absent
 
     # The absent file describes a creation, and cites the rule the workflow
     # declares — which the ownership check is what refuses.
@@ -1323,9 +1352,11 @@ def test_the_message_is_word_for_word_what_each_fault_says(
         tmp_path: Path, root_name: str, expected_fault: str):
     """Read off the produced text, not off the source that builds it.
 
-    The whole message rather than substrings of it, for both wordings, so the
-    resolution clause is asserted identical across them by being written once
-    here and compared twice.
+    The whole message rather than substrings of it, for both wordings. The
+    resolutions the two share are written once here and compared twice; the
+    third way out belongs to the modification alone, so it is written beside
+    that fault and its absence from the creation is what the creation row
+    asserts by comparing the whole string.
     """
     root = dict(zip(("holding", "empty"), roots(tmp_path)))[root_name]
     faults = {
@@ -1337,7 +1368,18 @@ def test_the_message_is_word_for_word_what_each_fault_says(
             f"The target root already holds that file, so the entry describes "
             f"a modification, which the revert check governs: it restores the "
             f"stage's edits beneath that prefix and re-runs the suite, and "
-            f"refuses them unless reverting them breaks it."
+            f"refuses them unless reverting them breaks it. The entry declares "
+            f"no such forced adaptation."
+        ),
+    }
+    declaring = {
+        "creation": "",
+        "modification": (
+            f" If instead this edit is a test adaptation forced by a deliberate "
+            f"change elsewhere in this story, so that reverting it would break "
+            f"the suite, say so in reverting_breaks_the_suite on the entry: "
+            f"unlike a grant, that leaves the revert check governing "
+            f"'{PRESENT_FILE}' and deciding the claim when the story runs."
         ),
     }
 
@@ -1351,7 +1393,7 @@ def test_the_message_is_word_for_word_what_each_fault_says(
         f"Either assign '{PRESENT_FILE}' to a stage that "
         f"may own it, or declare a stage_exceptions grant naming "
         f"'{PRESENT_FILE}' for {RESTRICTED_STAGE}, whose reason field is "
-        f"required."
+        f"required." + declaring[expected_fault]
     )
 
 
@@ -1473,7 +1515,11 @@ def test_artifact_problems_reports_against_either_root_and_words_it_from_one(
     """The same pair one level up, through the function l5-plan calls.
 
     Non-vacuous because the same artifact carrying a grant is reported by
-    neither root, which is the only thing that silences it now.
+    neither root. A grant is not the only thing that silences the check —
+    story-068 gave a modification a second way out, and
+    tests/test_forced_adaptation_declaration.py holds that one — but it is the
+    only one that silences it against a root that does not hold the file, which
+    is why the pair here is still a pair.
     """
     holding, empty = roots(tmp_path)
     text = artifact("story-900") + plan_block((PRESENT_FILE, RESTRICTED_STAGE))
@@ -1610,12 +1656,23 @@ def test_the_docstring_states_the_rule_as_it_now_stands():
     its own the moment the section stops saying its half.
     """
     doc = flowed(plan_validation.__doc__)
-    # The rule: a grant is required, and the filesystem does not decide it.
+    # The rule: an offending entry needs a grant or, where the file is already
+    # there, a declaration that the edit was forced.
     assert re.search(r"(?i)no grant on that stage covers it", doc)
-    assert re.search(r"(?i)whatever the filesystem holds", doc)
-    # What existence decides now, said as the wording rather than the verdict.
-    assert re.search(r"(?i)existence decides the \*\*wording\*\* and not the "
-                     r"verdict|decides the wording and not the verdict", doc)
+    assert re.search(r"(?i)does not declare the edit a forced test adaptation",
+                     doc)
+    # What existence decides. story-042 wrote that it decides the wording and
+    # not the verdict; story-068 made it decide whether the declaration is read
+    # at all, so the second half of that sentence is asserted absent here and
+    # the third check's own docstring is where the phrase now lives, if at all.
+    assert re.search(r"(?i)existence decides the \*\*wording\*\*|existence "
+                     r"decides the wording", doc)
+    assert re.search(r"(?i)whether the declaration is read at all", doc)
+    assert not re.search(r"(?i)decides the wording and not the verdict", doc), doc
+    # Control for that absence: the same search over the same text with the
+    # retired clause planted back into it.
+    assert re.search(r"(?i)decides the wording and not the verdict",
+                     f"{doc} Existence decides the wording and not the verdict.")
     assert re.search(r"(?i)describes a creation", doc)
     assert re.search(r"(?i)describes a modification", doc)
     # Both run-time checks are named, and stated as untouched by this.
@@ -2193,13 +2250,16 @@ def test_an_entry_naming_the_restricted_prefix_itself_is_reported(
 # --------------------------------------------------------------------------
 
 
-def test_the_wording_follows_the_root_and_the_rest_of_the_message_does_not(
+def test_the_wording_follows_the_root_and_the_shared_repair_does_not(
         tmp_path: Path):
     """The same entry against both roots: one verdict, two faults, one repair.
 
-    Asserted as a difference *and* as a sameness, so a change that varied
-    anything else with the root — the resolutions above all — fails here even
-    though both roots still report.
+    Asserted as a difference *and* as a sameness. What varies with the root is
+    the fault and — since story-068 — the third way out, which a present file
+    has and an absent one cannot: declaring nothing rescues a file that is not
+    there. What must not vary is everything before the fault and the two
+    resolutions both faults share, so a change that moved any of that with the
+    root fails here even though both roots still report.
     """
     holding, empty = fixture_roots(tmp_path)
     story = fixture_plan(CONFLICTING_ENTRY)
@@ -2211,7 +2271,10 @@ def test_the_wording_follows_the_root_and_the_rest_of_the_message_does_not(
     absent_fault = fault_in(absent, FIXTURE_PREFIX)
     assert present_fault and absent_fault
     assert present_fault != absent_fault
-    assert present.replace(present_fault, "") == absent.replace(absent_fault, "")
+    assert (present.split(present_fault, 1)[0]
+            == absent.split(absent_fault, 1)[0])
+    assert present.split(present_fault, 1)[1].startswith(
+        absent.split(absent_fault, 1)[1])
 
     assert re.search(r"(?i)modification", present_fault), present_fault
     assert re.search(r"(?i)revert check", present_fault), present_fault
