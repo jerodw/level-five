@@ -59,6 +59,7 @@ schema for the contract and the skeleton for the shape.
 	  title: <short title>
 	  description: |
 	    <what this story adds or changes, and why>
+	  workflow: <the workflow this session was started for>
 
 	tasks:
 	  - <bounded task>
@@ -92,6 +93,14 @@ schema for the contract and the skeleton for the shape.
 The facts below are injected from the workflow definition and the
 execution rules — the same files the coordinator enforces — not copied
 into this template.
+
+This session was started for the workflow named below, and every fact in
+this section is that workflow's. Record it as story.workflow in the artifact
+you write, so the run loads the workflow the plan was written against; an
+artifact naming any other is refused when the session ends, because the
+facts you were given here are not that workflow's.
+
+{{workflow_name}}
 
 Every likely_file_changes entry names a stage. These are the stages the
 workflow defines, and a plan must not name any other:

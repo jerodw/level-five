@@ -2358,6 +2358,15 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":
         "its subject is this repository's own module names",
+    "test_workflow_selection.py":
+        "the workflows it runs are built and written into roots it owns; what "
+        "it resolves live are the shipped declarations that are its subject — "
+        "the story schema's optional workflow field, the planner template that "
+        "must carry the selected name and ask for it to be recorded, and this "
+        "repository's own committed story artifacts, which must still parse "
+        "unchanged. The planner template is also copied into the harness root "
+        "the l5-plan cases run out of, because the template a session renders "
+        "is the one this repository ships",
 }
 
 

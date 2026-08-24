@@ -698,7 +698,8 @@ def test_the_control_for_every_incomplete_story_above_is_the_complete_one():
 def test_artifact_problems_reports_the_new_class(tmp_path: Path):
     path = tmp_path / "story-900.yaml"
     path.write_text(OFFENDING_ARTIFACT, encoding="utf-8")
-    found = plan_validation.artifact_problems([path], STAGES, REPO_ROOT)
+    found = plan_validation.artifact_problems([path], STAGES, REPO_ROOT,
+        REPO_ROOT, WORKFLOW['name'])
     assert list(found) == [path]
     assert any(OFFENDING in problem for problem in found[path])
 
@@ -706,7 +707,8 @@ def test_artifact_problems_reports_the_new_class(tmp_path: Path):
 def test_artifact_problems_holds_the_well_named_artifact_back(tmp_path: Path):
     path = tmp_path / "story-901.yaml"
     path.write_text(WELL_NAMED_ARTIFACT, encoding="utf-8")
-    assert plan_validation.artifact_problems([path], STAGES, REPO_ROOT) == {}
+    assert plan_validation.artifact_problems([path], STAGES, REPO_ROOT,
+        REPO_ROOT, WORKFLOW['name']) == {}
 
 
 def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
@@ -718,7 +720,8 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
     """
     unparseable = tmp_path / "story-902.yaml"
     unparseable.write_text("this: is: not: a story\n\t- ?\n", encoding="utf-8")
-    found = plan_validation.artifact_problems([unparseable], STAGES, REPO_ROOT)
+    found = plan_validation.artifact_problems([unparseable], STAGES, REPO_ROOT,
+        REPO_ROOT, WORKFLOW['name'])
     assert found[unparseable]
     assert not any(OFFENDING in problem for problem in found[unparseable])
 
@@ -726,7 +729,8 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
     reached.write_text(OFFENDING_ARTIFACT, encoding="utf-8")
     assert any(OFFENDING in problem
                for problem in plan_validation.artifact_problems(
-                   [reached], STAGES, REPO_ROOT)[reached])
+                   [reached], STAGES, REPO_ROOT,
+                   REPO_ROOT, WORKFLOW["name"])[reached])
 
 
 def corpus() -> dict[str, dict]:

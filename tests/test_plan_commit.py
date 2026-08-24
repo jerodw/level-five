@@ -65,6 +65,7 @@ from conftest import repointed_at_todays_signature
 import conftest
 
 import context_assembler
+import harness_config
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
@@ -736,9 +737,21 @@ def test_the_argument_list_handed_to_claude_is_what_the_exec_passed(
         HARNESS_ROOT, context_assembler.PROSE_LAYER, {}
     )
     assert prose, "the planner's prose partial is missing"
+    # story-069 gave the planner the name of the workflow the session was
+    # rendered against, which the old script does not resolve either: it
+    # renders `{{workflow_name}}` as the literal None where today's script
+    # renders the name it loaded. Subtracted here for the same reason and in
+    # the same shape as the partial above, the name resolved the way the script
+    # resolves it rather than written down.
+    name = harness_config.load_config(planning.root).get(
+        "workflow", "story-workflow")
     prompt_at = after["argv"].index("--append-system-prompt") + 1
     without_prose = list(after["argv"])
-    without_prose[prompt_at] = without_prose[prompt_at].replace(prose, "None")
+    without_prose[prompt_at] = (
+        without_prose[prompt_at]
+        .replace(prose, "None")
+        .replace(f"\n{name}\n", "\nNone\n")
+    )
     assert without_prose == before["argv"]
     assert after["argv"] != before["argv"]  # the partial really did reach it
     assert after["cwd"] == before["cwd"]
