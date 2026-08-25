@@ -1,0 +1,235 @@
+story:
+  id: story-072
+  title: The planner proposes the workflow it plans for
+  description: |
+    Since story-069 a work item names the workflow it runs under, and
+    `l5-plan --workflow` states the workflow the planner's stage facts are
+    rendered against. Without the flag, the script falls back to the
+    configured `workflow` key and the session proceeds with no sign a choice
+    existed: forgetting the flag and deliberately choosing `story-workflow`
+    produce identical output.
+
+    That is the wrong shape for this decision, because the two shipped
+    workflows differ in their stage lists and in what they check.
+    `refactor-workflow` has no tester and its implementer carries a suite
+    census rather than a create restriction and a revert check; the census
+    catches a refactor weakening existing validation, but it does not catch an
+    implementer authoring the tests that judge its own work, which is what
+    stories 013 and 017 exist to prevent. In the other direction, a refactor
+    planned as a story has already happened three times: story-070 records
+    that stories 015, 016 and 026 each granted the implementer a `create`
+    exception it did not need, purely to disable a check about modification.
+
+    This story splits planning in two. Invoked without `--workflow`,
+    `l5-plan` first runs the planner against a prompt carrying the request and
+    what each defined workflow is for, and nothing else -- it cannot be
+    rendered against a workflow, because choosing one is its job. That
+    invocation writes a workflow name and the reasoning behind it. `l5-plan`
+    reads the name mechanically, shows the reasoning, and asks the developer
+    to accept it, name another, or abort; the confirmed name is what the real
+    planning session is rendered against. The planner proposes and the
+    developer confirms, which is the same instinct `stage_exceptions` already
+    applies: a grant carries a stated reason because it is a judgement rather
+    than a flag.
+
+    Where "what a workflow is for" comes from is the crux. No definition
+    carries such a statement today, so one is added to the definitions rather
+    than to the prompt, and a third workflow becomes selectable by shipping a
+    definition rather than by editing a classifier that enumerates the ones it
+    knows.
+
+    The story also makes a run say which workflow it is executing. Today the
+    announcement names the story and not the definition running it, and with
+    two definitions differing in their stage list, a reader watching a run go
+    implementer then documenter cannot tell a correct refactor from a story
+    that skipped its tester. The name is already resolved and already recorded
+    in `state.json`, so this is a matter of saying what the run already knows.
+
+    With `--workflow`, none of the above happens and the session is what it is
+    today.
+  workflow: story-workflow
+
+tasks:
+  - Add a required top-level `applies_when` string to each workflow definition under `workflows/`, stating when that workflow is the right one to plan under. `story-workflow`'s says the correctness claim is that something new works; `refactor-workflow`'s says the correctness claim is that behaviour is unchanged and the existing validation is carried across rather than weakened. Write both for the reader who has to choose between them, since that is the only thing that reads them.
+  - Add a validator that reports a workflow definition carrying no usable `applies_when`, beside `cost_ceiling_problems`, `self_route_problems` and `retry_routing_problems` in `orchestration/story_coordinator.py`, and run it at pre-flight where those are run. A definition that cannot say what it is for cannot be chosen between, and discovering that at the first stage has already spent one.
+  - Give the fixture builder in `tests/conftest.py` an `applies_when` default, so every built definition satisfies the new validator and a test that cares about the field states it.
+  - Add `prompts/workflow-selector.md`, the phase-one prompt. It carries the request text and each defined workflow's name and `applies_when`, derived from what the harness holds rather than written into the prompt. It is one classifying turn and not an interview: it returns a workflow name and the reasoning for it, or says it is unsure and returns no name rather than guessing. It carries no workflow stage facts.
+  - Add `schemas/workflow-selection.schema.json` and declare it in `schemas/manifest.json`. It describes what phase one writes - a workflow name, which may be absent where the classification is unsure, and the reasoning, which is always required because the reasoning is what the developer is being asked to review.
+  - Add `orchestration/workflow_selection.py` holding the parts that are pure over their inputs - assembling the candidate name and `applies_when` pairs, reading and validating what phase one wrote, deciding whether there is a proposal to accept, and interpreting the developer's reply as accept, override or abort. Everything it does is returned rather than printed, the way `plan_run_offer` and `plan_commit` do, so `scripts/l5-plan` remains the one place the developer-facing wording lives.
+  - Teach `scripts/l5-plan` the two-phase invocation. With `--workflow`, nothing changes and phase one is not invoked at all. Without it, and with a terminal, phase one runs, its reasoning and proposal are printed, and the developer accepts with Enter, overrides by naming another defined workflow, or aborts. The confirmed name is what the planning session is rendered against and what the end-of-session mismatch refusal checks the artifact against.
+  - Refuse an invocation with no terminal and no `--workflow`, through `story_coordinator.refuse`, naming the flag and listing the workflows the harness defines. The refusal happens before phase one is invoked - nothing is run, nothing is written and nothing is committed - and it reads nothing, so it cannot block. The TTY question is answered by `plan_run_offer.can_prompt` rather than by a second spelling of it.
+  - Stop `scripts/l5-plan` consulting the configured `workflow` key. After this story no path renders the planner against a name that was neither given on the command line nor confirmed by the developer, so the fallback has nowhere left to apply. The key stays declared and stays read by the coordinator, where a story artifact naming no workflow still resolves through it.
+  - Name the workflow in the announcement a fresh run already makes, so the first line on the console and the first line of `events.log` both answer which definition is executing. Keep it one `append_event` call and keep the `workflow-started` kind, so the log and `execution-history.json` stay two renderings of one write.
+  - Name the workflow the resumed run loaded in the `resumed` event, which is the first thing a resumed run says. It comes from what the resume resolved and wrote back to `state.json`, not from re-reading the artifact.
+  - Carry the suite's own headless `l5-plan` call sites onto `--workflow`. Each of them runs the script as a subprocess with no terminal, and each is about something other than workflow selection - what the prompt carries, what the session commits, where the branch is cut - so stating the workflow is what those invocations should have said all along.
+  - Replace the assertion in `tests/test_workflow_selection.py` that a session started with no `--workflow` is rendered against the configured `workflow` key. That behaviour is what this story removes, so the assertion becomes the refusal that now stands in its place rather than being deleted.
+  - Add a standing check of the two-phase planning session and a standing check that a run announces the workflow it is executing, with the negative controls this repository requires.
+
+acceptance_criteria:
+  - Every workflow definition under `workflows/` carries a non-empty `applies_when`, and a definition without one is reported by a validator that the coordinator runs at pre-flight, before any stage is invoked.
+  - "`l5-plan --workflow <name>` invokes the planner exactly once. No phase-one invocation is made, no proposal is printed and no confirmation is asked for, and what the session is rendered against is the name the flag gave."
+  - "Invoked at a terminal with no `--workflow`, `l5-plan` invokes the planner twice: once against `prompts/workflow-selector.md`, and once against `prompts/planner.md` rendered against the confirmed workflow. The workflow facts injected into the second invocation are the confirmed workflow's, read from what was injected rather than from what was asked for."
+  - The confirmation shows the reasoning phase one wrote, not only the name it chose, and lists the workflows the developer may name instead.
+  - Pressing Enter at the confirmation accepts the proposal. Naming another defined workflow runs the session under that one instead, and what the session is rendered against is the name the developer typed.
+  - "A phase-one answer that is unsure, absent, unreadable, unparsable, or names a workflow no definition has yields no proposal: the developer is told what happened, asked to name a workflow, and an empty reply aborts with no planning session started and no artifact written. Nothing is rendered against a name nothing chose."
+  - "A third workflow definition, shipped with an `applies_when` and nothing else, is offered to phase one and can be proposed and confirmed, with no edit to `prompts/workflow-selector.md`."
+  - "An invocation with no terminal and no `--workflow` is refused: the message names `--workflow`, the exit status is non-zero, no planner invocation is made, no story artifact is written and nothing is committed. It reads no input, so it returns whether or not anything is on stdin."
+  - "An invocation with no terminal and `--workflow` behaves exactly as it does today: one planner invocation, rendered against the named workflow, and the artifact it writes committed and pushed."
+  - "`scripts/l5-plan` no longer reads the configured `workflow` key on any path, and the workflow the end-of-session mismatch refusal holds the artifact to is the name the flag gave or the developer confirmed."
+  - A fresh run's first console line and the first line of its `events.log` name the workflow being executed as well as the story, and the event is still one `workflow-started` entry in `execution-history.json`.
+  - A resumed run says which workflow it loaded, in the first thing it says, taken from what the resume recorded in `state.json`.
+  - A run started by pressing Enter at `l5-plan`'s run offer announces its workflow in the same way, observed from that run's own output rather than assumed from the code path it shares.
+  - The story artifact this repository's own planning sessions write is unchanged in shape - `story.workflow`, the facts injection and the end-of-session mismatch refusal are story-069's and keep working as they are.
+  - The full suite passes, and every edit to an existing test module is either a call site stating the workflow it renders against, an event literal following the announcement, or the replacement of the assertion whose subject this story removed.
+
+technical_plan:
+  implementation_steps:
+    - Add `applies_when` to both shipped definitions and the validator that requires it, wire the validator in at pre-flight beside the other definition validators, and give the fixture builder its default. Run the suite here - a missing default reddens every coordinator run, which is the fastest way to find out whether the validator is reachable from where a run reads it.
+    - Write `prompts/workflow-selector.md` and `schemas/workflow-selection.schema.json`, and declare the schema in the manifest. The prompt is handed the candidates and the path to write its answer to; it enumerates nothing itself.
+    - "Build `orchestration/workflow_selection.py` as pure functions over inputs a test can construct: candidates from a harness root, a proposal from the text phase one left, and a decision from a reply string. Nothing there prompts and nothing there decides what the offer is worth."
+    - Change `scripts/l5-plan` last, once the pieces it composes exist. The order inside it matters - the no-terminal refusal decides before phase one is invoked, so a refused invocation costs nothing and writes nothing.
+    - Name the workflow in the `workflow-started` message and in the `resumed` message. Both are existing `append_event` calls with existing kinds; nothing new is written and no second line is added.
+    - Sweep the suite's headless `l5-plan` call sites onto `--workflow`, and follow the two event literals onto the new announcement. Any further adaptation the suite turns up is decided by the same rule these were - a test whose subject is not workflow selection states the workflow it renders against rather than relying on a fallback that no longer exists.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Gains `applies_when`, saying this workflow is for work whose correctness claim is that something new works.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: Gains `applies_when`, saying this workflow is for work whose correctness claim is that behaviour is unchanged and the existing validation is carried across.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The `applies_when` validator and its pre-flight wiring, and the two announcement messages that name the workflow being executed.
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: The candidate pairs phase one is given are each definition's name and `applies_when`, which is a reading of the workflows directory beside `workflow_names`.
+    - file: orchestration/workflow_selection.py
+      stage: implementer
+      reason: New. The pure parts of the proposal - candidates, the answer phase one wrote, and the developer's reply read as accept, override or abort.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: The two-phase invocation, the confirmation, the no-terminal refusal, and the removal of the configured-workflow fallback.
+    - file: prompts/workflow-selector.md
+      stage: implementer
+      reason: New. Phase one's prompt - the request and what each defined workflow is for, carrying no workflow stage facts.
+    - file: schemas/workflow-selection.schema.json
+      stage: implementer
+      reason: New. What phase one writes, so `l5-plan` reads a name mechanically rather than parsing prose.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: Declares the new schema, which is the inventory every reader of the schemas directory resolves against.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Only if the configured `workflow` key's declared meaning changes for this repository. The key stays declared and stays read by the coordinator, so this entry is expected to be untouched.
+    - file: tests/conftest.py
+      stage: implementer
+      reverting_breaks_the_suite: The fixture builder gains an `applies_when` default. Reverting it leaves every built definition failing the new pre-flight validator, so every coordinator-driven run in the suite refuses and the modules driving them go red.
+      reason: Built definitions must satisfy the validator this story adds, and a test that cares about the field states it rather than inheriting it.
+    - file: tests/test_foreign_work_refusal.py
+      stage: implementer
+      reverting_breaks_the_suite: Its `CLEAN_RUN_EVENTS` is an exact equality over the whole event stream and holds the old announcement literal. Reverting it compares the old text against the message the run now writes, and the assertion fails.
+      reason: The first entry of the asserted event stream follows the announcement onto its new wording.
+    - file: tests/test_rerun_refusal.py
+      stage: implementer
+      reverting_breaks_the_suite: Its `FIRST_RUN_EVENTS` holds the same announcement literal under the same exact-equality assertion, so reverting it fails for the same reason.
+      reason: The first entry of the asserted event stream follows the announcement onto its new wording.
+    - file: tests/test_workflow_selection.py
+      stage: implementer
+      reverting_breaks_the_suite: It runs `scripts/l5-plan` headless, and one of its assertions is that an invocation with no `--workflow` is rendered against the configured `workflow` key. Reverting leaves that session refused and the assertion red, because the behaviour it describes is the one this story removes.
+      reason: Its headless call sites state the workflow they render against, and the configured-fallback assertion is replaced by the refusal that now stands where it stood.
+    - file: tests/test_planner_injection.py
+      stage: implementer
+      reverting_breaks_the_suite: Its three `l5-plan` invocations run as subprocesses with no terminal and no `--workflow`. Reverting them leaves the script refusing before it invokes anything, so the assertions about what the prompt carries have no session to read.
+      reason: Each invocation states the workflow it renders against.
+    - file: tests/test_plan_assignment_refusal.py
+      stage: implementer
+      reverting_breaks_the_suite: Its two headless `l5-plan` invocations are refused without the flag, so the refusals it is actually asserting on never happen.
+      reason: Each invocation states the workflow it renders against.
+    - file: tests/test_plan_time_validation.py
+      stage: implementer
+      reverting_breaks_the_suite: It drives `scripts/l5-plan` headless to compare what plan-time validation does now with what an earlier harness did. Reverting leaves the current-harness invocations refused before validation runs.
+      reason: Its current-harness invocations state the workflow they render against; the ones running an earlier harness copy are left as they are, because that harness has no such flag.
+    - file: tests/test_plan_commit.py
+      stage: implementer
+      reverting_breaks_the_suite: It runs `scripts/l5-plan` headless to observe what the script commits. Reverting leaves nothing committed to observe, because the invocation is refused before the session starts.
+      reason: Its invocations state the workflow they render against.
+    - file: tests/test_branch_base.py
+      stage: implementer
+      reverting_breaks_the_suite: It runs `scripts/l5-plan` headless to observe where the plan commit lands. Reverting leaves the invocation refused, so there is no commit to locate.
+      reason: Its invocations state the workflow they render against.
+    - file: tests/test_plan_run_offer.py
+      stage: implementer
+      reverting_breaks_the_suite: It runs a copy of `scripts/l5-plan` headless to observe the run offer. Reverting leaves the session refused before the offer is reached.
+      reason: Its invocations state the workflow they render against.
+    - file: tests/test_harness_layer_extraction.py
+      stage: implementer
+      reverting_breaks_the_suite: Its `l5-plan` invocation runs headless to observe the shared partial in the rendered planner prompt. Reverting leaves the invocation refused and no prompt rendered.
+      reason: The invocation states the workflow it renders against.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: implementer
+      reverting_breaks_the_suite: It asserts which configured keys `scripts/l5-plan` reads, and this story removes the script's read of `workflow`. Reverting leaves it asserting a read that is no longer there.
+      reason: The set of keys the script reads changes; the key itself stays declared and stays proven where the coordinator reads it.
+    - file: tests/test_workflow_proposal.py
+      stage: tester
+      reason: New. The standing check of two-phase planning - the flag skipping phase one, a proposal shown with its reasoning, acceptance, override, the unusable answer, the headless refusal, a third definition becoming selectable with no prompt edit, and the `applies_when` validator reporting a definition that carries none.
+    - file: tests/test_run_announces_its_workflow.py
+      stage: tester
+      reason: New. The standing check that a fresh run, a resumed run and a run started from the planning offer each name the workflow they execute, read from the run's own console output and its `events.log`.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Two-phase planning, what `applies_when` is for and that a workflow definition must carry one, that `--workflow` is what a session with no terminal states its choice with, and that phase one is a second planner invocation outside the per-stage cost ceilings.
+
+scope:
+  modify:
+    - scripts/l5-plan
+    - orchestration/story_coordinator.py
+    - orchestration/harness_config.py
+    - orchestration/workflow_selection.py
+    - prompts/workflow-selector.md
+    - schemas/workflow-selection.schema.json
+    - schemas/manifest.json
+    - workflows/
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/stories/
+    - tests/history-fixtures/
+    - .harness/runs-archive/
+    - templates/
+    - schemas/story.schema.json
+    - orchestration/plan_validation.py
+    - prompts/planner.md
+    - prompts/harness-layer.md
+    - prompts/prose-layer.md
+    - prompts/documenter.md
+    - prompts/story-implementer.md
+    - prompts/story-tester.md
+    - prompts/story-verifier.md
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+
+verification_requirements:
+  - Confirm `--workflow` skips phase one entirely - one planner invocation, no proposal printed, no confirmation asked - and that the resulting session is what today's session is.
+  - Confirm that without the flag, a request whose correctness claim is that behaviour is unchanged is proposed as a refactor and one that adds behaviour is proposed as a story, and that confirming each renders the planner against the confirmed workflow. Read the workflow from the facts injected into the second invocation, not from what was asked for.
+  - Confirm the developer can override the proposal by naming another defined workflow, and that the overriding name is what the session is rendered against.
+  - Confirm an unusable phase-one answer - unsure, absent, unparsable, or naming a workflow no definition has - yields no proposal, and that an empty reply then aborts with no session started and no artifact written. Check each of those shapes rather than one standing for the rest.
+  - Confirm a third workflow definition becomes selectable with no edit to `prompts/workflow-selector.md`, which is the property that makes `applies_when` worth adding rather than a prompt that lists what it knows.
+  - Confirm a definition carrying no `applies_when` is reported at pre-flight, before a stage is invoked, and that both shipped definitions carry one that says when that workflow applies rather than restating its name.
+  - Confirm a fresh run, a resumed run, and a run started by pressing Enter at the planning offer each announce the workflow they are executing, by reading that run's own first console line and the first line of its `events.log` rather than the code that writes them. The run started from the planning offer is the one to observe rather than infer, since it is the path that would silently diverge.
+  - Confirm a headless invocation without `--workflow` is refused naming the flag, invokes no planner, writes nothing, commits nothing and never blocks waiting on input, and that the same headless invocation with `--workflow` succeeds unchanged.
+  - Confirm `scripts/l5-plan` reads the configured `workflow` key on no path, and that the coordinator still reads it for a story artifact that names no workflow.
+  - Confirm each edit to an existing test module is a call site stating its workflow, an event literal following the announcement, or the replacement of the removed assertion - and that no assertion lost strength in the process. The replacement of the configured-fallback assertion is the one to look at closely.
+  - Confirm the suite passes in a clean clone with the story committed.
+  - Report that phase one is a second planner invocation which no cost ceiling covers, since the planner is not a workflow stage and story-063's ceilings are per stage. Say so as a finding about what the harness now spends rather than as a defect in this story.
+
+constraints:
+  - "`--workflow` keeps working exactly as it does today and always skips phase one. A session given the flag makes no phase-one invocation at all."
+  - No path renders the planner against a workflow that was neither named on the command line nor confirmed by the developer. Neither an unusable proposal nor a missing terminal may fall back to the configured key.
+  - The no-terminal refusal has no escape hatch - no environment variable, no configuration key, no implicit acceptance. A call site that needs to plan without a terminal names its workflow.
+  - Phase one is one classifying turn and carries no workflow stage facts. It cannot be rendered against a workflow, because choosing one is what it is for.
+  - The candidates phase one is shown are derived from the definitions the harness holds. No workflow name and no description of a workflow is written into the prompt.
+  - The announcement stays one `append_event` call per event with the kinds those events already carry, so `events.log` and `execution-history.json` remain two renderings of one write and `l5-status` keeps reading what it reads.
+  - "Story-069's mechanism is untouched: `story.workflow`, the facts injection, `rendered_against` and the end-of-session mismatch refusal in `orchestration/plan_validation.py` all keep working as they are, and the mismatch refusal stays the backstop rather than being replaced by the confirmation."
+  - No new cost mechanism. Phase one's spend is recorded and reported, not budgeted, because the planner is not a workflow stage and inventing a ceiling for it would put a second budget mechanism outside the run's accounting.
+  - What either workflow declares beyond `applies_when` is out of scope. `refactor-workflow`'s stages, checks and ceilings are story-070's subject.
+  - Choosing a workflow at run time stays out of scope. The plan is written against a workflow's facts, so the plan is where the choice belongs.
