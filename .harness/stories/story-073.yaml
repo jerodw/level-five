@@ -1,0 +1,131 @@
+story:
+  id: story-073
+  title: A stage that runs no suite cannot run one
+  description: |
+    `prompts/story-tester.md` tells the tester, in plain words and with the
+    reasoning attached, that it executes no test command. story-070's tester
+    ran the target's whole suite twice inside its own turn anyway: twenty-plus
+    minutes of wall clock spent producing a result the coordinator discards and
+    recomputes, plus the turn-length risk story-064 and story-066 exist to
+    remove. The prompt is correct. What failed is the assumption that saying it
+    is enough — the same lesson the story-013 pair recorded when an injected
+    written rule did not hold and a mechanical check replaced it.
+
+    This story denies the invocation in `hooks/bash_guard.py`, the deny-only
+    PreToolUse hook already passed to every stage invocation, which already
+    decomposes a command string across pipes, `;`, redirection and command
+    substitution. Both observed invocations are exactly what that decomposition
+    is for.
+
+    Two things decide the denial and neither is hardcoded. The command comes
+    from the target's own `test_command` in `.harness/config.yaml`, never from a
+    framework name, to the standing rule story-040 and story-041 established.
+    The restriction comes from a new per-stage declaration in the workflow
+    definition, so the stages that execute no test command carry it and a stage
+    that legitimately runs the suite is unaffected by construction rather than
+    by the guard happening not to fire.
+  workflow: story-workflow
+
+tasks:
+  - Add a `may_not_run_suite` stage declaration to `workflows/story-workflow.json` on the tester, documenter and verifier, and to `workflows/refactor-workflow.json` on the documenter and verifier. The implementer stages are deliberately left without it: story-064 established their targeted runs and this story does not touch them.
+  - Teach `hooks/bash_guard.py` a second denial family beside the mutators — a component that invokes the configured test command over the same targets — reading that command from its own argv, and saying nothing at all when it was given none.
+  - Extend the hook declaration in `hooks/settings.json` and its rendering in `orchestration/agent_runner.py` so the configured command reaches the guard as an argument, escaped so a command containing quotes or spaces survives both the JSON declaration and the shell word-splitting the hook runner performs.
+  - Widen `run_agent` with one keyword-only parameter carrying the configured command, passed by `orchestration/story_coordinator.py` only for a stage whose workflow entry declares the restriction, so a stage under none is invoked with exactly the arguments it was invoked with before.
+  - Shorten the paragraph at `prompts/story-tester.md:129` so it states the rule and points at the guard rather than arguing for it at length. The prompt does not grow.
+  - Write a standing validation module for the new denial, its discrimination, and its derivation from configuration.
+  - Record the mechanism in `.harness/docs/ARCHITECTURE.md`.
+
+acceptance_criteria:
+  - Both commands recorded in the request are denied verbatim by the guard driven as a program, with the target's configured test command supplied: the `> /tmp/suite.txt 2>&1; tail -40 /tmp/suite.txt` form and the `2>&1 | tail -40` form.
+  - A denial fires on a component whose non-flag words equal the configured command's non-flag words, whatever flags, redirections, pipes or `;`-chained neighbours surround it.
+  - An invocation naming a target the configured command does not name — a single named test file in place of the configured directory — produces no decision at all, and this is asserted beside a denied command differing only in that one feature.
+  - The denial is decided from the configured `test_command`: changing that value in a constructed target moves what the guard denies and what it permits, together.
+  - No framework name, test-runner name or target-stack literal is added to harness source; the existing scan over `hooks/bash_guard.py` in `tests/test_no_target_stack_in_harness_source.py` stays clean.
+  - A stage whose workflow entry does not declare `may_not_run_suite` is invoked without the command, and the guard driven with no command argument produces no decision for the very command it denies when given one.
+  - The guard keeps both load-bearing properties: it has no allow path, and every failure to establish something — an absent argument, an unparseable one, a malformed payload — yields no decision rather than a denial.
+  - The denial's reason names the coordinator's post-turn run of the configured command as where the answer comes from, and the injected suite-run record as where the stage reads it, so a denied stage redirects rather than probes the guard.
+  - `workflows/story-workflow.json` declares the restriction on the tester, documenter and verifier and not on the implementer; `workflows/refactor-workflow.json` declares it on the documenter and verifier and not on the implementer.
+  - Both shipped workflow definitions still pass the pre-flight well-formedness validators unchanged.
+  - The paragraph in `prompts/story-tester.md` is shorter than the paragraph it replaces and names the guard as what enforces it.
+
+technical_plan:
+  implementation_steps:
+    - In `hooks/bash_guard.py`, add a parser for the guard's own argv that yields the configured command or None, failing open on anything it cannot read, and thread that value into `offence` so each decomposed component is judged against it after the mutator and redirect checks.
+    - Decide a component to be a suite invocation when its words, with environment assignments dropped, wrapper commands unwrapped by the existing `_mutator` machinery's convention, flags removed and redirection operators and their targets removed, equal the same reduction of the configured command. Equality over the reduced word sequences is the whole rule: added flags and redirections do not save an invocation, and a substituted or extra positional argument makes it a different invocation the guard says nothing about.
+    - Emit the denial through the existing `deny` helper with a reason of its own rather than the mutation reason, since the remedy is different — read the coordinator's record, do not reach for Edit.
+    - In `hooks/settings.json`, add a second placeholder to the hook command so arguments can be rendered into it, keeping the file free of any absolute path.
+    - In `orchestration/agent_runner.py`, give `guard_settings` a keyword for the configured command and render the declaration by loading it as JSON, substituting, and dumping it again, so a command containing a quote cannot break the declaration. Shell-quote the value so the hook runner passes it as one word. `run_agent` gains one keyword-only parameter and passes it to `guard_settings`.
+    - In `orchestration/story_coordinator.py`, look the restriction up on the stage's own workflow entry and build the keyword argument the way the `max_execution_cost_usd` ceiling is already built — present only when the stage declares it, absent otherwise, so no fake runner in the suite has to know the parameter exists.
+    - Declare `may_not_run_suite` on the stages named in the tasks, in both shipped workflow definitions.
+    - Replace the six-line paragraph in `prompts/story-tester.md` with a short statement that this stage runs no test command, that the guard denies one, and that the coordinator's record below is the answer.
+  likely_file_changes:
+    - file: hooks/bash_guard.py
+      stage: implementer
+      reason: The denial itself, its argv parser, and the docstring's account of what the guard now covers.
+    - file: hooks/settings.json
+      stage: implementer
+      reason: The hook command gains a placeholder for rendered arguments.
+    - file: orchestration/agent_runner.py
+      stage: implementer
+      reason: `guard_settings` renders the configured command into the declaration; `run_agent` carries it.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Reads the stage's declaration and passes the command only for a stage that carries it.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Declares the restriction on the tester, documenter and verifier.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: Declares the restriction on the documenter and verifier.
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: The paragraph shortens and points at the guard.
+    - file: tests/test_stage_tool_grants.py
+      stage: implementer
+      reason: Adapts the two assertions this story's change to `run_agent` and to the shipped hook declaration make stale.
+      reverting_breaks_the_suite: This module asserts `run_agent`'s parameter list exactly, against a carried baseline plus an explicit `ADDED_SINCE_STORY_035` list, and asserts what the shipped `hooks/settings.json` declaration contains. Both assertions are about the two files this story deliberately changes, so they go red the moment the change lands and reverting the adaptation restores a red suite rather than a green one. story-063 made the same appended edit to the same list for the same reason.
+    - file: tests/test_suite_run_denial.py
+      stage: tester
+      reason: The standing module for the new denial — both recorded commands, the permitted single-file invocation beside them, the derivation from a constructed target's configured command, the silence when no command is supplied, and the absence controls that show each of those checks can report a violation.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the guard now denies a suite invocation for a stage declaring `may_not_run_suite`, and that the command it compares against comes from the target's configuration.
+
+scope:
+  modify:
+    - hooks/bash_guard.py
+    - hooks/settings.json
+    - orchestration/agent_runner.py
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - prompts/story-tester.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - templates/config.yaml
+    - .harness/config.yaml
+    - prompts/story-implementer.md
+    - prompts/refactor-implementer.md
+    - schemas/
+
+verification_requirements:
+  - Confirm both commands recorded in the request are denied, verbatim, including the redirect-then-`;` form and the pipe-into-`tail` form, by the guard run as a program with real PreToolUse payloads.
+  - Confirm a single named test file is still permitted, so the guard is shown to discriminate rather than shown to fire.
+  - Confirm the denial is decided from the configured `test_command`: a constructed target with a different value moves both what is denied and what is permitted.
+  - Confirm no framework name or target-stack literal entered harness source.
+  - Confirm a stage that legitimately runs the suite is unaffected — a stage without the declaration is invoked with no command, and the guard given no command denies nothing.
+  - Confirm the guard still has no allow path and still fails open on every input it cannot establish.
+  - Confirm the denial's reason names where the answer comes from instead of only refusing.
+  - Confirm the tester prompt's paragraph is shorter than what it replaced.
+  - Confirm the coordinator invokes an unrestricted stage with exactly the arguments it did before, so no stage under no declaration changed.
+
+constraints:
+  - The guard stays deny-only and fail-open. No input may produce a decision other than "deny", and anything the guard cannot establish yields no decision at all.
+  - The guard stays a stdlib-only program with no harness imports and no configuration parsing of its own.
+  - The comparison is against the target's configured `test_command`. No framework name, runner name or file-extension convention enters harness source.
+  - What the coordinator runs, when, and how many times is settled by story-066 and is not changed here.
+  - The implementer stages' targeted test runs, established by story-064, are not restricted by this story.
+  - The tester must remain able to run tests it authors; only an invocation of the configured command over the configured targets is denied.
+  - The allowlist in `.harness/config.yaml` is not the mechanism for this and is not edited.
+  - `prompts/story-tester.md` does not grow. If it changes at all it gets shorter and points at the guard.
