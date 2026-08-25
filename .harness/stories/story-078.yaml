@@ -1,0 +1,108 @@
+story:
+  id: story-078
+  title: An interrupt test does not race its own teardown
+  description: |
+    `test_an_interrupt_still_commits_what_was_written_and_exits_130` failed in
+    two full-suite runs on macOS at `4118d3e` and passes in isolation. The
+    assertion that broke was `assert status == 130`, against an observed `120`.
+    The contract it guards held -- the interrupted session still committed
+    exactly its artifact -- so what failed was the reporting of the interrupt,
+    not the interrupt.
+
+    The shared pty teardown is where it fails. `drain` in
+    `tests/test_plan_commit.py` gives up after a fixed window of silence,
+    closes the pty master, and only then reaps the child. So the master can be
+    closed while the child is still alive and still holds it, and the status
+    is read after that close rather than before it. Reorder the teardown: read
+    to EOF, reap the child, close the master last, so nothing the teardown does
+    can land between the signal and the status the test reads.
+
+    Every module that drives `l5-plan` on a terminal imports this one `drain` --
+    `test_plan_commit`, `test_plan_run_offer`, `test_run_announces_its_workflow`
+    and `test_workflow_proposal` -- so they share the race and they share the
+    fix. That is the answer to whether the siblings carry it, established from
+    the import rather than surveyed case by case.
+
+    The assertion is not weakened to make it pass. `exit 130` is story-023's
+    contract and stays asserted exactly as it is; accepting `120` beside it
+    would turn a flake into a rule nothing enforces.
+  workflow: story-workflow
+
+tasks:
+  - Confirm, by deliberate reproduction rather than by inference, what substitutes an exit status for the signal's - drive a child on a pty, close the master while the child still has unflushed output, and observe the status the parent then reads.
+  - Reorder `drain` so the pty master is closed only after the child has been reaped - read to EOF, wait for the child, close the master last - leaving what it returns and every caller's use of it unchanged.
+  - Replace the fixed window of silence, which serves as both the end-of-output detector and the only bound on a child that never exits, with a single overall deadline whose expiry kills the process group and fails with a message naming the deadline.
+  - Leave `test_an_interrupt_still_commits_what_was_written_and_exits_130` asserting what it asserts today - the signal's status, and exactly the one artifact committed.
+  - Write the control-and-subject pair that proves the mechanism - one child, one signal, the racy teardown against the shipped one - so the diagnosis is established in seconds rather than under a loaded machine.
+  - Show the interrupt test still reddens when the behaviour it is about is broken, so the fix removed a race rather than the test's ability to report one.
+  - State plainly in the run's own artifacts whether the original full-suite failure was seen again, rather than claiming a fix that was never watched working.
+  - Record the teardown rule where this repository's other testing conventions are recorded.
+
+acceptance_criteria:
+  - The interrupt test asserts the same two things it asserts today - the signal's exit status, and that exactly `.harness/stories/story-900.yaml` was committed - with neither relaxed, widened to admit a second status, nor removed.
+  - `drain` never closes the pty master while the child is alive - the close happens after the child has been reaped, on every path that returns a status.
+  - A test drives a child to a known signal status through the shipped teardown and reads that status back, and the same child driven through a teardown that closes the master early reads back a different one - so the mechanism is shown rather than asserted.
+  - A child that never exits is reported as a failure naming the deadline that expired, not as a status the teardown produced, and the process group is killed rather than left running.
+  - A child that is silent for longer than the old window of silence and then exits is drained to its true status, because silence is no longer read as the end of its output.
+  - The interrupt test fails when the script it drives exits under interrupt with some status other than the signal's, demonstrated rather than argued.
+  - Every module that imports `drain` - `test_plan_commit`, `test_plan_run_offer`, `test_run_announces_its_workflow`, `test_workflow_proposal` - still passes, and none of them gains its own copy of the teardown.
+  - `drain` still returns the child's status and its decoded output, and no caller's call site changes.
+  - The run's artifacts say whether the original full-suite failure on macOS was reproduced before the change, and say so plainly either way rather than implying a before-and-after that was not observed.
+  - Nothing in `scripts/l5-plan` changes - the interrupt handling, the commit, the push and the run offer are all as they were.
+
+technical_plan:
+  implementation_steps:
+    - Reproduce the substituted status deliberately - a child on a pty whose master is closed while it still has unflushed output - and record what was observed, so the fix is shaped around a confirmed mechanism rather than around CPython behaviour inferred from an exit code.
+    - Rewrite `drain` so its loop ends at end-of-output rather than at a window of silence, then reaps the child, then closes the master - keeping its signature, its return value and its decoding of the output exactly as they are.
+    - Give the loop one overall deadline, and on expiry kill the process group and raise a failure whose message names the deadline, so a genuinely hung child is reported rather than turned into whatever status the teardown leaves behind.
+    - Leave the interrupt test's body alone apart from what the teardown change forces - the signal is still sent to the process group, the offer is still declined, and both assertions are untouched.
+    - Add a module whose subject is the teardown itself - the control that closes the master early and reads back a substituted status, and the subject that uses the shipped teardown and reads back the signal's - driving the same child with the same signal so the teardown is the only difference between them.
+    - Cover the deadline path and the silent-then-exits path in the same module, each named for what it checks.
+    - Show the interrupt test still fails when the script under it exits some other way under interrupt, by running it against a script that does, so the assertion is proved able to report rather than merely observed passing.
+    - Record the rule and its reason in the architecture document, beside the sections that hold this repository's other testing conventions.
+  likely_file_changes:
+    - file: tests/test_plan_commit.py
+      stage: implementer
+      reason: holds `drain`, the shared pty teardown every terminal-driven test runs through, whose ordering is the defect.
+    - file: tests/test_pty_drain.py
+      stage: tester
+      reason: the control-and-subject pair that establishes the mechanism, the deadline path, and the silent-then-exits path, in a module named for the helper it is about.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the teardown rule - a test's teardown may not overwrite the status the test asserts - beside the existing testing conventions.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_plan_commit.py
+    reason: the story's deliverable is the shared pty teardown, and it lives in this module. Reverting the fix leaves the suite green - the race is load-dependent and the suite passed with the racy ordering in every run but the two that provoked this story - so the revert check cannot adjudicate the edit, and the grant names this one file so every other path stays governed.
+
+scope:
+  modify:
+    - tests/test_plan_commit.py
+    - tests/test_pty_drain.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - scripts/l5-plan
+    - orchestration/
+    - prompts/
+    - workflows/
+    - schemas/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm the interrupt test still asserts the signal's exit status and still asserts that exactly one artifact was committed, by reading the assertions rather than by reading that the test passed.
+  - Confirm the shipped teardown closes the pty master only after the child has been reaped, on every path that returns a status.
+  - Confirm the mechanism was established by reproduction - that a test reads back one status through the shipped teardown and a different one through a teardown that closes the master early - rather than asserted from the exit code alone.
+  - Confirm a child that never exits produces a reported failure naming the deadline, and that the process group does not survive it.
+  - Confirm the interrupt test reddens when the script it drives exits under interrupt with some other status, by the evidence the run recorded rather than by re-running it.
+  - Confirm every module that imports `drain` still passes and that none of them carries its own copy of the teardown.
+  - Confirm the run says plainly whether the original full-suite failure was reproduced, and that no claim is made about a before-and-after that was not observed.
+  - Confirm `scripts/l5-plan` is unchanged.
+
+constraints:
+  - The interrupt test's assertions are immutable. `exit 130` is story-023's contract; it may not be relaxed, deleted, or widened to admit the status this story is removing.
+  - `drain` keeps its signature and its return value, so no call site in any importing module changes.
+  - The teardown stays shared. The fix belongs in the one helper the terminal-driven tests already run through, not copied into each of them.
+  - A hung child must always be bounded. Removing the window of silence may not leave the suite able to wait forever.
+  - Nothing in the script under test changes - the evidence does not implicate `l5-plan`'s interrupt handling, and this story does not go looking there.
+  - The deterministic proof drives a child of the test's own making. It does not depend on machine load, on the full suite, or on any timing the test cannot control.
