@@ -615,21 +615,66 @@ def run_plan_on_a_pty(planning: Planning, **stub):
     return process, master
 
 
-def drain(process, master: int) -> tuple[int, str]:
+#: The whole time `drain` will wait for a child to finish and its output to
+#: reach end of file. It is the only bound on a child that never exits, so it
+#: is generous: a session that is merely slow must not be killed and reported
+#: as a hang.
+DRAIN_DEADLINE = 120.0
+
+
+def drain(process, master: int, deadline: float = DRAIN_DEADLINE) -> tuple[int, str]:
+    """Read the pty to end of output, reap the child, close the master last.
+
+    The order is the whole of it. A teardown that closes the master while the
+    child is still alive and still holding it makes the child's own exit-time
+    flush fail, and a child that cannot flush its standard streams exits 120
+    whatever status it meant to exit with -- so the teardown overwrites the
+    status the test is asserting. Reading to end of output means the loop ends
+    when the child has closed its side, which is to say when it has exited, so
+    nothing this function does can land between the signal and the status.
+
+    A child that never exits is bounded by `deadline` rather than by a window
+    of silence: silence is not end of output, and a child that says nothing for
+    a while and then exits must be drained to its true status. On expiry the
+    process group is killed and the failure names the deadline, so a hang is
+    reported as a hang rather than as whatever status the teardown left behind.
+    """
     output, selector = b"", selectors.DefaultSelector()
     selector.register(master, selectors.EVENT_READ)
-    while True:
-        if not selector.select(timeout=30):
-            break
+    expires = time.monotonic() + deadline
+    try:
+        while True:
+            remaining = expires - time.monotonic()
+            if remaining <= 0 or not selector.select(timeout=remaining):
+                raise _expired(process, deadline, "its output never reached "
+                               "end of file")
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break            # EIO: the child has closed its side of the pty
+            if not chunk:
+                break
+            output += chunk
         try:
-            chunk = os.read(master, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        output += chunk
-    os.close(master)
-    return process.wait(timeout=30), output.decode(errors="replace")
+            status = process.wait(timeout=max(expires - time.monotonic(), 0))
+        except subprocess.TimeoutExpired:
+            raise _expired(process, deadline, "it never exited") from None
+    finally:
+        selector.close()
+        os.close(master)
+    return status, output.decode(errors="replace")
+
+
+def _expired(process, deadline: float, what: str) -> AssertionError:
+    """Kill the child's process group and say which deadline expired."""
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    process.wait(timeout=30)
+    return AssertionError(
+        f"the child under the pty was killed after the {deadline:g}s drain "
+        f"deadline expired: {what}")
 
 
 def test_the_developers_terminal_is_the_sessions_terminal(planning: Planning):
