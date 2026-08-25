@@ -396,6 +396,31 @@ def cost_ceiling_problems(workflow: dict) -> list[str]:
     return problems
 
 
+def applies_when_problems(workflow: dict) -> list[str]:
+    """Check that the definition says when it is the workflow to plan under.
+
+    Beside `cost_ceiling_problems`, `self_route_problems` and
+    `retry_routing_problems`, and for their reason: a definition that cannot
+    say what it is for is a defect every run under it carries, and discovering
+    it at the first stage has already spent one.
+
+    Unlike those three, `applies_when` is required rather than optional, and
+    the required-ness is what the field is for: the developer chooses between
+    the definitions the harness holds by reading what each says it is for, so a
+    definition that says nothing is a definition that cannot be chosen between.
+    A value that is not a string, or one that is only whitespace, is no more
+    usable than an absent one and is reported the same way.
+    """
+    declared = workflow.get("applies_when")
+    if isinstance(declared, str) and declared.strip():
+        return []
+    return [
+        f"workflow '{workflow.get('name')}' declares applies_when "
+        f"{declared!r}, which does not say when this workflow is the right "
+        f"one to plan under"
+    ]
+
+
 def granted_paths(story: dict, stage_name: str) -> list[str]:
     """The values this story's stage_exceptions grant to one stage, in order.
 
@@ -4140,6 +4165,21 @@ def _refuse_bad_cost_ceilings(workflow: dict, problems: list[str]) -> int:
     )
 
 
+def _refuse_bad_applies_when(workflow: dict, problems: list[str]) -> int:
+    """Refuse a workflow that does not say when it is the one to plan under.
+
+    Thin, like every other caller of `refuse`. The definition is wrong, not the
+    story and not the tree, so the guidance points at the file that has to
+    change.
+    """
+    return refuse(
+        f"Workflow '{workflow['name']}' does not say when it applies:",
+        problems,
+        "Give the workflow definition an applies_when saying when it is the "
+        "right workflow to plan under, before running a story under it.",
+    )
+
+
 def _budget_stopped(run_dir: Path, stage_name: str, reason: str) -> None:
     """Say that the run stopped on a cost ceiling, in its own event kind.
 
@@ -4549,6 +4589,14 @@ def run_story(
     if ceiling_problems:
         return _refuse_bad_cost_ceilings(workflow, ceiling_problems)
 
+    # And the same pre-flight for what the definition says it is for. A
+    # definition that cannot say when it applies cannot be chosen between at
+    # planning time, and discovering that at the first stage has already spent
+    # one.
+    purpose_problems = applies_when_problems(workflow)
+    if purpose_problems:
+        return _refuse_bad_applies_when(workflow, purpose_problems)
+
     # Conformance is one question, agreement with this workflow another. A
     # stage exception is checked against the workflow that was selected, so it
     # sits below the load rather than beside read_story; both refusals stay
@@ -4784,7 +4832,8 @@ def run_story(
             save_state(run_dir, state)
         append_event(
             run_dir,
-            f"resumed at stage {state.current_stage}",
+            f"resumed at stage {state.current_stage} under workflow "
+            f"{state.workflow}",
             kind="resumed",
             stage=state.current_stage,
         )
@@ -4837,8 +4886,18 @@ def run_story(
             workflow=workflow_name,
         )
         save_state(run_dir, state)
+        # The first line on the console and the first line of events.log both
+        # say which definition is executing as well as which story, because two
+        # definitions differing in their stage list make implementer-then-
+        # documenter ambiguous between a correct refactor and a story that
+        # skipped its tester. The name is already resolved, so this says what
+        # the run already knows. Still one append_event call under the kind the
+        # event already carried, so events.log and execution-history.json stay
+        # two renderings of one write.
         append_event(
-            run_dir, f"workflow started for {story_id}", kind="workflow-started"
+            run_dir,
+            f"workflow {workflow_name} started for {story_id}",
+            kind="workflow-started",
         )
 
     # A declared base is where the new branch is cut from. Undeclared, the

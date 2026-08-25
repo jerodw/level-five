@@ -697,9 +697,16 @@ def planning(tmp_path: Path) -> Planning:
     return planning
 
 
+#: The workflow these sessions render against, stated rather than left to a
+#: fallback: since story-072 l5-plan reads no configured workflow key, and an
+#: invocation with no terminal and no --workflow is refused before the session
+#: starts. This module's subject is where the plan commit lands.
+PLANNED_WORKFLOW = "story-workflow"
+
+
 def run_plan(planning: Planning, *argv: str, **stub) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(L5_PLAN), *argv],
+        [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, *argv],
         cwd=planning.root, env=planning.env(**stub),
         capture_output=True, text=True,
     )

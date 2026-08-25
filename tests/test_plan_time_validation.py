@@ -372,6 +372,17 @@ def test_plan_validation_introduces_no_second_parser_or_validator():
         assert second_readers(f"{source}\n{planted}\n") != [], planted
 
 
+#: The one module outside the coordinator that validates an artifact against a
+#: schema, exempted by name and by nothing else. Its subject is a different
+#: artifact — what the first of l5-plan's two planner invocations wrote, which
+#: is an agent-authored answer and is therefore checked against the schema the
+#: prompt asked it to satisfy, exactly as every other agent-authored artifact
+#: is. The rule this test holds is about the *story* artifact having one
+#: reader, and the exemption is held shut from both sides below so it cannot
+#: quietly become a second one.
+VALIDATES_ANOTHER_ARTIFACT = "orchestration/workflow_selection.py"
+
+
 def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinator():
     """Asserted by search over the harness, and unchanged from the baseline."""
     def callers(read) -> dict:
@@ -381,6 +392,8 @@ def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinato
                 if not path.is_file() or path.name == "__init__.py":
                     continue
                 relative = str(path.relative_to(HARNESS_ROOT))
+                if relative == VALIDATES_ANOTHER_ARTIFACT:
+                    continue
                 hits = [
                     line.strip() for line in read(relative).splitlines()
                     if re.search(r"\b(?:story_parser\.parse|schema_validator\.validate)\(",
@@ -401,6 +414,30 @@ def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinato
             return ""
 
     assert now == callers(at_baseline)
+
+
+def test_the_exempt_module_validates_something_that_is_not_a_story():
+    """The other side of the exemption, so it cannot go stale or widen.
+
+    An exemption naming a module that has stopped validating anything is a
+    hole nobody notices; one naming a module that has started reading story
+    artifacts is the very thing the rule above forbids, hidden behind the
+    name. So the exempt module must exist, must actually call the validator,
+    must call the story parser nowhere, and must name neither the story schema
+    nor the story artifact's own directory.
+    """
+    source = (HARNESS_ROOT / VALIDATES_ANOTHER_ARTIFACT).read_text(
+        encoding="utf-8")
+    assert "schema_validator.validate(" in source
+    assert "story_parser" not in source
+    assert "story.schema.json" not in source
+    assert '"story"' not in source
+    # And the coordinator is still held to the rule in full: it is not exempt
+    # from anything, so a story read moving into the exempt module would leave
+    # the assertion above with nothing to find here.
+    coordinator = (HARNESS_ROOT / "orchestration" / "story_coordinator.py"
+                   ).read_text(encoding="utf-8")
+    assert "story_parser.parse(" in coordinator
 
 
 # --------------------------------------------------------------------------

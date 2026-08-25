@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "workflow-selection",
+  "description": "What the first of l5-plan's two planner invocations writes: which workflow the request should be planned under, and the reasoning behind that. l5-plan reads the name mechanically, shows the reasoning, and asks the developer to accept it, name another, or abort -- so this artifact is a proposal a human confirms rather than a decision anything acts on unattended. It is written by an invocation that carries no workflow stage facts, because choosing the workflow is what that invocation is for.",
+  "type": "object",
+  "required": ["reasoning"],
+  "properties": {
+    "workflow": {
+      "type": "string",
+      "description": "The name of the workflow definition this request should be planned under -- a name the harness defines, spelled as the candidates given were spelled. It is optional, and its absence is how an unsure classification is stated: presence is the signal, the same encoding verification-result's retry_target and unfinishable_by_retry use and for the same reason, which is that this validator subset has no if/then and no dependentRequired, so 'a name is required unless unsure' is inexpressible as a constraint. Absent means no proposal is made and the developer is asked to name a workflow instead, which is a better outcome than a guess the confirmation makes look considered."
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "Why this workflow, or why the classification could not be made. Always required, because the reasoning is what the developer is being asked to review: a name alone gives them nothing to disagree with, and a proposal accepted by pressing Enter is only worth confirming if what is shown is the argument rather than the conclusion. Where no workflow is named, this says what about the request left the classification unsure."
+    }
+  }
+}

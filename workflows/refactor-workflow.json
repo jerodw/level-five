@@ -1,5 +1,6 @@
 {
   "name": "refactor-workflow",
+  "applies_when": "The correctness claim is that behaviour is unchanged. The work restructures, renames, moves, extracts or consolidates something that already works, the validation that would show it still works already exists, and the job is to carry that validation across rather than to weaken it. Choose this when what you are asking for is judged by whether the system still does exactly what it did before.",
   "max_run_cost_usd": 90,
   "max_run_cost_usd_reason": "This workflow has no cost corpus of its own yet: no run has executed under it, so there is nothing to derive a figure from. It inherits story-workflow's ceiling until it has one, and story-workflow's reason string carries the derivation. Tighten it against the record runs under this workflow write, not against story-workflow's, since this workflow has one fewer stage and its work is behaviour-preserving rather than new. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
   "stages": [

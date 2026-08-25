@@ -654,7 +654,10 @@ FIRST_RUN_ARTIFACTS = [
     "verification-result.json", "verification/iteration-1.json",
 ]
 FIRST_RUN_EVENTS = [
-    f"workflow started for {STORY_ID}",
+    # story-072: a fresh run's first line names the definition it is executing
+    # as well as the story. The name is the one
+    # `conftest.configured_workflow` configures this target to run.
+    f"workflow story-workflow started for {STORY_ID}",
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
     "documenter stage started",

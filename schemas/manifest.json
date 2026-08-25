@@ -15,6 +15,7 @@
     "story",
     "suite-run-result",
     "test-results",
-    "verification-result"
+    "verification-result",
+    "workflow-selection"
   ]
 }

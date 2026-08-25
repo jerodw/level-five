@@ -260,11 +260,20 @@ def writes(*artifacts: tuple[str, str]) -> str:
     return json.dumps([list(pair) for pair in artifacts])
 
 
+#: The workflow these sessions are rendered against, stated at every call site
+#: rather than left to a fallback. Since story-072 l5-plan reads no configured
+#: workflow key: without --workflow it proposes one and asks a developer to
+#: confirm it, and an invocation with no terminal and no flag is refused. This
+#: module's subject is what a session commits, so every session here says which
+#: workflow it planned under and none of them reaches the proposal at all.
+PLANNED_WORKFLOW = "story-workflow"
+
+
 def run_plan(planning: Planning, request: str = "add a thing",
              **stub) -> subprocess.CompletedProcess:
     """Run the real scripts/l5-plan against the throwaway repository."""
     return subprocess.run(
-        [sys.executable, str(L5_PLAN), request],
+        [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, request],
         cwd=planning.root,
         env=planning.env(**stub),
         capture_output=True,
@@ -596,7 +605,8 @@ def run_plan_on_a_pty(planning: Planning, **stub):
     """Run l5-plan with a pty for stdin, stdout and stderr."""
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        [sys.executable, str(L5_PLAN), "add a thing"],
+        [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW,
+         "add a thing"],
         cwd=planning.root, env=planning.env(**stub),
         stdin=slave, stdout=slave, stderr=slave,
         start_new_session=True,
@@ -719,8 +729,12 @@ def test_the_argument_list_handed_to_claude_is_what_the_exec_passed(
     )
     before = planning.session()
 
+    # Today's script states the workflow it renders against; the old one had no
+    # such flag and took the configured name, which is the same name. What
+    # reaches `claude` is therefore unchanged by the flag, which is why the
+    # comparison below is still an equality rather than a subtraction.
     subprocess.run(
-        [sys.executable, str(L5_PLAN), request],
+        [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, request],
         cwd=planning.root, env=planning.env(), capture_output=True, text=True,
         check=True,
     )

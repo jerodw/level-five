@@ -775,9 +775,14 @@ def test_the_scan_reads_the_scripts_that_carry_no_py_suffix():
     extensionless = [path.name for path in scanned if path.suffix != ".py"]
     assert "l5-plan" in extensionless
     # l5-plan is the script that reads configuration; if the scan could not
-    # parse it, the two keys it reads would be invisible.
-    assert keys_read_in(REPO_ROOT / "scripts" / "l5-plan") == {"workflow",
-                                                               "stories_dir"}
+    # parse it, the key it reads would be invisible. Since story-072 that is
+    # `stories_dir` alone: no path in the script reads the configured workflow
+    # key any longer, because the workflow a session renders against is the one
+    # --workflow named or the one the developer confirmed. The key itself is
+    # still declared and still read, by the coordinator, where a story artifact
+    # naming no workflow resolves through it, and which the equality below over
+    # every scanned source holds.
+    assert keys_read_in(REPO_ROOT / "scripts" / "l5-plan") == {"stories_dir"}
 
 
 def test_the_keys_the_harness_reads_and_the_keys_the_schema_declares_are_equal():
