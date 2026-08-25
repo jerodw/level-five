@@ -26,6 +26,7 @@
       "prompt": "story-tester.md",
       "outputs": ["test-results.json", "tester-changed-files.json"],
       "changed_files": "tester-changed-files.json",
+      "may_not_run_suite": true,
       "max_self_routes": 2,
       "max_execution_cost_usd": 75,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=35, p50 $3.27, p90 $12.99, max $52.56. This one is the deliberate one. The tester's expensive invocations are story-053's single legitimate $52.56 conversion and four from story-048's failing run, and no cap distinguishes them, so $75 leaves the legitimate one alone while stopping a call at well past the worst ever seen. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
@@ -43,6 +44,7 @@
       "prompt": "documenter.md",
       "outputs": ["documentation-report.md", "documenter-changed-files.json"],
       "changed_files": "documenter-changed-files.json",
+      "may_not_run_suite": true,
       "max_self_routes": 1,
       "max_execution_cost_usd": 10,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=34, p50 $1.30, p90 $2.07, max $3.10. The tightest distribution of the four and the tightest ceiling, at better than three times the worst ever seen. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
@@ -56,6 +58,7 @@
     {
       "name": "verifier",
       "prompt": "story-verifier.md",
+      "may_not_run_suite": true,
       "max_self_routes": 1,
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=40, p50 $1.76, p90 $6.26, max $19.07. The observed maxima, $19.07 and $18.99, were both story-059 and both caused by the verifier starting a full suite run it could not wait for, which prompts/verifier.md now prevents; its real distribution is likely tighter and $30 is generous on purpose. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",

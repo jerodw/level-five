@@ -7,10 +7,12 @@ and never invoke a model.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # The hooks ship with the harness code, like the schemas, so they are resolved
 # relative to this module rather than to a caller-supplied root.
@@ -19,6 +21,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 SETTINGS_NAME = "settings.json"
 GUARD_NAME = "bash_guard.py"
 GUARD_PLACEHOLDER = "{guard_path}"
+GUARD_ARGUMENTS_PLACEHOLDER = "{guard_arguments}"
 
 
 @dataclass
@@ -37,24 +40,60 @@ def hooks_dir(harness_root: Path | None = None) -> Path:
     return (harness_root or HARNESS_ROOT) / "hooks"
 
 
-def guard_settings(harness_root: Path | None = None) -> str | None:
+def _rendered(node: Any, values: dict[str, str]) -> Any:
+    """`node` with each placeholder replaced wherever a string carries one."""
+    if isinstance(node, dict):
+        return {key: _rendered(value, values) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_rendered(item, values) for item in node]
+    if isinstance(node, str):
+        for placeholder, value in values.items():
+            node = node.replace(placeholder, value)
+        return node
+    return node
+
+
+def guard_settings(
+    harness_root: Path | None = None, *, suite_command: str | None = None
+) -> str | None:
     """The shipped hook declaration, with the guard's own path resolved.
 
     The declaration's shape lives in hooks/settings.json, a data file, because
     the harness root varies by installation and only the absolute path can be
-    computed here. An absent or unreadable declaration returns None and the
-    stage runs without the hook: the guard is the net behind the allowlist,
-    which is the gate, so failing to register it must not stop a run.
+    computed here. An absent, unreadable or unparseable declaration returns
+    None and the stage runs without the hook: the guard is the net behind the
+    allowlist, which is the gate, so failing to register it must not stop a run.
+
+    `suite_command` is the target's configured test command, handed to the
+    guard as its own argument so that the suite denial is decided from the
+    target's configuration rather than from anything written here. It is
+    rendered by loading the declaration as JSON, substituting, and dumping it
+    again — a command carrying a quote cannot break a declaration built that
+    way — and it is shell-quoted, so the hook runner's word splitting passes it
+    to the guard as one word. Unset, the placeholder resolves to nothing and
+    the guard is registered with exactly the command line it had before this
+    argument existed.
     """
     directory = hooks_dir(harness_root)
     guard = directory / GUARD_NAME
     try:
-        declaration = (directory / SETTINGS_NAME).read_text(encoding="utf-8")
-    except OSError:
+        declaration = json.loads(
+            (directory / SETTINGS_NAME).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
         return None
     if not guard.is_file():
         return None
-    return declaration.replace(GUARD_PLACEHOLDER, str(guard))
+    arguments = f" {shlex.quote(suite_command)}" if suite_command else ""
+    return json.dumps(
+        _rendered(
+            declaration,
+            {
+                GUARD_PLACEHOLDER: str(guard),
+                GUARD_ARGUMENTS_PLACEHOLDER: arguments,
+            },
+        )
+    )
 
 
 def run_agent(
@@ -67,6 +106,7 @@ def run_agent(
     model: str | None = None,
     allowed_tools: list[str] | None = None,
     max_budget_usd: float | None = None,
+    suite_command: str | None = None,
 ) -> AgentResult:
     """Run `claude -p` with the rendered prompt on stdin.
 
@@ -80,6 +120,12 @@ def run_agent(
     afterwards — which is what makes a ceiling a ceiling rather than a gate
     between stages. Unset, no budget argument appears in the command at all and
     it is exactly the command this built before the parameter existed.
+
+    `suite_command` is the target's configured test command, passed on to the
+    guard so it can deny a run of it. It is given only for a stage whose
+    workflow entry declares that it runs no suite; unset, the guard is
+    registered exactly as it was before the parameter existed and denies
+    nothing on that account.
     """
     cmd = [
         "claude",
@@ -98,11 +144,13 @@ def run_agent(
     # spend anything and must reach the CLI, where an unset budget must not.
     if max_budget_usd is not None:
         cmd += ["--max-budget-usd", str(max_budget_usd)]
-    # Every stage invocation carries the deny-only Bash guard. It is resolved
-    # here rather than passed in, so run_agent's signature is unchanged and no
-    # caller — including the fake runners the suite injects — has to know the
-    # hook exists.
-    settings = guard_settings()
+    # Every stage invocation carries the deny-only Bash guard. The settings are
+    # still resolved here rather than passed in, so no caller assembles the hook
+    # declaration. What a caller does now carry, since story-073, is the
+    # configured test command, threaded through `suite_command` for a stage
+    # declaring `may_not_run_suite` — which is why a fake runner driving one of
+    # the shipped definitions has to accept that keyword.
+    settings = guard_settings(suite_command=suite_command)
     if settings:
         cmd += ["--settings", settings]
 

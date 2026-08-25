@@ -572,11 +572,18 @@ def test_run_agent_passes_settings_registering_the_guard(monkeypatch, tmp_path):
     assert [entry["matcher"] for entry in hooks] == ["Bash"]
     commands = [hook["command"] for entry in hooks for hook in entry["hooks"]]
     assert len(commands) == 1
+    # Since story-073 the declaration renders arguments after the path, so the
+    # command is the path plus whatever those arguments came to. This call
+    # names no suite command, so they come to nothing and the whole command is
+    # still the path — which is the property this story kept: a stage under no
+    # such declaration is registered with exactly the command line it had.
     named = Path(commands[0])
     assert named.is_absolute()
     assert named.is_file(), named
     assert named.resolve() == GUARD_PATH.resolve()
-    assert agent_runner.GUARD_PLACEHOLDER not in cmd[cmd.index("--settings") + 1]
+    rendered = cmd[cmd.index("--settings") + 1]
+    assert agent_runner.GUARD_PLACEHOLDER not in rendered
+    assert agent_runner.GUARD_ARGUMENTS_PLACEHOLDER not in rendered
 
 
 def test_the_settings_check_reports_a_declaration_naming_nothing(tmp_path):
@@ -629,7 +636,7 @@ def test_run_agent_signature_is_unchanged_by_this_story(tmp_path):
     # ordered, and still goes red on a parameter nobody declared. A later story
     # that widens the signature again appends to this list, which is the
     # deliberate edit an assertion about a signature should cost.
-    ADDED_SINCE_STORY_035 = ["max_budget_usd"]
+    ADDED_SINCE_STORY_035 = ["max_budget_usd", "suite_command"]
     assert _signature_names(today) == (
         _signature_names(before) + ADDED_SINCE_STORY_035)
 

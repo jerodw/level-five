@@ -454,7 +454,7 @@ class RecordingRunner:
         self.calls: list[dict] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None):
         self.calls.append({
             "stage": stage, "prompt": prompt, "cwd": Path(cwd),
             "log_path": Path(log_path), "permission_mode": permission_mode,
