@@ -1041,8 +1041,16 @@ def test_the_script_stays_a_thin_entry_point():
 
 
 def test_scripts_l5_plan_writes_nothing_and_removes_nothing_on_a_refusal():
-    """Searched for, since a repair or a deletion would be code in the script."""
-    source = L5_PLAN.read_text(encoding="utf-8")
+    """Searched for, since a repair or a deletion would be code in the script.
+
+    Scoped to `report`, the function that validates and refuses, rather than to
+    the whole script. It was the whole script while the script wrote and
+    removed nothing anywhere; since story-076 phase one writes a transcript and
+    removes its own answer file, neither of which is on this path, so a
+    whole-file scan would report the wrong subject.
+    """
+    source = conftest.function_source(
+        L5_PLAN.read_text(encoding="utf-8"), "report")
     for pattern in (r"\.unlink\(", r"\.write_text\(", r"shutil\.", r"os\.remove"):
         assert not re.search(pattern, source), pattern
     assert re.search(r"\.unlink\(", f"{source}\npath.unlink()\n")

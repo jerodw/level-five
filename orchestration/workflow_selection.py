@@ -32,6 +32,43 @@ SELECTOR_PROMPT = "workflow-selector.md"
 #: `schema_validator.load_schema` takes.
 SELECTION_SCHEMA = "workflow-selection"
 
+#: The file phase one is asked to write its answer to, and the file its own
+#: output is kept in. Named here for the reason SELECTOR_PROMPT is: the module
+#: that owns the mechanism owns the spelling, so neither name is written at a
+#: call site.
+SELECTION_ANSWER = "workflow-selection.json"
+SELECTION_TRANSCRIPT = "workflow-selection.log"
+
+#: Where both live when the target configures no logs directory, spelled as
+#: the coordinator spells it when it resolves the stage log, so phase one's
+#: evidence lands beside the evidence every run already leaves.
+DEFAULT_LOGS_DIR = ".harness/logs"
+
+
+@dataclass(frozen=True)
+class SelectionPaths:
+    """Where phase one's answer goes and where its output is kept."""
+
+    answer: Path
+    transcript: Path
+
+
+def selection_paths(target_root: Path, config: dict) -> SelectionPaths:
+    """Derive both paths from the target root and its configuration.
+
+    The answer is beneath the target root because that is the workspace the
+    permission mode accepts edits within: asked for a path outside it, the
+    classifying turn reasons correctly and then cannot deliver, which is the
+    whole of why an unnamed l5-plan never once reached a proposal outside the
+    test suite. The transcript sits beside it, under the same configured
+    directory l5-plan already leaves evidence in.
+
+    Pure, like everything else here: it returns paths, and creates, removes
+    and prints nothing.
+    """
+    logs = target_root / config.get("logs_dir", DEFAULT_LOGS_DIR)
+    return SelectionPaths(logs / SELECTION_ANSWER, logs / SELECTION_TRANSCRIPT)
+
 
 @dataclass(frozen=True)
 class Candidate:

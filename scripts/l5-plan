@@ -26,15 +26,19 @@ reasoning behind it; this script reads the name mechanically, shows the
 reasoning, and asks the developer to accept it, name another, or abort. The
 confirmed name is what the planning session is rendered against.
 
+That turn is asked for its answer inside the workspace, under the configured
+logs directory, and is granted the one tool writing it needs. What it printed
+on the way there is appended to a transcript beside the answer, so an
+invocation that proposed nothing leaves behind the reason it did not.
+
 That confirmation needs a terminal, so an invocation with neither a terminal
 nor --workflow is refused before anything is invoked, written or committed. A
 call site that plans without a terminal names its workflow.
 """
+import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from shutil import rmtree
 from typing import Sequence
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
@@ -85,7 +89,7 @@ def main() -> None:
         # a terminal names its workflow.
         if not plan_run_offer.can_prompt(sys.stdin):
             sys.exit(refuse_headless(HARNESS_ROOT))
-        selected = choose_workflow(HARNESS_ROOT, request)
+        selected = choose_workflow(HARNESS_ROOT, target_root, config, request)
         if selected is None:
             sys.exit(1)
     workflow_name = selected
@@ -183,7 +187,9 @@ def refuse_headless(harness_root: Path) -> int:
     )
 
 
-def choose_workflow(harness_root: Path, request: str) -> str | None:
+def choose_workflow(
+    harness_root: Path, target_root: Path, config: dict, request: str
+) -> str | None:
     """Propose a workflow for this request and ask the developer to confirm it.
 
     Phase one of two. The planner is invoked against the selector prompt,
@@ -192,6 +198,12 @@ def choose_workflow(harness_root: Path, request: str) -> str | None:
     is shown the reasoning rather than only the name, because the reasoning is
     what they are being asked to review.
 
+    The answer is asked for inside the workspace rather than in a temporary
+    directory, and the invocation is granted the one tool a turn whose entire
+    output is one JSON file needs, so a turn that reasons correctly can also
+    deliver. Its output is kept rather than discarded, so a run whose answer
+    never arrives leaves behind what the turn said on the way there.
+
     Returns the confirmed name, or None where nothing was chosen — an unusable
     answer the developer declined to replace, or a reply naming a workflow the
     harness does not define. On None no planning session is started and no
@@ -199,16 +211,21 @@ def choose_workflow(harness_root: Path, request: str) -> str | None:
     lives here is the wording and the reading of the reply.
     """
     found = workflow_selection.candidates(harness_root)
-    scratch = Path(tempfile.mkdtemp(prefix="l5-plan-selection-"))
+    paths = workflow_selection.selection_paths(target_root, config)
+    paths.answer.parent.mkdir(parents=True, exist_ok=True)
+    # An answer left behind by an earlier invocation is not this one's, and
+    # reading one as this one's would report a proposal nothing made. Removed
+    # before the invocation and again after it is read, so whatever this
+    # invocation does, the next one starts with nothing there.
+    paths.answer.unlink(missing_ok=True)
     try:
-        selection_path = scratch / "workflow-selection.json"
         template = context_assembler.load_template(
             harness_root, workflow_selection.SELECTOR_PROMPT
         )
         context = context_assembler.schema_context(harness_root)
         context["request"] = request
         context["workflow_candidates"] = workflow_selection.candidate_block(found)
-        context["selection_path"] = str(selection_path)
+        context["selection_path"] = str(paths.answer)
         prose = context_assembler.resolved_partial(
             harness_root, context_assembler.PROSE_LAYER, context
         )
@@ -219,30 +236,61 @@ def choose_workflow(harness_root: Path, request: str) -> str | None:
         # session. Its output is the file it writes; what it says on the way
         # there is not what the developer is being asked to review, so it is
         # captured rather than left to clutter the terminal above the
-        # confirmation.
-        subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--permission-mode",
-                "acceptEdits",
-                "--append-system-prompt",
-                context_assembler.render(template, context),
-                f"Story request: {request}",
-            ],
-            capture_output=True,
-        )
+        # confirmation — and then kept, because a turn that delivered nothing
+        # is exactly the turn whose reasoning someone has to be able to read.
+        #
+        # cwd is the target root, so the workspace the permission mode accepts
+        # edits within is the repository being planned for whatever directory
+        # l5-plan was invoked from. stdin is /dev/null because this turn is
+        # given its whole request on the command line and has nothing to read:
+        # inheriting the session's stdin buys a three-second wait for data that
+        # never comes.
+        with open(os.devnull, "rb") as devnull:
+            completed = subprocess.run(
+                [
+                    "claude",
+                    "-p",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--allowedTools",
+                    "Write",
+                    "--append-system-prompt",
+                    context_assembler.render(template, context),
+                    f"Story request: {request}",
+                ],
+                cwd=target_root,
+                stdin=devnull,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        keep_transcript(paths.transcript, request, completed.stdout)
         selection = workflow_selection.read_selection(
-            selection_path, found, harness_root
+            paths.answer, found, harness_root
         )
     finally:
-        rmtree(scratch, ignore_errors=True)
-    return confirm(selection, found)
+        paths.answer.unlink(missing_ok=True)
+    return confirm(selection, found, paths.transcript)
+
+
+def keep_transcript(transcript: Path, request: str, output: str) -> None:
+    """Append one invocation's output to the transcript, headed by its request.
+
+    Appended rather than written, in the shape agent_runner writes its stage
+    separator, so an earlier invocation's evidence survives a later one: the
+    file is a record of what phase one has said in this repository, not of
+    what it said most recently.
+    """
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    with open(transcript, "a", encoding="utf-8") as handle:
+        handle.write(f"\n===== workflow selection: {request} =====\n")
+        handle.write(output or "")
 
 
 def confirm(
     selection: workflow_selection.Selection,
     found: Sequence[workflow_selection.Candidate],
+    transcript: Path | None = None,
 ) -> str | None:
     """Show what phase one proposed and read the developer's one reply.
 
@@ -251,6 +299,12 @@ def confirm(
     unparsable, or naming a workflow no definition has — and the developer is
     asked to name a workflow instead, where an empty reply aborts. Either way
     the workflows they may name are listed, and the reply is read once.
+
+    On the branch where nothing was proposed the transcript is named beside the
+    fault, because "it wrote no answer" tells a developer what happened and not
+    where to look. The path that reaches a proposal says nothing new, so it is
+    not printed there. The caller passes it in; `workflow_selection` still
+    decides nothing about wording.
     """
     names = [candidate.name for candidate in found]
     listed = ", ".join(names) if names else "no workflow definitions"
@@ -267,6 +321,8 @@ def confirm(
         print(f"l5-plan: the planner proposed no workflow — {selection.fault}.")
         if selection.reasoning:
             print(f"l5-plan: {selection.reasoning}")
+        if transcript is not None:
+            print(f"l5-plan: what it said is in {transcript}")
         print(
             f"l5-plan: name the workflow to plan under ({listed}); "
             f"Enter aborts: ",

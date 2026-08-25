@@ -64,7 +64,20 @@ reports the violation it exists to catch:
   * "`scripts/l5-plan` reads the configured workflow key on no path" sits
     beside the same scan over a copy of that script with the read put back,
     which reports it -- and beside a session whose configured key names a
-    workflow no definition has, which plans anyway.
+    workflow no definition has, which plans anyway;
+  * "the flagged session asks for no answer and keeps no transcript" sits
+    beside the same target planned without the flag, where both appear;
+  * "the transcript is not named on the path that reaches a proposal" sits
+    beside the session that proposed nothing, where it is.
+
+Since story-076 the stub is not a substitute for delivery. It writes the
+answer only where the real classifying turn could have written it -- inside
+the directory it was invoked in -- and otherwise writes nothing and prints
+what the real turn printed instead. `write_text` has no permission model, so
+a stub without that guard delivers where the real agent never can, which is
+how phase one came to be green here and broken everywhere else. Section 7
+asks what the invocation carried: the path, the working directory, the grant
+and the streams, none of which needs a model to settle.
 
 Nothing here invokes a model: every run goes through the fake runner below and
 every session through the stub `claude`.
@@ -295,13 +308,25 @@ branch_prefix: story/
 permission_mode: acceptEdits
 stories_dir: .harness/stories
 runs_dir: .harness/runs
-logs_dir: .harness/logs
+logs_dir: {logs_dir}
 standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: echo tests-ok
 tests_dir: {tests_dir}
 """
+
+#: Where a target built here keeps the raw output of the agents it runs, and so
+#: where phase one's answer and phase one's transcript are asked for. Declared
+#: by the fixture rather than read from `workflow_selection`, because "the path
+#: phase one was asked to write to is under the *configured* directory" is only
+#: an observation if the configuration is this module's own statement.
+TARGET_LOGS_DIR = ".harness/logs"
+
+#: A second target's answer to the same question, sharing no path component
+#: with the first, so a script deriving the location from a literal rather than
+#: from the configuration cannot satisfy both.
+ANOTHER_LOGS_DIR = "var/planning-logs"
 
 APP_AT_HEAD = "print('hello')\n"
 
@@ -336,7 +361,8 @@ def build_target(root: Path, configured: str, declared: str | None) -> Path:
                 ".harness/logs", ".harness/docs"):
         (root / sub).mkdir(parents=True)
     write(root / ".harness" / "config.yaml",
-          CONFIG.format(workflow=configured, tests_dir=TESTS_DIR))
+          CONFIG.format(workflow=configured, tests_dir=TESTS_DIR,
+                        logs_dir=TARGET_LOGS_DIR))
     write(root / ".harness" / "stories" / f"{STORY_ID}.yaml",
           story_text(declared))
     write(root / ".harness" / "standards" / "coding.md", "# Coding\n- simple\n")
@@ -838,6 +864,20 @@ def test_naming_a_workflow_with_no_definition_aborts_over_a_proposal_too():
 # ==========================================================================
 
 
+#: What a stub invocation prints, one line on each stream, so a transcript can
+#: be asked whether phase one's stdout and its stderr both reached it.
+STUB_STDOUT = "stub session"
+STUB_STDERR = "stub diagnostics"
+
+#: What the stub prints instead of an answer when it is asked for one outside
+#: the directory it was invoked in: the shape of what the real classifying turn
+#: printed, an approval it cannot get and no file. `write_text` has no
+#: permission model, so a stub without this guard can always write where the
+#: real agent never can — which is exactly how a feature broken in production
+#: kept a green suite.
+OUTSIDE_THE_WORKSPACE = ("I need your approval to create a file outside this "
+                         "workspace, so I have not written the selection.")
+
 #: A stub `claude` that serves both invocations. It appends one JSON line per
 #: invocation — the argument list, the working directory, whether its streams
 #: are a terminal, and the system prompt it was handed — so how many
@@ -846,12 +886,13 @@ def test_naming_a_workflow_with_no_definition_aborts_over_a_proposal_too():
 #:
 #: Phase one is recognised by the answer path in the prompt it was given rather
 #: than by a flag this test sets, so the recognition is the script's own doing:
-#: an invocation carrying a path to write a selection to is the selecting one,
-#: and it writes what the test told it to write there, or nothing at all when
-#: the test told it nothing. Every other invocation writes the artifacts the
-#: test told it to write, relative to the directory it inherited.
-STUB = '''\
-#!/usr/bin/env python3
+#: an invocation carrying a path to write a selection to is the selecting one.
+#: It writes there only when that path is inside the directory it was invoked
+#: in, which is the only place the real turn's permission mode accepts edits;
+#: asked for anywhere else it writes nothing and says so, exactly as the real
+#: turn did. Every other invocation writes the artifacts the test told it to
+#: write, relative to the directory it inherited.
+STUB_BODY = '''\
 import json
 import os
 import pathlib
@@ -869,20 +910,43 @@ with open(os.environ["L5_STUB_LOG"], "a", encoding="utf-8") as log:
         "tty": [os.isatty(0), os.isatty(1), os.isatty(2)],
         "prompt": prompt,
     }) + "\\n")
-answer_path = re.search(r"(\\S+workflow-selection\\.json)", prompt)
+answer_path = re.search(r"(\\S+" + re.escape(ANSWER_NAME) + ")", prompt)
 if answer_path:
-    answer = os.environ.get("L5_STUB_SELECTION")
-    if answer is not None:
-        pathlib.Path(answer_path.group(1)).write_text(answer, encoding="utf-8")
+    wanted = pathlib.Path(answer_path.group(1)).resolve()
+    here = pathlib.Path.cwd().resolve()
+    if here != wanted and here not in wanted.parents:
+        sys.stdout.write(OUTSIDE_THE_WORKSPACE + "\\n")
+    else:
+        answer = os.environ.get("L5_STUB_SELECTION")
+        if answer is not None:
+            wanted.write_text(answer, encoding="utf-8")
 else:
     for relative, body in json.loads(os.environ.get("L5_STUB_WRITE", "[]")):
         path = pathlib.Path(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-sys.stdout.write("stub session\\n")
+sys.stdout.write(STUB_STDOUT + "\\n")
 sys.stdout.flush()
+sys.stderr.write(STUB_STDERR + "\\n")
+sys.stderr.flush()
 sys.exit(int(os.environ.get("L5_STUB_EXIT", "0")))
 '''
+
+
+def stub_source() -> str:
+    """The stub, carrying the names it has to agree with the harness on.
+
+    The answer file's name is `workflow_selection`'s declaration rather than a
+    second spelling here: the stub recognises phase one by the path it was
+    asked to write to, and what that file is called is the module's to decide.
+    """
+    declared = "".join(
+        f"{name} = {value!r}\n"
+        for name, value in (("ANSWER_NAME", workflow_selection.SELECTION_ANSWER),
+                            ("OUTSIDE_THE_WORKSPACE", OUTSIDE_THE_WORKSPACE),
+                            ("STUB_STDOUT", STUB_STDOUT),
+                            ("STUB_STDERR", STUB_STDERR)))
+    return "#!/usr/bin/env python3\n" + declared + STUB_BODY
 
 #: The prompts `l5-plan` needs from a harness root beyond the stage templates
 #: `materialize_workflow` writes. All three are this repository's own artifacts
@@ -919,24 +983,40 @@ def planning_harness(tmp_path) -> Path:
 CONFIGURED = UNDEFINED
 
 
+def build_planning(tmp_path: Path, *, name: str = "plan-target",
+                   logs_dir: str = TARGET_LOGS_DIR,
+                   remote: bool = True) -> Planning:
+    """A throwaway target with the stub above on PATH, and its logs directory.
+
+    `logs_dir` is a parameter rather than a constant because where phase one is
+    asked for its answer is derived from it: a second target configuring
+    somewhere else is what makes "under the configured directory" an
+    observation rather than a coincidence with one literal.
+    """
+    root = tmp_path / name
+    (root / ".harness" / "stories").mkdir(parents=True)
+    write(root / ".harness" / "config.yaml",
+          CONFIG.format(workflow=CONFIGURED, tests_dir=TESTS_DIR,
+                        logs_dir=logs_dir))
+    write(root / "README.md", "target\n")
+    init_repo(root)
+    bin_dir = tmp_path / f"bin-{name}"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(stub_source(), encoding="utf-8")
+    stub.chmod(0o755)
+    planning = Planning(root, bin_dir, root / ".harness" / "stories",
+                        tmp_path / f"session-{name}.jsonl")
+    if remote:
+        planning.remote = bare_remote(tmp_path, planning, name=f"origin-{name}",
+                                      upstream=True)
+    return planning
+
+
 @pytest.fixture
 def planning(tmp_path) -> Planning:
     """A throwaway target with the stub above on PATH and a bare origin."""
-    root = tmp_path / "plan-target"
-    (root / ".harness" / "stories").mkdir(parents=True)
-    write(root / ".harness" / "config.yaml",
-          CONFIG.format(workflow=CONFIGURED, tests_dir=TESTS_DIR))
-    write(root / "README.md", "target\n")
-    init_repo(root)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub = bin_dir / "claude"
-    stub.write_text(STUB, encoding="utf-8")
-    stub.chmod(0o755)
-    planning = Planning(root, bin_dir, root / ".harness" / "stories",
-                        tmp_path / "session.jsonl")
-    planning.remote = bare_remote(tmp_path, planning, upstream=True)
-    return planning
+    return build_planning(tmp_path)
 
 
 def invocations(planning: Planning) -> list[dict]:
@@ -969,20 +1049,26 @@ def artifact_path(planning: Planning) -> Path:
 
 
 def plan_on_a_terminal(planning: Planning, harness: Path, *args: str,
-                       reply: bytes = b"\n", **stub) -> tuple[int, str]:
+                       reply: bytes = b"\n", cwd: Path | None = None,
+                       **stub) -> tuple[int, str]:
     """Run the real `scripts/l5-plan` with a pty for its three streams.
 
     The reply is written to the terminal as soon as the process starts, the
     way `test_plan_run_offer` writes its own: nothing between here and the
     confirmation reads stdin — the stub session does not — so the bytes wait
     in the terminal's buffer until the confirmation reads them.
+
+    `cwd` is where the developer invoked `l5-plan` from, and defaults to the
+    target root because that is where they usually are. Somewhere else inside
+    the target is what separates "the working directory phase one ran in" from
+    "the directory this process happened to start in".
     """
     import pty
 
     master, slave = pty.openpty()
     process = subprocess.Popen(
         [sys.executable, str(harness / "scripts" / "l5-plan"), *args],
-        cwd=planning.root, env=planning.env(**stub),
+        cwd=cwd or planning.root, env=planning.env(**stub),
         stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
     )
     os.close(slave)
@@ -1458,3 +1544,387 @@ def test_the_coordinator_still_resolves_an_artifact_naming_no_workflow(
         (target / ".harness" / "runs" / STORY_ID / "state.json").read_text(
             encoding="utf-8"))
     assert state["workflow"] == PRESERVING["name"]
+
+
+# ==========================================================================
+# 7. Phase one can deliver its answer
+#
+# Everything above this section was green while no unnamed `l5-plan` had ever
+# reached a proposal outside this suite: the answer was asked for under
+# `tempfile.mkdtemp`, which no permission mode accepts edits within, and the
+# stub wrote it there anyway because `write_text` has no permission model.
+#
+# So the stub above now writes only where the real turn could have written,
+# and what follows asks what the invocation actually carried — the path, the
+# working directory, the grant and the streams — none of which needs a model
+# to settle. Nothing here judges whether a proposal was the right one.
+# ==========================================================================
+
+
+#: How the answer path is found in the prompt phase one was handed. The file's
+#: name is `workflow_selection`'s declaration, as it is for the stub.
+ANSWER_IN_PROMPT = re.compile(
+    r"(\S+" + re.escape(workflow_selection.SELECTION_ANSWER) + ")")
+
+
+def answer_asked_for(invocation: dict) -> Path:
+    """The path an invocation was asked to write its answer to.
+
+    Read out of the prompt the script rendered rather than out of the script's
+    source, so this is what phase one was actually told.
+    """
+    found = ANSWER_IN_PROMPT.search(invocation["prompt"])
+    assert found, "the invocation carried no answer path"
+    return Path(found.group(1))
+
+
+def transcript_in(logs: Path) -> Path:
+    return logs / workflow_selection.SELECTION_TRANSCRIPT
+
+
+def answer_in(logs: Path) -> Path:
+    return logs / workflow_selection.SELECTION_ANSWER
+
+
+def squashed(text: str) -> str:
+    """Text with all whitespace removed, for asking whether a path is in it.
+
+    A terminal's line endings are not part of what was printed, and a path
+    printed at the end of a sentence is the same path whether or not one fell
+    between two of its components.
+    """
+    return "".join(text.split())
+
+
+def test_the_stub_writes_only_where_the_real_turn_could_have_written(tmp_path):
+    """The guard the whole section rests on, driven directly.
+
+    Run twice against the same stub: once asked for a path inside the directory
+    it was invoked in, where it delivers, and once for a path outside it, where
+    it writes nothing and says what the real turn said. Without this pair, every
+    delivery below could be the stub's permission-free `write_text` standing in
+    for a turn that could never have delivered at all.
+    """
+    stub = tmp_path / "claude"
+    stub.write_text(stub_source(), encoding="utf-8")
+    stub.chmod(0o755)
+    inside_root = tmp_path / "workspace"
+    inside_root.mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    payload = answer(ADDING["name"])
+
+    def run(asked_for: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(stub), "--append-system-prompt",
+             f"Write your answer to {asked_for}", "a request"],
+            cwd=inside_root, capture_output=True, text=True,
+            env={**os.environ, "L5_STUB_LOG": str(tmp_path / "log.jsonl"),
+                 "L5_STUB_SELECTION": payload})
+
+    within = answer_in(inside_root / "logs")
+    within.parent.mkdir()
+    run(within)
+    assert within.read_text(encoding="utf-8") == payload
+
+    beyond = answer_in(outside)
+    result = run(beyond)
+    assert not beyond.exists()
+    assert OUTSIDE_THE_WORKSPACE in result.stdout
+
+
+def test_an_unnamed_plan_reaches_a_proposal_by_the_route_production_uses(
+    planning, planning_harness,
+):
+    """The story's first criterion, end to end: no `--workflow`, two
+    invocations, and the answer arriving because the invoked process wrote it
+    to the path the invocation named — the stub now writes nowhere else.
+
+    Its control is the pair above: the same stub asked for a path it could not
+    have written writes nothing, so a proposal here is a delivery rather than a
+    test filling in for one.
+    """
+    head = planning.head()
+    status, output = plan_on_a_terminal(
+        planning, planning_harness, "a story request", reply=b"\nn\n",
+        L5_STUB_SELECTION=answer(ADDING["name"]),
+        L5_STUB_WRITE=writes((relative_artifact(), planned(ADDING["name"]))))
+
+    assert status == 0, output
+    made = invocations(planning)
+    assert len(made) == 2
+    assert answer_asked_for(made[0]).is_absolute()
+    assert ADDING["name"] in output
+    assert rendered_against(made[1], ADDING)
+    assert planning.head() != head
+
+
+def test_phase_one_is_asked_for_its_answer_beneath_the_target_root(
+    planning, planning_harness,
+):
+    """Inside the workspace the permission mode accepts edits within, which is
+    the whole of what was wrong: a path outside it is a path the turn reasons
+    its way to and then cannot write.
+
+    The directory is the one the target configures, and its control is the test
+    beside it, where a target configuring somewhere else is asked for its
+    answer there.
+    """
+    plan_on_a_terminal(planning, planning_harness, "a story request",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+
+    asked_for = answer_asked_for(invocations(planning)[0])
+
+    assert planning.root.resolve() in asked_for.resolve().parents
+    assert asked_for.parent.resolve() == (planning.root / TARGET_LOGS_DIR).resolve()
+
+
+def test_the_answer_path_follows_the_logs_dir_the_target_configures(
+    tmp_path, planning_harness,
+):
+    """The control for the assertion above, and the constraint that the path is
+    derived from the configuration rather than from a literal at the call site:
+    a target naming another directory is asked for its answer in that one, and
+    the default directory is not created at all."""
+    elsewhere = build_planning(tmp_path, name="other-target",
+                               logs_dir=ANOTHER_LOGS_DIR, remote=False)
+
+    plan_on_a_terminal(elsewhere, planning_harness, "a story request",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+
+    asked_for = answer_asked_for(invocations(elsewhere)[0])
+
+    assert asked_for.parent.resolve() == (elsewhere.root
+                                          / ANOTHER_LOGS_DIR).resolve()
+    assert transcript_in(elsewhere.root / ANOTHER_LOGS_DIR).is_file()
+    assert not (elsewhere.root / TARGET_LOGS_DIR).exists()
+
+
+def test_phase_one_runs_with_its_working_directory_at_the_target_root(
+    planning, planning_harness,
+):
+    """Whatever directory the developer invoked `l5-plan` from. Run from a
+    subdirectory of the target, which is the case that tells the two apart: a
+    session that inherited this process's directory would leave the answer path
+    outside phase one's workspace, and the stub — like the real turn — would
+    write nothing there.
+
+    So the proposal reaching the confirmation is itself the check, and the
+    logged directory says which directory it was.
+    """
+    from_here = planning.root / "src" / "deep"
+    from_here.mkdir(parents=True)
+
+    status, output = plan_on_a_terminal(
+        planning, planning_harness, "a story request", reply=b"\n",
+        cwd=from_here, L5_STUB_SELECTION=answer(PRESERVING["name"]))
+
+    assert status == 0, output
+    made = invocations(planning)
+    selecting = made[0]
+    assert Path(selecting["cwd"]).resolve() == planning.root.resolve()
+    assert Path(selecting["cwd"]).resolve() != from_here.resolve()
+    assert len(made) == 2, output
+    assert rendered_against(made[1], PRESERVING)
+
+
+def granted_tools(invocation: dict) -> list[str]:
+    """The tools an invocation's argument list grants, in order.
+
+    Read off the command line rather than out of the script, because what a
+    turn may do being readable from the invocation is the point of stating it
+    there.
+    """
+    argv = invocation["argv"]
+    return [argv[index + 1] for index, item in enumerate(argv)
+            if item == "--allowedTools"]
+
+
+def test_phase_ones_argument_list_grants_the_tool_its_answer_needs(
+    planning, planning_harness,
+):
+    """One tool for a turn whose entire output is one JSON file. Its control is
+    the flagged session beside it, whose single invocation grants none — so a
+    green here cannot mean the reader has stopped seeing grants."""
+    plan_on_a_terminal(planning, planning_harness, "a story request",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+    assert granted_tools(invocations(planning)[0]) == ["Write"]
+
+    planning.log.unlink()
+    plan_on_a_terminal(planning, planning_harness, "--workflow", ADDING["name"],
+                       "a story request", reply=b"")
+    assert granted_tools(invocations(planning)[0]) == []
+
+
+def test_phase_ones_stdin_is_not_the_sessions_stdin(planning, planning_harness):
+    """A turn given its whole request on the command line has nothing to read,
+    and inheriting the terminal buys a wait for input that never comes.
+
+    Its control is in the same session: the planning turn beside it does
+    inherit the developer's terminal on all three streams, so a green here
+    cannot mean the pty failed to reach either invocation.
+    """
+    plan_on_a_terminal(planning, planning_harness, "a story request",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+
+    selecting, planning_turn = invocations(planning)
+
+    assert selecting["tty"][0] is False
+    assert planning_turn["tty"] == [True, True, True]
+
+
+# --------------------------------------------------------------------------
+# What the turn said on the way there is kept
+# --------------------------------------------------------------------------
+
+
+def test_phase_ones_output_is_kept_after_an_invocation_that_proposed(
+    planning, planning_harness,
+):
+    """Both streams, under the configured logs directory, headed by the request
+    that was being answered."""
+    plan_on_a_terminal(planning, planning_harness, "make the loader faster",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+
+    kept = transcript_in(planning.root / TARGET_LOGS_DIR)
+
+    assert kept.is_file()
+    held = kept.read_text(encoding="utf-8")
+    assert STUB_STDOUT in held
+    assert STUB_STDERR in held
+    assert "make the loader faster" in held
+
+
+def test_phase_ones_output_is_kept_after_an_invocation_that_proposed_nothing(
+    planning, planning_harness,
+):
+    """The invocation whose output there was never any other way to see: it
+    delivered nothing, so what it said on the way there is all there is. Its
+    control is the test above, where the same reading finds the same output
+    after an invocation that did deliver."""
+    status, _ = plan_on_a_terminal(planning, planning_harness,
+                                   "a story request", reply=b"\n")
+
+    assert status != 0
+    held = transcript_in(planning.root / TARGET_LOGS_DIR).read_text(
+        encoding="utf-8")
+    assert STUB_STDOUT in held
+    assert STUB_STDERR in held
+    assert "a story request" in held
+
+
+def test_a_later_invocation_appends_to_the_transcript_rather_than_replacing_it(
+    planning, planning_harness,
+):
+    """An earlier invocation's evidence survives a later one: the file is a
+    record of what phase one has said in this repository, not of what it said
+    most recently."""
+    plan_on_a_terminal(planning, planning_harness, "the earlier request",
+                       reply=b"\n")
+    kept = transcript_in(planning.root / TARGET_LOGS_DIR)
+    after_one = kept.read_text(encoding="utf-8")
+
+    plan_on_a_terminal(planning, planning_harness, "the later request",
+                       reply=b"\n")
+    after_two = kept.read_text(encoding="utf-8")
+
+    assert "the earlier request" in after_two
+    assert "the later request" in after_two
+    assert after_two.startswith(after_one)
+    assert after_two.count(STUB_STDOUT) == after_one.count(STUB_STDOUT) + 1
+
+
+def test_the_message_naming_no_proposal_names_the_transcript(
+    planning, planning_harness,
+):
+    """"It wrote no answer" tells a developer what happened and not where to
+    look. Its control is the session beside it, which reaches a proposal: the
+    path says nothing new there and is not printed, so a green here cannot mean
+    the reading finds the path in any output at all."""
+    kept = transcript_in(planning.root / TARGET_LOGS_DIR)
+
+    _, silent = plan_on_a_terminal(planning, planning_harness,
+                                   "a story request", reply=b"\n")
+    assert squashed(str(kept)) in squashed(silent)
+
+    planning.log.unlink()
+    _, proposing = plan_on_a_terminal(
+        planning, planning_harness, "a story request", reply=b"\n",
+        L5_STUB_SELECTION=answer(ADDING["name"]))
+    assert squashed(str(kept)) not in squashed(proposing)
+
+
+# --------------------------------------------------------------------------
+# An answer is this invocation's or it is nothing
+# --------------------------------------------------------------------------
+
+
+def test_an_answer_left_by_an_earlier_invocation_is_not_read_as_this_ones(
+    planning, planning_harness,
+):
+    """A stale answer naming a workflow would report a proposal this invocation
+    never made, and the session would be rendered against it.
+
+    Its control is the second half: the same content, written by the invocation
+    itself, is a proposal — so "no proposal" here is the answer being this
+    invocation's or nothing, rather than the reader having stopped seeing
+    answers.
+    """
+    stale = answer_in(planning.root / TARGET_LOGS_DIR)
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(answer(ADDING["name"]), encoding="utf-8")
+
+    status, output = plan_on_a_terminal(planning, planning_harness,
+                                        "a story request", reply=b"\n")
+
+    assert status != 0, output
+    assert "no workflow" in output
+    assert len(invocations(planning)) == 1
+
+    planning.log.unlink()
+    status, output = plan_on_a_terminal(
+        planning, planning_harness, "a story request", reply=b"\n",
+        L5_STUB_SELECTION=answer(ADDING["name"]))
+    assert status == 0, output
+    assert rendered_against(invocations(planning)[1], ADDING)
+
+
+def test_the_answer_is_not_left_behind_for_the_next_invocation(
+    planning, planning_harness,
+):
+    """Whatever this invocation did with it. The file is observed in place
+    first, which is the control the absence needs: the reading does report an
+    answer file when one is there."""
+    left = answer_in(planning.root / TARGET_LOGS_DIR)
+    left.parent.mkdir(parents=True, exist_ok=True)
+    left.write_text(answer(ADDING["name"]), encoding="utf-8")
+    assert left.exists()
+
+    plan_on_a_terminal(planning, planning_harness, "a story request",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+
+    assert not left.exists()
+
+
+def test_the_flag_asks_for_no_answer_and_keeps_no_transcript(
+    planning, planning_harness,
+):
+    """A session given `--workflow` invokes phase one not at all, so neither
+    artifact appears. Its control is the same target without the flag, where
+    both the transcript and an invocation carrying an answer path do."""
+    logs = planning.root / TARGET_LOGS_DIR
+
+    status, _ = plan_on_a_terminal(planning, planning_harness, "--workflow",
+                                   ADDING["name"], "a story request", reply=b"")
+
+    assert status == 0
+    assert not transcript_in(logs).exists()
+    assert not answer_in(logs).exists()
+    assert ANSWER_IN_PROMPT.search(invocations(planning)[0]["prompt"]) is None
+
+    planning.log.unlink()
+    plan_on_a_terminal(planning, planning_harness, "a story request",
+                       reply=b"\n", L5_STUB_SELECTION=answer(ADDING["name"]))
+
+    assert transcript_in(logs).is_file()
+    assert ANSWER_IN_PROMPT.search(invocations(planning)[0]["prompt"])
