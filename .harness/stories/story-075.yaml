@@ -1,0 +1,92 @@
+story:
+  id: story-075
+  title: A superseded attempt keeps its evidence
+  description: |
+    archive_attempt preserves a superseded attempt's stage artifacts and drops the
+    check results that judged it. archivable_artifacts collects the union of each
+    stage's outputs, its changed_files record, and the keys of its schemas map;
+    check results are declared in none of those three places, so no revert-check,
+    suite-run, claim-support, clean-clone or census result has ever been archived.
+    A retry overwrites each in place, and the checks run in scratch clones that are
+    removed in a finally whatever the result, so what the harness decided about the
+    superseded attempt is unrecoverable from anywhere.
+
+    This story archives the check results alongside the artifacts, deriving their
+    names from the workflow's own declarations rather than listing them, so a check
+    added later archives itself. It also archives the whole-output companion file a
+    suite-shaped result points at, and rewrites the pointer in the archived copy, so
+    an archived record resolves to the output of the attempt it belongs to rather
+    than to whatever the next attempt wrote over it.
+
+    It changes nothing about what any check decides, when it runs, or what it
+    records - only whether the record survives a retry.
+  workflow: story-workflow
+
+tasks:
+  - Extend archivable_artifacts with a fourth source alongside outputs, the changed_files record and the schemas keys, collecting the result artifact from every check declaration a stage carries, name-agnostically.
+  - Make archive_attempt follow a copied record's own output_path pointer, archiving the companion output file beside the record and rewriting the pointer in the archived copy.
+  - Establish and record what happens to a correction pass's record today, changing nothing about it.
+  - Write a test module that drives a real retry and holds the archive to what it now preserves.
+
+acceptance_criteria:
+  - archivable_artifacts collects, for every stage, the result name of every check declaration that stage carries, so revert-check, suite-run, claim-support, clean-clone and census results are all in the list the retry archive is given.
+  - The collection is derived from the declarations rather than listed - no check name, no declaration key spelled as an artifact name, and no stage name appears in the collecting code, and a check declaration added to a constructed workflow has its result archived with no change to harness source.
+  - After a retry, attempts/attempt-1/ holds each check result attempt 1 actually produced, under the same canonical name it has at the run-directory root, and the live root copy still describes the current attempt.
+  - A check result the superseded attempt did not produce is skipped rather than failing the archive, exactly as an absent stage artifact already is. The clean-clone result is usually such a case, because it is written only after a passing verdict.
+  - When an archived record carries an output_path naming a file inside the run directory, archive_attempt copies that file into attempts/attempt-N/ and rewrites output_path in the archived copy to the archived file, so reading the archived record leads to the output of the attempt that record belongs to.
+  - The live run-directory copies are untouched by the archive: both the root record and the root output file keep their contents and their canonical names, and the archive copies rather than moves.
+  - archive_attempt returns every name it copied, companion output files included.
+  - No correction-pass behaviour changes. The story records what was established: correction_pass_result_file keys each record by pass number and correction_pass_count is reset by neither a retry nor a resume, so no correction-pass record is ever overwritten, and the declared name that carries no pass number names no file on disk and is skipped like any absent artifact.
+  - Every artifact archived before this story is still archived, and the attempt directory naming and layout are unchanged.
+
+technical_plan:
+  implementation_steps:
+    - In archivable_artifacts, walk each stage's values for a dict that carries a string result, and add that result to the collected names. The three existing sources stay exactly as they are, and the result stays sorted so the archive remains deterministic. Extend the docstring to say the fourth source is there and why the names are still not written.
+    - In archive_attempt, after copying an artifact, attempt to read the copy as JSON. If it is an object carrying an output_path that names an existing file inside the run directory, copy that file into the destination under its basename and rewrite output_path in the archived copy to the archived file's path. A record that is not JSON, or that carries no output_path, or whose output_path names nothing that exists, is copied verbatim as before. Add the companion's name to the returned list.
+    - Say in archive_attempt's docstring that the pointer is followed off the record's own field rather than off any filename, which is what keeps the archive name-agnostic, and that the pointer is rewritten only in the archived copy.
+    - Record in the code the consequence that interrupted_attempt_artifacts reads through archivable_artifacts, so a resume's archive carries check results for the same reason a retry's does.
+    - Write the new test module against a constructed workflow through the fake runner, covering a real retry, the pointer rewrite, a check declaration the repository does not ship, and the correction-pass record being left alone.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: archivable_artifacts gains the check-declaration source and archive_attempt follows and rewrites the output_path pointer.
+    - file: tests/test_archived_check_results.py
+      stage: tester
+      reason: The regression module for what the attempt archive now preserves - a driven retry, the pointer rewrite, the derived-not-listed property, and the correction-pass record left alone.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The description of what an attempt archive contains, and what was established about the correction-pass record.
+    - file: README.md
+      stage: documenter
+      reason: The story table gains this story's row.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - workflows/
+    - schemas/
+    - orchestration/agent_runner.py
+    - orchestration/context_assembler.py
+    - .gitignore
+
+verification_requirements:
+  - Confirm by driving a real retry, rather than by reading archivable_artifacts, that the superseded attempt's archive holds every check result that attempt produced.
+  - Confirm the names are still derived rather than listed by adding a check declaration to a constructed workflow and showing its result is archived with no change to harness source.
+  - Confirm an archived record's output_path resolves to a file holding the output of the attempt that record belongs to, and not the output the later attempt wrote.
+  - Confirm the live run-directory records and output files are unchanged by the archive.
+  - Confirm nothing archived before this story stopped being archived, and that the attempts directory naming and layout are as they were.
+  - Confirm the claim about the correction-pass record against the code that writes it and the state that counts it, and that no correction-pass behaviour changed.
+  - Confirm the full suite passes.
+
+constraints:
+  - No check name, artifact name or stage name may be written into the collecting or archiving code. A seventh check declared later must archive itself with no code change.
+  - What every check decides, when it runs, and what it records are unchanged. This story governs only whether the record survives a retry.
+  - This is archiving, not retention policy. Nothing is pruned, compressed, expired or deleted, and no existing archived name is dropped.
+  - The live copies at the run-directory root keep their canonical names and their contents. Only the archived copy's pointer is rewritten.
+  - attempts/attempt-N/ naming and layout, and the resume archive under resumes/resume-N, are settled by earlier stories and stay as they are.
+  - The .harness/runs/ gitignore stays as it is; these artifacts are execution state and remain untracked.
+  - No existing assertion may be weakened or skipped.
