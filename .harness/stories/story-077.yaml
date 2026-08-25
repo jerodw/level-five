@@ -1,0 +1,132 @@
+story:
+  id: story-077
+  title: The revert check asks one test first
+  description: |
+    The revert check establishes a failure, and one failing test proves a
+    failing suite while no number of passing tests proves a passing suite.
+    That asymmetry lets a subset stand in for the whole here and nowhere the
+    verdict runs the other way. So let the implementer nominate the test that
+    fails without its change, run that test alone in the reverted clone, and
+    take a failure there as the answer.
+
+    The nomination must be shown to discriminate. A selector that fails to
+    collect exits non-zero exactly as a failing test does, and telling those
+    apart means reading which non-zero, which is framework-specific and
+    forbidden here. So the selector runs twice: once in a clone with the
+    working tree applied, where it must pass, and once in the reverted clone,
+    where it must fail. Pass-then-fail is the permission. Anything else --
+    passes both times, fails both times, cannot be run at all, no nomination,
+    no configured selection command -- falls through to the whole suite and
+    today's verdict, unchanged.
+
+    A bad nomination costs one extra selector run over today's runtime, so the
+    stage nominating the test that judges its own edit can buy nothing by
+    nominating badly. That is what makes the conflict of interest harmless.
+  workflow: story-workflow
+
+tasks:
+  - Declare a test_selection_command key in schemas/harness-config.schema.json - the command the harness substitutes a nominated test into and reads an exit code from, beside test_command - so story-043's undeclared-key refusal does not refuse every run under it.
+  - Add an optional test_that_fails_without_this_change field to schemas/changed-files.schema.json, whose description tells the writing stage what the nomination must satisfy, and which leaves both the implementer's and the tester's records valid without it.
+  - Teach revert_check to try the nomination before the suite - the selector in an applied clone where it must pass, then in the reverted clone where it must fail - and to fall through to the whole suite in every other case, with the reason recorded.
+  - Record the outcome in revert-check-result.json - the nominated test, the substituted command, both exit codes, and why the check fell through when it did - keeping ran meaning the suite ran in the reverted clone.
+  - Change the coordinator's escalation predicate from "the suite did not run" to "the check reached no verdict", so a permission the nomination established is not read as a check that could not run.
+  - Set test_selection_command in this repository's own .harness/config.yaml, so the short-circuit pays here rather than only being available.
+  - Record the residual risk beside the check - a test that fails in isolation and passes inside the full suite is a false permit, narrowed by the applied-tree run and not closed - and say plainly that this is not story-068's reverting_breaks_the_suite.
+  - Cover the short-circuit and every fall-through path with tests, and prove the new configuration key is obeyed.
+
+acceptance_criteria:
+  - A nomination that passes in the applied clone and fails in the reverted clone permits the governed edits with the configured test_command never run, and the recorded result says so.
+  - A record carrying no nomination reaches today's verdict by today's path - the whole suite in the reverted clone - and nothing new is required of it.
+  - A target that configures no test_selection_command reaches today's verdict by today's path, in the shape a target with no test_command already uses - reported as a check that did not short-circuit, never as a permission.
+  - A nomination that passes in the reverted clone falls through to the whole suite, and the whole suite's exit status alone decides the verdict.
+  - A nomination that fails in the applied clone falls through to the whole suite, which is what makes a nomination naming a test present only in the new version of a reverted file fall through rather than permit.
+  - A nomination that cannot be run at all - the selector is unrunnable, or the configured command carries no substitution point - falls through to the whole suite, and the recorded reason names what stopped it.
+  - A refusal is still a refusal - reconstructing the shape of a run whose reverted suite passes, no nomination turns it into a permission.
+  - revert-check-result.json records, for a run that short-circuited, the nominated test, the command the nomination was substituted into, and the exit status of each of the two selector runs; and for a run that fell through, why.
+  - ran in revert-check-result.json still means the configured test command ran in the clone with the edits reverted, and a short-circuited check records it as false while carrying permitted.
+  - The coordinator escalates a revert check that reached no verdict and does not escalate one that reached a verdict without running the suite.
+  - schemas/harness-config.schema.json declares the new key, and a config file carrying it is accepted at pre-flight rather than refused.
+  - The optional nomination field leaves the implementer's changed-files.json and the tester's tester-changed-files.json valid whether or not either carries it.
+  - The harness names no test framework and parses no runner output on either path - the standing rule from story-040 and story-041 - and the existing check of that rule stays green.
+  - The residual false-permit risk is recorded next to the check itself rather than left for a later reader to discover.
+  - A reader of the new field's description is told it is the executable counterpart of story-068's reverting_breaks_the_suite and not the same thing - that one is plan-time prose for a human reviewer, this one is named after the edit exists and is decided by running it.
+  - The granularity the check already has is unchanged - every governed path is reverted in one run and one verdict is reached - and nothing added implies otherwise.
+
+technical_plan:
+  implementation_steps:
+    - Add test_selection_command to schemas/harness-config.schema.json, describing it as the command the check substitutes a nominated test into, with the substitution point spelled as the literal {test}, and describing its absence as disabling the short-circuit rather than failing the check.
+    - Add test_that_fails_without_this_change to schemas/changed-files.schema.json as an optional string, describing what the nomination must satisfy - pass on the tree the stage left, fail with the governed edits reverted - and distinguishing it from story-068's reverting_breaks_the_suite.
+    - Give the clone-and-run path a way to run a command other than the configured test_command, so the selector runs through the same builder the suite does and the applied and reverted runs differ only in what is reverted.
+    - In revert_check, before the suite - when the record names a nomination, the config names a selection command, and the substitution point is present - run the substituted selector in an applied clone and then in the reverted clone, and take pass-then-fail as permitted.
+    - Fall through to the existing whole-suite run in every other case, recording the reason on the result rather than treating any of them as a permission.
+    - Extend RevertCheckResult and revert-check-result.json with the nomination block, leaving ran, command, runner, paths, permitted, reason and baseline meaning what they mean today.
+    - Change the call site's escalation from "the result did not run" to "the check reached no verdict", so a short-circuited permission is not escalated, and leave the refusal branch as it is.
+    - Announce the selector runs as a check whose wait is seconds rather than a suite run, using the cost the announcement already takes rather than claiming a suite run's.
+    - Add a sentence to prompts/story-implementer.md pointing the implementer at the new field, leaving the schema description as what says how to fill it.
+    - Set test_selection_command in .harness/config.yaml for this repository.
+    - Extend tests/test_revert_check.py with the short-circuit and each fall-through case, and add the obeyed-proof for the new key to tests/test_config_keys_are_obeyed.py.
+    - Record the mechanism and the residual risk in the architecture document.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: revert_check gains the nomination path, the clone-and-run path gains a command to run, the result gains the nomination block, and the call site's escalation predicate changes.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: declares test_selection_command, without which the undeclared-key refusal refuses every run under a config that sets it.
+    - file: schemas/changed-files.schema.json
+      stage: implementer
+      reason: declares the optional nomination field, and its description is what teaches the writing stage what the nomination must satisfy.
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: records what the nomination decided and why a check fell through, and states the residual risk beside the granularity note already there.
+    - file: prompts/story-implementer.md
+      stage: implementer
+      reason: points the implementer at the nomination field it may now fill.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: sets the selection command for this repository, so the short-circuit pays here.
+    - file: tests/test_revert_check.py
+      stage: tester
+      reason: covers the short-circuit, each fall-through case, and that a refusal stays a refusal.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: every declared configuration key carries a proof that varies it and observes the harness obey it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the mechanism, the asymmetry that licenses it, and the residual false-permit risk.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/harness-config.schema.json
+    - schemas/changed-files.schema.json
+    - schemas/revert-check-result.schema.json
+    - prompts/story-implementer.md
+    - .harness/config.yaml
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - orchestration/harness_config.py
+    - schemas/clean-clone-result.schema.json
+    - schemas/census-result.schema.json
+    - schemas/story.schema.json
+
+verification_requirements:
+  - Confirm, by reading what the check recorded rather than by timing it, that a nomination passing applied and failing reverted permits the edits without the configured test command running.
+  - Confirm each falling-through case reaches today's verdict by running the whole suite - no nomination, no configured selection command, a nomination that passes in the reverted clone, a nomination that fails in the applied clone, and a nomination that cannot be run at all.
+  - Confirm a refusal is still a refusal - reconstruct the shape of a stage whose edits are not needed and check that no nomination turns it into a permission.
+  - Confirm the harness names no framework and parses no runner output on either path, to the standing rule.
+  - Confirm the new configuration key is declared and that a config setting it passes pre-flight, and that a target setting nothing runs exactly as it does today.
+  - Confirm the changed-files record stays valid with the nomination absent, for both the implementer's and the tester's record.
+  - Confirm the whole suite still runs and still decides wherever the nomination did not.
+
+constraints:
+  - The harness must name no test framework and must parse no runner output; only exit codes are read.
+  - The nomination is optional, and its absence must cost nothing new - no extra run, no new required field, no new failure mode.
+  - Only the revert check may short-circuit. The clean-clone check and the suite run after the tester conclude green, and no subset establishes a green whole; neither may be touched.
+  - What the check reverts, what its baseline is, and when it fires are unchanged.
+  - The granularity is unchanged - every governed path reverted in one run, one verdict - and the nomination proves the bundle was needed, no more finely than today.
+  - Pass-then-fail is the only permission the nomination can establish; every other outcome falls through to the whole suite rather than deciding anything.
+  - A check that could not decide is recorded as one that did not short-circuit, never as a permission.
+  - The selector syntax belongs to the target. The harness substitutes a string into a configured command and reads an exit status, and knows nothing else about it.
