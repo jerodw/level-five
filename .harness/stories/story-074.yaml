@@ -40,6 +40,36 @@ story:
     Nothing here changes behaviour. No rule moves, no declaration changes
     meaning, and no command is denied that was permitted or permitted that was
     denied.
+
+    Correction, appended by hand on 2026-08-25 after this story completed.
+    Everything above is left as it was planned. The fourth paragraph, and the
+    task and acceptance criterion that restate it, are wrong: they require the
+    corrected account to say story-070's pipe form "ran once" and to "no longer
+    assert two runs", and the log says otherwise. `.harness/logs/story-070.log`
+    records three whole-suite invocations of which two ran - the redirect form
+    denied on arrival, and two pipe forms that both ran, one in the foreground
+    until the 600-second tool timeout moved it to the background and one
+    dispatched into the background from the start. So story-073's "ran the whole
+    suite twice" was right about the runs, and the twenty-plus minutes beside it
+    is unconfirmed rather than unsupported: the first run's wall clock is in the
+    log, in the tester's own tail of that task's output, reading `2 failed, 3279
+    passed in 704.08s (0:11:44)`, while the second was killed with nothing ever
+    written.
+
+    The run wrote the accurate account rather than the one demanded here, and
+    verification passed it on the evidence rather than on the criterion. That is
+    the right outcome and it is why this is a correction to the artifact rather
+    than to the work: `.harness/docs/ARCHITECTURE.md` carries the true account,
+    and only this artifact still carried the false requirement.
+
+    The wrong premise came from the request behind this story, which was written
+    from a grep over the log rather than from reducing its commands the way the
+    guard reduces one. Two later readings by hand were also wrong, in both
+    directions - one counting three invocations as two, one counting an echo of
+    a denied command inside a `"denials"` summary array as a fourth and fifth.
+    The lesson worth keeping is the one the run demonstrated: read that log by
+    driving `hooks/bash_guard.py`'s own reduction over it, and follow each
+    invocation to its result rather than counting the commands attempted.
   workflow: refactor-workflow
 
 tasks:
