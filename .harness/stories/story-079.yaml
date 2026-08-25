@@ -1,0 +1,167 @@
+story:
+  id: story-079
+  title: The suite uses the machine it runs on
+  description: |
+    This repository's suite runs serially and takes about twelve minutes on a
+    ten-core machine, holding 0.86 of one core while nine sit idle. The work is
+    syscall-bound rather than CPU-bound — sys time exceeds user time in every
+    measured run, because the suite builds, clones and commits in real git
+    repositories and drives the coordinator as a subprocess thousands of times
+    — so workers interleave instead of contending. Measured at 4.5x to 5.2x
+    under eight workers on this repository.
+
+    This story adds pytest-xdist and makes `-n auto` part of the target's
+    configured `test_command`, so the developer and the harness's own gates run
+    the identical command. The decision the request left open is decided here
+    and stated as a decision: `-n auto` is the default rather than a
+    developer-only opt-in. The harness runs the suite two or three times per
+    story — the revert check, the coordinator's suite run in the tree, and the
+    clean-clone check all execute the configured command — so leaving those
+    serial would capture almost none of the available win and would let the
+    command the gates run drift from the command a developer runs. `-n auto`
+    reads the core count of whatever machine it lands on, so a small CI runner
+    and a ten-core laptop each get what they have and no core count is written
+    down anywhere.
+
+    One test in the suite is not parallel-safe. The temp-root assertion in
+    tests/test_clean_clone_check.py snapshots the *shared* system temp root and
+    asserts no new `l5-clean-clone-*` directory appears in it; under eight
+    workers it fails on other workers' scratch directories, which it does not
+    own and never did. The check's own subject cleans up correctly. Narrowing
+    the assertion to the scratch directory this call actually created — read
+    off the `clone_path` the result records — is a better test whether or not
+    the suite runs in parallel, because today a stale `l5-clean-clone-*` left
+    on the machine by any unrelated process reddens it too.
+
+    That narrowing is the implementer's work rather than the tester's, and
+    deliberately so. The moment `.harness/config.yaml` carries `-n auto`, the
+    implementer's own suite run and the revert check after it execute the
+    un-narrowed assertion under many workers and go red, so a story that
+    deferred the fix to a later stage would make the implementer's stage
+    unpassable. The edit is a modification of an existing file forced by a
+    deliberate change elsewhere in the same story, which is exactly what the
+    revert check adjudicates, so it is declared rather than granted.
+
+    The dependency is declared in the repository rather than left as tribal
+    knowledge: a tracked requirements-dev.txt names pytest and pytest-xdist,
+    and CI installs from it rather than from a hand-written list that can
+    silently disagree with what the configured command needs.
+
+    Three things measured during the investigation are deliberately not done
+    here. `core.fsync=none` in the constructed test repositories was measured
+    and refuted — 165.32s against a plain baseline of 163.78s, system time
+    within four seconds — and is recorded in the architecture document so the
+    next person with the same reasonable idea does not spend an afternoon on
+    it. Spotlight indexing of the temp root is real, at 57% to 78% of a core
+    during a run, and unshippable: disabling it means turning search off for
+    the whole data volume. A RAM disk for the temp root is a different command
+    on every platform. A repository that must run on any machine carries none
+    of these, and a story that shipped them would fail the portability rule
+    story-040 and story-041 established.
+
+    The pty-driven timing-sensitive tests are neither quarantined nor marked.
+    Parallel load may widen their windows; the answer to that is to fix the
+    race, which is another story's subject, not to hide it behind
+    configuration. What this story owes is measurement across several runs
+    rather than a claim from one.
+  workflow: story-workflow
+
+tasks:
+  - Add `-n auto` to `test_command` in `.harness/config.yaml`, leaving every other key untouched.
+  - Narrow the temp-root assertion in `tests/test_clean_clone_check.py` so it observes only the scratch directory the call under test created, resolved from the `clone_path` the returned result records, rather than globbing the shared system temp root.
+  - Add a tracked `requirements-dev.txt` declaring `pytest` and `pytest-xdist`.
+  - Change `.github/workflows/tests.yml` to install from `requirements-dev.txt` instead of installing a hand-listed `pytest`.
+  - Write validation that the narrowed assertion is independent of what any other process has in the shared temp root, and that it still fails when the check genuinely leaves its scratch directory behind.
+  - Write validation that this repository's configured test command names no fixed worker count, and that CI installs the declared dependency file rather than a hand-listed set.
+  - Record the measurement, the decision to make `-n auto` the default, and the rejected `core.fsync=none` result in the architecture document, and update the two places that spell the suite command in prose.
+
+acceptance_criteria:
+  - "`test_command` in `.harness/config.yaml` runs the suite in parallel and contains no numeric worker count: the worker count is `auto`, so the command carries no assumption about the machine it runs on."
+  - A tracked `requirements-dev.txt` exists at the repository root and names both `pytest` and `pytest-xdist`.
+  - "`.github/workflows/tests.yml` installs the test dependencies from `requirements-dev.txt` and no longer installs a bare hand-listed `pytest`, so the plugin the configured command needs cannot be missing in CI while present locally."
+  - The temp-root test in `tests/test_clean_clone_check.py` asserts about the scratch directory the call under test created and does not glob the shared system temp root for directories it did not create.
+  - A test demonstrates that the narrowed assertion passes with a foreign `l5-clean-clone-*` directory present in the shared temp root for the whole of its execution.
+  - A test demonstrates that the narrowed assertion still fails when `clean_clone_check` does not remove its scratch directory — the non-vacuity control, driven against a mutated copy rather than asserted about.
+  - A test reads `.harness/config.yaml` and asserts the configured command carries no digit as a worker count, so a later edit pinning a core count is caught.
+  - "`README.md` and `.harness/standards/testing.md` each tell a developer to install `requirements-dev.txt` into both `.venv` and the interpreter `verification_runner` names, and name both. A developer who installs into only the first has a green local suite and a clean-clone check that dies on an unrecognized argument, which is the failure this instruction exists to prevent."
+  - A test asserts that the dependency file CI installs from is the same tracked file the repository declares, driven by reading the workflow definition rather than by a listing kept beside it.
+  - The bash guard's suite-denial family still denies this repository's configured command and the surroundings `tests/test_suite_run_denial.py` already enumerates, with the parallel flag present in the configured command.
+  - The whole suite passes under the parallel invocation.
+  - No test is marked, skipped, deselected or otherwise excluded from the parallel path by this story.
+
+technical_plan:
+  implementation_steps:
+    - Add `-n auto` to the end of `test_command` in `.harness/config.yaml`. Nothing in orchestration needs to know about it: the coordinator shell-splits and runs the command as written, and `hooks/bash_guard.py` reduces both the configured command and any invocation with `_without_flags`, which strips options together with their values, so the guard's match is unchanged by the added flag.
+    - Narrow `test_the_check_leaves_no_scratch_directory_behind_in_the_temp_root`. `clean_clone_check` creates its scratch with `tempfile.mkdtemp(prefix="l5-clean-clone-")` and `run_clean_clone` records `clone_path` inside it, on the failing-suite path this test drives as well as on the passing one. Take the returned result's `clone_path`, assert its parent is the scratch directory under the system temp root, and assert that directory no longer exists. Do not compare against a snapshot of the root.
+    - Add `requirements-dev.txt` naming `pytest` and `pytest-xdist`, and point the CI install step at it. Leave the matrix, the `fetch-depth: 0` checkout and the one-retry step alone — none of them is this story's subject and the comments on them explain why they are as they are.
+    - Write the tester's validation. The independence proof plants a foreign `l5-clean-clone-*` directory in the shared temp root, keeps it there across the call, and asserts the narrowed test passes. The non-vacuity control drives the same assertion against a copy of the coordinator with the scratch removal defeated and asserts it fails. The configuration proof reads `.harness/config.yaml` itself, and the CI proof reads `.github/workflows/tests.yml` itself, so neither is a second copy of the answer.
+    - Update the prose. `README.md`'s Tests section and `.harness/standards/testing.md` each spell the suite command and must now spell the parallel one alongside the instruction to install the dependency file into both `.venv` and `.venv310`. The architecture document gains the measurement, the reason parallelism works on this workload, the decision that the gates run the same command as the developer, and the two measured-and-rejected results.
+  likely_file_changes:
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: "`test_command` gains `-n auto`. This is the target's own configuration rather than harness source, so no runner or framework name enters orchestration and another target with another runner is untouched."
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: The temp-root assertion is narrowed to the scratch directory the call under test created. It has to move in the same stage as the configuration change, because the implementer's own suite run and the revert check after it both execute the configured command and would meet the un-narrowed assertion under many workers.
+      reverting_breaks_the_suite: Reverting this edit restores an assertion that globs the shared system temp root and compares it against a snapshot taken before the call. Under the parallel command this story configures, other workers hold their own `l5-clean-clone-*` scratch directories in that root during the window, so the restored assertion fails on names it does not own and the suite goes red. The edit is forced by the configuration change in this same story, not authored to make anything pass.
+    - file: requirements-dev.txt
+      stage: implementer
+      reason: A tracked declaration of the test dependencies, so the plugin the configured command needs is recorded rather than being knowledge each environment has to be told separately.
+    - file: .github/workflows/tests.yml
+      stage: implementer
+      reason: The install step installs from the declared dependency file rather than a hand-listed `pytest`, so CI cannot be missing the plugin the configured command requires.
+    - file: tests/test_suite_parallelism.py
+      stage: tester
+      reason: Independent validation of the story's claims — the configured command names no fixed worker count, and CI installs from the declared dependency file. Named for what it checks rather than for a story number.
+    - file: tests/test_clean_clone_check.py
+      stage: tester
+      reason: The independence proof and the non-vacuity control for the narrowed assertion belong in the module whose subject the clean-clone check is, beside the assertion they are about.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the measurement, the reason this workload parallelises, the decision that the governance checks run the same command a developer runs, and the two measured-and-rejected alternatives.
+    - file: README.md
+      stage: documenter
+      reason: The Tests section spells the suite command and must now spell the parallel one and the dependency install.
+    - file: .harness/standards/testing.md
+      stage: documenter
+      reason: Its first line spells the suite command and would otherwise disagree with the configured one.
+
+scope:
+  modify:
+    - .harness/config.yaml
+    - tests/test_clean_clone_check.py
+    - tests/test_suite_parallelism.py
+    - requirements-dev.txt
+    - .github/workflows/tests.yml
+    - README.md
+    - .harness/standards/testing.md
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - hooks/
+    - prompts/
+    - workflows/
+    - schemas/
+    - scripts/
+    - templates/
+    - .harness/census.py
+    - .harness/stories/
+
+verification_requirements:
+  - Confirm the whole suite passes under the parallel invocation, and that the timing figure the story reports is backed by more than one run — run-to-run variance was measured at roughly 16% on an uncontrolled machine, so a single measurement supports no claim.
+  - Confirm the narrowed temp-root assertion still fails when the check it is about genuinely leaves its scratch directory behind, by driving it against a copy of the coordinator with the removal defeated rather than by reasoning about the code.
+  - Confirm the narrowed assertion no longer depends on what any other process has in the shared system temp root, by demonstrating it passes with a foreign `l5-clean-clone-*` directory present throughout.
+  - Confirm the three governance checks — the revert check, the coordinator's suite run in the target's tree, and the clean-clone check — run the parallel command, read off `.harness/config.yaml` and the code paths that consume it rather than off any one stage's prompt.
+  - Confirm the parallel invocation carries no assumption about a particular core count, in the configured command and anywhere else the story touched.
+  - Confirm `hooks/bash_guard.py` still denies this repository's configured command for a stage that runs no suite, and still denies the surroundings `tests/test_suite_run_denial.py` enumerates, with the parallel flag present in the configured command.
+  - Confirm no test was marked, skipped, deselected or excluded from the parallel path, and that the census reports no counter falling.
+  - Confirm the dependency the configured command needs is declared in a tracked file, that CI installs from that file, and that the developer-facing documentation names both environments the dependency has to reach — the one a developer runs the suite in and the one `verification_runner` names.
+
+constraints:
+  - No runner, framework or plugin name may enter `orchestration/`, `hooks/` or any harness source. The parallel flag lives in the target's `test_command` and nowhere else, which is the rule story-040 and story-041 established and which is what keeps a target with another runner untouched.
+  - No fixed worker count anywhere. `-n auto` reads the machine, so the same command is correct on a two-core CI runner and a ten-core laptop.
+  - No platform-specific machinery. No `mdutil`, no RAM-disk setup, no `hdiutil`, `diskutil` or `tmpfs` call enters the repository — those belong in developer notes if anywhere, and a repository that must run on any machine cannot carry them.
+  - No `core.fsync=none` in the constructed test repositories. It was measured and refuted; the story records the result rather than repeating the experiment.
+  - No existing assertion may be weakened. The temp-root assertion is narrowed to the scratch directory the check actually created, which is strictly stronger than globbing a shared root the check does not own.
+  - No test may be marked, skipped, deselected or excluded from the parallel path to make the suite green. A test that fails under load is a defect to be reported, not configuration to be added.
+  - The CI workflow's matrix, its full-history checkout and its one-retry step are left as they are. Each carries a comment explaining why it exists, and none of them is this story's subject.
