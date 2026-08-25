@@ -14,7 +14,7 @@ logs_dir: .harness/logs
 standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
-test_command: .venv/bin/python -m pytest tests/ -q
+test_command: .venv/bin/python -m pytest tests/ -q -n auto
 # This repository's suite census: it prints a JSON object of counter names to
 # integers, and a stage declaring suite_census has it run in a clone at that
 # stage's baseline and again in the tree the stage left. The counters are this

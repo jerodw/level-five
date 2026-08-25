@@ -36,7 +36,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
+      # Install from the tracked declaration rather than a hand-listed set, so
+      # the plugin the configured test_command needs cannot be missing here
+      # while present locally.
+      - run: pip install -r requirements-dev.txt
       # One retry, of the failures only, and only here. It was added while the
       # clean-clone and revert checks still cloned with `--no-hardlinks`, which
       # copies .git/objects as a directory tree: git enumerates the tree, then

@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -754,16 +755,38 @@ def test_the_scratch_directory_is_removed_whatever_the_result(
 def test_the_check_leaves_no_scratch_directory_behind_in_the_temp_root(
     story_target, tmp_path,
 ):
-    import tempfile
-    root = Path(tempfile.gettempdir())
-    before = {p.name for p in root.glob("l5-clean-clone-*")}
+    """The scratch directory *this* call made is gone from the temp root.
+
+    The subject is the directory the call under test created, resolved from
+    the `clone_path` the returned record carries, and not whatever else the
+    shared system temp root happens to hold. Globbing that root and comparing
+    it against a snapshot asks a question this check does not own: any other
+    process — another pytest worker, or a stale directory left by an unrelated
+    run — puts an `l5-clean-clone-*` name there, and a snapshot comparison
+    reports it as a leak by this call. Reading the path off the record is
+    strictly the stronger claim, because it names the one directory the check
+    is answerable for.
+
+    The failing-suite path is driven deliberately: the record carries
+    `clone_path` there as well as on the passing one, and a scratch directory
+    is removed in a `finally` whatever the result.
+    """
     dirty_target(story_target)
     run_dir = run_dir_of(story_target)
     run_dir.mkdir(parents=True, exist_ok=True)
-    story_coordinator.clean_clone_check(
+
+    result = story_coordinator.clean_clone_check(
         run_dir, story_target, {"test_command": "sh -c 'exit 1'"}, ARTIFACT,
         stage_name=VERIFIER_STAGE["name"])
-    assert {p.name for p in root.glob("l5-clean-clone-*")} == before
+
+    assert result.exit_code != 0
+    scratch = Path(result.clone_path).parent
+    # Resolved on both sides: the system temp root reaches through a symlink
+    # on some platforms, and which side of it a path was spelled from says
+    # nothing about the directory.
+    assert scratch.parent.resolve() == Path(tempfile.gettempdir()).resolve()
+    assert scratch.name.startswith("l5-clean-clone-")
+    assert not scratch.exists()
 
 
 # --------------------------------------------------------------------------
