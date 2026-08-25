@@ -2388,6 +2388,17 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":
         "its subject is this repository's own module names",
+    "test_workflow_proposal.py":
+        "the workflows it plans under are built and written into roots it "
+        "owns; what it resolves live are the shipped declarations that are its "
+        "subject — that every definition under workflows/ says when it "
+        "applies, that prompts/workflow-selector.md enumerates no workflow of "
+        "its own and carries no stage facts, that the selection schema is in "
+        "this repository's manifest, and that scripts/l5-plan reads the "
+        "configured workflow key on no path. The selector prompt is also "
+        "copied into the harness root its sessions run out of, because 'a "
+        "third definition is selectable with no edit to it' is a claim about "
+        "the file this repository ships",
     "test_workflow_selection.py":
         "the workflows it runs are built and written into roots it owns; what "
         "it resolves live are the shipped declarations that are its subject — "

@@ -581,7 +581,11 @@ CLEAN_RUN_ARTIFACTS = [
     "verification-result.json",
 ]
 CLEAN_RUN_EVENTS = [
-    "workflow started for story-001",
+    # story-072: a fresh run's first line names the definition it is executing
+    # as well as the story, because two definitions differing in their stage
+    # list make the stages below ambiguous on their own. The name is the one
+    # `conftest.configured_workflow` configures this target to run.
+    "workflow story-workflow started for story-001",
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
     "documenter stage started",

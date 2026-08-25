@@ -148,6 +148,12 @@ import plan_commit  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
 
+#: The workflow the sessions below render against, stated rather than left to
+#: a fallback: since story-072 l5-plan reads no configured workflow key, and an
+#: invocation with no terminal and no --workflow is refused before the session
+#: starts. This module's subject is the plan-time assignment refusal.
+PLANNED_WORKFLOW = "story-workflow"
+
 #: The committed corpus. Written with `joinpath` rather than the `/` operator
 #: because story-004 holds the suite to naming no path under the repository's
 #: own run directory that way; story-005 and the parser corpus test reach the
@@ -1866,7 +1872,8 @@ def test_l5_plan_words_the_problem_from_the_target_root_not_its_cwd(
     assert not (work / PRESENT_FILE).exists()
 
     from_holding = subprocess.run(
-        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"), "add a thing"],
+        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
+         "--workflow", PLANNED_WORKFLOW, "add a thing"],
         cwd=work,
         env=planning_holding.env(L5_STUB_WRITE=writes(
             (f"../{ARTIFACT_PATH}", PRESENT_ARTIFACT))),
@@ -1878,7 +1885,8 @@ def test_l5_plan_words_the_problem_from_the_target_root_not_its_cwd(
 
     (planning_holding.root / PRESENT_FILE).unlink()
     from_empty = subprocess.run(
-        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"), "add a thing"],
+        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
+         "--workflow", PLANNED_WORKFLOW, "add a thing"],
         cwd=work,
         env=planning_holding.env(L5_STUB_WRITE=writes(
             (f"../{ARTIFACT_PATH.replace('900', '901')}",

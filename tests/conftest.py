@@ -1415,7 +1415,19 @@ def _substitute_refs(value, names: list[str]):
     return value
 
 
+#: What a built definition says it is for when its caller does not care. Every
+#: definition must carry an applies_when -- the coordinator refuses one that
+#: does not at pre-flight -- so a builder with no default would make every
+#: coordinator-driven run in the suite refuse for a reason no module is about.
+#: A test whose subject *is* the field states it, by passing applies_when.
+BUILT_APPLIES_WHEN = (
+    "the built workflow is the one to plan under, which is what a fixture "
+    "says when the assertion it serves is about something else"
+)
+
+
 def build_workflow(*stages: dict, name: str = "built-workflow",
+                   applies_when: str = BUILT_APPLIES_WHEN,
                    escalation_rules: dict | None = None) -> dict:
     """A workflow definition assembled from what the caller asked for.
 
@@ -1428,6 +1440,12 @@ def build_workflow(*stages: dict, name: str = "built-workflow",
     A stage's `prompt` defaults to a file named for the stage, because
     `materialize_workflow` writes one per stage and the coordinator loads a
     template by the name the declaration carries.
+
+    `applies_when` is the one key that is defaulted rather than absent-unless-
+    asked-for, because it is the one key a definition is required to carry:
+    without a default every built definition would be refused at pre-flight.
+    A caller states it to say something about the field, and passes None to
+    build a definition that carries none.
     """
     names = [stage.get("name") or f"stage-{index + 1}"
              for index, stage in enumerate(stages)]
@@ -1443,6 +1461,8 @@ def build_workflow(*stages: dict, name: str = "built-workflow",
             declaration[key] = value
         built.append(_substitute_refs(declaration, names))
     definition: dict = {"name": name, "stages": built}
+    if applies_when is not None:
+        definition["applies_when"] = applies_when
     if escalation_rules is not None:
         definition["escalation_rules"] = _substitute_refs(escalation_rules, names)
     return definition

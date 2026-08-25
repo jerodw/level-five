@@ -1151,20 +1151,43 @@ def test_l5_plan_renders_the_planner_against_the_workflow_the_argument_names(
     assert CONFIGURED_PREFIX not in prompt
 
 
-def test_l5_plan_without_the_argument_renders_the_configured_workflow(
+def test_l5_plan_without_the_argument_and_without_a_terminal_is_refused(
     planning, planning_harness,
 ):
-    result = plan(planning, planning_harness, "a story request")
+    """What stands where "an unnamed session renders the configured workflow"
+    stood.
 
-    assert result.returncode == 0, result.stderr
-    prompt = session_prompt(planning)
-    assert carries(prompt, CONFIGURED)
-    for stage, prefix in restrictions_of(CONFIGURED):
-        assert any(stage in line and prefix in line
-                   for line in prompt.splitlines()), (stage, prefix)
-    for name in distinctive(SELECTED, CONFIGURED):
-        assert name not in prompt, name
-    assert SELECTED_PREFIX not in prompt
+    Story-072 removed that fallback: the script reads the configured workflow
+    key on no path, because without `--workflow` the planner proposes a
+    workflow and the developer confirms it. This invocation is a subprocess
+    with no terminal, so there is nobody to confirm anything, and it is refused
+    rather than falling back to a name nothing chose. The refusal names the
+    flag and lists the definitions the harness holds, and it happens before
+    phase one: nothing is invoked, nothing is written and nothing is committed.
+    Its control is the same invocation stating a workflow, which plans.
+    """
+    head = planning.head()
+    result = plan(planning, planning_harness, "a story request",
+                  L5_STUB_WRITE=writes((relative_artifact(),
+                                        planned(CONFIGURED["name"]))))
+
+    assert result.returncode != 0
+    assert "--workflow" in result.stderr
+    for definition in (SELECTED, CONFIGURED):
+        assert definition["name"] in result.stderr, definition["name"]
+    # Nothing ran: the stub records every invocation and writes what it is told
+    # to, so an absent log and an absent artifact are the same fact twice.
+    assert not planning.log.exists()
+    assert not artifact_path(planning).exists()
+    assert planning.head() == head
+
+    assert plan(planning, planning_harness, "--workflow", CONFIGURED["name"],
+                "a story request",
+                L5_STUB_WRITE=writes((relative_artifact(),
+                                      planned(CONFIGURED["name"])))
+                ).returncode == 0
+    assert planning.log.exists()
+    assert planning.head() != head
 
 
 def test_the_planner_prompt_carries_the_name_of_the_selected_workflow(
@@ -1172,14 +1195,17 @@ def test_the_planner_prompt_carries_the_name_of_the_selected_workflow(
 ):
     """Resolved from the same argument the injected facts are resolved from,
     so what the prompt says it was started for and what it was rendered
-    against cannot differ. Its control is the unnamed session, which carries
-    the configured name and not the selected one."""
+    against cannot differ. Its control is the same session naming the other
+    definition, which carries that name and not this one — the control used to
+    be the unnamed session, which since story-072 is refused rather than
+    rendered against the configured name."""
     plan(planning, planning_harness, "--workflow", SELECTED["name"],
          "a story request")
     assert SELECTED["name"] in session_prompt(planning)
     assert CONFIGURED["name"] not in session_prompt(planning)
 
-    plan(planning, planning_harness, "a story request")
+    plan(planning, planning_harness, "--workflow", CONFIGURED["name"],
+         "a story request")
     assert CONFIGURED["name"] in session_prompt(planning)
     assert SELECTED["name"] not in session_prompt(planning)
 
@@ -1349,14 +1375,23 @@ def test_a_session_whose_artifact_names_another_workflow_is_refused_with_both(
     assert relative_artifact() in untracked(planning)
 
 
-def test_an_unnamed_session_refuses_an_artifact_naming_other_than_the_default(
+def test_a_session_naming_the_configured_workflow_still_holds_its_artifact_to_it(
     planning, planning_harness,
 ):
-    """With no `--workflow`, the session was rendered against the configured
-    workflow, so that is what the artifact must name. Its control is the same
-    session whose artifact names the configured one, which commits."""
+    """What stands where "an unnamed session is held to the configured name"
+    stood.
+
+    The mismatch refusal used to be reachable two ways: a session given
+    `--workflow`, and an unnamed session held to the configured key. Story-072
+    removed the second — an unnamed session with no terminal is refused before
+    it starts — so what the artifact is held to is the name the flag gave or
+    the developer confirmed, on every path. Stating the configured name
+    explicitly is what that session should have said all along, and the
+    refusal it meets is the same one. Its control is the same session whose
+    artifact names the workflow it was rendered against, which commits."""
     head = planning.head()
-    result = plan(planning, planning_harness, "a story request",
+    result = plan(planning, planning_harness, "--workflow", CONFIGURED["name"],
+                  "a story request",
                   L5_STUB_WRITE=writes((relative_artifact(),
                                         planned(SELECTED["name"]))))
     assert result.returncode != 0
@@ -1366,7 +1401,8 @@ def test_an_unnamed_session_refuses_an_artifact_naming_other_than_the_default(
     # what a session *added* — so the control starts from the state the first
     # session started from rather than from the wreckage it left.
     artifact_path(planning).unlink()
-    assert plan(planning, planning_harness, "a story request",
+    assert plan(planning, planning_harness, "--workflow", CONFIGURED["name"],
+                "a story request",
                 L5_STUB_WRITE=writes((relative_artifact(),
                                       planned(CONFIGURED["name"])))
                 ).returncode == 0

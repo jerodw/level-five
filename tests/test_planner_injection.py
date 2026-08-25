@@ -53,6 +53,13 @@ SCHEMAS_DIR = REPO_ROOT / "schemas"
 PLANNER = REPO_ROOT / "prompts" / "planner.md"
 STORY_SCHEMA_PATH = SCHEMAS_DIR / "story.schema.json"
 
+#: The workflow the sessions below are rendered against, stated rather than
+#: left to a fallback: since story-072 l5-plan reads no configured workflow
+#: key, and an invocation with no terminal and no --workflow is refused before
+#: anything is invoked. It is the name this module's fixture configures, so the
+#: facts these assertions read are the facts they always read.
+PLANNED_WORKFLOW = "story-workflow"
+
 #: The two stories this module validates, as `conftest.STORY_ORIGINS`
 #: declares them. Every story-range call below names one of these, because a
 #: module with two origins has two answers to "which commits are mine" and
@@ -298,8 +305,13 @@ def captured_plan_argv(tmp_path: Path) -> list[str]:
     )
     fake.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    # The session states the workflow it is rendered against. This module's
+    # subject is what the planner prompt carries, not how a workflow is chosen,
+    # and since story-072 an invocation with no terminal and no --workflow is
+    # refused rather than falling back to the configured name.
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"), "a story request"],
+        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"),
+         "--workflow", PLANNED_WORKFLOW, "a story request"],
         env=env, capture_output=True, text=True, cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
@@ -326,7 +338,8 @@ def test_l5_plan_requires_a_target_repository(tmp_path):
     the target's config to learn which workflow to inject, so with no
     .harness/config.yaml here or above it refuses instead of planning."""
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"), "a story request"],
+        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"),
+         "--workflow", PLANNED_WORKFLOW, "a story request"],
         capture_output=True, text=True, cwd=tmp_path,
     )
     assert result.returncode != 0
@@ -764,7 +777,12 @@ def plan_capture(tmp_path: Path):
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
     def run_plan(cwd: Path):
-        result = run_script("l5-plan", "a story request", cwd=cwd, env=env)
+        # States the workflow it renders against, for the reason every other
+        # invocation in this module does: the subject is what the prompt
+        # carries, and since story-072 a session with no terminal and no
+        # --workflow is refused rather than taking the configured name.
+        result = run_script("l5-plan", "--workflow", PLANNED_WORKFLOW,
+                            "a story request", cwd=cwd, env=env)
         argv = (json.loads(argv_path.read_text(encoding="utf-8"))
                 if argv_path.is_file() else None)
         return result, argv

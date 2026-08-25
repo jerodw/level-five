@@ -14,13 +14,27 @@ the repository's own default branch, and --base states another deliberately.
 
 --workflow states the workflow the planner is rendered against, so the stage
 facts injected into the prompt are the facts of the workflow the story will
-actually run under. Unstated, it is the workflow the target configuration
-names. A name with no definition refuses before the session starts, and an
-artifact naming another workflow is refused when the session ends.
+actually run under. A name with no definition refuses before the session
+starts, and an artifact naming another workflow is refused when the session
+ends.
+
+Without --workflow, planning runs in two phases. The planner is invoked first
+against prompts/workflow-selector.md, which carries the request and what each
+defined workflow says it is for and nothing else -- it cannot be rendered
+against a workflow, because choosing one is its job. It writes a name and the
+reasoning behind it; this script reads the name mechanically, shows the
+reasoning, and asks the developer to accept it, name another, or abort. The
+confirmed name is what the planning session is rendered against.
+
+That confirmation needs a terminal, so an invocation with neither a terminal
+nor --workflow is refused before anything is invoked, written or committed. A
+call site that plans without a terminal names its workflow.
 """
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from shutil import rmtree
 from typing import Sequence
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +46,7 @@ import plan_commit  # noqa: E402
 import plan_run_offer  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
+import workflow_selection  # noqa: E402
 
 
 def main() -> None:
@@ -55,12 +70,25 @@ def main() -> None:
     request = " ".join(argv)
     target_root = harness_config.find_target_root(Path.cwd())
     config = harness_config.load_config(target_root)
-    # The workflow the planner is rendered against: what --workflow named, or
-    # the one the target configuration names. A name with no definition is
-    # refused here, before the session starts, through the coordinator's own
-    # refusal so an unknown workflow reads the same at plan time as at
-    # pre-flight.
-    workflow_name = selected or config.get("workflow", "story-workflow")
+    # The workflow the planner is rendered against is the one --workflow named
+    # or the one the developer confirmed, and there is no third source: after
+    # story-072 no path renders the planner against a name that was neither
+    # given on the command line nor chosen by a human. The configured workflow
+    # key is not read here at all; it is still what the coordinator resolves a
+    # story artifact naming no workflow through.
+    if selected is None:
+        # No terminal and no --workflow leaves nobody to confirm a proposal,
+        # and the refusal is decided here, above phase one, so a refused
+        # invocation runs nothing, writes nothing and commits nothing. It reads
+        # no input, so it returns whether or not anything is on stdin. There is
+        # deliberately no escape hatch: a call site that needs to plan without
+        # a terminal names its workflow.
+        if not plan_run_offer.can_prompt(sys.stdin):
+            sys.exit(refuse_headless(HARNESS_ROOT))
+        selected = choose_workflow(HARNESS_ROOT, request)
+        if selected is None:
+            sys.exit(1)
+    workflow_name = selected
     try:
         workflow = harness_config.load_workflow(HARNESS_ROOT, workflow_name, config)
     except harness_config.UnknownWorkflow as unknown:
@@ -132,6 +160,134 @@ def main() -> None:
     sys.exit(status or committing)
 
 
+def refuse_headless(harness_root: Path) -> int:
+    """Refuse an invocation with no terminal and no --workflow.
+
+    Through the coordinator's own refusal helper, so this reads like every
+    other refusal the harness prints. It names the flag and lists the
+    workflows the harness defines, so the repair is in the message: the caller
+    states the workflow it means rather than being told a terminal is missing
+    and left to work out what to do about it.
+    """
+    defined = harness_config.workflow_names(harness_root)
+    listed = ", ".join(defined) if defined else "no workflow definitions"
+    return story_coordinator.refuse(
+        "l5-plan has no terminal to confirm a workflow at:",
+        [
+            "without --workflow the planner proposes a workflow and the "
+            "developer confirms it, and there is no terminal here to ask",
+            f"the harness defines: {listed}",
+        ],
+        "Name the workflow with --workflow <name>. Nothing was invoked, "
+        "written or committed.",
+    )
+
+
+def choose_workflow(harness_root: Path, request: str) -> str | None:
+    """Propose a workflow for this request and ask the developer to confirm it.
+
+    Phase one of two. The planner is invoked against the selector prompt,
+    which carries the request and what each defined workflow says it is for
+    and nothing else; what it writes is read mechanically, and the developer
+    is shown the reasoning rather than only the name, because the reasoning is
+    what they are being asked to review.
+
+    Returns the confirmed name, or None where nothing was chosen — an unusable
+    answer the developer declined to replace, or a reply naming a workflow the
+    harness does not define. On None no planning session is started and no
+    artifact is written. Every decision here is `workflow_selection`'s; what
+    lives here is the wording and the reading of the reply.
+    """
+    found = workflow_selection.candidates(harness_root)
+    scratch = Path(tempfile.mkdtemp(prefix="l5-plan-selection-"))
+    try:
+        selection_path = scratch / "workflow-selection.json"
+        template = context_assembler.load_template(
+            harness_root, workflow_selection.SELECTOR_PROMPT
+        )
+        context = context_assembler.schema_context(harness_root)
+        context["request"] = request
+        context["workflow_candidates"] = workflow_selection.candidate_block(found)
+        context["selection_path"] = str(selection_path)
+        prose = context_assembler.resolved_partial(
+            harness_root, context_assembler.PROSE_LAYER, context
+        )
+        if prose is not None:
+            context["prose_layer"] = prose
+        print("l5-plan: choosing a workflow for this request...")
+        # One classifying turn, so it prints its answer rather than opening a
+        # session. Its output is the file it writes; what it says on the way
+        # there is not what the developer is being asked to review, so it is
+        # captured rather than left to clutter the terminal above the
+        # confirmation.
+        subprocess.run(
+            [
+                "claude",
+                "-p",
+                "--permission-mode",
+                "acceptEdits",
+                "--append-system-prompt",
+                context_assembler.render(template, context),
+                f"Story request: {request}",
+            ],
+            capture_output=True,
+        )
+        selection = workflow_selection.read_selection(
+            selection_path, found, harness_root
+        )
+    finally:
+        rmtree(scratch, ignore_errors=True)
+    return confirm(selection, found)
+
+
+def confirm(
+    selection: workflow_selection.Selection,
+    found: Sequence[workflow_selection.Candidate],
+) -> str | None:
+    """Show what phase one proposed and read the developer's one reply.
+
+    A proposal is shown with its reasoning and accepted by pressing Enter. An
+    unusable answer is shown as what it was — unsure, absent, unreadable,
+    unparsable, or naming a workflow no definition has — and the developer is
+    asked to name a workflow instead, where an empty reply aborts. Either way
+    the workflows they may name are listed, and the reply is read once.
+    """
+    names = [candidate.name for candidate in found]
+    listed = ", ".join(names) if names else "no workflow definitions"
+    if selection.proposed:
+        print(f"l5-plan: the planner proposes {selection.workflow}.")
+        print(f"l5-plan: {selection.reasoning}")
+        print(
+            f"l5-plan: Enter accepts it; naming another runs the session "
+            f"under that one instead ({listed}); anything else aborts: ",
+            end="",
+            flush=True,
+        )
+    else:
+        print(f"l5-plan: the planner proposed no workflow — {selection.fault}.")
+        if selection.reasoning:
+            print(f"l5-plan: {selection.reasoning}")
+        print(
+            f"l5-plan: name the workflow to plan under ({listed}); "
+            f"Enter aborts: ",
+            end="",
+            flush=True,
+        )
+    decision = workflow_selection.read_reply(
+        sys.stdin.readline(), tuple(found), selection.workflow
+    )
+    if decision.action == workflow_selection.ABORT:
+        if decision.unknown is not None:
+            print(
+                f"l5-plan: '{decision.unknown}' is not a workflow the harness "
+                f"defines; it defines: {listed}."
+            )
+        print("l5-plan: no workflow chosen; started no planning session.")
+        return None
+    print(f"l5-plan: planning under {decision.workflow}.")
+    return decision.workflow
+
+
 def report(
     target_root: Path,
     stories_dir: Path,
@@ -167,9 +323,10 @@ def report(
     # The workflow this session was rendered against goes with them: an
     # artifact naming another one was planned against facts that are not its
     # own, and an artifact naming one with no definition would refuse the run.
-    rendered_against = selected or (config or {}).get("workflow", "story-workflow")
+    # It is the name the flag gave or the developer confirmed, and nothing
+    # else: this script reads the configured workflow key on no path.
     problems = plan_validation.artifact_problems(
-        artifacts, stages, target_root, HARNESS_ROOT, rendered_against
+        artifacts, stages, target_root, HARNESS_ROOT, selected
     )
     if problems:
         for path, found in problems.items():

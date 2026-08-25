@@ -415,7 +415,12 @@ def planner_prompt(tmp_path: Path) -> str:
     stub.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"), "a story request"],
+        # The session states the workflow it renders against: this module's
+        # subject is the shared partial in the rendered prompt, and since
+        # story-072 an invocation with no terminal and no --workflow is refused
+        # rather than falling back to the configured name.
+        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"),
+         "--workflow", "story-workflow", "a story request"],
         env=env, capture_output=True, text=True, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     argv = json.loads(argv_path.read_text(encoding="utf-8"))

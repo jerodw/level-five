@@ -73,6 +73,14 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
 PLAN_RUN_OFFER = HARNESS_ROOT / "orchestration" / "plan_run_offer.py"
 
+#: The workflow the sessions below render against, stated rather than left to
+#: a fallback: since story-072 l5-plan reads no configured workflow key, and
+#: without --workflow it proposes a workflow and asks the developer to confirm
+#: it before the session starts. This module's subject is the run offer, which
+#: comes after the session, so every session here says which workflow it
+#: planned under and none of them reaches the proposal at all.
+PLANNED_WORKFLOW = "story-workflow"
+
 #: A stub `l5-run`. It records the argument list it was given, the directory it
 #: was started in and whether its three standard streams are a terminal, and
 #: exits with the status it was told to. It starts no story and reads no
@@ -187,7 +195,8 @@ def plan_without_a_terminal(harness: Harness, planning: Planning, *args: str,
     """
     with open(os.devnull, "rb") as devnull:
         return subprocess.run(
-            [sys.executable, str(harness.plan), *args],
+            [sys.executable, str(harness.plan),
+             "--workflow", PLANNED_WORKFLOW, *args],
             cwd=planning.root, env=harness.env(planning, **stub),
             stdin=devnull, capture_output=True, text=True, timeout=timeout,
         )
@@ -206,7 +215,8 @@ def plan_on_a_terminal(harness: Harness, planning: Planning, *args: str,
 
     master, slave = pty.openpty()
     process = subprocess.Popen(
-        [sys.executable, str(harness.plan), *args],
+        [sys.executable, str(harness.plan),
+         "--workflow", PLANNED_WORKFLOW, *args],
         cwd=planning.root, env=harness.env(planning, **stub),
         stdin=slave, stdout=slave, stderr=slave,
         start_new_session=True,
