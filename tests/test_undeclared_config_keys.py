@@ -121,7 +121,7 @@ class Runner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None):
         self.calls.append(stage)
         # Written exactly as the real runner writes it, so the stage log is
         # observable as a file rather than only as an argument nobody used.

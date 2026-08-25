@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "{guard_path}"
+            "command": "{guard_path}{guard_arguments}"
           }
         ]
       }

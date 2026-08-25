@@ -126,9 +126,12 @@ From the injected changed-files record, load the implementer's source for
 the current run and identify which files need validation. Author validation
 that exercises the story's acceptance criteria, and record what you wrote.
 
-This stage executes no test command, and the Bash guard denies one. The
-coordinator runs the configured command as a subprocess after your turn
-ends and reads its exit status; its record of that run is the answer.
+This stage executes no test command. The target's whole suite takes longer
+than one turn of yours can last, so a run of it started here ends the turn
+rather than finishing in it — that is arithmetic, not a matter of waiting
+harder. The coordinator runs the configured test command as a subprocess
+after your turn ends and reads its exit status, which is an exit code it
+owns rather than your account of a run you made yourself.
 
 A red suite brings this stage back in place, on the same attempt, with the
 coordinator's record of the run and the path to that run's whole output

@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Deny a Bash call that mutates the tree, or that runs the target's suite.
+"""Deny a Bash call that mutates the working tree, the index or the repository.
 
 This is a PreToolUse hook, registered against Bash by hooks/settings.json and
 passed to every stage invocation by orchestration/agent_runner.py. It reads the
 hook payload from stdin and writes a deny decision to stdout when it finds a
 mutator; otherwise it writes nothing at all.
-
-Since story-073 there is a second denial family beside the mutators: an
-invocation of the target's configured test command over the configured targets,
-for a stage that runs no suite. The command is handed to this program as its
-own single argument, and comes from the target's `test_command` — never from a
-framework or runner name, to the rule story-040 and story-041 established. A
-stage that legitimately runs the suite is invoked with no argument at all, and
-then this family says nothing whatever the command.
 
 Two properties are load-bearing and neither is an accident of the code:
 
@@ -24,11 +16,10 @@ problem with it.
 
 **Its bias is fail-open.** Anything this cannot establish yields *no* decision
 rather than a deny, and the call falls through to the allowlist. Unreadable
-stdin, a malformed payload, an unbalanced quote, an unterminated substitution,
-a heredoc, and an absent or unreadable configured command all take that path. A
-fail-closed parser mistake would stop runs that should have proceeded, which is
-the more expensive error, and it is the same one-directional bias the
-coordinator's own checks already take.
+stdin, a malformed payload, an unbalanced quote, an unterminated substitution
+and a heredoc all take that path. A fail-closed parser mistake would stop runs
+that should have proceeded, which is the more expensive error, and it is the
+same one-directional bias the coordinator's own checks already take.
 
 What it does not cover, stated here rather than implied: it reads the command as
 written, so a mutator spelled to avoid recognition (quoted, assembled from
@@ -124,25 +115,6 @@ WRAPPERS = frozenset(
 SEPARATORS = ";\n&|"
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 REDIRECT = re.compile(r"^(?:\d*|&)>>?")
-
-MUTATION_REASON = (
-    "This harness denies Bash commands that write to the working tree, the "
-    "index or the repository: {found}. Use Edit or Write to change files."
-)
-
-# The remedy here is different from the mutation one, so the reason is its own
-# rather than a reuse: nothing about this is repaired by reaching for Edit. The
-# stage is redirected at the answer it already has, because a denial that only
-# refuses invites working around it, and a turn spent probing the guard costs
-# more than the suite run it replaced.
-SUITE_REASON = (
-    "This stage runs no test command, and this is the target's configured one: "
-    "{found}. The answer is already being computed for you. The coordinator "
-    "runs that same command as a subprocess after your turn ends and reads its "
-    "exit status, and it injects its record of that run — with the path to the "
-    "run's whole output — into your prompt as the suite-run record. Read that "
-    "record rather than running the suite here."
-)
 
 
 class Unparseable(Exception):
@@ -366,107 +338,6 @@ def _writes_a_file(words: list[str]) -> str | None:
     return None
 
 
-def _wrapped(arguments: list[str]) -> list[str]:
-    """The command a wrapper was given, past the wrapper's own arguments.
-
-    Its flags and any numeric argument — a timeout's duration — are skipped.
-    Both denial families unwrap by this one convention, so `timeout 600 <cmd>`
-    and `<cmd>` are judged as the same command by each of them.
-    """
-    remainder = list(arguments)
-    while remainder:
-        candidate = _unquote(remainder[0])
-        if candidate.startswith("-") or candidate.replace(".", "").isdigit():
-            remainder = remainder[1:]
-            continue
-        break
-    return remainder
-
-
-def _without_redirections(words: list[str]) -> list[str]:
-    """These words with every redirection operator and named file removed.
-
-    Where a command's output is sent says nothing about what ran, so an
-    invocation that redirects and one that does not reduce alike.
-    """
-    kept: list[str] = []
-    index = 0
-    while index < len(words):
-        word = words[index]
-        match = REDIRECT.match(word)
-        index += 1
-        if not match:
-            kept.append(word)
-            continue
-        if not word[match.end() :] and index < len(words):
-            index += 1  # the operator names its file in the following word
-    return kept
-
-
-def _without_flags(words: list[str]) -> list[str]:
-    """These words with every option removed, leaving the positional ones.
-
-    A flag takes the word after it with it, unless that word is itself a flag
-    or the flag already carries its value with an `=`. An option's value is
-    part of the option rather than a target the command was pointed at, so an
-    option written as two words disappears whole and does not read as one more
-    positional argument.
-    """
-    kept: list[str] = []
-    index = 0
-    while index < len(words):
-        word = _unquote(words[index])
-        index += 1
-        if not word.startswith("-") or word == "-":
-            kept.append(word)
-            continue
-        if "=" in word:
-            continue
-        if index < len(words) and not _unquote(words[index]).startswith("-"):
-            index += 1
-    return kept
-
-
-def _suite_words(words: list[str], depth: int = 0) -> list[str]:
-    """These words reduced to the command run and the targets it was given.
-
-    Environment assignments are dropped, a wrapper is unwrapped, redirections
-    and their files are removed, and options and their values are removed.
-    What is left is the whole rule: two invocations reducing to the same
-    sequence are the same invocation, so added flags and redirections do not
-    save one, and a substituted or extra positional argument — a single named
-    test file in place of the configured directory — makes it a different
-    invocation the guard has nothing to say about.
-    """
-    words = _command_words(words)
-    if not words:
-        return []
-    if _name(words[0]) in WRAPPERS and depth < 3:
-        return _suite_words(_wrapped(words[1:]), depth + 1)
-    return _without_flags(_without_redirections(words))
-
-
-def configured_command(argv: list[str]) -> list[str] | None:
-    """The configured test command this guard was given, reduced, or None.
-
-    The guard is handed the target's own `test_command` as a single argument,
-    shell-quoted by the caller so a command carrying spaces or quotes arrives
-    as one word. Anything this cannot read — no argument, more than one, an
-    empty one, or one reducing to nothing — yields None, and with no command
-    established the suite family says nothing at all.
-    """
-    if len(argv) != 1:
-        return None
-    return _suite_words(tokens(argv[0])) or None
-
-
-def _runs_the_suite(words: list[str], suite: list[str] | None) -> bool:
-    """Whether these words are an invocation of the configured command."""
-    if not suite:
-        return False
-    return _suite_words(words) == suite
-
-
 def _mutator(words: list[str], depth: int = 0) -> str | None:
     """What in these words mutates, named, or None."""
     words = _command_words(words)
@@ -505,18 +376,21 @@ def _mutator(words: list[str], depth: int = 0) -> str | None:
                     return "perl -i"
         return None
     if name in WRAPPERS and depth < 3:
-        return _mutator(_wrapped(arguments), depth + 1)
+        # Skip the wrapper's own flags and any numeric argument (a timeout's
+        # duration), then judge whatever command it was given.
+        remainder = list(arguments)
+        while remainder:
+            candidate = _unquote(remainder[0])
+            if candidate.startswith("-") or candidate.replace(".", "").isdigit():
+                remainder = remainder[1:]
+                continue
+            break
+        return _mutator(remainder, depth + 1)
     return None
 
 
-def offence(command: str, suite: list[str] | None = None) -> str | None:
-    """The whole denial reason for this command, or None to say nothing.
-
-    Each decomposed component is judged against the mutators and the redirect
-    rule first and against the configured suite command after, so a component
-    that both writes a file and runs the suite is reported as the write — the
-    order the two families were added in, and the one that keeps every reason
-    a command already drew exactly what it was.
+def offence(command: str) -> str | None:
+    """Why this command is denied, or None when the guard has nothing to say.
 
     Raises Unparseable when the command cannot be decomposed, which the caller
     turns into no decision rather than into a denial.
@@ -525,14 +399,10 @@ def offence(command: str, suite: list[str] | None = None) -> str | None:
         words = tokens(component)
         found = _mutator(words)
         if found:
-            return MUTATION_REASON.format(found=f"{found} in `{component.strip()}`")
+            return f"{found} in `{component.strip()}`"
         redirect = _writes_a_file(words)
         if redirect:
-            return MUTATION_REASON.format(
-                found=f"redirect `{redirect}` in `{component.strip()}`"
-            )
-        if _runs_the_suite(words, suite):
-            return SUITE_REASON.format(found=f"`{component.strip()}`")
+            return f"redirect `{redirect}` in `{component.strip()}`"
     return None
 
 
@@ -563,7 +433,7 @@ def main() -> int:
         return 0
 
     try:
-        reason = offence(command, configured_command(sys.argv[1:]))
+        reason = offence(command)
     except Unparseable:
         return 0
     except Exception:  # a parser defect must not stop a run
@@ -571,7 +441,14 @@ def main() -> int:
     if reason is None:
         return 0
 
-    json.dump(deny(reason), sys.stdout)
+    json.dump(
+        deny(
+            f"This harness denies Bash commands that write to the working tree, "
+            f"the index or the repository: {reason}. Use Edit or Write to change "
+            f"files."
+        ),
+        sys.stdout,
+    )
     sys.stdout.write("\n")
     return 0
 

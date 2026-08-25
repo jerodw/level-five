@@ -36,7 +36,8 @@ class StageRunner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode,
-                 model, allowed_tools=None, max_budget_usd=None):
+                 model, allowed_tools=None, max_budget_usd=None,
+                 suite_command=None):
         self.calls.append(stage)
         if stage == "implementer":
             _write(self.run_dir / "changed-files.json",

@@ -2384,6 +2384,17 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "and the schema shipped for the record the check writes, both of which "
         "are the subject: what this repository counts, and what a reader of "
         "the artifact is told the count does not mean",
+    "test_suite_run_denial.py":
+        "every run it drives goes through a workflow it builds, against a "
+        "target it constructs, where the may_not_run_suite declaration, the "
+        "stage names and the configured test command are inputs. What it "
+        "resolves live has what is shipped as its subject: both shipped "
+        "workflow definitions, because 'this deployment restricts the tester, "
+        "the documenter and the verifier and deliberately not the implementer' "
+        "is a claim about what it deploys and about nothing else; and "
+        "prompts/story-tester.md, because the criterion is that this "
+        "repository's own tester prompt shortened and names the guard, which "
+        "only the shipped template can answer",
     "test_undeclared_config_keys.py":
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":

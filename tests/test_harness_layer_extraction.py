@@ -312,7 +312,7 @@ class DeclaredArtifactRunner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None):
         self.calls.append(stage)
         declaration = self.stages[stage]
         schemas = declaration.get("schemas", {})

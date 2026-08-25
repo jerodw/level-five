@@ -29,6 +29,7 @@
       "prompt": "documenter.md",
       "outputs": ["documentation-report.md", "documenter-changed-files.json"],
       "changed_files": "documenter-changed-files.json",
+      "may_not_run_suite": true,
       "max_self_routes": 1,
       "max_execution_cost_usd": 10,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's documenter ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
@@ -42,6 +43,7 @@
     {
       "name": "verifier",
       "prompt": "refactor-verifier.md",
+      "may_not_run_suite": true,
       "max_self_routes": 1,
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's verifier ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",

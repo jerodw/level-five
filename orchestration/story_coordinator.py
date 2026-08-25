@@ -5121,6 +5121,21 @@ def run_story(
             {} if execution_ceiling is None else {"max_budget_usd": execution_ceiling}
         )
 
+        # The configured test command, handed to the stage's Bash guard so a
+        # run of it inside the turn is denied. Built the way the ceiling above
+        # is: present only for a stage whose workflow entry declares that it
+        # runs no suite, absent otherwise, so a stage under no declaration is
+        # invoked with exactly the arguments it was invoked with before and no
+        # fake runner in the suite has to know the parameter exists. A target
+        # configuring no test command has nothing to compare against, so the
+        # keyword is absent there too.
+        test_command = config.get("test_command")
+        no_suite = (
+            {"suite_command": test_command}
+            if stage.get("may_not_run_suite") and test_command
+            else {}
+        )
+
         result = runner(
             prompt,
             stage=name,
@@ -5130,6 +5145,7 @@ def run_story(
             model=config.get("model"),
             allowed_tools=config.get("allowed_tools"),
             **budget,
+            **no_suite,
         )
 
         # The cost the invocation reported, added to the live allowance and
