@@ -867,13 +867,26 @@ def _schema_violation(run_dir: Path, stage: dict) -> str | None:
 
 
 def archivable_artifacts(stages: list[dict]) -> list[str]:
-    """Collect every stage artifact name the loaded workflow declares.
+    """Collect every artifact name the loaded workflow declares under a stage.
 
-    The union of each stage's outputs, its changed_files record, and the keys
-    of its schemas map — the same three places the coordinator already reads
-    artifact names from. No artifact name is written here, so a workflow that
-    adds a stage artifact gets it archived with no code change. Sorted, so
-    the archive is deterministic.
+    The union of four sources: each stage's outputs, its changed_files record,
+    the keys of its schemas map, and the result artifact of every check
+    declaration that stage carries. The first three are the places the
+    coordinator already reads *stage* artifact names from; the fourth is where
+    it reads the names of the records the *checks* write, which are declared
+    nowhere else and so were never archived — a retry overwrote each in place
+    and what the harness decided about a superseded attempt was unrecoverable.
+
+    A check declaration is recognised by its shape rather than by its key: a
+    value of the stage dict that is a mapping carrying a string `result`. That
+    is what keeps this name-agnostic — no check name, no declaration key spelled
+    as an artifact name and no stage name is written here, so a check declared
+    later archives its result with no change to this function. Sorted, so the
+    archive is deterministic.
+
+    interrupted_attempt_artifacts is built on this, so a resume's archive
+    carries the check results for the same reason a retry's does, with no
+    second collection to keep in step.
     """
     names: set[str] = set()
     for stage in stages:
@@ -882,6 +895,9 @@ def archivable_artifacts(stages: list[dict]) -> list[str]:
         if record:
             names.add(record)
         names.update(stage.get("schemas", {}))
+        for value in stage.values():
+            if isinstance(value, dict) and isinstance(value.get("result"), str):
+                names.add(value["result"])
     return sorted(names)
 
 
@@ -917,6 +933,19 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
     An artifact the attempt did not write is skipped, the way an absent
     conditional artifact is skipped by _schema_violation. Returns the names
     actually archived.
+
+    A copied record that points at a companion file of its own brings that file
+    with it. The pointer is followed off the record's own `output_path` field
+    rather than off any filename, which is what keeps this name-agnostic: no
+    artifact name and no naming convention is written here, so a record of a
+    shape declared later is followed for free. The companion is copied into the
+    archive under its basename and the pointer is rewritten *in the archived
+    copy alone* — the live record and the live output file keep their contents
+    and their canonical names — so reading an archived record leads to the
+    output of the attempt that record belongs to rather than to whatever the
+    next attempt wrote over it. A record that is not JSON, that is not an
+    object, that carries no `output_path`, or whose `output_path` names nothing
+    that exists inside the run directory, is copied exactly as before.
     """
     destination = attempt_dir(run_dir, attempt)
     destination.mkdir(parents=True, exist_ok=True)
@@ -925,9 +954,48 @@ def archive_attempt(run_dir: Path, artifacts: list[str], attempt: int) -> list[s
         source = run_dir / artifact
         if not source.is_file():
             continue
-        shutil.copy2(source, destination / artifact)
+        archived_copy = destination / artifact
+        shutil.copy2(source, archived_copy)
         archived.append(artifact)
+        companion = _archive_companion_output(run_dir, archived_copy, destination)
+        if companion is not None:
+            archived.append(companion)
     return archived
+
+
+def _archive_companion_output(
+    run_dir: Path, archived_copy: Path, destination: Path
+) -> str | None:
+    """Bring an archived record's own output file with it, and repoint the copy.
+
+    Returns the name the companion was archived under, or None when the record
+    points at nothing archivable. The pointed-at file must live inside the run
+    directory: a record naming something outside it is naming a file this
+    archive has no claim on, and is left pointing where it points.
+    """
+    try:
+        record = json.loads(archived_copy.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    pointer = record.get("output_path")
+    if not isinstance(pointer, str) or not pointer:
+        return None
+    output = Path(pointer)
+    if not output.is_absolute():
+        output = run_dir / output
+    try:
+        inside = output.resolve().is_relative_to(run_dir.resolve())
+    except OSError:
+        return None
+    if not inside or not output.is_file():
+        return None
+    companion = destination / output.name
+    shutil.copy2(output, companion)
+    record["output_path"] = str(companion)
+    archived_copy.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return output.name
 
 
 def interrupted_attempt_artifacts(
