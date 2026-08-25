@@ -1,0 +1,14 @@
+# The test dependencies this repository's configured test_command needs.
+#
+# The harness itself has no third-party runtime dependency; this file is the
+# target's declaration of what running its suite requires, and it is tracked so
+# that CI installs the same set a developer does rather than a hand-written
+# list that can silently disagree with the configured command.
+#
+# pytest-xdist is what makes `-n auto` in .harness/config.yaml's test_command a
+# recognised argument. Install this file into every interpreter that runs the
+# suite — the one a developer runs it in and the one verification_runner names —
+# because a suite that is green in the first and missing the plugin in the
+# second dies on an unrecognized argument in the clean-clone check.
+pytest
+pytest-xdist
