@@ -22,11 +22,20 @@ Two sets of literals are deliberately this module's own rather than read off
 anything:
 
   * `RECORDED_TEST_COMMAND` and `RECORDED_INVOCATIONS` are the *record*: the
-    configured command story-070's tester was given and the two invocations of
-    it that turned up in that run's log. They are a historical fact about one
-    turn, so reading them out of `.harness/config.yaml` today would make a
-    change to what this deployment configures redden an assertion about what
-    happened in a run that has already ended;
+    configured command story-070's tester was given and the two spellings of it
+    that turned up in that run's log. The log records three whole-suite
+    invocations in those two spellings: the redirect form, denied on arrival by
+    the rule the guard already carried and never run, and the pipe form twice —
+    differing only in how much of the tail each asked for — both of which ran.
+    The log follows those two differently: the first has a completion record
+    (`status: completed`, exit code 0) and its result and wall clock in the
+    tester's own poll of its output, `2 failed, 3279 passed in 704.08s`, while
+    the second was killed with its output file still empty, so it left no
+    result and no duration of its own. They are what was attempted rather than
+    what ran, and they are a
+    historical fact about one turn, so reading them out of `.harness/config.yaml`
+    today would make a change to what this deployment configures redden an
+    assertion about what happened in a run that has already ended;
   * `SUITE_ALPHA` and `SUITE_BETA` are two configured commands this module
     invents, used to show that changing the configured value moves what the
     guard denies. They name no framework and no runner, which is the point:

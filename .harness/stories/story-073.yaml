@@ -24,6 +24,51 @@ story:
     definition, so the stages that execute no test command carry it and a stage
     that legitimately runs the suite is unaffected by construction rather than
     by the guard happening not to fire.
+
+    Correction, appended by story-074 on 2026-08-25. Everything above is left
+    as it was planned; one of its figures was wrong and one of its claims was
+    stronger than the mechanism.
+
+    The first paragraph says story-070's tester ran the whole suite twice for
+    twenty-plus minutes. `.harness/logs/story-070.log` records three
+    whole-suite invocations, of which two ran, so "twice" was right about the
+    runs: one invocation was denied on arrival by the redirect rule the guard
+    had carried since story-035 and never ran, and the two pipe forms both ran
+    — one in the foreground until the 600-second tool timeout moved it to the
+    background, one dispatched into the background from the start. The
+    twenty-plus minutes is unconfirmed rather than unsupported, and the log
+    follows the two runs differently. The first has a completion record -
+    status completed, exit code 0 - and its result and wall clock are in the
+    log too, in the tester's own poll of its output file: `2 failed, 3279
+    passed in 704.08s (0:11:44)`. The second was killed with its output file
+    still empty, so it left no result and no duration of its own; the two
+    recorded end times bound it at about 9m27s. That puts the turn's
+    whole-suite wall clock between about 11m44s and about 21m11s, so
+    twenty-plus minutes sits at the top edge of a band the log bounds rather
+    than being a figure the log is silent on. The trap nearby is that a `tool_use`
+    block records what an agent tried rather than what succeeded — three tried,
+    two ran — so a count taken from one side and reported as the other is wrong
+    whichever side it started on. The defect this story fixes is still real and
+    its fix is still aimed correctly: the forms that got through were pipe
+    forms, and that is the shape the rule catches.
+
+    The title, and `may_not_run_suite` with it, assert that the invocation is
+    impossible. It is not. The rule reduces a command to the program and its
+    positional arguments and denies exactly when that equals the same reduction
+    of the configured `test_command`, so a different spelling of the same suite
+    is a different command the guard says nothing about: driven against the
+    shipped guard with this repository's configured command,
+    `.venv/bin/python -m pytest tests/ -q` is denied while `pytest .`, `pytest`
+    and `pytest tests` each produce no decision and each run the whole suite.
+    Knowing that those denote one set of tests requires understanding the
+    runner, which is what target-agnosticism forbids, so this is a limit of the
+    approach rather than a defect in it. Measured over `.harness/logs/` on
+    2026-08-25 - 517 whole-suite invocations across 73 runs - 439, or 85%,
+    would be denied; that corpus is gitignored and reaches no clone. The honest
+    description is a filter that catches the overwhelming majority of the
+    spellings agents use, not a boundary. The title stays as committed history,
+    and `may_not_run_suite` deliberately keeps its name; the architecture
+    section's heading and account were corrected by story-074 instead.
   workflow: story-workflow
 
 tasks:
