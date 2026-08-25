@@ -1,0 +1,116 @@
+story:
+  id: story-076
+  title: Phase one can deliver its answer
+  description: |
+    l5-plan's workflow proposal has never succeeded outside the test suite.
+    The classifying turn is asked to write its answer to a path under
+    tempfile.mkdtemp, which is outside the workspace acceptEdits accepts
+    edits within, so the turn reasons correctly and then cannot deliver:
+    every unnamed l5-plan falls through to the manual prompt with
+    "it wrote no answer". The invocation also grants no tools at all and
+    captures its output only to discard it, so a failure that has occurred
+    on every invocation since story-072 landed left no trace in the
+    repository and had to be reproduced by hand.
+
+    This story moves the answer inside the workspace, grants the one tool
+    the turn needs, keeps phase one's transcript where l5-plan already
+    leaves evidence, and stops the test stub substituting for delivery.
+    The stub writes the answer file itself with write_text, which has no
+    permission model, so it can always write where the real agent never
+    can; that is why the suite is green against a feature that is broken
+    in production. Delivery is not model behaviour and is fully decidable,
+    so it is checked here rather than assumed.
+
+    The two-phase design, the confirmation flow, applies_when, the
+    headless refusal and the fallback prompt are all story-072's, all
+    correct and all untouched. Classification quality is out of scope:
+    nothing in this repository can settle whether a proposal is right.
+  workflow: story-workflow
+
+tasks:
+  - Give orchestration/workflow_selection.py the names of phase one's answer file and phase one's transcript, and a pure function deriving both from the target root and the configuration, under the configured logs_dir. The module that owns the mechanism owns the spelling, and like everything else there the function returns paths rather than printing or creating anything.
+  - Move phase one's answer inside the workspace. scripts/l5-plan's choose_workflow takes the target root and the configuration that main already resolved, derives the answer path through the new function, and no longer creates or removes a temporary directory.
+  - Run the phase-one invocation with cwd set to the target root, so the workspace the permission mode accepts edits within is the target root whatever directory the developer invoked l5-plan from.
+  - Grant the phase-one invocation --allowedTools Write, the one tool a turn whose entire output is one JSON file needs, so what it may do is deliberate and readable off the command line.
+  - Redirect the phase-one invocation's stdin from /dev/null, removing the three-second "no stdin data received" wait from every unnamed l5-plan.
+  - Keep phase one's output. Capture stdout with stderr merged into it and append it to the transcript under logs_dir, headed by the request it was answering, so a run whose answer never arrives leaves behind what the turn said on the way there.
+  - Remove the answer file before the invocation and again after it is read, so an answer left behind by an earlier invocation can never be read as this one's.
+  - Print the transcript's path alongside the fault when phase one proposed nothing, so a developer reading "it wrote no answer" is told where to look. The path that reaches a proposal says nothing new.
+  - Stop the test stub in tests/test_workflow_proposal.py substituting for delivery. It writes the answer only when the path resolves inside the directory it was invoked in, and otherwise writes nothing and prints the approval request the real agent printed, so a path the real agent could not write is a path the stub does not write either.
+  - Assert what the phase-one invocation carries. The answer path is beneath the target root, the working directory is the target root, Write is granted, and stdin is not inherited from the session. None of this needs a model to settle.
+
+acceptance_criteria:
+  - An unnamed l5-plan driven end to end reaches a proposal with the answer arriving by the route production uses, written by the invoked process to the path the invocation named rather than written by the test.
+  - The path phase one is asked to write its answer to is beneath the target root, under the directory the configuration's logs_dir names.
+  - The phase-one invocation runs with its working directory set to the target root.
+  - The phase-one invocation's argument list grants Write.
+  - The phase-one invocation's stdin is not the session's stdin.
+  - Phase one's output, stdout and stderr together, is on disk under logs_dir after an invocation that produced a usable answer and after one that produced none.
+  - The transcript is appended to rather than replaced, so an earlier invocation's evidence survives a later one.
+  - An answer file left behind by an earlier invocation is not read as this invocation's answer.
+  - When phase one proposes nothing, what l5-plan prints names the transcript the developer can read.
+  - A test stub asked to write an answer to a path outside the directory it was invoked in writes no answer, and the session behaves as it does when phase one wrote nothing.
+  - An l5-plan invocation given --workflow invokes phase one not at all, and what it does is unchanged by this story.
+  - The checks this story adds are shown to fail against the code as it stood before it.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/workflow_selection.py, declare the answer file's name and the transcript's name as module constants beside SELECTOR_PROMPT and SELECTION_SCHEMA, and add a function taking the target root and the configuration and returning both paths, resolved through config.get("logs_dir", ".harness/logs") the way the coordinator resolves the stage log. It creates nothing and prints nothing.
+    - In scripts/l5-plan, change choose_workflow's signature to take the target root and the configuration, and pass them from main, which has both already.
+    - Replace the tempfile.mkdtemp and rmtree pair in choose_workflow with the derived paths, creating the logs directory if it is absent, and unlinking any answer file already there before the invocation.
+    - Add cwd set to the target root, --allowedTools Write, stdin redirected from devnull, and stderr merged into stdout to the subprocess.run call that invokes phase one, and keep the completed process rather than discarding it.
+    - Append the captured output to the transcript with a header naming the request, in the shape agent_runner writes its stage separator, opening the file in append mode so nothing earlier is lost.
+    - Read the selection as now, and unlink the answer file in a finally so the next invocation starts with nothing there whatever this one did.
+    - In confirm, add the transcript's path to what is printed on the branch where nothing was proposed. The caller passes it in; workflow_selection still decides nothing about wording.
+    - In tests/test_workflow_proposal.py, give the stub a guard: resolve the answer path it scraped from the prompt, and write only when it is inside the current working directory, otherwise print the sentence the real agent printed when it could not write and exit as it did.
+    - Add checks over the invocation the stub logged: the answer path beneath the target root, the working directory, the presence of Write in the granted tools, and stdin not being the session's.
+    - Add checks that the transcript exists and holds phase one's output after a session that proposed, after a session whose answer never arrived, and that a second session appends rather than replaces; and that a stale answer file left in place is not read as the new invocation's answer.
+    - Add a check that the message printed when nothing was proposed names the transcript.
+  likely_file_changes:
+    - file: orchestration/workflow_selection.py
+      stage: implementer
+      reason: Owns the names of phase one's artifacts and the derivation of their paths, as it already owns the selector prompt's name and the selection schema's.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Holds the phase-one invocation, whose answer path, working directory, tool grant, stdin and captured output all change, and the wording printed when nothing was proposed.
+    - file: tests/test_workflow_proposal.py
+      stage: tester
+      reason: Holds the stub that writes the answer itself, which is the reason a broken feature has a green suite, and is where the invocation's argument list and the transcript are checked.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Describes l5-plan's two-phase planning and workflow_selection's surface, both of which gain phase one's answer path, its grant and its kept transcript.
+
+scope:
+  modify:
+    - scripts/l5-plan
+    - orchestration/workflow_selection.py
+    - tests/test_workflow_proposal.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/workflow-selector.md
+    - schemas/workflow-selection.schema.json
+    - orchestration/agent_runner.py
+    - orchestration/story_coordinator.py
+    - orchestration/plan_run_offer.py
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - workflows/
+
+verification_requirements:
+  - Confirm an unnamed l5-plan reaches a proposal driven end to end, with the answer arriving by the route production uses rather than written by the test.
+  - Confirm the phase-one invocation's argument list carries an answer path inside the workspace, under the configured logs_dir, and grants the tool that path requires.
+  - Confirm phase one's transcript is kept where a developer can find it, and that an invocation whose answer never arrived leaves enough behind to say why.
+  - Confirm the message printed when phase one proposed nothing names the transcript.
+  - Confirm a stale answer file is not read as a later invocation's answer.
+  - Confirm an l5-plan invocation given --workflow skips phase one entirely and is otherwise unchanged.
+  - Confirm the checks this story adds fail against the code as it stood before the story, so the suite is shown to observe the defect rather than to accommodate it.
+  - Confirm the full suite passes.
+
+constraints:
+  - The two-phase design, the confirmation flow, applies_when and the headless refusal are story-072's and stay as they are. Only phase one's delivery, its grant, its stdin and the keeping of its output change.
+  - The fallback prompt keeps working exactly as it does. It is the only reason an unnamed l5-plan works at all today, and it stays the path taken whenever no usable answer arrives.
+  - This story settles nothing about whether a proposal is correct. No check added here scores, matches or judges a classification.
+  - workflow_selection keeps returning what happened rather than printing it, and scripts/l5-plan stays the one place developer-facing wording lives.
+  - The answer path and the transcript path are derived from the configured logs_dir rather than from a literal written at the call site.
+  - No third-party runtime dependency is added; the standard library and the existing modules are what this is built from.
+  - The stub is not left able to write an answer the real agent could not have written.
