@@ -5125,10 +5125,15 @@ def run_story(
         # run of it inside the turn is denied. Built the way the ceiling above
         # is: present only for a stage whose workflow entry declares that it
         # runs no suite, absent otherwise, so a stage under no declaration is
-        # invoked with exactly the arguments it was invoked with before and no
-        # fake runner in the suite has to know the parameter exists. A target
-        # configuring no test command has nothing to compare against, so the
-        # keyword is absent there too.
+        # invoked with exactly the arguments it was invoked with before. A
+        # target configuring no test command has nothing to compare against, so
+        # the keyword is absent there too.
+        #
+        # Unlike the ceiling above, this does reach the fake runners: a suite
+        # test driving either shipped definition drives a stage that declares
+        # the restriction, so the keyword is passed and the runner must accept
+        # it. The absent-when-undeclared shape bounds which runners that is, it
+        # does not spare them all.
         test_command = config.get("test_command")
         no_suite = (
             {"suite_command": test_command}
