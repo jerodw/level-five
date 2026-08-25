@@ -437,6 +437,18 @@ def _suite_words(words: list[str], depth: int = 0) -> list[str]:
     save one, and a substituted or extra positional argument — a single named
     test file in place of the configured directory — makes it a different
     invocation the guard has nothing to say about.
+
+    What that costs is a different *spelling* of the same suite. Two commands
+    that run exactly the same tests reduce to different sequences whenever
+    their positional words differ, so pointing the same runner at the same
+    tests by another name — a bare invocation, a `.`, a directory written
+    without its trailing slash — is a command this says nothing about, and it
+    runs the whole suite. Recognising those as one set means knowing that the
+    runner treats them alike, which is knowledge of the runner this guard is
+    not allowed to have. So this is a filter over the spellings agents reach
+    for rather than a boundary an invocation cannot cross, and widening the
+    match to normalise some of them would leave the rest through while looking
+    repaired.
     """
     words = _command_words(words)
     if not words:
