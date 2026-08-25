@@ -1,0 +1,127 @@
+story:
+  id: story-074
+  title: The suite denial says what it does
+  description: |
+    story-073 named a filter as if it were a boundary, and was planned on a
+    magnitude the logs do not support. Both are corrections to what is written,
+    not to what runs. The mechanism is good and this story does not change it.
+
+    `may_not_run_suite`, and the title "A stage that runs no suite cannot run
+    one", both assert that the invocation is impossible. It is not. The rule
+    reduces a command to the program and its positional arguments and denies iff
+    that equals the same reduction of the configured `test_command`. Exact
+    equality on the reduced words is the whole rule, so a different spelling of
+    the same suite is a different command the guard says nothing about: driven
+    against the shipped guard with this repository's configured command,
+    `.venv/bin/python -m pytest tests/ -q` is denied while `pytest .`, `pytest`
+    and `pytest tests` each produce no decision and each run the whole suite.
+    Knowing that `tests`, `tests/` and `.` denote the same set requires
+    understanding the runner, which is what target-agnosticism forbids, so this
+    is a limit of the approach rather than a defect in it and belongs recorded
+    as one.
+
+    The measured filter is worth stating because it is good. Running the guard's
+    own rule over every whole-suite pytest invocation in `.harness/logs/` on
+    2026-08-25 - 517 across 73 runs - 439 (85%) would be denied. Agents reach
+    for the configured command verbatim and pipe it, and most of the 78 that
+    pass through are not the target's suite in the target's tree at all. The
+    honest description is a filter that catches the overwhelming majority of the
+    spellings agents use, not a boundary.
+
+    story-073's description also says story-070's tester ran the whole suite
+    twice for twenty-plus minutes. `.harness/logs/story-070.log` does not
+    support it: the redirect form was denied and never ran, and the pipe form
+    ran once and was backgrounded at the 600-second tool timeout. The error came
+    from counting `tool_use` blocks, which record what an agent tried, as though
+    they recorded what succeeded. The defect story-073 fixes is still real and
+    its fix is still aimed correctly - the form that got through was the pipe
+    form, and that is the one the rule catches.
+
+    Nothing here changes behaviour. No rule moves, no declaration changes
+    meaning, and no command is denied that was permitted or permitted that was
+    denied.
+  workflow: refactor-workflow
+
+tasks:
+  - Rewrite the `.harness/docs/ARCHITECTURE.md` section currently headed "A stage that runs no suite cannot run one" so its heading names a filter rather than a boundary, and update every cross-reference that points at it by title - the four at lines 43, 133, 160 and 1118 - so no reference is left naming a heading that no longer exists.
+  - Correct that section's opening account of story-070. The redirect form was denied and never ran, `_writes_a_file` having been in the guard since story-035 (538248f, 2026-08-13), eleven days earlier; the pipe form ran once and was backgrounded at the 600-second tool timeout. Say where the wrong figure came from - `tool_use` blocks record what an agent tried, not what succeeded - because the same mistake is available to anyone reading these logs.
+  - Record the limitation in that section - that exact equality on the reduced words is the whole rule, that `pytest .`, `pytest` and `pytest tests` each escape it and each run the whole suite, and that recognising them as one set requires knowledge of the runner that target-agnosticism forbids.
+  - Record the measured filter in that section with the corpus it came from and the date it was taken, since `.harness/logs/` is gitignored and reaches no clone.
+  - Say in that section why `tests/test_no_target_stack_in_harness_source.py` cannot catch this class - the scan looks for framework and runner names and there is no name here to find, the assumption being about the shape of an argument list rather than about a literal in it.
+  - Record in that section that `may_not_run_suite` deliberately keeps its name, and the reason: the key is declared in both shipped definitions, read in `orchestration/story_coordinator.py` and asserted by name in the standing modules, and what overstated was the prose above it rather than the job the key does.
+  - Extend `_suite_words`'s docstring in `hooks/bash_guard.py` so the next reader of the rule meets what exact equality costs as well as what it buys. The docstring already states the first half.
+  - Correct the sentence in `tests/test_suite_run_denial.py`'s module docstring describing `RECORDED_INVOCATIONS` as the two invocations that turned up in story-070's log, so it says what the log shows: one denied on arrival by the pre-existing redirect rule, one run once and ended at the tool timeout. The constants themselves are the record of what was attempted and do not change.
+  - Append a correction to `.harness/stories/story-073.yaml`'s description in the shape story-064's artifact used for a superseded criterion - what was believed, what the evidence shows - leaving the original statement legible. story-073's title stays as committed history.
+
+acceptance_criteria:
+  - The four spellings driven against the shipped guard behave exactly as they do today - `.venv/bin/python -m pytest tests/ -q` denied, and `pytest .`, `pytest` and `pytest tests` each producing no decision - so this story changes not one verdict.
+  - No line of `hooks/bash_guard.py` outside a docstring is changed, and no workflow definition, coordinator path or schema is changed at all.
+  - The architecture section's heading names a filter rather than a boundary, and no `See "..."` reference anywhere in the document names the retired heading.
+  - The architecture section states that the redirect form was denied and never ran, names `_writes_a_file` and story-035 as why, states that the pipe form ran once and ended at the tool timeout, and no longer asserts two runs or twenty-plus minutes.
+  - The architecture section names the three spellings that escape the rule and says that recognising them as one set requires knowledge of the runner the harness may not have.
+  - Wherever the 85% figure is stated it names both the corpus it was measured over and the date it was measured, and says that corpus is gitignored.
+  - The architecture section says why the target-stack scan cannot catch this class, in terms of shape rather than of a missing entry in a token list.
+  - The architecture section records that the declaration keeps its name and why, so a reader meeting the overstatement in the key does not read the section as having overlooked it.
+  - `_suite_words`'s docstring states what a different spelling of the same suite costs, beside the rule it already states.
+  - `tests/test_suite_run_denial.py`'s docstring describes story-070's log as it reads, and `RECORDED_TEST_COMMAND` and `RECORDED_INVOCATIONS` are unchanged in value.
+  - story-073's artifact carries the correction, still reads as the record of what was believed when it was planned, and keeps its title.
+  - The suite is green and its census does not regress. This story adds no test and removes none.
+
+technical_plan:
+  implementation_steps:
+    - Drive the shipped guard as a program with this repository's configured `test_command` over the four spellings before touching anything, and record the four verdicts. They are the baseline this story must not move, and the same four are driven again at the end.
+    - Extend the `_suite_words` docstring in `hooks/bash_guard.py` with what exact equality costs. Nothing outside the docstring is edited; if the change reaches a statement, the story has left its scope.
+    - Correct the one sentence in `tests/test_suite_run_denial.py`'s module docstring introducing `RECORDED_INVOCATIONS`. The two constants are a historical fact about one turn and keep their values; what changes is the sentence describing what happened to them.
+    - Append the correction to `.harness/stories/story-073.yaml`'s description, following the shape story-064's artifact used - the original statement left in place, the correction stated after it naming what the evidence shows. The title, tasks, criteria and plan are untouched.
+    - Rewrite the architecture section, heading first, then the four cross-references that name it, then the body - the story-070 correction, the limitation, the measured filter with corpus and date, the scan's edge, and the naming decision.
+  likely_file_changes:
+    - file: hooks/bash_guard.py
+      stage: implementer
+      reason: The `_suite_words` docstring gains what exact equality costs. Docstring only.
+      reverting_breaks_the_suite: Nothing asserts this docstring's wording, so reverting it leaves the suite green. It is recorded here so the revert check's silence on this file is expected rather than surprising.
+    - file: tests/test_suite_run_denial.py
+      stage: implementer
+      reason: One sentence of the module docstring described the two recorded invocations as though both ran. The constants are unchanged.
+      reverting_breaks_the_suite: This is a docstring correction in a module whose assertions are about the guard, not about its own prose, so reverting it leaves the suite green. Recorded rather than claimed otherwise.
+    - file: .harness/stories/story-073.yaml
+      stage: implementer
+      reason: Carries the correction to the two figures its description was planned on, appended rather than substituted.
+      reverting_breaks_the_suite: The corpus test in `tests/test_story_parser.py` parses committed artifacts, so the appended text must keep the artifact conforming; it does not assert this description's content, so reverting the correction leaves the suite green.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section that overstates is rewritten, and the four references naming its heading move with it.
+
+scope:
+  modify:
+    - hooks/bash_guard.py
+    - tests/test_suite_run_denial.py
+    - .harness/stories/story-073.yaml
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - orchestration/story_coordinator.py
+    - orchestration/agent_runner.py
+    - hooks/settings.json
+    - prompts/
+    - schemas/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm the four spellings in the story's description still behave exactly as they do today, by driving the shipped guard as a program with this repository's configured test command. One moved verdict fails the story.
+  - Confirm `hooks/bash_guard.py`'s diff is confined to a docstring, and that no workflow definition, coordinator path, hook declaration, prompt or schema was touched.
+  - Confirm the limitation is written where `_suite_words` is, and not only in the architecture document.
+  - Confirm whatever states the 85% figure names the corpus and the date it came from, since `.harness/logs/` is gitignored and reaches no clone.
+  - Confirm no cross-reference in `.harness/docs/ARCHITECTURE.md` names a heading the document no longer carries.
+  - Confirm story-073's artifact carries the correction, keeps its title, still reads as the record of what was believed when it was planned, and still parses.
+  - Confirm the suite census reports no counter falling; this story adds and removes no test.
+
+constraints:
+  - Nothing here changes behaviour. If the story finds itself editing `hooks/bash_guard.py`'s logic, it has left its scope.
+  - `may_not_run_suite` keeps its name. The decision was taken deliberately at plan time and the story records it; renaming the key is not this story's work.
+  - story-073's title stays as it was committed. Its description is corrected by appending, never by substitution, and the original statement stays legible.
+  - The `--collect-only` and `-k` over-denials are deliberately excluded. 21 and 4 occurrences in the corpus, denied because they are flags and flags are stripped before comparison; fixing them means the guard knowing what one framework's flags mean, and the ~5% over-denial is worth keeping the story-040 rule intact. Do not improve this.
+  - The match is not widened to normalise path spellings. It would catch `tests` and still miss `.` and the bare invocation, leaving the guarantee false while looking repaired.
+  - The configured command's program is not denied outright. In story-073's own run the tester made 6 targeted pytest calls and the verifier 5, and the verifier's method depends on them.
+  - Nothing about story-070's tester is revisited beyond correcting the two figures.
+  - This story adds no test. The claim is that no verdict moves, and the verification that shows it is the existing standing module plus driving the guard directly.
