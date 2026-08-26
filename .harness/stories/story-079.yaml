@@ -103,7 +103,7 @@ technical_plan:
     - file: tests/test_clean_clone_check.py
       stage: implementer
       reason: The temp-root assertion is narrowed to the scratch directory the call under test created. It has to move in the same stage as the configuration change, because the implementer's own suite run and the revert check after it both execute the configured command and would meet the un-narrowed assertion under many workers.
-      reverting_breaks_the_suite: Reverting this edit restores an assertion that globs the shared system temp root and compares it against a snapshot taken before the call. Under the parallel command this story configures, other workers hold their own `l5-clean-clone-*` scratch directories in that root during the window, so the restored assertion fails on names it does not own and the suite goes red. The edit is forced by the configuration change in this same story, not authored to make anything pass.
+      reason_the_declaration_was_withdrawn: The plan declared reverting_breaks_the_suite for this entry and the run refuted it. That declaration reasoned about the parallel command this story configures, but the revert check runs the test_command the coordinator loaded at process start - before the implementer edited .harness/config.yaml - so it ran the suite serially, took 12m29s and exited 0 with 3526 passed. Reverting this edit cannot redden a serial suite, because the assertion it restores only fails when other workers hold scratch directories in the shared temp root. The necessity is real and is not observable by the check that judges it, which is what the grant below is for.
     - file: requirements-dev.txt
       stage: implementer
       reason: A tracked declaration of the test dependencies, so the plugin the configured command needs is recorded rather than being knowledge each environment has to be told separately.
@@ -125,6 +125,11 @@ technical_plan:
     - file: .harness/standards/testing.md
       stage: documenter
       reason: Its first line spells the suite command and would otherwise disagree with the configured one.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/test_clean_clone_check.py
+    reason: This story's own configuration change is what makes the un-narrowed temp-root assertion fail, and the revert check cannot see that. The check runs the test_command loaded at process start, which is the serial one, so reverting the narrowing leaves a green suite and the check refuses an edit the story genuinely requires - which is exactly what happened on 2026-08-25, at 12m29s and exit 0. The grant names this one file rather than the tests/ prefix, so every other path beneath tests/ stays governed, including the validation the tester writes for the narrowed assertion, which is ordinary tester work and needs no grant. A reviewer weighing this should weigh whether the narrowing is a better assertion irrespective of parallelism: it is, because globbing a shared temp root also reddens on any stale l5-clean-clone-* directory left by an unrelated process.
 
 scope:
   modify:
