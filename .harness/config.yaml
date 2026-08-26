@@ -15,6 +15,16 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q -n auto
+# The command the revert check substitutes a nominated test into. {test} is the
+# substitution point; everything else is this repository's own selector syntax,
+# which the harness neither parses nor understands. A writing stage that names
+# a test failing without its change lets the check decide on that test alone —
+# run once on the tree the stage left, where it must pass, and once with the
+# governed edits reverted, where it must fail — instead of on a twelve-minute
+# suite. Anything short of pass-then-fail falls through to the whole suite, so
+# a bad nomination costs one extra selector run and changes no verdict. No
+# -n auto here: one test is not worth the workers it would start.
+test_selection_command: .venv/bin/python -m pytest {test} -q
 # This repository's suite census: it prints a JSON object of counter names to
 # integers, and a stage declaring suite_census has it run in a clone at that
 # stage's baseline and again in the tree the stage left. The counters are this

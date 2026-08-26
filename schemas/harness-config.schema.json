@@ -59,6 +59,10 @@
       "type": "string",
       "description": "The command the clean-clone and revert checks run inside a scratch clone. Read without a fallback: a target that omits it cannot run either check."
     },
+    "test_selection_command": {
+      "type": "string",
+      "description": "The command the revert check substitutes a nominated test into, run in a clone and read for its exit status alone. The substitution point is the literal {test}, replaced by the string the writing stage nominated; every other character of the command is the target's own, and the harness knows nothing about the selector syntax it is substituting into. Set, it lets the revert check short-circuit: the nomination is run once in a clone with the stage's edits applied, where it must pass, and once in the clone with the governed edits reverted, where it must fail, and pass-then-fail permits the edits without the configured test_command being run at all. Unset, the short-circuit is disabled and the check reaches today's verdict by today's path — the whole configured test command in the reverted clone. Its absence disables the short-circuit; it never fails the check, and it is never read as a permission."
+    },
     "verification_runner": {
       "type": "string",
       "description": "The executable the clean-clone and revert checks run the configured test command under: it replaces the first word of test_command, and every remaining argument is the configured command's own. Unset, the checks use test_command's own first word, so the command runs exactly as written. An environment difference that cannot be expressed as a first-word swap belongs in test_command instead."

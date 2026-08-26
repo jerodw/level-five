@@ -209,6 +209,19 @@ def _changed_files_fields(harness_root: Path) -> list[str]:
     return sorted(schema["properties"])
 
 
+def _changed_files_required_fields(harness_root: Path) -> list[str]:
+    """The fields of that schema a record must carry.
+
+    Read off the schema rather than listed, for the reason every other name in
+    this module is derived: a field added to one list or the other is meant to
+    move what this reports.
+    """
+    schema = json.loads(
+        (harness_root / "schemas" / "changed-files.schema.json").read_text()
+    )
+    return sorted(schema["required"])
+
+
 def _fields_stated_in_prose(template: str, fields: list[str]) -> list[str]:
     """Which schema field names the template states itself.
 
@@ -256,8 +269,15 @@ def test_documenter_prompt_requires_the_record_with_the_schema_injected(harness_
     # and the second is this same template with the schema pasted in where the
     # placeholder stands. Both must be reported, or the check above is passing
     # because it has stopped seeing field names at all.
+    # The tester's template lists the fields a record must carry; an optional
+    # one it has no reason to mention is not what this control is about, so it
+    # is held to the required set rather than to every declared property. Still
+    # an equality, and still non-empty, which is the whole of what it has to be
+    # to show the scan has not stopped seeing field names.
     tester_prompt = (harness_root / "prompts" / "story-tester.md").read_text()
-    assert _fields_stated_in_prose(tester_prompt, fields) == fields
+    required = _changed_files_required_fields(harness_root)
+    assert required
+    assert _fields_stated_in_prose(tester_prompt, fields) == required
     pasted = prompt.replace(
         "{{changed_files_schema}}",
         (harness_root / "schemas" / "changed-files.schema.json").read_text(),

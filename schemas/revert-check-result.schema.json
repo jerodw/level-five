@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "revert-check-result",
-  "description": "The coordinator's record of the revert check: after a stage that declares both a changed-files record and a may_not_create list, its own modifications and deletions under those prefixes are permitted iff reverting them makes the suite fail. A forced repair breaks the suite when reverted; new coverage does not. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it, and nothing in orchestration routes on it — it is evidence, like clean-clone-result. GRANULARITY: the check reverts every governed path at once and decides on that single run of the suite. A set containing one forced repair is therefore permitted in full, including any added coverage sitting in the other files of that set, and a single file mixing a forced repair with added coverage is not caught at all. The paths field states exactly what was reverted, so a reader can tell what the decision covered rather than assuming it discriminated per file. Optional fields are expressed by absence rather than by null, as clean-clone-result does: a check that could not run decided nothing.",
+  "description": "The coordinator's record of the revert check: after a stage that declares both a changed-files record and a may_not_create list, its own modifications and deletions under those prefixes are permitted iff reverting them makes the suite fail. A forced repair breaks the suite when reverted; new coverage does not. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it, and nothing in orchestration routes on it — it is evidence, like clean-clone-result. GRANULARITY: the check reverts every governed path at once and decides on that single run of the suite. A set containing one forced repair is therefore permitted in full, including any added coverage sitting in the other files of that set, and a single file mixing a forced repair with added coverage is not caught at all. The paths field states exactly what was reverted, so a reader can tell what the decision covered rather than assuming it discriminated per file. Optional fields are expressed by absence rather than by null, as clean-clone-result does: a check that could not run decided nothing. SHORT-CIRCUIT: the check establishes a failure, and one failing test proves a failing suite while no number of passing tests proves a passing suite. That asymmetry lets a subset stand in for the whole here and nowhere the verdict runs the other way, so when the stage's record nominates a test and the target configures a selection command, the nomination is run alone in a clone with the edits applied and again in the clone with them reverted, and pass-then-fail permits the edits with the configured test command never run. Every other outcome falls through to the whole suite and the verdict below, with the reason recorded in the nomination block. RESIDUAL RISK: a nominated test that fails in isolation and would have passed inside the full suite is a false permit — the check would report the edits forced when the suite it stands in for would have passed. The applied-clone run narrows it, since a test that also fails in isolation on the tree the stage left is not a permission, and it does not close it: a test whose isolated failure depends on the reverted content alone survives both runs. The granularity limit above is unchanged by any of this: every governed path is still reverted in one run and one verdict is still reached, and a nomination proves the bundle was needed no more finely than the whole suite did.",
   "type": "object",
   "required": ["ran", "paths", "command", "runner"],
   "properties": {
     "ran": {
       "type": "boolean",
-      "description": "Whether the suite actually ran in the clone with the edits reverted. False when the check could not run, in which case reason says why and permitted, exit_code and output_tail are absent."
+      "description": "Whether the configured test command actually ran in the clone with the edits reverted. It means that and only that, unchanged by the short-circuit: a check the nomination decided records it false while carrying permitted true, because the configured command was never run. False with permitted absent is the check having reached no verdict at all, in which case reason says why and exit_code and output_tail are absent too."
     },
     "paths": {
       "type": "array",
@@ -24,7 +24,7 @@
     },
     "permitted": {
       "type": "boolean",
-      "description": "Whether the edits are permitted. True when the suite failed with every path above reverted, which is what makes the set maintenance the change forced rather than validation the stage authored. False escalates the run immediately, without incrementing retry_count. Absent when ran is false, because a check that could not run permitted nothing and refused nothing."
+      "description": "Whether the edits are permitted. True when the suite failed with every path above reverted, which is what makes the set maintenance the change forced rather than validation the stage authored, or when the nomination below passed in a clone with the edits applied and failed in the clone with them reverted. False escalates the run immediately, without incrementing retry_count. Absent when the check reached no verdict, because a check that could not run permitted nothing and refused nothing; that is the only reading of its absence, and a fall-through is not one — a check that fell through ran the whole suite and records what the suite decided."
     },
     "clone_path": {
       "type": "string",
@@ -48,7 +48,38 @@
     },
     "reason": {
       "type": "string",
-      "description": "Why the check did not run, naming what stopped it. Absent when ran is true."
+      "description": "Why the check reached no verdict, naming what stopped it. Absent whenever a verdict was reached, whether the whole suite reached it or the nomination did. Why a nomination did not short-circuit is not this field: that is a fall-through rather than a failure to decide, and it is recorded in the nomination block below."
+    },
+    "nomination": {
+      "type": "object",
+      "description": "What the nominated test decided, and when it decided nothing, why. Present whenever the check got as far as considering one, which is every run that resolved a baseline — including a run whose record nominated nothing and a target that configures no selection command, both of which are recorded here as a check that did not short-circuit rather than left silent. Absent when the check reached no verdict at all, because there was nothing to consider.",
+      "required": ["short_circuited"],
+      "properties": {
+        "short_circuited": {
+          "type": "boolean",
+          "description": "Whether the nomination decided the check. True means it passed with the edits applied and failed with them reverted, and permitted above is true with the configured test command never run. False means the check fell through to the whole suite, and fell_through_because says why."
+        },
+        "test": {
+          "type": "string",
+          "description": "The test the stage's changed-files record nominated, verbatim. Absent when the record nominated none."
+        },
+        "command": {
+          "type": "string",
+          "description": "The command the nomination was substituted into and run as: the target's configured test_selection_command with its substitution point replaced by the test above, and with its first word swapped for the verification_runner exactly as the configured test command's is. Absent when no command was built, which is every fall-through decided before one could be."
+        },
+        "applied_exit_code": {
+          "type": "integer",
+          "description": "The nomination's exit status in a clone with the stage's edits applied — the tree the stage left, reverting nothing. Zero is the half of the permission that shows the nomination discriminates rather than merely failing. Absent when that run did not happen."
+        },
+        "reverted_exit_code": {
+          "type": "integer",
+          "description": "The nomination's exit status in the clone with the governed paths reverted, which is the same clone the whole suite would have run in. Non-zero is the other half of the permission. Absent when that run did not happen, which includes every case the applied run already decided."
+        },
+        "fell_through_because": {
+          "type": "string",
+          "description": "Why the whole suite decided this check instead of the nomination, naming what stopped the short-circuit: no nomination, no configured selection command, no substitution point in that command, a selector that could not be run at all, a nomination that failed with the edits applied, or one that passed with them reverted. Absent when short_circuited is true."
+        }
+      }
     }
   }
 }

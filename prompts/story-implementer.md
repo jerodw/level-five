@@ -65,6 +65,16 @@ ten-minute command late in its turn can end the turn still waiting for it,
 having produced nothing. Run what tells you your change is sound and leave
 the rest to the checks that own it.
 
+The first of those three re-runs can often be answered by one test instead.
+If your record names an edit the revert check governs, and you know a single
+test that passes on the tree you are leaving and fails once that edit is
+reverted, name it in your record's optional
+test_that_fails_without_this_change field — the injected schema above says
+what a nomination must satisfy and what it is worth. The check runs it in
+both trees and takes pass-then-fail as its answer; anything else falls
+through to the whole suite, so naming one costs at most one extra selector
+run and naming none costs nothing at all.
+
 If retry state is active:
 - remain within the authorized retry scope,
 - preserve accepted artifacts, and

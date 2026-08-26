@@ -100,6 +100,7 @@ VARYING: dict[str, object] = {
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
     "test_command": "xyzzy-runner --all",
+    "test_selection_command": "xyzzy-selector --only {test}",
     "tests_dir": "xyzzy-checks/",
     "verification_runner": "/xyzzy/bin/interpreter",
     "workflow": "xyzzy-workflow",
@@ -124,6 +125,7 @@ FALLBACKS: dict[str, object] = {
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
     "test_command": None,
+    "test_selection_command": None,
     "tests_dir": None,
     "verification_runner": None,
     "workflow": "story-workflow",
@@ -190,6 +192,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "test_command": Proof(
         "test_test_command_is_the_command_the_clean_clone_path_builds",
+        BEHAVIOURAL),
+    "test_selection_command": Proof(
+        "test_test_selection_command_is_what_a_nomination_is_substituted_into",
         BEHAVIOURAL),
     "tests_dir": Proof(
         "test_tests_dir_is_the_location_the_workflow_and_the_prompt_are_governed_at",
@@ -285,6 +290,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/context_assembler.py",
          'config.get("test_command")',
          HARDCODED_TEST_COMMAND),
+    ),
+    "test_selection_command": (
+        ("orchestration/story_coordinator.py",
+         'config.get("test_selection_command")',
+         "None"),
     ),
     "tests_dir": (
         ("orchestration/harness_config.py",
@@ -585,8 +595,8 @@ EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
     "census_command",
     "logs_dir", "model", "permission_mode", "runs_dir", "standards_dir",
-    "stories_dir", "test_command", "tests_dir", "verification_runner",
-    "workflow",
+    "stories_dir", "test_command", "test_selection_command", "tests_dir",
+    "verification_runner", "workflow",
 )
 
 
@@ -1020,6 +1030,60 @@ def test_test_command_is_the_command_the_clean_clone_path_builds(tmp_path):
     # The configured command's own arguments, under the configured
     # runner: `--all` is the half that comes from `test_command`.
     assert record["command"] == "/xyzzy/bin/interpreter --all"
+
+
+#: The test a stage's record nominates, for the selection proof below. It
+#: names nothing that exists: what the proof observes is the command the
+#: nomination was substituted into, which is built before anything is run.
+NOMINATED_TEST = "xyzzy-nominated-test"
+
+
+def nomination_record(run: Run) -> dict:
+    """What the revert check builds when a record nominates a test.
+
+    Observed rather than completed, for the reason `clean_clone_record` above
+    is: `verification_runner` names an executable that does not exist, so the
+    selector run reports a run that did not happen — carrying the command it
+    would have run — before any clone is built. The check then falls through to
+    the whole suite, which cannot run either, so the proof is deterministic and
+    depends on no second toolchain.
+
+    Invoked by hand rather than reached through a run, because this fixture's
+    workflow strips the declaration that turns the check on; which stage
+    declares it is not what this proof is about, so the stage is taken off the
+    fixture's own definition rather than written down.
+    """
+    artifact = "xyzzy-revert-check-result.json"
+    definition = json.loads(
+        (run.harness / "workflows" / f"{FIXTURE_WORKFLOW}.json").read_text(
+            encoding="utf-8"))
+    governed = [str(run.values["tests_dir"])]
+    baseline = story_coordinator.capture_stage_baseline(
+        run.run_dir, run.target, "xyzzy-revert-baseline", "xyzzy-stage",
+        governed, accounted_for=set())
+    story_coordinator.revert_check(
+        run.run_dir, run.target, run.config, artifact,
+        (f"{run.values['tests_dir']}test_xyzzy.py",), baseline,
+        stage_name=definition["stages"][-1]["name"],
+        nomination=NOMINATED_TEST)
+    return json.loads((run.run_dir / artifact).read_text(encoding="utf-8"))
+
+
+def test_test_selection_command_is_what_a_nomination_is_substituted_into(tmp_path):
+    """The configured command, with its substitution point replaced and its
+    first word swapped for the configured runner.
+
+    `--only` is the half that can only have come from `test_selection_command`,
+    and the nominated test standing where `{test}` stood is the substitution
+    itself. A harness that had stopped reading the key would record a check
+    that fell through with no command built at all.
+    """
+    run = complete_run(tmp_path)
+    record = nomination_record(run)
+    assert record["nomination"]["command"] == \
+        f"/xyzzy/bin/interpreter --only {NOMINATED_TEST}"
+    assert record["nomination"]["short_circuited"] is False
+    assert record["nomination"]["test"] == NOMINATED_TEST
 
 
 def census_record(run: Run) -> dict:
