@@ -2384,6 +2384,16 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "and the schema shipped for the record the check writes, both of which "
         "are the subject: what this repository counts, and what a reader of "
         "the artifact is told the count does not mean",
+    "test_suite_parallelism.py":
+        "what this deployment ships is the whole of its subject: that the "
+        "command .harness/config.yaml configures runs the suite in parallel "
+        "without pinning a core count, and that the CI workflow this "
+        "repository ships installs the tracked dependency declaration that "
+        "command needs rather than a hand-listed set. The scan reaches it "
+        "through .github/workflows/tests.yml, whose path carries a 'workflows' "
+        "segment; a fixture workflow could not answer either question, because "
+        "both are about the files this repository deploys and about nothing "
+        "else",
     "test_suite_run_denial.py":
         "every run it drives goes through a workflow it builds, against a "
         "target it constructs, where the may_not_run_suite declaration, the "
