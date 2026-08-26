@@ -82,7 +82,7 @@ The harness stays at level 3. Epics and products (Chapters 20–22) are a differ
 - Python 3 (3.10+)
 - Git
 
-No third-party dependencies — the harness uses only the Python standard library.
+The harness itself has no third-party runtime dependency — it uses only the Python standard library. Running its test suite needs what `requirements-dev.txt` declares; see [Tests](#tests).
 
 ## Scripts
 
@@ -140,7 +140,16 @@ See `.harness/docs/ARCHITECTURE.md` for the full architecture.
 
 The Story Coordinator is deterministic and fully unit-tested without any model calls (a fake runner plays back scripted stage artifacts). Run the suite with:
 
-    .venv/bin/python -m pytest tests/ -q
+    .venv/bin/python -m pytest tests/ -q -n auto
+
+That is `test_command` in `.harness/config.yaml` verbatim, and running it verbatim is the point: the harness's own gates — the revert check, the coordinator's suite run in the tree, and the clean-clone check — execute the configured command, so what a developer runs and what the gates run cannot drift apart. `-n auto` reads the core count of whatever machine it lands on, so no core count is written down anywhere.
+
+The dependencies that command needs are declared in `requirements-dev.txt`, and it has to be installed into **both** interpreters this repository configures — the one you run the suite in and the one `verification_runner` names:
+
+    .venv/bin/pip install -r requirements-dev.txt
+    .venv310/bin/pip install -r requirements-dev.txt
+
+Install it into only the first and your local suite is green while the clean-clone check dies on an unrecognized argument, because that check runs the same command under the second interpreter. That is the failure this instruction exists to prevent.
 
 ## Contributing and feedback
 

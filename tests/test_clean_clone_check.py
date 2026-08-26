@@ -752,6 +752,44 @@ def test_the_scratch_directory_is_removed_whatever_the_result(
     assert (run_dir / ARTIFACT).is_file()
 
 
+def no_scratch_directory_is_left_behind(result) -> None:
+    """The narrowed temp-root assertion, as one callable.
+
+    story-079 narrowed the assertion below from a snapshot of the shared system
+    temp root to the one scratch directory the call under test created. It is a
+    function so that the non-vacuity control near the foot of this module —
+    `test_the_narrowed_assertion_fails_when_the_scratch_is_left_behind` — drives
+    *this* code rather than a second copy of it that could drift from it. The
+    assertions are unchanged by the extraction.
+    """
+    scratch = Path(result.clone_path).parent
+    # Resolved on both sides: the system temp root reaches through a symlink
+    # on some platforms, and which side of it a path was spelled from says
+    # nothing about the directory.
+    assert scratch.parent.resolve() == Path(tempfile.gettempdir()).resolve()
+    assert scratch.name.startswith("l5-clean-clone-")
+    assert not scratch.exists()
+
+
+@pytest.fixture
+def foreign_scratch_directory():
+    """A scratch directory in the shared temp root that this check never made.
+
+    It carries the same `l5-clean-clone-` prefix the check's own scratch
+    directories carry, and it stays in place for the whole of the test that
+    takes it — which is what another pytest worker running this same suite, or
+    a stale directory left by an unrelated run, looks like from inside one
+    call.
+    """
+    foreign = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
+    (foreign / "belongs-to-nobody-here.txt").write_text(
+        "another process's scratch directory\n", encoding="utf-8")
+    try:
+        yield foreign
+    finally:
+        shutil.rmtree(foreign, ignore_errors=True)
+
+
 def test_the_check_leaves_no_scratch_directory_behind_in_the_temp_root(
     story_target, tmp_path,
 ):
@@ -780,13 +818,75 @@ def test_the_check_leaves_no_scratch_directory_behind_in_the_temp_root(
         stage_name=VERIFIER_STAGE["name"])
 
     assert result.exit_code != 0
-    scratch = Path(result.clone_path).parent
-    # Resolved on both sides: the system temp root reaches through a symlink
-    # on some platforms, and which side of it a path was spelled from says
-    # nothing about the directory.
-    assert scratch.parent.resolve() == Path(tempfile.gettempdir()).resolve()
-    assert scratch.name.startswith("l5-clean-clone-")
-    assert not scratch.exists()
+    no_scratch_directory_is_left_behind(result)
+
+
+def test_the_narrowed_assertion_ignores_a_scratch_directory_it_did_not_make(
+    story_target, foreign_scratch_directory,
+):
+    """A foreign `l5-clean-clone-*` directory in the shared temp root, present
+    for the whole of the call, changes nothing.
+
+    This is the property the narrowing bought, and it is what lets this suite
+    run under many workers: every other worker's scratch directory is exactly
+    this foreign directory, and the assertion above is answerable without
+    reference to any of them. It is also worth having with one worker, since a
+    stale directory left by an unrelated process looks identical from here.
+    """
+    dirty_target(story_target)
+    run_dir = run_dir_of(story_target)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    assert foreign_scratch_directory.exists()
+
+    result = story_coordinator.clean_clone_check(
+        run_dir, story_target, {"test_command": "sh -c 'exit 1'"}, ARTIFACT,
+        stage_name=VERIFIER_STAGE["name"])
+
+    # The foreign directory outlived the call — the assertion passed *with* it
+    # there, rather than because something tidied it away first.
+    assert foreign_scratch_directory.exists()
+    assert Path(result.clone_path).parent != foreign_scratch_directory
+    no_scratch_directory_is_left_behind(result)
+    assert foreign_scratch_directory.exists()
+
+
+def test_the_snapshot_this_replaced_reports_a_foreign_directory(story_target):
+    """The demonstration that the narrowing was not cosmetic.
+
+    The assertion story-079 removed compared a listing of the shared temp root
+    taken before the call against one taken after, and reported any new
+    `l5-clean-clone-*` name as a leak by this check. That comparison is
+    reconstructed here — the reconstruction, not the shipped code — over a call
+    that leaks nothing, with a foreign directory appearing between the two
+    listings, exactly as another worker's would. It reports the foreign
+    directory. The narrowed assertion, run on the same call in the same moment,
+    does not.
+
+    The foreign directory is made here rather than by the fixture above because
+    it has to arrive *after* the first listing; the fixture's directory is
+    already there when a test body starts.
+    """
+    temp_root = Path(tempfile.gettempdir())
+    before = set(temp_root.glob("l5-clean-clone-*"))
+    dirty_target(story_target)
+    run_dir = run_dir_of(story_target)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    foreign = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
+
+    try:
+        result = story_coordinator.clean_clone_check(
+            run_dir, story_target, {"test_command": "sh -c 'exit 1'"}, ARTIFACT,
+            stage_name=VERIFIER_STAGE["name"])
+
+        appeared = set(temp_root.glob("l5-clean-clone-*")) - before
+        # The old assertion was `appeared == set()`; it would have failed on a
+        # directory this call neither created nor owns.
+        assert foreign in appeared
+        # And the narrowed one passes on the same call, on the same machine, in
+        # the same moment.
+        no_scratch_directory_is_left_behind(result)
+    finally:
+        shutil.rmtree(foreign, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------
@@ -1596,6 +1696,45 @@ def test_a_scratch_directory_left_behind_is_caught(story_target, tmp_path):
         assert left.exists()
     finally:
         shutil.rmtree(left.parent, ignore_errors=True)
+
+
+def test_the_narrowed_assertion_fails_when_the_scratch_is_left_behind(
+    story_target, tmp_path,
+):
+    """The non-vacuity control for the narrowing, driven rather than reasoned about.
+
+    An assertion that a directory is *gone* passes just as happily when it is
+    looking somewhere nothing was ever created, so story-079's narrowing needs
+    a demonstration that it still reports the leak it exists to report. The
+    demonstration runs the very function the passing test runs — the same
+    `no_scratch_directory_is_left_behind` — against a coordinator whose scratch
+    removal has been defeated, and it raises.
+
+    The mutant is the one this module already carries, so the defeat is a
+    single line of the real coordinator rather than a fake result object: a
+    result whose `clone_path` a test made up would prove nothing about what the
+    check leaves on disk.
+    """
+    module = variant("a scratch directory that is never removed", tmp_path)
+    dirty_target(story_target)
+    run_dir = run_dir_of(story_target)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    result = module.clean_clone_check(
+        run_dir, story_target, {"test_command": "sh -c 'exit 1'"}, ARTIFACT,
+        stage_name=VERIFIER_STAGE["name"])
+
+    try:
+        with pytest.raises(AssertionError):
+            no_scratch_directory_is_left_behind(result)
+        # The two assertions the narrowing kept are true of the mutant's
+        # result, so the failure above is the leak and not a path that never
+        # reached the temp root at all.
+        scratch = Path(result.clone_path).parent
+        assert scratch.parent.resolve() == Path(tempfile.gettempdir()).resolve()
+        assert scratch.name.startswith("l5-clean-clone-")
+    finally:
+        shutil.rmtree(Path(result.clone_path).parent, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------
