@@ -1288,10 +1288,18 @@ def test_the_paths_description_names_the_baseline_and_no_longer_names_head():
 def test_the_granularity_limit_is_unchanged_in_the_schema_and_the_docstring():
     """The story changed the baseline, not what the check decides at. Both
     statements are compared with their pre-story text, and the control is the
-    paths description in the same file, which did change."""
+    paths description in the same file, which did change.
+
+    Story-077 added a short-circuit and stated its residual risk in the same
+    top-level description, so equality was narrowed to `startswith`: every byte
+    of the granularity statement is still asserted verbatim and in place, and
+    the only edit that passes is one appending after it. It is not a
+    relaxation of the subject — what this test is about is that the
+    granularity limit reads as it read, and appending to a description cannot
+    change it."""
     before = json.loads(pre_story("schemas/revert-check-result.schema.json"))
     now = schema()
-    assert now["description"] == before["description"]
+    assert now["description"].startswith(before["description"])
     assert now["properties"]["paths"]["description"] \
         != before["properties"]["paths"]["description"]
 

@@ -39,10 +39,11 @@ Every absence asserted here carries a demonstration that it can fail:
   * "story-056's artifact with its grants stripped is still reported" is the
     unchanged case, and its control is the committed artifact itself, which is
     reported by nothing;
-  * "the field name appears in no orchestration module but one, and in no
-    workflow or rules file" sits beside the same search over the three files
-    that do hold it, and beside the same search over a planted copy of a file
-    that does not;
+  * "no orchestration module but the plan-time check names the field in code,
+    and no workflow or rules file names it at all" sits beside the same search
+    over the directories that do hold it, and beside the same search over a
+    planted copy — one plant in code and one in prose, so the two scans are
+    shown to disagree where they should;
   * "no run-time check consults it" is driven rather than inspected, and its
     control is that the very same story is accepted at plan time *because* of
     the declaration — a typo'd or inert field would make the run-time silence
@@ -57,10 +58,13 @@ this one.
 Nothing here invokes a model: every coordinator run goes through a fake agent
 runner.
 """
+import ast
+import io
 import json
 import re
 import shutil
 import sys
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -718,50 +722,161 @@ def files_naming_the_field(directory: Path, relative_to: Path = None) -> list[st
     return found
 
 
-def test_the_field_name_appears_in_one_orchestration_module_and_no_other(
+def prose_of(source: str) -> list[str]:
+    """Every docstring and every comment in a Python module's source.
+
+    A name a module only talks about lives in one of these; a name it acts on
+    lives anywhere else, a dictionary key and an argument to `.get` included.
+    """
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            docstring = ast.get_docstring(node, clean=False)
+            if docstring:
+                found.append(docstring)
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT:
+            found.append(token.string)
+    return found
+
+
+def modules_naming_the_field_in_code(
+        directory: Path, relative_to: Path = None) -> list[str]:
+    """Every module beneath `directory` naming the field outside its prose.
+
+    The same scan as `files_naming_the_field` with each module's docstrings and
+    comments removed from the text first, so a module that mentions the field
+    to a reader is distinguished from one that reads it.
+    """
+    base = relative_to or directory.parent
+    found = []
+    for path in sorted(directory.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if FIELD not in source:
+            continue
+        stripped = source
+        for text in prose_of(source):
+            stripped = stripped.replace(text, "")
+        if FIELD in stripped:
+            found.append(str(path.relative_to(base)))
+    return found
+
+
+def test_only_the_plan_time_check_names_the_field_in_orchestration_code(
         tmp_path: Path):
     """The plan-time check is the only code that knows the field exists.
 
-    The control is the same scan over a copy of that directory with the name
-    planted in a module that does not hold it, which the scan reports — so the
-    short answer above it is a measured absence rather than a scan that stopped
-    seeing. The plant goes into the copy: a control has no business editing the
-    tree it is a control for, however carefully it puts it back.
+    Both scans are exact set equalities, so a mention this story does not know
+    about reddens either way. story-077 forced the wider of the two: its
+    short-circuit is the executable counterpart of this declaration and says so
+    to a reader of `run_nomination`, which put the name into a second module's
+    docstring. The claim that survives is the one the story-068 criteria
+    actually make — that nothing but the plan-time check *reads* it — so it is
+    the claim now asserted, and the byte scan is kept beside it naming both
+    files rather than dropped.
+
+    Two controls, planted into a copy because a control has no business editing
+    the tree it is a control for. A module given the name in code is reported
+    by both scans; a module given it in a docstring is reported by the byte
+    scan alone, which is what makes the narrower answer a measured distinction
+    rather than a scan that stopped seeing.
     """
     orchestration = HARNESS_ROOT / "orchestration"
 
-    assert files_naming_the_field(orchestration) == [
+    assert modules_naming_the_field_in_code(orchestration) == [
         "orchestration/plan_validation.py"]
+    assert files_naming_the_field(orchestration) == [
+        "orchestration/plan_validation.py",
+        "orchestration/story_coordinator.py",
+    ]
 
     copied = tmp_path / "orchestration"
     shutil.copytree(orchestration, copied,
                     ignore=shutil.ignore_patterns("__pycache__"))
-    planted = copied / "story_coordinator.py"
-    planted.write_text(planted.read_text(encoding="utf-8") + f"\n# {FIELD}\n",
-                       encoding="utf-8")
+    in_code = copied / "harness_config.py"
+    in_code.write_text(
+        in_code.read_text(encoding="utf-8")
+        + f'\n_PROBE = {{}}.get("{FIELD}")\n', encoding="utf-8")
+    in_prose = copied / "plan_commit.py"
+    in_prose.write_text(
+        in_prose.read_text(encoding="utf-8") + f"\n# {FIELD}\n",
+        encoding="utf-8")
 
-    assert sorted(files_naming_the_field(copied)) == [
+    assert modules_naming_the_field_in_code(copied) == [
+        "orchestration/harness_config.py",
+        "orchestration/plan_validation.py",
+    ]
+    assert files_naming_the_field(copied) == [
+        "orchestration/harness_config.py",
+        "orchestration/plan_commit.py",
         "orchestration/plan_validation.py",
         "orchestration/story_coordinator.py",
     ]
 
 
-def test_no_workflow_and_no_rule_file_names_the_field():
+def declared_properties(node, name: str) -> bool:
+    """Whether any `properties` object anywhere in a schema declares `name`."""
+    if isinstance(node, dict):
+        if isinstance(node.get("properties"), dict) and name in node["properties"]:
+            return True
+        return any(declared_properties(value, name) for value in node.values())
+    if isinstance(node, list):
+        return any(declared_properties(item, name) for item in node)
+    return False
+
+
+def schemas_declaring_the_field(
+        directory: Path, relative_to: Path = None) -> list[str]:
+    """Every schema beneath `directory` that declares the field as a property."""
+    base = relative_to or directory.parent
+    return [str(path.relative_to(base))
+            for path in sorted(directory.rglob("*.json"))
+            if declared_properties(json.loads(path.read_text(encoding="utf-8")),
+                                   FIELD)]
+
+
+def test_no_workflow_and_no_rule_file_names_the_field(tmp_path: Path):
     """No run-time artifact is told the field exists, workflow and rules alike.
 
     Their control is the directory that does hold it: the same scan over
     `schemas/` and `prompts/` reports the contract and the template, so a scan
     that had stopped reading files would fail there rather than pass here.
+
+    story-077 forced the schema half, for the reason the module above records:
+    the contract for its own nomination field distinguishes itself from this
+    declaration by name, in a description. So the schema that *declares* the
+    field is asserted as well, and both assertions are exact set equalities.
+    Its control is a copy of the schema that only mentions it, given the field
+    as a property, which the narrower scan reports.
     """
     for directory in ("workflows", "rules"):
         assert files_naming_the_field(HARNESS_ROOT / directory) == [], directory
 
-    assert files_naming_the_field(HARNESS_ROOT / "schemas") == [
-        "schemas/story.schema.json"]
+    schemas = HARNESS_ROOT / "schemas"
+    assert schemas_declaring_the_field(schemas) == ["schemas/story.schema.json"]
+    assert files_naming_the_field(schemas) == [
+        "schemas/changed-files.schema.json",
+        "schemas/story.schema.json",
+    ]
     assert files_naming_the_field(HARNESS_ROOT / "prompts") == [
         "prompts/planner.md"]
     assert str(Path(__file__).relative_to(HARNESS_ROOT)) in files_naming_the_field(
         HARNESS_ROOT / "tests")
+
+    copied = tmp_path / "schemas"
+    shutil.copytree(schemas, copied)
+    planted_path = copied / "changed-files.schema.json"
+    planted = json.loads(planted_path.read_text(encoding="utf-8"))
+    planted["properties"][FIELD] = {"type": "string"}
+    planted_path.write_text(json.dumps(planted), encoding="utf-8")
+
+    assert schemas_declaring_the_field(copied) == [
+        "schemas/changed-files.schema.json",
+        "schemas/story.schema.json",
+    ]
 
 
 # --------------------------------------------------------------------------

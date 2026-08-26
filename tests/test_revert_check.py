@@ -1018,7 +1018,7 @@ def test_a_single_file_mixing_a_repair_and_an_addition_is_permitted(
     assert record["paths"] == ["tests/test_app.py"]
     assert set(record) <= {"ran", "paths", "command", "runner",
                            "clone_path", "exit_code", "output_tail", "output_path",
-                           "permitted", "baseline", "reason"}
+                           "permitted", "baseline", "reason", "nomination"}
 
 
 def test_the_addition_inside_that_file_needed_no_change_to_pass(tmp_path):
@@ -1190,6 +1190,617 @@ def test_the_planner_template_still_names_no_stage_and_no_restricted_prefix():
     assert PREFIX not in template
     for stage in WORKFLOW["stages"]:
         assert not re.search(rf"\b{stage['name']}\b", template), stage["name"]
+
+
+# --------------------------------------------------------------------------
+# The nomination: one test asked before the suite (story-077)
+#
+# The check establishes a *failure*, and one failing test proves a failing
+# suite while no number of passing tests proves a passing suite. That
+# asymmetry is what lets a subset stand in for the whole here, so a stage may
+# nominate the test that fails without its change and have the check decide on
+# that test alone.
+#
+# Nothing below reads the nomination's worth off the code that computes it.
+# Each case builds the tree, configures the selection command, runs the
+# coordinator, and reads what the check recorded: which exit codes the two
+# selector runs produced, which command ran in the clone that reverted
+# something, and what the verdict was. Every fall-through is paired with the
+# short-circuit it did not take, so "the whole suite decided this" is asserted
+# against a run in which the whole suite demonstrably did not.
+#
+# The standing rule that the harness names no framework and parses no runner
+# output is not restated here: test_no_target_stack_in_harness_source.py scans
+# the whole coordinator source, so the code added for this reaches it already.
+# --------------------------------------------------------------------------
+
+#: The substitution point, spelled here rather than imported from the code
+#: that looks for it: it is a term of the target's configuration format, so a
+#: test that took it from the harness could never report the harness changing
+#: it out from under every config already written. The schema is held to the
+#: same spelling below.
+SUBSTITUTION = "{test}"
+
+#: The key the target sets to enable the short-circuit.
+SELECTION_KEY = "test_selection_command"
+
+#: The target's own selector syntax, which the harness neither parses nor
+#: understands. Assembled as a string rather than through `shlex.join`, so the
+#: substitution point stays the bare literal a developer would write.
+TEST_SELECTION_COMMAND = (
+    f"{shlex.quote(sys.executable)} -m pytest {SUBSTITUTION} -q "
+    f"-p no:cacheprovider"
+)
+
+#: The test the forced repair repairs. It passes on the tree the implementer
+#: leaves and cannot even be collected once `test_app.py` is reverted, because
+#: the reverted file imports a name the renamed module no longer exports.
+NOMINATION_REPAIRED = f"{PREFIX}test_app.py::test_greet"
+
+#: A test in the file no edit touches. It passes in both trees, which is the
+#: nomination that shows nothing and must fall through.
+NOMINATION_UNTOUCHED = f"{PREFIX}test_extra.py::test_arithmetic"
+
+#: A test no version of any file defines, so the selector naming it fails on
+#: the tree the stage left exactly as a broken selector does.
+NOMINATION_ABSENT = f"{PREFIX}test_app.py::test_no_such_test"
+
+#: A nomination whose substituted command cannot be split into an argument
+#: list at all: the quotation it opens is never closed.
+NOMINATION_UNSPLITTABLE = f'{PREFIX}test_app.py::test_"greet'
+
+
+def with_nomination(edit, test: str):
+    """The same working-tree edit, with its record naming a nominated test."""
+    def edited(root: Path) -> dict:
+        return {**edit(root), "test_that_fails_without_this_change": test}
+    return edited
+
+
+def enable_selection(target_root: Path, command: str = TEST_SELECTION_COMMAND) -> None:
+    """Configure the selection command, and check it survived the parser.
+
+    The value carries a brace pair, which is exactly the shape a configuration
+    reader is most likely to mangle. If it arrived mangled every assertion
+    below about a fall-through would still pass — for the wrong reason — so it
+    is read back through the harness's own loader here.
+    """
+    configure(target_root, **{SELECTION_KEY: command})
+    assert harness_config.load_config(target_root)[SELECTION_KEY] == command
+
+
+@pytest.fixture
+def clone_runs(monkeypatch):
+    """Every call into the shared clone runner, as (command, reverted paths).
+
+    `clone_calls` above records what each call reverted and not what it ran,
+    which was all there was to record while every call ran the configured test
+    command. The nomination runs a different command through the same builder,
+    so *what* a call ran is what several assertions below are about: "the
+    configured test command never ran" is a claim about the commands, and a
+    fixture that only saw the reverts could not tell it from "no clone was
+    built".
+    """
+    calls: list[tuple[str, tuple[str, ...]]] = []
+    original = story_coordinator.run_clean_clone
+
+    def spy(*args, **kwargs):
+        command = kwargs.get("command_to_run", args[1] if len(args) > 1 else "")
+        revert = kwargs.get("revert", args[4] if len(args) > 4 else ())
+        calls.append((command, tuple(revert)))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator, "run_clean_clone", spy)
+    return calls
+
+
+def suite_runs(calls) -> list[tuple[str, tuple[str, ...]]]:
+    """The calls that ran the target's configured test command."""
+    return [call for call in calls if call[0] == TEST_COMMAND]
+
+
+def selector_runs(calls) -> list[tuple[str, tuple[str, ...]]]:
+    """The calls that ran something other than the configured test command."""
+    return [call for call in calls if call[0] != TEST_COMMAND]
+
+
+def nomination_of(target_root: Path) -> dict:
+    return record_of(target_root)["nomination"]
+
+
+def suite_output(target_root: Path) -> Path:
+    return run_dir_of(target_root) / story_coordinator.suite_output_file(ARTIFACT)
+
+
+# --- the permission the nomination can establish --------------------------
+
+
+def test_a_nomination_that_passes_applied_and_fails_reverted_permits_the_edits(
+    target, harness_root, clone_runs,
+):
+    """The short-circuit, read off what the check recorded rather than timed.
+
+    Both selector runs are recorded, and both are what the permission is made
+    of: zero on the tree the implementer left, non-zero with the governed path
+    reverted.
+    """
+    enable_selection(target)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair, NOMINATION_REPAIRED)})
+    assert code == 0
+    assert state_of(target)["status"] == "completed"
+
+    record = record_of(target)
+    assert record["permitted"] is True
+    assert record["paths"] == ["tests/test_app.py"]
+
+    nomination = record["nomination"]
+    assert nomination["short_circuited"] is True
+    assert nomination["test"] == NOMINATION_REPAIRED
+    assert nomination["applied_exit_code"] == 0
+    assert nomination["reverted_exit_code"] != 0
+    assert "fell_through_because" not in nomination
+
+
+def test_the_permitting_nomination_never_ran_the_configured_test_command(
+    target, harness_root, clone_runs,
+):
+    """What the short-circuit is *for*, asserted against the commands that ran.
+
+    The run's other clone is the verifier's clean-clone check, which reverts
+    nothing and runs the configured command — so the absence claimed here is
+    "the configured command never ran with anything reverted" and the control
+    for it is the call that ran it with nothing reverted. A spy that had
+    stopped seeing commands would fail that control rather than pass this.
+    """
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_REPAIRED)})[0] == 0
+
+    reverting = [call for call in clone_runs if call[1]]
+    assert [shlex.split(command) for command, _ in reverting] == \
+        [shlex.split(nomination_of(target)["command"])] * len(reverting)
+    assert TEST_COMMAND not in [command for command, _ in reverting]
+    assert suite_runs(clone_runs) == [(TEST_COMMAND, ())]
+
+
+def test_the_command_the_nomination_ran_is_the_configured_one_substituted(
+    target, harness_root,
+):
+    """The recorded command, compared as an argument list.
+
+    The configured command's own arguments, with the substitution point and
+    nothing else replaced by the nominated test. Compared after splitting
+    rather than as text, because how the harness re-joins an argument list is
+    not what the target configured.
+    """
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_REPAIRED)})[0] == 0
+    assert shlex.split(nomination_of(target)["command"]) == [
+        sys.executable, "-m", "pytest", NOMINATION_REPAIRED, "-q",
+        "-p", "no:cacheprovider"]
+
+
+def test_a_short_circuited_check_records_ran_false_and_writes_no_suite_output(
+    target, harness_root,
+):
+    """`ran` still means the configured test command ran in the reverted clone.
+
+    So a check the nomination decided records it false while carrying
+    `permitted` true — the two stopped being the same question, which is what
+    the escalation predicate had to change for. The output file is the
+    control's other half: the fall-through case below writes one, so its
+    absence here is the suite not having run rather than the path having moved.
+    """
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_REPAIRED)})[0] == 0
+    record = record_of(target)
+    assert record["ran"] is False
+    assert record["permitted"] is True
+    assert "exit_code" not in record
+    assert "output_tail" not in record
+    assert not suite_output(target).exists()
+
+
+def test_the_selector_runs_announce_a_wait_of_seconds_not_a_suite_run(
+    target, harness_root,
+):
+    """The announcement takes the cost it actually takes.
+
+    Paired with the no-nomination run below, whose announcement claims a suite
+    run's wait: the same helper, the same stage, and the difference is what
+    the check is about to do.
+    """
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_REPAIRED)})[0] == 0
+    entries = announcements(target, WRITING)
+    assert len(entries) == 1
+    message = entries[0]["message"]
+    assert NOMINATION_REPAIRED in message
+    assert "seconds" in message
+    assert entries[0]["artifacts"] == [ARTIFACT]
+
+
+# --- every other outcome falls through to the whole suite ------------------
+
+
+def test_a_record_carrying_no_nomination_reaches_todays_verdict_by_todays_path(
+    target, harness_root, clone_runs,
+):
+    """Nothing new is required of a record that names no test.
+
+    The same edits as the permitted case above, minus the nomination: the
+    whole suite runs in the reverted clone, decides, and writes its output —
+    and the announcement says a suite run's wait rather than seconds.
+    """
+    enable_selection(target)
+    code, _ = run(target, harness_root, {WRITING: forced_repair})
+    assert code == 0
+
+    record = record_of(target)
+    assert record["ran"] is True
+    assert record["exit_code"] != 0
+    assert record["permitted"] is True
+    assert suite_output(target).exists()
+
+    assert selector_runs(clone_runs) == []
+    assert (TEST_COMMAND, ("tests/test_app.py",)) in clone_runs
+    assert record["nomination"]["short_circuited"] is False
+    assert record["nomination"]["fell_through_because"]
+    assert "test" not in record["nomination"]
+    assert "seconds" not in announcements(target, WRITING)[0]["message"]
+
+
+def test_a_target_configuring_no_selection_command_runs_exactly_as_today(
+    target, harness_root, clone_runs,
+):
+    """A nomination the target gave the check no way to run.
+
+    The shape a target with no `test_command` already uses: reported as a check
+    that did not short-circuit, never as a permission. The fixture's own
+    configuration is read back, so this is a target that really omits the key
+    rather than one whose value went unread.
+    """
+    assert SELECTION_KEY not in harness_config.load_config(target)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair, NOMINATION_REPAIRED)})
+    assert code == 0
+
+    record = record_of(target)
+    assert record["ran"] is True
+    assert record["permitted"] is True
+    assert selector_runs(clone_runs) == []
+    nomination = record["nomination"]
+    assert nomination["short_circuited"] is False
+    assert nomination["test"] == NOMINATION_REPAIRED
+    assert SELECTION_KEY in nomination["fell_through_because"]
+    assert "command" not in nomination
+
+
+def test_a_nomination_that_passes_reverted_falls_through_and_the_suite_decides(
+    target, harness_root, clone_runs,
+):
+    """A test the revert cannot touch shows nothing, so the suite decides.
+
+    Both selector runs happened and both passed, and the verdict is the whole
+    suite's: it failed with the governed path reverted, which is the same
+    answer this record got before nominations existed.
+    """
+    enable_selection(target)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair, NOMINATION_UNTOUCHED)})
+    assert code == 0
+
+    record = record_of(target)
+    nomination = record["nomination"]
+    assert nomination["short_circuited"] is False
+    assert nomination["applied_exit_code"] == 0
+    assert nomination["reverted_exit_code"] == 0
+    assert nomination["fell_through_because"]
+    assert record["ran"] is True
+    assert record["exit_code"] != 0
+    assert record["permitted"] is True
+    assert (TEST_COMMAND, ("tests/test_app.py",)) in clone_runs
+
+
+def test_a_refusal_is_still_a_refusal_and_no_nomination_makes_it_a_permission(
+    target, harness_root,
+):
+    """The shape of a run whose reverted suite passes, with a nomination that
+    passes in both trees attached to it.
+
+    This is the case the whole mechanism has to not break: added coverage,
+    which reverting costs nothing, and a nomination that establishes nothing.
+    The suite passes with the edits reverted and the run escalates, exactly as
+    it does with no nomination at all.
+    """
+    enable_selection(target)
+    code, runner = run(target, harness_root,
+                       {WRITING: with_nomination(added_coverage,
+                                                 NOMINATION_UNTOUCHED)})
+    assert code == 2
+    assert state_of(target)["status"] == "escalated"
+    assert runner.calls == [WRITING]
+
+    record = record_of(target)
+    assert record["ran"] is True
+    assert record["exit_code"] == 0
+    assert record["permitted"] is False
+    assert record["nomination"]["short_circuited"] is False
+
+
+def test_a_nomination_that_fails_on_the_tree_the_stage_left_falls_through(
+    target, harness_root, clone_runs,
+):
+    """A selector that fails to collect exits non-zero exactly as a failing
+    test does, and the harness may not read *which* non-zero. So the applied
+    run is what tells them apart: a nomination that cannot pass on the tree the
+    stage left discriminates nothing, and it falls through rather than being
+    read as half a permission.
+
+    The reverted run is never reached — one selector run, not two — which is
+    what makes a bad nomination cost one extra run over today's runtime.
+    """
+    enable_selection(target)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair, NOMINATION_ABSENT)})
+    assert code == 0
+
+    nomination = nomination_of(target)
+    assert nomination["short_circuited"] is False
+    assert nomination["applied_exit_code"] != 0
+    assert "reverted_exit_code" not in nomination
+    assert nomination["fell_through_because"]
+    assert len(selector_runs(clone_runs)) == 1
+    assert selector_runs(clone_runs)[0][1] == ()
+
+    record = record_of(target)
+    assert record["ran"] is True
+    assert record["permitted"] is True
+
+
+def test_a_selection_command_with_no_substitution_point_falls_through_naming_it(
+    target, harness_root, clone_runs,
+):
+    """A configured command the nomination cannot be substituted into.
+
+    Nothing is run at all — the selector count is zero against a run that
+    reaches the suite — and the recorded reason names the substitution point
+    that was missing rather than reporting an unexplained fall-through.
+    """
+    enable_selection(target, f"{shlex.quote(sys.executable)} -m pytest -q")
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair, NOMINATION_REPAIRED)})
+    assert code == 0
+
+    nomination = nomination_of(target)
+    assert nomination["short_circuited"] is False
+    assert SUBSTITUTION in nomination["fell_through_because"]
+    assert "command" not in nomination
+    assert selector_runs(clone_runs) == []
+    assert record_of(target)["ran"] is True
+    assert record_of(target)["permitted"] is True
+
+
+def test_a_substituted_command_that_cannot_be_run_at_all_falls_through(
+    target, harness_root, clone_runs,
+):
+    """A nomination that opens a quotation it never closes.
+
+    The harness substitutes a plain string, because quoting it would be the
+    harness deciding something about a selector syntax that belongs to the
+    target. The cost is that a substitution can produce a command no argument
+    list can be made of, and that falls through with the reason naming what
+    stopped it rather than raising out of the check.
+    """
+    enable_selection(target)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair,
+                                            NOMINATION_UNSPLITTABLE)})
+    assert code == 0
+
+    nomination = nomination_of(target)
+    assert nomination["short_circuited"] is False
+    assert nomination["test"] == NOMINATION_UNSPLITTABLE
+    assert nomination["command"] == \
+        TEST_SELECTION_COMMAND.replace(SUBSTITUTION, NOMINATION_UNSPLITTABLE)
+    assert "could not be run at all" in nomination["fell_through_because"]
+    assert selector_runs(clone_runs) == []
+    assert record_of(target)["ran"] is True
+    assert record_of(target)["permitted"] is True
+
+
+def test_the_substituted_command_really_cannot_be_split(tmp_path):
+    """The premise under the case above: without this, that fall-through
+    could be happening for some reason other than the one it names."""
+    with pytest.raises(ValueError):
+        shlex.split(TEST_SELECTION_COMMAND.replace(SUBSTITUTION,
+                                                   NOMINATION_UNSPLITTABLE))
+    # And the control: every other nomination in this module splits.
+    for nomination in (NOMINATION_REPAIRED, NOMINATION_UNTOUCHED,
+                       NOMINATION_ABSENT):
+        assert shlex.split(
+            TEST_SELECTION_COMMAND.replace(SUBSTITUTION, nomination))[3] == \
+            nomination
+
+
+# --- a check that reached no verdict is not a check that decided -----------
+
+
+def test_a_check_that_reached_no_verdict_escalates_even_with_a_nomination(
+    target, harness_root, monkeypatch,
+):
+    """The other side of the escalation predicate.
+
+    The permitted case above is a check that reached a verdict without running
+    the suite, and it completes. This is a check that reached no verdict, with
+    a nomination attached that would have permitted the edits had it been
+    runnable — and it escalates, because a nomination that could not be run
+    decided nothing either.
+    """
+    def unbuildable(*args, **kwargs):
+        raise RuntimeError("the clone could not be built")
+
+    enable_selection(target)
+    monkeypatch.setattr(story_coordinator, "_build_clone", unbuildable)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(forced_repair, NOMINATION_REPAIRED)})
+    assert code == 2
+
+    record = record_of(target)
+    assert record["ran"] is False
+    assert "permitted" not in record
+    assert record["reason"]
+    assert record["nomination"]["short_circuited"] is False
+    assert record["nomination"]["fell_through_because"]
+
+
+# --- what the record and the schemas say -----------------------------------
+
+
+def test_the_short_circuited_record_satisfies_the_schema(target, harness_root):
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_REPAIRED)})[0] == 0
+    record = record_of(target)
+    schema = schema_validator.load_schema(SCHEMA_STEM)
+    assert schema_validator.validate(record, schema) == []
+    # The control: the same validator rejects the same record with the
+    # nomination's own required field taken out of it.
+    broken = json.loads(json.dumps(record))
+    del broken["nomination"]["short_circuited"]
+    assert schema_validator.validate(broken, schema) != []
+
+
+def test_a_fallen_through_record_satisfies_the_schema(target, harness_root):
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_UNTOUCHED)})[0] == 0
+    record = record_of(target)
+    assert schema_validator.validate(
+        record, schema_validator.load_schema(SCHEMA_STEM)) == []
+    assert set(record) <= {"ran", "paths", "command", "runner", "clone_path",
+                           "exit_code", "output_tail", "output_path",
+                           "permitted", "baseline", "reason", "nomination"}
+
+
+def test_the_configuration_schema_declares_the_selection_command_key():
+    """The declaration is also the pre-flight check since story-043, so an
+    undeclared key would refuse every run under a config that sets it — which
+    is what every run above would then be reporting instead of what it means
+    to report."""
+    assert SELECTION_KEY in harness_config.declared_config_keys()
+    declaration = schema_validator.load_schema("harness-config")[
+        "properties"][SELECTION_KEY]
+    assert SUBSTITUTION in declaration["description"]
+
+
+def test_a_config_carrying_the_selection_command_is_accepted_at_pre_flight(
+    target,
+):
+    """Accepted rather than refused, with the control that the same check
+    refuses a key the schema does not declare."""
+    enable_selection(target)
+    config = harness_config.load_config(target)
+    assert harness_config.undeclared_config_problems(config) == []
+    problems = harness_config.undeclared_config_problems(
+        {**config, "test_selection_kommand": "a mistyping of the above"})
+    assert len(problems) == 1
+    assert "test_selection_kommand" in problems[0]
+
+
+def test_the_nomination_field_leaves_both_writing_stages_records_valid(
+    target, harness_root,
+):
+    """The field is optional, so both records validate with it and without it.
+
+    Asked of the records two stages of a real run actually wrote — the
+    implementer's carrying a nomination and the tester's carrying none — and
+    then of each with the field's presence flipped, so neither direction rests
+    on which stage happened to fill it in.
+    """
+    enable_selection(target)
+    assert run(target, harness_root,
+               {WRITING: with_nomination(forced_repair,
+                                         NOMINATION_REPAIRED)})[0] == 0
+    schema = schema_validator.load_schema("changed-files")
+    run_dir = run_dir_of(target)
+
+    written = record_of(target, conftest.CHANGED_FILES)
+    tester = record_of(target, conftest.TESTER_CHANGED_FILES)
+    assert written["test_that_fails_without_this_change"] == NOMINATION_REPAIRED
+    assert "test_that_fails_without_this_change" not in tester
+
+    for record in (written, tester):
+        without = {key: value for key, value in record.items()
+                   if key != "test_that_fails_without_this_change"}
+        assert schema_validator.validate(record, schema) == []
+        assert schema_validator.validate(without, schema) == []
+        assert schema_validator.validate(
+            {**without, "test_that_fails_without_this_change":
+                NOMINATION_UNTOUCHED}, schema) == []
+    # The control: optional is not "anything goes" — the field is declared a
+    # string, and the same validator rejects a record that carries a list.
+    assert schema_validator.validate(
+        {**written, "test_that_fails_without_this_change": [NOMINATION_REPAIRED]},
+        schema) != []
+    assert (run_dir / conftest.CHANGED_FILES).is_file()
+
+
+def test_the_residual_false_permit_risk_is_recorded_beside_the_check():
+    """A reader meets this check in two places — the function that decides and
+    the schema of what it records — and both say that a test failing in
+    isolation and passing inside the full suite is a false permit the applied
+    run narrows and does not close."""
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    for text in (inspect.getdoc(story_coordinator.run_nomination),
+                 schema["description"]):
+        lowered = text.lower()
+        assert "isolation" in lowered
+        assert "false permit" in lowered
+        assert "narrow" in lowered
+        assert "does not close" in lowered
+
+
+def test_the_new_fields_description_distinguishes_it_from_the_plans_declaration():
+    """A reader of the field is told what it is not: story-068's
+    reverting_breaks_the_suite is plan-time prose a human reviewer weighs,
+    while this one is named after the edit exists and is decided by running
+    it. The control is the schema that carries the plan, which really does
+    declare the other field — so this is two live declarations being compared
+    rather than one string being searched for a phrase."""
+    described = schema_validator.load_schema("changed-files")["properties"][
+        "test_that_fails_without_this_change"]["description"]
+    assert "reverting_breaks_the_suite" in described
+    assert "plan" in described.lower()
+    assert "reverting_breaks_the_suite" in json.dumps(
+        schema_validator.load_schema("story"))
+
+
+def test_the_granularity_the_check_decides_at_is_unchanged_by_the_nomination(
+    target, harness_root,
+):
+    """A permission the nomination established covers the same set the whole
+    suite's would have: every governed path reverted in one run, one verdict,
+    and the record naming what it reverted. The set here is the mixed one, one
+    of whose two files nothing forced."""
+    enable_selection(target)
+    code, _ = run(target, harness_root,
+                  {WRITING: with_nomination(mixed_set, NOMINATION_REPAIRED)})
+    assert code == 0
+    record = record_of(target)
+    assert record["nomination"]["short_circuited"] is True
+    assert record["permitted"] is True
+    assert record["paths"] == ["tests/test_app.py", "tests/test_extra.py"]
 
 
 # --------------------------------------------------------------------------

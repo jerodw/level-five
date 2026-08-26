@@ -19,6 +19,10 @@
       "type": "array",
       "description": "Repository-relative paths of files this stage removed.",
       "items": { "type": "string" }
+    },
+    "test_that_fails_without_this_change": {
+      "type": "string",
+      "description": "Optional. One test, named in whatever selector syntax the target's test_selection_command takes, that passes on the tree this stage is leaving and fails once this stage's edits under a governed path are reverted. Nominating one lets the check that decides whether a stage's edits under a governed path were forced decide on that test alone instead of on the whole suite: it is run in a clone with the edits applied, where it must pass, and again in the clone with them reverted, where it must fail, and only pass-then-fail permits the edits. Any other outcome — passes both times, fails both times, cannot be run at all — falls through to the whole suite and today's verdict, so a nomination can buy a stage nothing it did not earn and costs at most one extra selector run. It is optional and its absence costs nothing: a record without it is decided exactly as records were decided before this field existed. This is the executable counterpart of a plan's reverting_breaks_the_suite declaration and not the same thing: that one is written at plan time, before the edit exists, as prose for a human reviewer to weigh, while this one is named after the edit exists and is decided by running it."
     }
   }
 }

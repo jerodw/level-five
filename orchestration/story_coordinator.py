@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -1689,17 +1690,24 @@ def _link_interpreter_roots(target_root: Path, clone: Path, interpreters: list[s
 
 def run_clean_clone(
     target_root: Path,
-    test_command: str,
+    command_to_run: str,
     verification_runner: str | None,
     destination: Path,
     revert: list[str] | tuple[str, ...] = (),
     baseline: Path | None = None,
     output_path: Path | None = None,
 ) -> CleanCloneResult:
-    """Run the configured test command in a fresh clone with the story committed.
+    """Run a command in a fresh clone with the story committed.
 
-    The command is the target repository's own `test_command`; nothing about
-    it is written here. Only its *first word* is substituted, and only when the
+    The command is the caller's, and every caller takes it from the target
+    repository's own configuration: the configured `test_command` for the
+    checks that run the whole suite, and the configured `test_selection_command`
+    with a nominated test substituted into it for the revert check's
+    short-circuit. Nothing about either is written here — which is what lets
+    the selector run through the same builder the suite does, so the applied
+    and reverted runs differ only in what is reverted.
+
+    Only its *first word* is substituted, and only when the
     configuration names a `verification_runner`, so the check can exercise an
     environment other than the one the developer works in and find an
     incompatibility before CI rather than by it. The caller owns `destination`
@@ -1721,7 +1729,7 @@ def run_clean_clone(
     artifact this run is recorded under and the name is derived from that. It
     defaults to writing nothing, so a caller that names none records none.
     """
-    argv = shlex.split(test_command)
+    argv = shlex.split(command_to_run)
     runner = verification_runner or argv[0]
     command = shlex.join([runner, *argv[1:]])
 
@@ -2231,20 +2239,84 @@ def governed_edits(
     return GovernedEdits(tuple(sorted(paths)), tuple(sorted(matched)))
 
 
+#: Where a nominated test is substituted into the target's configured
+#: selection command. A literal the harness looks for and replaces, and the
+#: whole of what it knows about that command: the selector syntax on either
+#: side of it belongs to the target.
+TEST_SUBSTITUTION = "{test}"
+
+
+def nominated_test(run_dir: Path, record_name: str) -> str | None:
+    """The test a stage's record nominates as failing without its change.
+
+    The field is optional, so a record that carries none, carries a
+    non-string, or carries only whitespace nominates nothing — none of which
+    is an error, because a nomination that is not there costs nothing and
+    decides nothing. Names no stage: the caller passes the record it already
+    read for the governed edits.
+    """
+    changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
+    nomination = changed.get("test_that_fails_without_this_change")
+    if not isinstance(nomination, str) or not nomination.strip():
+        return None
+    return nomination.strip()
+
+
+@dataclass(frozen=True)
+class Nomination:
+    """What the nominated test decided, and when it decided nothing, why.
+
+    `short_circuited` is the only permission a nomination can establish, and
+    it takes both exit codes to establish it: the selector must pass on the
+    tree the stage left and fail with the governed edits reverted. Every other
+    outcome sets `fell_through_because` and leaves the whole suite to decide,
+    which is why a stage nominating the test that judges its own edit can buy
+    nothing by nominating badly — a bad nomination costs one extra selector
+    run over today's runtime and changes no verdict.
+    """
+
+    short_circuited: bool
+    test: str | None = None
+    command: str | None = None
+    applied_exit_code: int | None = None
+    reverted_exit_code: int | None = None
+    fell_through_because: str | None = None
+
+    def as_record(self) -> dict:
+        record: dict = {"short_circuited": self.short_circuited}
+        optional = {
+            "test": self.test,
+            "command": self.command,
+            "applied_exit_code": self.applied_exit_code,
+            "reverted_exit_code": self.reverted_exit_code,
+            "fell_through_because": self.fell_through_because,
+        }
+        record.update({key: value for key, value in optional.items() if value is not None})
+        return record
+
+
 @dataclass(frozen=True)
 class RevertCheckResult:
     """What the revert check did, as it is recorded in the run directory.
 
-    `permitted` is absent from the record when the check did not run, following
-    the optional-by-absence convention the other coordinator-written records
-    use: a check that could not run decided nothing, and null would claim it
-    decided something.
+    `permitted` is absent from the record when the check reached no verdict,
+    following the optional-by-absence convention the other coordinator-written
+    records use: a check that could not run decided nothing, and null would
+    claim it decided something.
+
+    `result.ran` keeps meaning what it has always meant — the configured test
+    command ran in the clone with the edits reverted — so a check the
+    nomination decided records it false while carrying `permitted` true. The
+    two are therefore no longer the same question, which is why the call site
+    escalates on a check that reached no verdict rather than on one that did
+    not run.
     """
 
     result: CleanCloneResult
     paths: tuple[str, ...]
     permitted: bool | None
     baseline: str | None = None
+    nomination: Nomination | None = None
 
     def as_record(self) -> dict:
         record = {"ran": self.result.ran, "paths": list(self.paths)}
@@ -2255,7 +2327,214 @@ class RevertCheckResult:
             record["permitted"] = self.permitted
         if self.baseline is not None:
             record["baseline"] = self.baseline
+        if self.nomination is not None:
+            record["nomination"] = self.nomination.as_record()
         return record
+
+
+def _run_selection(
+    target_root: Path,
+    config: dict,
+    command: str,
+    *,
+    revert: tuple[str, ...] = (),
+    baseline: Path | None = None,
+) -> CleanCloneResult:
+    """Run one selection command in a clone, through the suite's own builder.
+
+    The selector and the suite differ in the command and in nothing else: the
+    same clone builder, the same first-word swap for the configured
+    verification_runner, the same environment linked into the clone. That is
+    what makes the applied and reverted runs differ only in what is reverted,
+    which is the whole of what the nomination is asked to establish.
+
+    A clone that cannot be built is reported as a run that did not happen,
+    with the reason, rather than raising: the caller falls through to the
+    whole suite on it, and a selector that cannot be run must never be read as
+    having decided anything.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="l5-selection-"))
+    try:
+        return run_clean_clone(
+            target_root,
+            command,
+            config.get("verification_runner"),
+            scratch,
+            revert=list(revert),
+            baseline=baseline,
+        )
+    except (RuntimeError, OSError) as error:
+        return CleanCloneResult(
+            ran=False,
+            command=command,
+            runner=config.get("verification_runner") or command,
+            reason=f"the clone could not be built: {error}",
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def run_nomination(
+    target_root: Path,
+    config: dict,
+    nomination: str | None,
+    paths: tuple[str, ...],
+    baseline: Path,
+    announce: Callable[[], None] | None = None,
+) -> Nomination:
+    """Decide whether the nominated test may stand in for the whole suite.
+
+    The check establishes a *failure*, and one failing test proves a failing
+    suite while no number of passing tests proves a passing suite. That
+    asymmetry is what lets a subset stand in for the whole here and nowhere
+    the verdict runs the other way.
+
+    The nomination must be shown to discriminate before it is believed. A
+    selector that fails to collect exits non-zero exactly as a failing test
+    does, and telling those apart means reading *which* non-zero, which is
+    framework-specific and forbidden here — the harness reads exit statuses
+    and nothing else. So the selector runs twice: once in a clone with the
+    working tree applied, where it must pass, and once in the clone with the
+    governed paths reverted, where it must fail. Pass-then-fail is the
+    permission; every other outcome falls through to the whole suite with the
+    reason recorded, and none of them is a permission.
+
+    The reverted run is reached only from a passing applied run, so a bad
+    nomination costs one extra selector run over today's runtime and buys
+    nothing — which is what makes it harmless for the stage judging its own
+    edit to be the one nominating.
+
+    RESIDUAL RISK, stated here because this is the check and this is where a
+    reader would otherwise have to discover it: a test that fails in isolation
+    and would have passed inside the full suite is a **false permit** — the
+    edits are reported forced when the suite standing in for them would have
+    passed. The applied run narrows it, since a test that also fails in
+    isolation on the tree the stage left establishes nothing and falls
+    through, and it does not close it: a test whose isolated failure depends
+    on the reverted content alone survives both runs. Nothing here detects
+    that, and widening the check to detect it would mean running the suite,
+    which is the cost the short-circuit exists to avoid.
+
+    This is the executable counterpart of a plan's reverting_breaks_the_suite
+    declaration and **not** the same thing. That one is written at plan time,
+    before the edit exists, as prose a human reviewer weighs, and it leaves
+    this check governing the path. This one is named after the edit exists and
+    is decided by running it.
+    """
+    if nomination is None:
+        return Nomination(
+            False,
+            fell_through_because=(
+                "the stage's changed-files record nominated no test that fails "
+                "without this change"
+            ),
+        )
+
+    selection = config.get("test_selection_command")
+    if not selection:
+        return Nomination(
+            False,
+            test=nomination,
+            fell_through_because=(
+                "the target configures no test_selection_command, so there is "
+                "no command to substitute the nomination into"
+            ),
+        )
+    if TEST_SUBSTITUTION not in selection:
+        return Nomination(
+            False,
+            test=nomination,
+            fell_through_because=(
+                f"the configured test_selection_command carries no "
+                f"{TEST_SUBSTITUTION} substitution point, so the nomination "
+                f"could not be substituted into it"
+            ),
+        )
+
+    substituted = selection.replace(TEST_SUBSTITUTION, nomination)
+    try:
+        argv = shlex.split(substituted)
+    except ValueError as error:
+        argv = []
+        problem = str(error)
+    else:
+        problem = "" if argv else "it is empty"
+    if problem:
+        return Nomination(
+            False,
+            test=nomination,
+            command=substituted,
+            fell_through_because=(
+                f"the nomination substituted into the configured "
+                f"test_selection_command could not be run at all: {problem}"
+            ),
+        )
+
+    # Announced here rather than at the top: every fall-through above this
+    # line runs nothing, and a wait announced before a check that turns out to
+    # have nothing to run is the announcement claiming a cost it did not take.
+    if announce is not None:
+        announce()
+
+    applied = _run_selection(target_root, config, substituted)
+    if not applied.ran:
+        return Nomination(
+            False,
+            test=nomination,
+            command=applied.command,
+            fell_through_because=(
+                f"the nomination could not be run on the tree the stage left: "
+                f"{applied.reason}"
+            ),
+        )
+    if applied.exit_code != 0:
+        return Nomination(
+            False,
+            test=nomination,
+            command=applied.command,
+            applied_exit_code=applied.exit_code,
+            fell_through_because=(
+                f"the nomination did not pass on the tree the stage left "
+                f"(exit {applied.exit_code}), so it discriminates nothing — a "
+                f"test present only in the new version of a reverted file "
+                f"fails here for the same reason a broken selector does"
+            ),
+        )
+
+    reverted = _run_selection(
+        target_root, config, substituted, revert=paths, baseline=baseline
+    )
+    if not reverted.ran:
+        return Nomination(
+            False,
+            test=nomination,
+            command=reverted.command,
+            applied_exit_code=applied.exit_code,
+            fell_through_because=(
+                f"the nomination could not be run with the edits reverted: "
+                f"{reverted.reason}"
+            ),
+        )
+    if reverted.exit_code == 0:
+        return Nomination(
+            False,
+            test=nomination,
+            command=reverted.command,
+            applied_exit_code=applied.exit_code,
+            reverted_exit_code=reverted.exit_code,
+            fell_through_because=(
+                "the nomination passed with the edits reverted, so it does not "
+                "show they were needed"
+            ),
+        )
+
+    return Nomination(
+        True,
+        test=nomination,
+        command=reverted.command,
+        applied_exit_code=applied.exit_code,
+        reverted_exit_code=reverted.exit_code,
+    )
 
 
 def revert_check(
@@ -2267,6 +2546,7 @@ def revert_check(
     baseline: Path | None = None,
     *,
     stage_name: str,
+    nomination: str | None = None,
 ) -> RevertCheckResult:
     """Run the suite once with every governed path reverted, and record it.
 
@@ -2282,9 +2562,17 @@ def revert_check(
     check never established.
 
     Two things stop the check from running, and both are reported as a check
-    that did not run, with the reason, rather than as a permission: a stage
-    that declares the check with no baseline captured, and a clone that
+    that reached no verdict, with the reason, rather than as a permission: a
+    stage that declares the check with no baseline captured, and a clone that
     cannot be built at all.
+
+    A `nomination` is asked first, when there is one. Passing on the tree the
+    stage left and failing with the governed paths reverted permits the edits
+    with the configured test command never run; every other outcome falls
+    through to the whole suite below and today's verdict, unchanged, with the
+    reason recorded. What is asked, what is reverted and what a verdict means
+    are the same as they were — only how many tests a permission can be
+    established from moved.
 
     The announcement is made inside the branch that builds the clone, not at
     the top: the no-baseline path runs no suite and so has nothing to announce.
@@ -2296,6 +2584,7 @@ def revert_check(
     command = config["test_command"]
     runner = config.get("verification_runner") or shlex.split(command)[0]
     resolved = baseline if baseline is not None and baseline.is_dir() else None
+    decided_by_nomination: Nomination | None = None
 
     if resolved is None:
         result = CleanCloneResult(
@@ -2308,6 +2597,40 @@ def revert_check(
             ),
         )
     else:
+        decided_by_nomination = run_nomination(
+            target_root,
+            config,
+            nomination,
+            paths,
+            resolved,
+            announce=lambda: _suite_rerun_started(
+                run_dir,
+                stage_name,
+                artifact,
+                f"restricted to the nominated {nomination}, twice — once on "
+                f"the tree {stage_name} left and once with "
+                f"{', '.join(paths)} reverted",
+                cost="this takes seconds rather than a suite run",
+            ),
+        )
+        if decided_by_nomination.short_circuited:
+            decided = RevertCheckResult(
+                result=CleanCloneResult(
+                    ran=False,
+                    command=command,
+                    runner=runner,
+                    reason=None,
+                ),
+                paths=paths,
+                permitted=True,
+                baseline=str(resolved),
+                nomination=decided_by_nomination,
+            )
+            (run_dir / artifact).write_text(
+                json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
+            )
+            return decided
+
         _suite_rerun_started(
             run_dir,
             stage_name,
@@ -2341,6 +2664,7 @@ def revert_check(
         paths=paths,
         permitted=(result.exit_code != 0) if result.ran else None,
         baseline=str(resolved) if resolved is not None else None,
+        nomination=decided_by_nomination,
     )
     (run_dir / artifact).write_text(
         json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
@@ -5430,8 +5754,14 @@ def run_story(
                     edits.paths,
                     baseline_dir,
                     stage_name=name,
+                    nomination=nominated_test(run_dir, record_name),
                 )
-                if not decided.result.ran:
+                # The escalation is on a check that reached no verdict, not on
+                # one that did not run: since the nomination can permit these
+                # edits without the configured test command being run at all,
+                # `ran` false is no longer the same question as "decided
+                # nothing", and reading it as one would escalate a permission.
+                if decided.permitted is None:
                     return _escalate(
                         run_dir,
                         state,
