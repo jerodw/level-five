@@ -1,0 +1,120 @@
+story:
+  id: story-083
+  title: A green run records its scope
+  description: |
+    Every suite run the coordinator records says what command ran, what
+    executable ran it, and what it exited with. It does not say what the run
+    covered. A run of the configured test_command and a run narrowed to a
+    single nominated test both exit zero, and nothing downstream can tell them
+    apart.
+
+    This story records the scope of each suite invocation beside its result, so
+    a later reader — the verifier, the next attempt, or a person — can tell
+    what a green established. It records only what the coordinator itself
+    narrowed the configured command by: an empty scope means nothing narrowed
+    it, which is a different claim from "the configured command covers
+    everything" and must not be written as if it were the same one. The harness
+    neither parses nor understands the target's selector syntax, and this story
+    does not teach it to.
+
+    The record only. No comparison of one run's scope with another's, and no
+    refusal of anything on it; those are the story after this one.
+  workflow: story-workflow
+
+tasks:
+  - Add a required scope field to CleanCloneResult in orchestration/story_coordinator.py, holding the selections the coordinator substituted into the configured command, with no default value so no construction site can omit it.
+  - Serialize scope in CleanCloneResult.as_record alongside ran, command and runner rather than among the optional-by-absence fields, so an empty scope is always written and never collapses into absence.
+  - Supply scope at every CleanCloneResult construction in orchestration/story_coordinator.py, including the paths that report a run that did not happen - run_clean_clone's early return on an unresolvable verification_runner, run_suite's no-test_command and OSError paths, revert_check's no-baseline and short-circuit paths, and _run_selection's clone-could-not-be-built path.
+  - Give _run_selection the nominated test as its scope, so the two selector runs carry in memory what they were narrowed to.
+  - Add scope to the properties and the required list of schemas/suite-run-result.schema.json, schemas/clean-clone-result.schema.json and schemas/revert-check-result.schema.json, describing precisely what an empty scope claims and what it does not.
+  - Adapt the existing assertions that enumerate a record's keys or a schema's required list, which the new field makes wrong.
+  - Write a standing test module for the record - what is written, where, that no construction can omit it, and that nothing routes on it.
+  - Record the new field in .harness/docs/ARCHITECTURE.md, in the section on the suite runs the coordinator makes.
+
+acceptance_criteria:
+  - suite-run-result.json, clean-clone-result.json and revert-check-result.json each carry a scope field whose value is an array of strings.
+  - A coordinator run of the target's configured test_command records scope as an empty array, in each of those three artifacts.
+  - All three schemas name scope in required, so a record that omits it fails validation - an empty scope and an absent one cannot serialize alike.
+  - The scope field's schema description says that an empty scope means the configured command ran unnarrowed, and does not claim the configured command covers the whole of the target's tests.
+  - CleanCloneResult.scope has no default value, so constructing a CleanCloneResult without it raises rather than silently recording an unnarrowed run.
+  - Every CleanCloneResult construction in orchestration/ supplies scope, including every path that reports a run that did not happen.
+  - The result _run_selection returns carries the nominated test as its scope.
+  - The nomination block of revert-check-result.json is unchanged and carries no scope key - nomination.test already names what those runs were narrowed to.
+  - census-result.json is unchanged - the census command is not the suite and is never narrowed, so there is no scope there to record.
+  - The scope field reaches the verifier through the suite-run-result.json injected into its rendered context.
+  - No coordinator decision consults scope - every occurrence of the identifier in orchestration/ is a write position: the dataclass field, its serialization, and the construction sites.
+  - The suite passes, and the routing a run takes on a green or a red suite is exactly what it was before this story.
+
+technical_plan:
+  implementation_steps:
+    - Read CleanCloneResult and as_record at orchestration/story_coordinator.py:1736, and the three writers around it - run_clean_clone, run_suite, clean_clone_check and revert_check - so every construction site is known before the field is added.
+    - Add scope to CleanCloneResult as a required field with no default, typed as a tuple of strings, and place it in the required block of as_record so it is always serialized.
+    - Give run_clean_clone a required scope argument and pass it through to both CleanCloneResult constructions in that function.
+    - Pass an empty scope from clean_clone_check, from run_suite, and from revert_check's whole-suite run and its non-running paths, because each of those runs the configured test_command as configured.
+    - Pass the nominated test as the scope from _run_selection, on both the applied and the reverted call and on its clone-could-not-be-built path.
+    - Add scope to the three schemas, in properties and in required, with a description that states what an empty array means and what it does not claim.
+    - Run the test modules that assert over these records and repair the assertions the new field makes wrong.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: CleanCloneResult, as_record, and every function that constructs one - run_clean_clone, run_suite, clean_clone_check, revert_check and _run_selection.
+    - file: schemas/suite-run-result.schema.json
+      stage: implementer
+      reason: The scope field, in properties and in required, with the description of what an empty scope claims.
+    - file: schemas/clean-clone-result.schema.json
+      stage: implementer
+      reason: The same field, because the clean-clone check records the same shape.
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: The same field on the check's own result. The nomination sub-schema is left alone.
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: Two assertions enumerate the record's keys and the schema's required list exactly, and both become wrong the moment the field lands.
+      reverting_breaks_the_suite: The assertions at lines 659 and 921 spell out the record's key set and the schema's required list as literals. Adding scope to both makes the old literals wrong, so reverting these edits leaves two assertions describing a record and a schema that no longer exist, and the suite fails on them.
+    - file: tests/test_revert_check.py
+      stage: implementer
+      reason: Two assertions bound the record's key set with a literal set that does not contain scope.
+      reverting_breaks_the_suite: The subset assertions at lines 1019 and 1691 bound the written record's keys by a literal set. The record now carries scope, which is not in that literal, so reverting the edits makes both assertions fail against the record the coordinator actually writes.
+    - file: tests/test_suite_run_scope.py
+      stage: tester
+      reason: The standing module for the new record - what is written and where, that the field cannot be omitted, that the nomination and the census are untouched, that the field reaches the verifier's rendered context, and that nothing routes on it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section on the suite runs the coordinator makes gains what each run now records about its own coverage, and the limit on what an empty scope claims.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/suite-run-result.schema.json
+    - schemas/clean-clone-result.schema.json
+    - schemas/revert-check-result.schema.json
+    - tests/test_clean_clone_check.py
+    - tests/test_revert_check.py
+    - tests/test_suite_run_scope.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/census-result.schema.json
+    - orchestration/census logic and the CensusResult record
+    - The nomination sub-schema of schemas/revert-check-result.schema.json
+    - .harness/config.yaml
+    - workflows/
+    - hooks/bash_guard.py
+
+verification_requirements:
+  - Confirm by search rather than by sampling that every CleanCloneResult construction in orchestration/ supplies scope - enumerate the constructions rather than checking the ones a test happened to exercise.
+  - Confirm a run of the configured test_command records an empty scope and a selector run carries the nominated test, so a filtered invocation and an unfiltered one are distinguishable from the record alone.
+  - Confirm the three schemas require scope, and that a record omitting it fails validation, so an absent field cannot be read as an unnarrowed run.
+  - Confirm CleanCloneResult.scope carries no default, so a construction site added later cannot omit it and have an unnarrowed run recorded by accident.
+  - Confirm the scope field appears in the suite-run-result.json injected into the verifier's rendered context.
+  - Confirm nothing routes on the field - no coordinator decision reads it, and the routing a green or red suite produces is unchanged.
+  - Confirm census-result.json and the nomination sub-record are unchanged.
+  - Confirm the new test module's assertions can fail - each carries a control showing it reports when the property it asserts is absent.
+
+constraints:
+  - Do not parse, normalize, classify or validate the target's selector syntax. The scope is the strings the coordinator substituted, not an interpretation of them.
+  - Do not name a coverage level, decide what a full run is, or compare one run's scope with another's. This story records; the comparison is the next story.
+  - Do not refuse, escalate or route on the new field.
+  - An empty scope means nothing narrowed the configured command. It must not be written, described or documented as a claim that the configured command covers everything.
+  - Keep the optional-by-absence convention intact for the fields that already have it - scope is required and always written, and no existing optional field becomes required or starts serializing as null.
+  - Standard library only, and the existing record shapes stay compatible - no field is renamed or removed.
+  - Do not weaken or delete an existing assertion to make it pass. The assertions this story adapts are adapted to the record as it now is, not loosened.
