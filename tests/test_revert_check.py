@@ -1016,7 +1016,7 @@ def test_a_single_file_mixing_a_repair_and_an_addition_is_permitted(
     record = record_of(target)
     assert record["permitted"] is True
     assert record["paths"] == ["tests/test_app.py"]
-    assert set(record) <= {"ran", "paths", "command", "runner",
+    assert set(record) <= {"ran", "paths", "command", "runner", "scope",
                            "clone_path", "exit_code", "output_tail", "output_path",
                            "permitted", "baseline", "reason", "nomination"}
 
@@ -1688,7 +1688,7 @@ def test_a_fallen_through_record_satisfies_the_schema(target, harness_root):
     record = record_of(target)
     assert schema_validator.validate(
         record, schema_validator.load_schema(SCHEMA_STEM)) == []
-    assert set(record) <= {"ran", "paths", "command", "runner", "clone_path",
+    assert set(record) <= {"ran", "paths", "command", "runner", "scope", "clone_path",
                            "exit_code", "output_tail", "output_path",
                            "permitted", "baseline", "reason", "nomination"}
 

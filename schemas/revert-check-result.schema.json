@@ -3,7 +3,7 @@
   "title": "revert-check-result",
   "description": "The coordinator's record of the revert check: after a stage that declares both a changed-files record and a may_not_create list, its own modifications and deletions under those prefixes are permitted iff reverting them makes the suite fail. A forced repair breaks the suite when reverted; new coverage does not. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it, and nothing in orchestration routes on it — it is evidence, like clean-clone-result. GRANULARITY: the check reverts every governed path at once and decides on that single run of the suite. A set containing one forced repair is therefore permitted in full, including any added coverage sitting in the other files of that set, and a single file mixing a forced repair with added coverage is not caught at all. The paths field states exactly what was reverted, so a reader can tell what the decision covered rather than assuming it discriminated per file. Optional fields are expressed by absence rather than by null, as clean-clone-result does: a check that could not run decided nothing. SHORT-CIRCUIT: the check establishes a failure, and one failing test proves a failing suite while no number of passing tests proves a passing suite. That asymmetry lets a subset stand in for the whole here and nowhere the verdict runs the other way, so when the stage's record nominates a test and the target configures a selection command, the nomination is run alone in a clone with the edits applied and again in the clone with them reverted, and pass-then-fail permits the edits with the configured test command never run. Every other outcome falls through to the whole suite and the verdict below, with the reason recorded in the nomination block. RESIDUAL RISK: a nominated test that fails in isolation and would have passed inside the full suite is a false permit — the check would report the edits forced when the suite it stands in for would have passed. The applied-clone run narrows it, since a test that also fails in isolation on the tree the stage left is not a permission, and it does not close it: a test whose isolated failure depends on the reverted content alone survives both runs. The granularity limit above is unchanged by any of this: every governed path is still reverted in one run and one verdict is still reached, and a nomination proves the bundle was needed no more finely than the whole suite did.",
   "type": "object",
-  "required": ["ran", "paths", "command", "runner"],
+  "required": ["ran", "paths", "command", "runner", "scope"],
   "properties": {
     "ran": {
       "type": "boolean",
@@ -21,6 +21,11 @@
     "runner": {
       "type": "string",
       "description": "The executable the run used: .harness/config.yaml's verification_runner when that key is set, and test_command's own first word otherwise."
+    },
+    "scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The selections the coordinator substituted into the configured command for this check's own run of it, verbatim and uninterpreted — the harness neither parses nor understands the target's selector syntax. An EMPTY array means the coordinator narrowed the configured command by nothing: the whole suite ran with the paths above reverted, or, on a check the nomination decided, the configured command was never run at all. It is NOT a claim that the configured command covers the whole of the target's tests: what that command covers is the target's business and this record says nothing about it. It is also not what the selector runs were narrowed to — nomination.test already names that, and the nomination block carries no scope of its own. Required and always written, so an empty scope and an absent one cannot serialize alike; a record omitting it fails validation rather than being read as an unnarrowed run. Nothing routes on this field."
     },
     "permitted": {
       "type": "boolean",

@@ -3,7 +3,7 @@
   "title": "suite-run-result",
   "description": "The coordinator's record of the suite run a workflow stage declares: the target's configured test_command, run as a subprocess with the target repository as its working directory, after that stage's agent turn has ended. It exists because a stage that authors validation cannot also run a suite that outlasts its own turn — the command is forced into the background, the stage polls, and the turn ends on a result that only arrives if the turn continues — while a subprocess cannot end its turn. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it, following clean-clone-result and revert-check-result. WHAT IT DOES NOT CARRY: no count of tests run, passed or failed, and no list of failing test names. The coordinator reads the exit status and nothing else; deriving a count would be a contract on the target's test framework, which is exactly the assumption this record exists to avoid. A zero exit advances the workflow; a non-zero exit brings the declaring stage back in place on its own self-route budget, spending no retry. Optional fields are expressed by absence rather than by null, as clean-clone-result does: a check that did not run has no exit code to report.",
   "type": "object",
-  "required": ["ran", "command", "runner"],
+  "required": ["ran", "command", "runner", "scope"],
   "properties": {
     "ran": {
       "type": "boolean",
@@ -16,6 +16,11 @@
     "runner": {
       "type": "string",
       "description": "The executable the run used, which is the configured test_command's own first word."
+    },
+    "scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The selections the coordinator substituted into the configured command for this run, verbatim and uninterpreted — the harness neither parses nor understands the target's selector syntax. An EMPTY array means the coordinator narrowed the configured command by nothing, so the command ran as configured. It is NOT a claim that the configured command covers the whole of the target's tests: what that command covers is the target's business and this record says nothing about it. Required and always written, so an empty scope and an absent one cannot serialize alike; a record omitting it fails validation rather than being read as an unnarrowed run. Nothing routes on this field."
     },
     "exit_code": {
       "type": "integer",

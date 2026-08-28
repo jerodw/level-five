@@ -3,7 +3,7 @@
   "title": "clean-clone-result",
   "description": "The coordinator's record of the clean-clone check: the configured test command run a second time in a fresh clone of the repository with the story committed into it, after the verifier passes and before the documenter runs. Coordinator-written rather than stage-written, so it appears in no stage's schemas map and no agent is asked to satisfy it; the artifact exists so a reader can tell the check ran rather than inferring it from a pass. Optional fields are expressed by absence rather than by null, as execution-history does: a check that refused to run has no exit code to report.",
   "type": "object",
-  "required": ["ran", "command", "runner"],
+  "required": ["ran", "command", "runner", "scope"],
   "properties": {
     "ran": {
       "type": "boolean",
@@ -16,6 +16,11 @@
     "runner": {
       "type": "string",
       "description": "The executable the run used: .harness/config.yaml's verification_runner when that key is set, and test_command's own first word otherwise."
+    },
+    "scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The selections the coordinator substituted into the configured command for this run, verbatim and uninterpreted — the harness neither parses nor understands the target's selector syntax. An EMPTY array means the coordinator narrowed the configured command by nothing, so the command ran as configured, which is what the clean-clone check always does. It is NOT a claim that the configured command covers the whole of the target's tests: what that command covers is the target's business and this record says nothing about it. Required and always written, so an empty scope and an absent one cannot serialize alike; a record omitting it fails validation rather than being read as an unnarrowed run. Nothing routes on this field."
     },
     "clone_path": {
       "type": "string",

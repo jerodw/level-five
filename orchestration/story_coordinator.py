@@ -1739,11 +1739,20 @@ class CleanCloneResult:
     Optional fields are expressed by absence in the written record rather than
     by null, matching the execution-history convention: a check that refused to
     run has no exit code and no output to report, only a reason.
+
+    `scope` is not one of those. It carries the selections the coordinator
+    substituted into the configured command, and it is required and always
+    written — an empty scope is the claim that nothing narrowed the configured
+    command, which is a different claim from an absent one and must not
+    serialize alike. It carries no default for the same reason: a construction
+    site added later cannot omit it and have an unnarrowed run recorded by
+    accident.
     """
 
     ran: bool
     command: str
     runner: str
+    scope: tuple[str, ...]
     clone_path: str | None = None
     exit_code: int | None = None
     output_tail: str | None = None
@@ -1751,7 +1760,12 @@ class CleanCloneResult:
     reason: str | None = None
 
     def as_record(self) -> dict:
-        record: dict = {"ran": self.ran, "command": self.command, "runner": self.runner}
+        record: dict = {
+            "ran": self.ran,
+            "command": self.command,
+            "runner": self.runner,
+            "scope": list(self.scope),
+        }
         optional = {
             "clone_path": self.clone_path,
             "exit_code": self.exit_code,
@@ -1964,6 +1978,8 @@ def run_clean_clone(
     revert: list[str] | tuple[str, ...] = (),
     baseline: Path | None = None,
     output_path: Path | None = None,
+    *,
+    scope: tuple[str, ...] = (),
 ) -> CleanCloneResult:
     """Run a command in a fresh clone with the story committed.
 
@@ -1996,6 +2012,13 @@ def run_clean_clone(
     caller names it, because the caller is the one that knows which result
     artifact this run is recorded under and the name is derived from that. It
     defaults to writing nothing, so a caller that names none records none.
+
+    `scope` is what the caller narrowed the configured command by, recorded on
+    the result and interpreted nowhere: the harness neither parses nor
+    understands the target's selector syntax. It is passed through rather than
+    derived from `command_to_run`, because only the caller knows what it
+    substituted. An empty scope says the configured command ran unnarrowed,
+    which is what every whole-suite caller here means.
     """
     argv = shlex.split(command_to_run)
     runner = verification_runner or argv[0]
@@ -2007,6 +2030,7 @@ def run_clean_clone(
             ran=False,
             command=command,
             runner=runner,
+            scope=scope,
             reason=(
                 f"verification_runner names {verification_runner}, which is not "
                 f"an executable that exists under {target_root}"
@@ -2028,6 +2052,7 @@ def run_clean_clone(
         ran=True,
         command=command,
         runner=runner,
+        scope=scope,
         clone_path=str(clone),
         exit_code=result.returncode,
         output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
@@ -2111,6 +2136,9 @@ def clean_clone_check(
             config.get("verification_runner"),
             scratch,
             output_path=run_dir / suite_output_file(artifact),
+            # The configured test command as configured: the coordinator
+            # narrows it by nothing here.
+            scope=(),
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -2261,6 +2289,10 @@ def suite_run_check(
     reported as a check that did not run rather than as a pass; nothing is
     announced on that path, because nothing is about to take a suite run's
     worth of time.
+
+    Every path here records an empty scope: this run is the configured test
+    command as configured, and the coordinator narrows it by nothing. That
+    says nothing about what the configured command covers.
     """
     command = config.get("test_command")
     if not command:
@@ -2268,6 +2300,7 @@ def suite_run_check(
             ran=False,
             command="",
             runner="",
+            scope=(),
             reason=(
                 "the target configures no test_command, so there is no suite "
                 "for the coordinator to run"
@@ -2297,6 +2330,7 @@ def suite_run_check(
             ran=False,
             command=named,
             runner=runner,
+            scope=(),
             reason=f"the configured test command could not be run: {error}",
         )
     else:
@@ -2305,6 +2339,7 @@ def suite_run_check(
             ran=True,
             command=named,
             runner=runner,
+            scope=(),
             exit_code=result.returncode,
             output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
             output_path=_write_suite_output(
@@ -2605,6 +2640,7 @@ def _run_selection(
     config: dict,
     command: str,
     *,
+    scope: tuple[str, ...],
     revert: tuple[str, ...] = (),
     baseline: Path | None = None,
 ) -> CleanCloneResult:
@@ -2620,6 +2656,13 @@ def _run_selection(
     with the reason, rather than raising: the caller falls through to the
     whole suite on it, and a selector that cannot be run must never be read as
     having decided anything.
+
+    `scope` is what this run was narrowed to — the nomination the caller
+    substituted — carried on the result so a filtered invocation and an
+    unfiltered one are distinguishable from the record alone. It is required
+    and keyword-only: a selector run that recorded an empty scope would claim
+    it ran the configured command unnarrowed, which is the one thing it never
+    does.
     """
     scratch = Path(tempfile.mkdtemp(prefix="l5-selection-"))
     try:
@@ -2630,12 +2673,14 @@ def _run_selection(
             scratch,
             revert=list(revert),
             baseline=baseline,
+            scope=scope,
         )
     except (RuntimeError, OSError) as error:
         return CleanCloneResult(
             ran=False,
             command=command,
             runner=config.get("verification_runner") or command,
+            scope=scope,
             reason=f"the clone could not be built: {error}",
         )
     finally:
@@ -2744,7 +2789,7 @@ def run_nomination(
     if announce is not None:
         announce()
 
-    applied = _run_selection(target_root, config, substituted)
+    applied = _run_selection(target_root, config, substituted, scope=(nomination,))
     if not applied.ran:
         return Nomination(
             False,
@@ -2770,7 +2815,12 @@ def run_nomination(
         )
 
     reverted = _run_selection(
-        target_root, config, substituted, revert=paths, baseline=baseline
+        target_root,
+        config,
+        substituted,
+        scope=(nomination,),
+        revert=paths,
+        baseline=baseline,
     )
     if not reverted.ran:
         return Nomination(
@@ -2859,6 +2909,7 @@ def revert_check(
             ran=False,
             command=command,
             runner=runner,
+            scope=(),
             reason=(
                 "no baseline was captured for the stage, so there is no state "
                 f"to revert the edits to: {baseline}"
@@ -2887,6 +2938,11 @@ def revert_check(
                     ran=False,
                     command=command,
                     runner=runner,
+                    # The coordinator narrowed the configured command by
+                    # nothing on this path — it never ran it at all. What the
+                    # selector runs were narrowed to is nomination.test, which
+                    # is where a reader finds it.
+                    scope=(),
                     reason=None,
                 ),
                 paths=paths,
@@ -2916,12 +2972,16 @@ def revert_check(
                 revert=list(paths),
                 baseline=resolved,
                 output_path=run_dir / suite_output_file(artifact),
+                # The whole suite, narrowed by nothing. What was reverted is
+                # `paths`, which is a different fact and has its own field.
+                scope=(),
             )
         except (RuntimeError, OSError) as error:
             result = CleanCloneResult(
                 ran=False,
                 command=command,
                 runner=runner,
+                scope=(),
                 reason=f"the clone with the edits reverted could not be built: {error}",
             )
         finally:
