@@ -7,6 +7,7 @@ and never invoke a model.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import threading
@@ -24,6 +25,71 @@ GUARD_PLACEHOLDER = "{guard_path}"
 GUARD_ARGUMENTS_PLACEHOLDER = "{guard_arguments}"
 
 
+#: What the CLI says when an invocation stopped because capacity ran out
+#: rather than because anything about the work was wrong: a provider rate
+#: limit, or a plan quota that has been used up. One constant, in the one
+#: module that may know what the CLI says, so the coordinator routes on a
+#: field rather than on a string and no second reader of this vocabulary
+#: exists anywhere. Matched case-insensitively against the text of the result
+#: event, and against nothing else.
+#:
+#: Anything unmatched is an ordinary failure and escalates exactly as it does
+#: today. That asymmetry is deliberate: a wrong classification either hangs a
+#: broken run or discards a recoverable one, so this answers no unless the
+#: signal is one it holds.
+CAPACITY_SIGNALS = (
+    "claude ai usage limit reached",
+    "usage limit reached",
+    "rate limit exceeded",
+    "rate_limit_error",
+    "overloaded_error",
+)
+
+#: How a reset time is carried when one is carried at all: the epoch second
+#: capacity is expected back, written after a pipe. Seconds since the epoch
+#: rather than a duration, so nothing here has to know when the message was
+#: composed. Nine digits or more, which no plausible duration reaches and
+#: every epoch second since 1973 does.
+RESET_AT = re.compile(r"\|\s*(\d{9,})")
+
+
+@dataclass(frozen=True)
+class CapacityStop:
+    """Why an invocation stopped for capacity, and when capacity is back.
+
+    `signal` is the entry of `CAPACITY_SIGNALS` that matched, so a reader of
+    the run's record learns what was detected rather than only that something
+    was. `reset_at` is the epoch second capacity is expected back when the
+    signal carried one, and None when it did not — and None is the answer the
+    harness acts on most conservatively, because a wait whose length it does
+    not know is a wait it does not take.
+    """
+
+    signal: str
+    reset_at: float | None = None
+
+
+def capacity_stop(event: dict) -> CapacityStop | None:
+    """Classify one result event as a capacity stop, or not at all.
+
+    Read off the fields of the event the streaming loop already has in hand —
+    the same event the final text and the reported cost come off — so nothing
+    reads the run log back. A second parser of the harness's own output is
+    precisely what carrying the cost on the result avoided.
+    """
+    text = " ".join(
+        str(event.get(field) or "")
+        for field in ("result", "error", "subtype")
+    ).lower()
+    for signal in CAPACITY_SIGNALS:
+        if signal in text:
+            found = RESET_AT.search(text)
+            return CapacityStop(
+                signal=signal, reset_at=float(found.group(1)) if found else None
+            )
+    return None
+
+
 @dataclass
 class AgentResult:
     ok: bool
@@ -34,6 +100,12 @@ class AgentResult:
     #: injects — is unchanged, and so that "this invocation reported no cost"
     #: stays distinguishable from "this invocation cost nothing".
     cost_usd: float | None = None
+    #: Why this invocation stopped, when it stopped because capacity ran out.
+    #: Defaulted to None for the reason `cost_usd` is: every fake runner in the
+    #: suite constructs a result without one and none of them needs changing,
+    #: and None keeps meaning "nothing was said" rather than "nothing was
+    #: wrong". The coordinator routes on this field and on no string.
+    capacity: CapacityStop | None = None
 
 
 def hooks_dir(harness_root: Path | None = None) -> Path:
@@ -113,7 +185,8 @@ def run_agent(
     Raw stream-json output is appended to log_path so every run remains
     inspectable after the fact. The agent's final result message is
     returned to the coordinator, along with what the invocation reported
-    spending.
+    spending and whether it stopped because capacity ran out. All three come
+    off the one result event the loop below already reads.
 
     `max_budget_usd` is the allowance this one invocation may spend. It is
     handed to the CLI, so the invocation stops itself rather than being stopped
@@ -157,6 +230,7 @@ def run_agent(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     result_text = ""
     cost_usd: float | None = None
+    capacity: CapacityStop | None = None
     with open(log_path, "a", encoding="utf-8") as log:
         log.write(f"\n===== stage: {stage} =====\n")
         proc = subprocess.Popen(
@@ -193,7 +267,16 @@ def run_agent(
                     reported, bool
                 ):
                     cost_usd = float(reported)
+                # And whether the invocation stopped because capacity ran out,
+                # classified from the same event beside the cost rather than
+                # from a later read of anything.
+                capacity = capacity_stop(event)
         writer.join()
         code = proc.wait()
 
-    return AgentResult(ok=(code == 0), result_text=result_text, cost_usd=cost_usd)
+    return AgentResult(
+        ok=(code == 0),
+        result_text=result_text,
+        cost_usd=cost_usd,
+        capacity=capacity,
+    )

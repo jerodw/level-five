@@ -7,8 +7,17 @@ configuration and then hardcoded to the same literal, because every fixture
 in the repository configured the value the harness would have picked anyway.
 
 So nothing here asserts that a key is *mentioned*. Each key is set to a value
-this harness would never choose — every one of them carries the token
-``xyzzy`` — and the harness is then observed acting on that value:
+this harness would never choose, and the harness is then observed acting on
+that value. Almost every value carries the token ``xyzzy``, which makes an
+accidental coincidence with anything the harness would pick impossible rather
+than unlikely. `max_pause_wait_seconds` is the one key exempt from that
+convention, and the exemption is forced rather than chosen: the value is a
+*duration*, parsed to a number and refused at pre-flight when it is not one,
+so a value carrying the token would refuse every run in this module rather
+than proving anything. `TOKEN_EXEMPT` names it, and what stands in for the
+token is stated at `VARYING`: a duration no harness would pick, pinned from
+both sides by the proof, which observes a wait just inside it taken and a wait
+just outside it declined.
 
 * `KEY_PROOFS` maps each declared key to the node id that proves it and to
   what "proven" means for it. Most are proven **behaviourally**: the fixture
@@ -51,6 +60,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,7 +71,7 @@ import harness_config
 import run_status
 import schema_validator
 import story_coordinator
-from agent_runner import AgentResult
+from agent_runner import AgentResult, CapacityStop
 
 REPO_ROOT = Path(harness_config.__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -87,6 +97,26 @@ THIS_REPO_CONFIG = harness_config.load_config(REPO_ROOT)
 #: anything the harness would pick is impossible rather than unlikely.
 TOKEN = "xyzzy"
 
+#: The keys whose value cannot carry the token, with the reason. One entry,
+#: and it is a fact about the value's *type* rather than a concession: a
+#: duration is parsed to a number and a value that is not one refuses the run,
+#: so a token in it would prove nothing about anything.
+TOKEN_EXEMPT: dict[str, str] = {
+    "max_pause_wait_seconds": (
+        "the value is a duration in seconds, parsed to a number and refused at "
+        "pre-flight when it is not one, so it cannot carry a word"
+    ),
+}
+
+#: How long the pause wait fixture is configured to allow. A duration no
+#: harness would choose and this repository does not configure, standing in
+#: for the token the value cannot carry. The proof pins it from both sides —
+#: a reset time inside it is waited for, one outside it is not — so the number
+#: itself is what is being obeyed rather than merely something non-zero.
+PAUSE_WAIT = 4919
+WITHIN_THE_BOUND = PAUSE_WAIT - 19
+BEYOND_THE_BOUND = PAUSE_WAIT + 61
+
 VARYING: dict[str, object] = {
     "allowed_tools": ["Bash(xyzzy:*)"],
     "architecture_docs": ["docs/xyzzy-architecture.md"],
@@ -94,6 +124,7 @@ VARYING: dict[str, object] = {
     "branch_prefix": "xyzzy-branch/",
     "census_command": "xyzzy-census --count",
     "logs_dir": ".harness/xyzzy-logs",
+    "max_pause_wait_seconds": str(PAUSE_WAIT),
     "model": "xyzzy-model",
     "permission_mode": "xyzzyPrompt",
     "runs_dir": ".harness/xyzzy-runs",
@@ -119,6 +150,7 @@ FALLBACKS: dict[str, object] = {
     "branch_prefix": "story/",
     "census_command": None,
     "logs_dir": ".harness/logs",
+    "max_pause_wait_seconds": story_coordinator.NO_PAUSE_WAIT,
     "model": None,
     "permission_mode": "acceptEdits",
     "runs_dir": ".harness/runs",
@@ -174,6 +206,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
+        BEHAVIOURAL),
+    "max_pause_wait_seconds": Proof(
+        "test_max_pause_wait_seconds_is_the_only_bound_on_an_in_place_wait",
         BEHAVIOURAL),
     "model": Proof(
         "test_model_is_the_model_every_stage_invocation_carries",
@@ -254,6 +289,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("logs_dir", ".harness/logs")',
          '".harness/logs"'),
+    ),
+    "max_pause_wait_seconds": (
+        ("orchestration/story_coordinator.py",
+         'config.get("max_pause_wait_seconds", NO_PAUSE_WAIT)',
+         "NO_PAUSE_WAIT"),
     ),
     "model": (
         ("orchestration/story_coordinator.py",
@@ -594,7 +634,8 @@ def clean_clone_record(run: Run) -> dict:
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
     "census_command",
-    "logs_dir", "model", "permission_mode", "runs_dir", "standards_dir",
+    "logs_dir", "max_pause_wait_seconds",
+    "model", "permission_mode", "runs_dir", "standards_dir",
     "stories_dir", "test_command", "test_selection_command", "tests_dir",
     "verification_runner", "workflow",
 )
@@ -872,9 +913,35 @@ def test_no_proof_value_is_a_default_or_this_repositorys_own_configured_value():
 
 
 def test_every_varying_value_carries_the_distinctive_token():
+    """Every value but the one whose type forbids a word.
+
+    The exemption is named rather than skipped over, and it is held shut from
+    both sides: an exempt key must be declared, and every key that is not
+    exempt must still carry the token, so this cannot be widened by adding a
+    value that quietly stops carrying it.
+    """
+    assert set(TOKEN_EXEMPT) <= set(DECLARED)
     for key, value in sorted(VARYING.items()):
+        if key in TOKEN_EXEMPT:
+            continue
         rendered = " ".join(value) if isinstance(value, list) else str(value)
         assert TOKEN in rendered, key
+
+
+def test_the_token_exempt_key_states_why_and_carries_a_value_of_its_own():
+    """What stands in for the token where the token cannot go.
+
+    A duration cannot carry a word, so what makes its value one the harness
+    would never pick is the number itself: distinct from the fallback, from
+    this repository's own configured bound, and pinned from both sides by the
+    proof rather than merely non-zero.
+    """
+    assert TOKEN_EXEMPT == {"max_pause_wait_seconds": TOKEN_EXEMPT[
+        "max_pause_wait_seconds"]}
+    assert TOKEN_EXEMPT["max_pause_wait_seconds"].strip()
+    assert str(PAUSE_WAIT) != FALLBACKS["max_pause_wait_seconds"]
+    assert str(PAUSE_WAIT) != THIS_REPO_CONFIG.get("max_pause_wait_seconds")
+    assert WITHIN_THE_BOUND < PAUSE_WAIT < BEYOND_THE_BOUND
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -1120,6 +1187,87 @@ def test_census_command_is_the_command_the_suite_census_runs(tmp_path):
     assert record["command"] == "xyzzy-census --count"
     assert record["ran"] is False
     assert "xyzzy-census" in record["reason"]
+
+
+class PausingRunner(RecordingRunner):
+    """A `RecordingRunner` whose first invocation stops for capacity.
+
+    The reset time is handed in as an offset from the moment the run starts,
+    so the two halves of the proof differ in one number and in nothing else.
+    """
+
+    def __init__(self, run_dir: Path, offset: int):
+        super().__init__(run_dir)
+        self.offset = offset
+
+    def __call__(self, prompt, **keywords):
+        if len(self.calls) == 0:
+            self.calls.append({
+                "stage": keywords["stage"], "prompt": prompt,
+                "cwd": Path(keywords["cwd"]),
+                "log_path": Path(keywords["log_path"]),
+                "permission_mode": keywords["permission_mode"],
+                "model": keywords["model"],
+                "allowed_tools": keywords.get("allowed_tools"),
+            })
+            return AgentResult(
+                ok=False,
+                result_text="Claude AI usage limit reached|"
+                            f"{int(time.time()) + self.offset}",
+                capacity=CapacityStop(
+                    signal="claude ai usage limit reached",
+                    reset_at=time.time() + self.offset,
+                ),
+            )
+        return super().__call__(prompt, **keywords)
+
+
+def paused_run(tmp_path: Path, offset: int) -> tuple[Run, list[float]]:
+    """One run whose first invocation stops for capacity, and what it slept.
+
+    The sleep is injected rather than taken, so nothing here waits: what the
+    proof observes is the duration the harness decided on, which is the whole
+    of what the configured bound governs.
+    """
+    values = fixture_config()
+    harness = build_harness(tmp_path)
+    target = build_target(tmp_path, values)
+    config = harness_config.load_config(target)
+    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    runner = PausingRunner(run_dir, offset)
+    slept: list[float] = []
+    code = story_coordinator.run_story(
+        STORY_ID, harness, target, runner, sleep=slept.append)
+    return (
+        Run(target=target, harness=harness, config=config, run_dir=run_dir,
+            runner=runner, code=code, values=values),
+        slept,
+    )
+
+
+def test_max_pause_wait_seconds_is_the_only_bound_on_an_in_place_wait(tmp_path):
+    """The configured bound decides both halves, observed rather than read.
+
+    A capacity signal whose reset time falls inside the configured bound is
+    waited for and the stage re-entered; one whose reset time falls outside it
+    is not waited for at all and the process exits paused. The two runs differ
+    only in that reset time, so what separates them can only be the number the
+    configuration carries — and a harness that had stopped reading the key
+    would fall back to never waiting and fail the first half.
+    """
+    inside, slept = paused_run(tmp_path / "inside", WITHIN_THE_BOUND)
+    assert slept and slept[0] == pytest.approx(WITHIN_THE_BOUND, abs=30)
+    assert inside.code == 0
+    assert inside.state["status"] == "completed"
+    # Re-entered at the same stage, and the run went on from there.
+    assert inside.stages[0] == inside.stages[1] == "implementer"
+
+    outside, not_slept = paused_run(tmp_path / "outside", BEYOND_THE_BOUND)
+    assert not_slept == []
+    assert outside.code == story_coordinator.PAUSE_EXIT_CODE
+    assert outside.state["status"] == "paused"
+
+    assert story_coordinator.pause_wait_bound(inside.config) == float(PAUSE_WAIT)
 
 
 def test_verification_runner_is_the_executable_the_check_resolves(tmp_path):

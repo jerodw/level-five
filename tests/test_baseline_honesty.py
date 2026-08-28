@@ -2210,6 +2210,19 @@ def live_artifact_reading_modules() -> list[str]:
 #: It is asserted equal to what the scan reports in both directions, so it
 #: cannot grow silently and cannot keep a name whose module was converted.
 DECLARED_LIVE_ARTIFACT_READERS = {
+    "test_capacity_pause.py":
+        "the workflow its runs execute is built and the pause bound those "
+        "targets configure is its own, because what a capacity classification "
+        "does to a run is a mechanism. What it resolves live is the subject of "
+        "the story's own criteria: that max_pause_wait_seconds is declared in "
+        "schemas/harness-config.schema.json and set to the same value in both "
+        ".harness/config.yaml and templates/config.yaml, that this bound "
+        "appears as a duration nowhere under orchestration/ or hooks/, that "
+        "the execution-history schema declares the capacity-paused kind, that "
+        "orchestration/run_status.py names no status of its own, and that "
+        "scripts/l5-run's docstring names both statuses that resume — every "
+        "one of which is a claim about what this repository ships and about "
+        "nothing else",
     "test_clean_clone_check.py":
         "its workflow reads were converted by story-048; what remains is the "
         "schema this repository ships for the clean-clone record and the retry "

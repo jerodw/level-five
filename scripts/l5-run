@@ -5,9 +5,15 @@ Usage: l5-run <story-id> [--stage <stage>] [--base <branch>]
 The target repository is found by walking up from the current directory
 to the nearest .harness/config.yaml.
 
-A run whose state.json says it escalated resumes at the recorded stage.
---stage overrides that with a stage the loaded workflow defines; the
-coordinator refuses one it does not.
+A run whose state.json says it escalated, or that it paused because
+capacity ran out, resumes at the recorded stage. --stage overrides that
+with a stage the loaded workflow defines; the coordinator refuses one it
+does not.
+
+The two resumes differ in what they restore. An escalated run is
+re-entered: its attempt allowance goes back to zero and the entry that
+ended is archived. A paused run simply continues — nothing failed and no
+attempt was spent, so no counter is reset and nothing is archived.
 
 --base declares what a new story branch is cut from. Unstated, it is the
 repository's own default branch, and the coordinator refuses a run that

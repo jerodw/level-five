@@ -2,6 +2,12 @@
 workflow: story-workflow
 branch_prefix: story/
 permission_mode: acceptEdits
+# How long a run paused because capacity ran out may wait in place before the
+# process exits, in seconds — five hours here. It bounds a wait whose length
+# the harness has been told, and never becomes one it guesses: a capacity
+# signal naming no reset time exits without sleeping whatever this says. Delete
+# the key and the bound is zero, which never waits.
+max_pause_wait_seconds: 18000
 stories_dir: .harness/stories
 runs_dir: .harness/runs
 logs_dir: .harness/logs

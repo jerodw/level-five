@@ -397,6 +397,48 @@ def cost_ceiling_problems(workflow: dict) -> list[str]:
     return problems
 
 
+#: What a target that configures no pause wait waits: nothing. It is the one
+#: duration written in harness source, and it is the one that means "do not
+#: wait" — every wait the harness ever takes is read from configuration.
+NO_PAUSE_WAIT = "0"
+
+
+def pause_wait_bound(config: dict) -> float:
+    """The configured ceiling on an in-place wait, in seconds.
+
+    Read as the string `load_config` produces, because the config parser
+    coerces nothing, and parsed here. Only ever called after
+    `pause_wait_problems` has passed, so the parse cannot fail: a value that is
+    not a non-negative number refuses the run at pre-flight rather than
+    reaching a comparison.
+    """
+    return float(config.get("max_pause_wait_seconds", NO_PAUSE_WAIT))
+
+
+def pause_wait_problems(config: dict) -> list[str]:
+    """Check the configured pause wait against what a bound can be.
+
+    Shaped like `cost_ceiling_problems`, and for its reason: a bound that
+    cannot be compared against a wait is a defect every run under that
+    configuration carries, so it is refused before a stage is spent on it. An
+    absent key is not checked at all — absent means zero, which is never
+    waiting, and is what every run did before this key existed.
+    """
+    if "max_pause_wait_seconds" not in config:
+        return []
+    configured = config["max_pause_wait_seconds"]
+    try:
+        bound = float(configured)
+    except (TypeError, ValueError):
+        bound = -1.0
+    if bound < 0 or bound != bound:  # NaN compares unequal to itself
+        return [
+            f"max_pause_wait_seconds is {configured!r}, which is not a "
+            f"non-negative number of seconds"
+        ]
+    return []
+
+
 def applies_when_problems(workflow: dict) -> list[str]:
     """Check that the definition says when it is the workflow to plan under.
 
@@ -4078,6 +4120,78 @@ def _head_escalated(target_root: Path) -> str | None:
     return escalated_story(result.stdout.strip())
 
 
+#: Leads a pause commit's subject, and is deliberately not
+#: `ESCALATION_COMMIT_MARKER`: `escalated_story` builds its pattern from the
+#: escalation's template, so a pause commit reusing that subject would be
+#: reported as an escalation by `_head_escalated` and amended over by
+#: `_complete`. A pause is not an escalation and its commit says so in the
+#: first thing a reader of `git log --oneline` meets.
+PAUSE_COMMIT_MARKER = "l5 paused:"
+
+#: How a pause commit's changes are put back in the working tree. Two
+#: revisions, for the reason the escalation's undo command names two: a pause
+#: that commits makes the same two commits — the run's own record of the pause,
+#: and the work on top of it.
+PAUSE_UNDO_COMMAND = "git reset --mixed HEAD~2"
+
+#: The pause commit's subject, written once so the composition below and
+#: `paused_story` are one fact rather than two spellings — the pairing
+#: `ESCALATION_SUBJECT_TEMPLATE` already gives the escalation.
+PAUSE_SUBJECT_TEMPLATE = (
+    f"{PAUSE_COMMIT_MARKER} {{story_id}} waiting for capacity at {{stage}}"
+)
+
+
+def pause_commit_subject(story_id: str, stage: str) -> str:
+    """The pause commit's subject line."""
+    return PAUSE_SUBJECT_TEMPLATE.format(story_id=story_id, stage=stage)
+
+
+def paused_story(subject: str) -> str | None:
+    """The story id a pause commit's subject names, or None.
+
+    The counterpart of `escalated_story`, and the reason there are two readers
+    rather than one: each answers for its own kind only, so a pause commit is
+    never read as an escalation and an escalation commit is never read as a
+    pause. The pattern is built from `PAUSE_SUBJECT_TEMPLATE`, so what this
+    reads is exactly what `pause_commit_subject` writes.
+    """
+    pattern = re.escape(PAUSE_SUBJECT_TEMPLATE)
+    pattern = pattern.replace(re.escape("{story_id}"), r"(?P<story_id>\S+)")
+    pattern = pattern.replace(re.escape("{stage}"), r"\S.*")
+    match = re.fullmatch(pattern, subject.strip())
+    return match.group("story_id") if match else None
+
+
+def pause_commit_message(state: RunState, reason: str) -> str:
+    """The pause commit's message: what it is, why, and how to undo it.
+
+    It says outright that nothing about the work has been rejected and that a
+    resume continues it, because the two commits a pause leaves are otherwise
+    indistinguishable at a glance from the two an escalation leaves, and the
+    difference between them is exactly whether a developer has anything to
+    look at.
+    """
+    stage = state.current_stage or "no stage"
+    return (
+        f"{pause_commit_subject(state.story_id, stage)}\n"
+        f"\n"
+        f"The run paused because capacity ran out, and this commit is a "
+        f"holding place for what it left in the working tree, so the work "
+        f"survives a checkout of another branch or a wait of several days.\n"
+        f"\n"
+        f"Nothing about the work has been rejected. No stage failed, no "
+        f"verifier judged it, and no attempt was spent: the invocation did "
+        f"not run. Running `l5-run {state.story_id}` again resumes this run "
+        f"at stage {stage}, with every counter exactly where it is now.\n"
+        f"\n"
+        f"Paused because: {reason}\n"
+        f"\n"
+        f"To put these changes back in the working tree:\n"
+        f"    {PAUSE_UNDO_COMMAND}\n"
+    )
+
+
 def escalation_commit_message(state: RunState, reason: str) -> str:
     """The escalation commit's message: what it is, why, and how to undo it.
 
@@ -4108,8 +4222,17 @@ def commit_escalated_work(
     reason: str,
     *,
     run_dir: Path | None = None,
+    message: str | None = None,
 ) -> str:
     """Open the escalation's commit of what the run left, and name it.
+
+    `message` is what the commit carries, defaulting to the escalation's own.
+    It is a parameter because a capacity pause makes the same two commits for
+    the same reason — work left uncommitted for days is what this exists to
+    protect, and the clean-tree pre-flight refuses a resume of a dirty tree —
+    and differs from an escalation only in what it says. What it must not
+    share is the *subject*: `escalated_story` and `_head_escalated` identify
+    an escalation commit by its subject, and a pause is not one.
 
     This is the first of the two commits an escalation makes: the run's own
     record of the escalation — state.json, both renderings of the event stream
@@ -4138,18 +4261,25 @@ def commit_escalated_work(
         "commit",
         "--allow-empty",
         "-m",
-        escalation_commit_message(state, reason),
+        message if message is not None else escalation_commit_message(state, reason),
     )
     return _revision(target_root) if committed.returncode == 0 else ""
 
 
-def commit_escalated_tree(target_root: Path, state: RunState, reason: str) -> None:
+def commit_escalated_tree(
+    target_root: Path,
+    state: RunState,
+    reason: str,
+    *,
+    message: str | None = None,
+) -> None:
     """Commit the work the escalated run left, on top of its record.
 
     The second of the two commits, and the branch tip an escalation leaves. It
     carries the same message as the commit it sits on, because it is the same
     escalation: a reader scanning the branch should meet the escalation rather
-    than a bookkeeping entry.
+    than a bookkeeping entry. `message` is that message, defaulted to the
+    escalation's own for the reason it is on `commit_escalated_work`.
     """
     _git(target_root, "add", "-A")
     _git(
@@ -4157,7 +4287,7 @@ def commit_escalated_tree(target_root: Path, state: RunState, reason: str) -> No
         "commit",
         "--allow-empty",
         "-m",
-        escalation_commit_message(state, reason),
+        message if message is not None else escalation_commit_message(state, reason),
     )
 
 
@@ -4643,6 +4773,23 @@ def _refuse_undeclared_config_keys(target_root: Path, problems: list[str]) -> in
     )
 
 
+def _refuse_bad_pause_wait(target_root: Path, problems: list[str]) -> int:
+    """Refuse a run whose configured pause wait is not a duration.
+
+    Thin, like every other caller of `refuse`. The configuration is wrong, not
+    the story and not the tree, so the guidance names the file to edit and what
+    the key may hold.
+    """
+    return refuse(
+        f"{target_root / '.harness' / 'config.yaml'} configures a pause wait "
+        f"that cannot be compared against a wait:",
+        problems,
+        "Set max_pause_wait_seconds to a non-negative number of seconds, or "
+        "remove it — removed, the harness never waits and a capacity pause "
+        "always exits.",
+    )
+
+
 def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     """Refuse a run whose target tree already holds work no stage produced.
 
@@ -4779,6 +4926,144 @@ def _escalate(
     return 2
 
 
+#: What a paused process returns. Distinct from completion (0) and from
+#: escalation (2), so a caller can tell a run that must be looked at from one
+#: that may simply be run again once capacity is back.
+PAUSE_EXIT_CODE = 3
+
+
+def pause_wait_seconds(
+    reset_at: float | None, now: float, bound: float
+) -> float | None:
+    """How long to wait in place before re-entering, or None to exit.
+
+    Three cases, and the third is the one that keeps the mechanism honest. A
+    known reset time within the configured bound is the wait. A known reset
+    time beyond it is None, because a run that would sit longer than the
+    developer authorized should exit and be resumed deliberately. And an
+    *unknown* reset time is None whatever the bound says: the bound is a
+    ceiling on a wait whose length the harness has been told, never a duration
+    it sleeps in the absence of one, and a harness that guessed would hang a
+    run on a signal it did not understand.
+
+    A bound of zero — which is what a target configuring none has — never
+    waits, so the reset time is not even consulted. A reset time already past
+    is a wait of nothing rather than a negative one.
+    """
+    if reset_at is None or not bound:
+        return None
+    wait = max(0.0, reset_at - now)
+    return wait if wait <= bound else None
+
+
+def _capacity_paused(
+    run_dir: Path,
+    stage_name: str,
+    capacity: agent_runner.CapacityStop,
+    reason: str,
+) -> None:
+    """Say that the run paused on capacity, in its own event kind.
+
+    What was detected and when capacity is expected back go here rather than
+    on `state.json`, because they are a record of why and when rather than
+    something routed on: the pause is expressed by the `status` value alone,
+    and `append_event` stays the single write path for events.
+    """
+    when = (
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capacity.reset_at))
+        if capacity.reset_at is not None
+        else "an unstated time"
+    )
+    append_event(
+        run_dir,
+        f"paused on capacity: {reason}; capacity expected back at {when}",
+        kind="capacity-paused",
+        stage=stage_name,
+    )
+
+
+def _pause(
+    run_dir: Path,
+    state: RunState,
+    capacity: agent_runner.CapacityStop,
+    reason: str,
+    *,
+    target_root: Path,
+) -> None:
+    """Pause the run where it stands, durably, before anything waits.
+
+    The state, the event and the commit all land here, in that order, so the
+    run's own record of the pause is inside the commit — the ordering
+    `_commits_the_tree_it_ends_on` already enforces for an escalation. That
+    ordering is also the whole reason a sleep is safe afterwards: the
+    durability is unconditional and the wait is opportunistic, so a process
+    killed mid-sleep leaves a run a fresh process resumes with nothing lost.
+
+    No counter is touched, no escalation summary is written and no escalation
+    event is appended. The stage did not fail — it did not run — so there is
+    nothing to spend and nothing to report a verdict on.
+
+    The two commits are the escalation's own functions carrying a different
+    message, because what a pause needs of them is exactly what an escalation
+    needs: work left uncommitted for days is what they exist to protect, and
+    the clean-tree pre-flight would otherwise refuse the very resume this
+    pause exists to allow. What is not shared is the subject; see
+    `pause_commit_subject`. The commit's sha is not recorded, because
+    `state.json` gains no field for a pause: the status is the whole of it.
+    """
+    state.status = "paused"
+    save_state(run_dir, state)
+    _capacity_paused(run_dir, state.current_stage, capacity, reason)
+    message = pause_commit_message(state, reason)
+    committed = commit_escalated_work(
+        target_root, state, reason, run_dir=run_dir, message=message
+    )
+    if committed:
+        commit_escalated_tree(target_root, state, reason, message=message)
+
+
+def _resumed(run_dir: Path, state: RunState, *, note: str = "") -> None:
+    """Say that the run resumed, in the one place that kind is spelled.
+
+    Two paths reach a resume — the escalated-or-crashed one, which re-enters
+    the run, and the capacity one, which simply continues it — and one kind of
+    event says so. `note` is what distinguishes them, in the shape
+    `_suite_rerun_started`'s `phrase` already established: without it this
+    writes byte for byte the line the resume wrote before a second path
+    existed.
+    """
+    append_event(
+        run_dir,
+        f"resumed at stage {state.current_stage} under workflow "
+        f"{state.workflow}{note}",
+        kind="resumed",
+        stage=state.current_stage,
+    )
+
+
+def resume_from_capacity(run_dir: Path, state: RunState) -> None:
+    """The state transitions a capacity resume makes, and nothing else.
+
+    Written once because two paths take it: the in-process wait, which sleeps
+    and then re-enters the same stage, and the fresh-process resume, which
+    reaches the same point having been started by a developer. Waiting in place
+    is then the ordinary resume plus a sleep rather than a second recovery
+    path, and the two cannot drift.
+
+    A capacity resume archives nothing, moves nothing, opens no entry and
+    resets nothing. That is where it differs from an escalated or crashed
+    resume, and the difference follows from what each is: those follow a
+    developer deciding, after investigating, to fund another attempt, while
+    this is automatic, nothing was wrong, and the stage did not fail. The
+    consequence worth naming is that a paused run cannot spend its way past
+    the run ceiling by pausing — the allowance survives the pause exactly as
+    the retry count does.
+    """
+    state.status = "running"
+    save_state(run_dir, state)
+    _resumed(run_dir, state, note=" after a capacity pause")
+
+
 def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) -> int:
     state.status = "completed"
     state.current_stage = ""
@@ -4852,6 +5137,7 @@ def run_story(
     start_stage: str | None = None,
     *,
     base: str | None = None,
+    sleep=time.sleep,
 ) -> int:
     """Execute one story, from a fresh run or from where a run left off.
 
@@ -4863,6 +5149,10 @@ def run_story(
 
     `base` declares what a *new* story branch is cut from. None is the normal
     case and means the repository's own default branch; see `resolve_base`.
+
+    `sleep` is how the run waits in place for capacity to come back, injected
+    for the reason the agent runner is: a test observes the decision to wait
+    without taking it. Every duration handed to it comes from configuration.
     """
     config = harness_config.load_config(target_root)
 
@@ -4876,6 +5166,16 @@ def run_story(
     undeclared = harness_config.undeclared_config_problems(config, harness_root)
     if undeclared:
         return _refuse_undeclared_config_keys(target_root, undeclared)
+
+    # And the same pre-flight for the one configured value the harness has to
+    # compare a duration against. A pause wait that is not a non-negative
+    # number cannot bound anything, and every run under that configuration
+    # carries the defect, so it is refused here rather than at the first
+    # capacity failure — above the run directory, so a refusal leaves nothing
+    # behind and invokes no agent.
+    wait_problems = pause_wait_problems(config)
+    if wait_problems:
+        return _refuse_bad_pause_wait(target_root, wait_problems)
 
     # The story artifact and any existing run state are read before the
     # workflow, because both can name the workflow this run loads. Reading
@@ -5059,7 +5359,11 @@ def run_story(
     # and invokes no agent. There is deliberately no flag, environment variable
     # or configuration key that skips it: a bypass on a correctness guard
     # becomes the default invocation.
-    if state is None or state.status == "escalated":
+    # A `paused` state joins `escalated` here on the same reasoning: a pause
+    # commits what the run left, so the tree it leaves is clean and anything
+    # uncommitted now is the developer's own. Leaving it out would have the
+    # clean-tree check refuse the very resume the pause exists to allow.
+    if state is None or state.status in ("escalated", "paused"):
         dirty = dirty_paths(target_root)
         if dirty:
             return _refuse_dirty_tree(target_root, dirty)
@@ -5085,7 +5389,19 @@ def run_story(
             file=sys.stderr,
         )
         return 1
-    if state:
+    if state and state.status == "paused":
+        # A resume of a run that paused because capacity ran out, which is the
+        # third interruption beside a crash and an escalation and is unlike
+        # both: nothing failed, nothing was judged, and the stage did not run.
+        # So it takes none of the acts below — no archive, no entry directory,
+        # no counter reset — and no unchanged-since-escalation guard, which
+        # applies to an escalation and has nothing to establish about a pause.
+        # It continues at the recorded stage with every counter carried
+        # forward, through the one function the in-process wait also calls.
+        if start_stage:
+            state.current_stage = start_stage
+        resume_from_capacity(run_dir, state)
+    elif state:
         # A resume, of a crashed run or an escalated one. Chapter 18 treats
         # the two identically and so does this: restore nothing, because the
         # artifacts and the state are already here, and continue at the
@@ -5222,13 +5538,7 @@ def run_story(
         if state.status == "escalated":
             state.status = "running"
             save_state(run_dir, state)
-        append_event(
-            run_dir,
-            f"resumed at stage {state.current_stage} under workflow "
-            f"{state.workflow}",
-            kind="resumed",
-            stage=state.current_stage,
-        )
+        _resumed(run_dir, state)
         # What moved and where, said once. A retry record written before the
         # move names its archive as a path relative to the run directory, and
         # that path is now one directory further down; the record is evidence
@@ -5587,6 +5897,48 @@ def run_story(
                 harness_root=harness_root,
                 duration_seconds=elapsed(),
             )
+
+        # Before any of that: did the invocation fail because capacity ran
+        # out? A budget ceiling is a reason to stop and capacity exhaustion is
+        # only a reason to wait, so this run pauses rather than ending. It is
+        # decided from the field the agent runner set and from no string — the
+        # coordinator never reasons about a capacity failure — and it sits
+        # *above* the self-route decision deliberately: the stage did not fail
+        # at its work, it did not run, so it must not spend a self-route.
+        #
+        # The pause is written and committed before anything sleeps. What
+        # follows is opportunistic: a known reset time within the configured
+        # bound is slept to and this same stage re-entered, and anything else
+        # returns the pause exit code, leaving a run a fresh l5-run resumes at
+        # exactly this stage.
+        if not result.ok and result.capacity:
+            reason = (
+                f"{name} stopped because capacity ran out "
+                f"({result.capacity.signal})"
+            )
+            _pause(
+                run_dir, state, result.capacity, reason, target_root=target_root
+            )
+            wait = pause_wait_seconds(
+                result.capacity.reset_at, time.time(), pause_wait_bound(config)
+            )
+            if wait is None:
+                return PAUSE_EXIT_CODE
+            append_event(
+                run_dir,
+                f"waiting {round(wait)}s in place for capacity, within the "
+                f"configured bound",
+                kind="note",
+                stage=name,
+            )
+            sleep(wait)
+            resume_from_capacity(run_dir, state)
+            # Re-entered as the same attempt of the same stage: nothing was
+            # spent, so nothing moves. `self_routed` is set for its one effect
+            # here — it is what stops the loop's head zeroing self_route_count,
+            # which a pause must leave exactly where it found it.
+            self_routed = True
+            continue
 
         # The first of the three mechanical failures. Each is routed through
         # one decision: re-enter the loop at this same index when the stage has

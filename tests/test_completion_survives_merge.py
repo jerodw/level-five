@@ -45,6 +45,7 @@ make assertions here fail. Neither is passing on the other's behalf.
 Nothing here invokes a model: the one test that drives `run_story` goes through
 a fake agent runner that refuses to be called.
 """
+import ast
 import json
 import subprocess
 from pathlib import Path
@@ -792,16 +793,64 @@ def pre_story_function(name: str) -> str:
         f"story_coordinator.{name}.at-story-065-baseline.py.txt")
 
 
+#: The one difference story-080 made to these two functions: the message each
+#: commit carries became a parameter, so a capacity pause can make the same two
+#: commits through the same functions under a message of its own. Normalising
+#: it away is what lets the comparison below keep asking its real question —
+#: does an escalation still do what it did — rather than forbidding any edit to
+#: the text forever.
+MESSAGE_DEFAULT = ("message if message is not None else "
+                   "escalation_commit_message(state, reason)")
+ESCALATION_MESSAGE = "escalation_commit_message(state, reason)"
+
+
+def statements(text: str) -> str:
+    """One function's statements, without its docstring and without comments.
+
+    Unparsed rather than compared as source, so a reworded docstring or an
+    added comment is not mistaken for a change to what the function does.
+    """
+    function = ast.parse(text).body[0]
+    body = function.body
+    first = body[0]
+    if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)):
+        body = body[1:]
+    return "\n".join(ast.unparse(node) for node in body)
+
+
+def parameters(text: str) -> list[str]:
+    function = ast.parse(text).body[0]
+    return [arg.arg for arg in function.args.args + function.args.kwonlyargs]
+
+
 @pytest.mark.parametrize("name", ESCALATION_WRITERS)
 def test_the_escalation_writers_are_unchanged(name):
     """The escalation's two-commit shape is load-bearing and was not touched.
 
-    The pre-story text, carried as a fixture, against the working tree. The
-    control below is the same comparison for `_complete`, which this story did
-    change — so an equality here is a statement about these two functions and
-    not about a comparison that cannot fail.
+    The pre-story text, carried as a fixture, against the working tree. It was
+    byte equality until story-080 lifted the commit message out as a parameter
+    so a capacity pause could make the same two commits through these same
+    functions; byte equality would have forbidden that rather than judged it.
+    What is asserted instead is the claim the equality was standing for: with
+    the message parameter normalised away, every statement of each function is
+    the statement it was, and the only signature change is the parameter
+    itself. An escalation that carried a different message, committed a
+    different set, or stopped returning "" on a clean tree still goes red.
+
+    The control below is the same comparison for `_complete`, which story-065
+    did change — so an equality here is a statement about these two functions
+    and not about a comparison that cannot fail.
     """
-    assert working_tree_function(name) == pre_story_function(name)
+    before = pre_story_function(name)
+    now = working_tree_function(name)
+    assert statements(now).replace(MESSAGE_DEFAULT, ESCALATION_MESSAGE) == \
+        statements(before)
+    assert parameters(now) == parameters(before) + ["message"]
+    # The normalisation is not a wildcard: it stands for one expression that
+    # is actually there, and the escalation's own message is what an unset
+    # parameter resolves to.
+    assert MESSAGE_DEFAULT in statements(now)
 
 
 def test_the_unchanged_comparison_can_report_a_change():
