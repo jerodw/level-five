@@ -1,0 +1,154 @@
+story:
+  id: story-082
+  title: A run commits the history it writes
+  description: |
+    Two things, one mechanism. Every path a run can end on must commit the
+    history records that path wrote, and the execution log must be able to
+    describe every outcome a run can reach.
+
+    _complete stages, chooses among three commit shapes, and appends the run's
+    execution record after the commit that should have carried it. append_event
+    is the only writer of the history logs and nothing later in the run stages
+    anything, so a completed run exits with its own completion record
+    untracked. Observed on story-081's branch before it merged: the retry line
+    was committed and the completion line was not, and the completion line had
+    to be committed by hand.
+
+    Every other terminal path is already correct. _escalate is wrapped by
+    _commits_the_tree_it_ends_on, the budget stop goes through that same
+    escalation path, and _pause orders its state, event and commit by hand and
+    says so in its docstring. So this is not four fixes; it is one rule,
+    already written down twice in prose, that one path does not follow and no
+    test holds any path to. The retry records are correct today by accident of
+    position rather than by rule: nothing stops a later kind being routed to a
+    log from a site after the last commit, and that failure would look exactly
+    like this one — silent, and one run behind.
+
+    The trap is that this is not a reorder. Moving the append above the staging
+    question makes the tree dirty at the three-way choice every time, which
+    silently disables story-065: the amend case, where a clean tree standing on
+    this story's own escalation commit amends that commit so a squash or rebase
+    merge cannot drop the completion, would never occur again. The choice
+    therefore asks its question about the work rather than about the record —
+    stage, record whether the stages left anything, append, re-stage, commit
+    per the answer already recorded — and the amend stays reachable.
+
+    And the suite would not catch that regression. _history_dir defaults to
+    None and append_event returns without writing when it is unset, and
+    tests/test_completion_survives_merge.py drives _complete without ever
+    calling set_history_dir, so no line is written, the tree stays clean, and
+    the amend tests stay green while real runs lose the behaviour. The same
+    blindness covers the paths that are correct today: their ordering is
+    observable only with a history directory set, and no test sets one.
+
+    Part two adds the outcomes the record cannot currently describe.
+    capacity-paused is exit code 3, distinct from completion and escalation
+    precisely so a caller can tell them apart, and it reaches no log, so a run
+    that paused for five hours and a run that never started are
+    indistinguishable in the record that outlives the run directory. resumed is
+    the same question one step further in: a run that escalated, was resumed
+    and completed leaves one record saying it completed and nothing saying it
+    was interrupted. Both are edits to the schema's enums, which is where
+    story-081 put the whole of the routing decision — deliberately, so that
+    adding a kind to a log is an edit there and nowhere else. This story is the
+    first exercise of that claim, and if routing the two new kinds turns out to
+    need a change under orchestration/, that is a finding about the design
+    worth reporting rather than working around.
+
+    One question is settled here rather than left open. A record written before
+    the commit says a run ended a moment before it demonstrably did. That is
+    already true of escalation, budget-stop and pause, and the alternative is
+    the untracked record this story exists to remove, so the answer is to
+    accept it and say so in ARCHITECTURE.md.
+
+  workflow: story-workflow
+
+tasks:
+  - Fix _complete's ordering so the run's own completion record is inside the commit that completion leaves. Stage the tree, record whether the stages left anything staged, append the story-completed event, stage again, and then commit according to the answer already recorded.
+  - Keep the three-way commit choice asking its question about the work rather than about the record. The amend case must stay reachable — a run whose stages changed no repository file, standing on its own escalation commit, still amends that commit rather than adding an empty one.
+  - Leave _escalate, _budget_stopped and _pause ordered as they are. They are already correct, and what this story adds for them is the check that holds them there.
+  - Add capacity-paused and resumed to the event enum and the status enum of execution-log.jsonl in schemas/cross-run-history.schema.json, and rewrite that log's description accordingly - it records one line per point an execution reached rather than one per execution that reached an outcome, so a paused, resumed and completed run leaves three lines in order.
+  - Confine the routing of the two new kinds to the schema. story_id, status, retry_count and timestamp are all derived already, so no file under orchestration/ should change to carry them; if one must, report it as a finding about story-081's design rather than working around it.
+  - Write tests/test_a_run_commits_the_history_it_writes.py with one case per terminal kind — story-completed, escalated, budget-stopped and capacity-paused — each running the path with a history directory set and asserting the record that path wrote is inside the commit that path left.
+  - Show each of those cases catching a planted commit-then-append inversion, so the assertion is demonstrably able to see the defect it is written against rather than passing because nothing was written at all.
+  - Extend the story-065 amend cases in tests/test_completion_survives_merge.py to run with a history directory set, since their current silence is what would let the trap regress unseen.
+  - Test the two new kinds — a capacity pause writes an execution record whose status says it paused, a resume writes one whose status says it resumed, and a run that paused, resumed and completed leaves those three records in that order.
+  - Record in .harness/docs/ARCHITECTURE.md that a terminal path appends its record before its commit, why the staging question is asked about the work rather than the record, and that a record therefore states an outcome a moment before that outcome is demonstrably committed.
+
+acceptance_criteria:
+  - A completed run's own execution record is tracked by the commit that completion left. Nothing the completion path writes to the history directory is left untracked when the run exits.
+  - The same holds for an escalated run, a budget-stopped run and a capacity-paused run - each path's record is inside the commit that path leaves.
+  - Each of those four assertions is shown to fail against a planted inversion in which the path commits before it appends, so none of them passes because no record was written.
+  - A run whose stages changed no repository file, standing on its own escalation commit, with a history directory set, still amends that commit rather than adding an empty one. The staged history line does not turn the amend case into the ordinary one.
+  - The story-065 amend cases run with a history directory set, so the behaviour they assert is observed under the conditions a real run has.
+  - A completion whose stages did leave repository changes is still written as it is today - a commit gained rather than a commit rewritten, carrying the unamended message.
+  - schemas/cross-run-history.schema.json lists capacity-paused and resumed in execution-log.jsonl's event enum and in its status enum, and that log's description says it records one line per point an execution reached.
+  - A capacity pause appends one record to execution-log.jsonl whose status says the run paused, and that record is inside the pause commit.
+  - A resume appends one record to execution-log.jsonl whose status says the run resumed.
+  - A run that pauses, resumes and completes leaves three records in execution-log.jsonl, in that order, so a resumed run is distinguishable in the history from an uninterrupted one.
+  - Routing the two new kinds is an edit to schemas/cross-run-history.schema.json alone. The diff under orchestration/ is the ordering fix in _complete and nothing else, and mentions neither new kind. If routing them required a change under orchestration/, the story says so as a finding about the story-081 design.
+  - The records the three kinds story-081 declared carry are unchanged. This story adds kinds, it does not reshape existing records.
+  - .harness/docs/ARCHITECTURE.md says a terminal path appends before it commits, why the staging question is asked about the work rather than about the record, and that a record therefore states an outcome a moment before it is demonstrably committed - and every claim it makes about the harness's behaviour is one something in the repository can be seen to check.
+
+technical_plan:
+  implementation_steps:
+    - Change _complete so the staging question is answered before anything is appended. Stage with git add -A, hold whether the index is non-empty, append the story-completed event, stage again to sweep in the history line, and then take the three-way branch on the value already held rather than on a fresh look at the index.
+    - Leave the branch itself as it is - dirty means a new commit, a clean tree on this story's own escalation commit means an amend, anything else means an empty commit - since the repair is to the question it asks, not to the answers it gives.
+    - Add capacity-paused and resumed to execution-log.jsonl's event enum and status enum, and rewrite the log's description so it says what the log now holds. Nothing else in the schema changes.
+    - Check that history_record needs nothing for the two new kinds. status is derived from the kind, story_id from the run directory's name, retry_count from the loaded history and timestamp from the entry - so the projection should already carry them, and any gap is a finding to report rather than to patch around.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The ordering fix in _complete - the staging question answered before the append, the history line swept in by a second staging, and the three-way choice taken on the recorded answer.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: capacity-paused and resumed added to the execution log's event and status enums, and the log's description rewritten to say it records one line per point an execution reached.
+    - file: tests/test_a_run_commits_the_history_it_writes.py
+      stage: tester
+      reason: One case per terminal kind, each run with a history directory set, asserting the record that path wrote is inside that path's commit, and each shown to catch a planted commit-then-append inversion. The two new kinds' records and their ordering across a paused, resumed and completed run go here too.
+    - file: tests/test_completion_survives_merge.py
+      stage: tester
+      reason: The story-065 amend cases extended to run with a history directory set, so a staged history line cannot silently turn the amend case into the ordinary one without a test seeing it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The append-before-commit rule stated for all four terminal paths, why the staging question is about the work rather than the record, and the accepted consequence that a record states an outcome a moment before it is committed.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/cross-run-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/harness-config.schema.json
+    - schemas/execution-history.schema.json
+    - schemas/manifest.json
+    - orchestration/harness_config.py
+    - .harness/config.yaml
+    - .gitignore
+    - prompts/
+    - workflows/
+    - templates/config.yaml
+    - .harness/runs-archive/
+
+verification_requirements:
+  - Confirm from a run's own artifacts, rather than from a re-reading of the code, that a completed run leaves nothing it wrote to the history directory untracked.
+  - Confirm the same for an escalation, a budget stop and a capacity pause, one path at a time.
+  - Confirm each of those four checks fails against a planted commit-then-append inversion, and report as unverified any of them that passes with the inversion in place.
+  - Confirm the amend case is still reachable with a history directory set - a clean-tree completion standing on its own escalation commit amends rather than adding a commit - and that a completion with repository changes to commit is unchanged.
+  - Confirm the story-065 amend cases now run with a history directory set, so their assertions are made under the conditions a real run has.
+  - Confirm a capacity pause and a resume each append one execution record with the expected status, and that a run which paused, resumed and completed leaves three records in that order.
+  - Confirm the routing of the two new kinds is confined to the schema by inspecting the diff under orchestration/, and report the diff there if it names either new kind.
+  - Confirm the records of story-completed, escalated, budget-stopped and the two retry kinds carry the same fields they carried before this story.
+  - Confirm every behavioural claim the ARCHITECTURE.md addition makes is one something in the repository checks, and report as unverified anything it asserts that nothing can.
+
+constraints:
+  - append_event stays the single write path for the harness's event record, and the cross-run projection stays a third output on that one call.
+  - The append path only appends. This story adds no rewrite of a log, and the prune remains the single point at which one is rewritten.
+  - History is evidence, never state. Nothing added here is read back to make a routing decision, and state.json remains the coordinator's only routing source.
+  - Which events are significant stays read from schemas/cross-run-history.schema.json alone. No condition in append_event decides it and no second list of event kinds is introduced.
+  - Nothing here changes when a run commits its work. Only the ordering of the history line a terminal path writes relative to that path's own commit changes.
+  - The three commit shapes a completion can take are unchanged. The repair is to the question the choice asks, not to the answers it gives.
+  - The prune, retention, history_dir resolution and the guarantee that no routing decision reads a log are untouched, as are the record contents of the three kinds story-081 declared.
+  - events.log and execution-history.json keep exactly the format and content they have today, and schemas/execution-history.schema.json is unchanged.
+  - The harness stays target-agnostic. Nothing added here names this repository's test framework, layout or stack.
