@@ -84,6 +84,24 @@ def load_config(target_root: Path) -> dict:
     return config
 
 
+#: Where a target keeps its cross-run history when it says nothing about it,
+#: spelled the way runs_dir's and logs_dir's own fallbacks are spelled at the
+#: sites that read them.
+DEFAULT_HISTORY_DIR = ".harness/history"
+
+
+def history_dir(target_root: Path, config: dict) -> Path:
+    """The directory holding the target's cross-run history logs.
+
+    Resolved against the target root exactly as runs_dir and logs_dir are, and
+    resolved *once per run* rather than at each site that appends a record: a
+    keyword argument with a default can be omitted at one call site and
+    silently drop a record, which is the one failure mode an append-only store
+    cannot have.
+    """
+    return target_root / config.get("history_dir", DEFAULT_HISTORY_DIR)
+
+
 def declared_config_keys(harness_root: Path | None = None) -> tuple[str, ...]:
     """The keys the harness reads, declared in schemas/harness-config.schema.json.
 

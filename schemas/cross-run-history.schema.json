@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "cross-run-history",
+  "description": "The declaration of the harness-scoped logs under history_dir, and the whole of what decides which events reach them. One property per log, named for the file it declares, holding that log read as an array of parsed lines: its items.properties.event.enum enumerates the execution-history event kinds routed to that log, and its items.properties declare the fields a record there carries. Selection and record shape are therefore one file rather than a condition written into append_event, and adding a kind to a log is an edit here and nowhere else. The `event` property is the selection and is not itself projected: a record carries the other declared fields, so what routed it is read off the enum that named its kind rather than repeated on every line. A field the execution-history entry does not carry is omitted rather than written null, which is the rule execution-history.json already follows. A record is a summary and never a copy: the per-run artifacts hold the detail, and a log that duplicated them would inherit their size and lose its queryability. History is evidence, never state — nothing here is read back to make a routing decision, and the only read of a log at all is the prune that bounds it by history_retention_days. Two further logs are named here as RESERVED and are deliberately not declared above: inspection-log.jsonl and adjudication-log.jsonl. This harness has no producer for either — inspection and adjudication are level 4 concepts it does not have — so it creates neither, and naming them here rather than shipping an empty file is the whole of what it does about them. A later harness that acquires a producer declares its log as a property beside the two above, and gets the projection with no change to orchestration. The per-log declarations are properties rather than a $defs block because the harness's own validator honors a deliberately small keyword subset and refuses a schema claiming a constraint it cannot check; a property named for its log carries the same declaration and stays checkable.",
+  "type": "object",
+  "properties": {
+    "execution-log.jsonl": {
+      "type": "array",
+      "description": "One record per execution of a story that reached an outcome. Written to .harness/history/execution-log.jsonl, one JSON object per line, appended as the outcome occurs rather than assembled as a terminal summary.",
+      "items": {
+        "type": "object",
+        "required": ["story_id", "status", "timestamp"],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The execution-history event kinds routed to this log. This enum is the selection and nothing else decides it: an entry whose kind appears here is projected into this log, and an entry whose kind appears in no log's enum is projected nowhere. capacity-paused is deliberately absent, because a pause is not an outcome — the run resumes and emits one later. The property is not projected into a record: it declares which kinds arrive here, not a field a line carries.",
+            "enum": ["story-completed", "escalated", "budget-stopped"]
+          },
+          "story_id": {
+            "type": "string",
+            "description": "The story this execution ran, derived from the run directory's own name."
+          },
+          "status": {
+            "type": "string",
+            "description": "How the execution ended, derived from the event kind that produced the record rather than threaded through the coordinator to serve this projection.",
+            "enum": ["completed", "escalated", "budget-stopped"]
+          },
+          "retry_count": {
+            "type": "integer",
+            "description": "How many retries the execution took, counted from the retry decisions already present in the run's own execution history, which append_event has loaded to number the entry it is appending."
+          },
+          "verifier_outcome": {
+            "type": "string",
+            "description": "The verifier's verdict, when the entry that produced this record carried one. Absent otherwise.",
+            "enum": ["passed", "failed"]
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "When the outcome occurred, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what history_retention_days is compared against."
+          }
+        }
+      }
+    },
+    "retry-log.jsonl": {
+      "type": "array",
+      "description": "One record per retry a story's execution took. Written to .harness/history/retry-log.jsonl, one JSON object per line, appended as the retry is routed.",
+      "items": {
+        "type": "object",
+        "required": ["story_id", "timestamp"],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The execution-history event kinds routed to this log, on the terms the execution log's own event property states: this enum is the selection, and the property is not projected into a record.",
+            "enum": ["verification-failed", "self-routed"]
+          },
+          "story_id": {
+            "type": "string",
+            "description": "The story whose execution took this retry, derived from the run directory's own name."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "When the retry was routed, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what history_retention_days is compared against."
+          },
+          "stage": {
+            "type": "string",
+            "description": "The stage the entry belongs to. Absent when the entry carried none."
+          },
+          "retry_decision": {
+            "type": "string",
+            "description": "The routing decision the entry recorded. Absent when the entry carried none.",
+            "enum": ["retry", "escalate"]
+          },
+          "retry_category": {
+            "type": "string",
+            "description": "The retry category the verifier reported, as the workflow's retry_routing table declares it. Absent on a retry that carries no category."
+          },
+          "retry_stage": {
+            "type": "string",
+            "description": "The stage the retry was routed to. On a self-routed entry it names the entry's own stage, because a self-route has no destination other than itself."
+          }
+        }
+      }
+    }
+  }
+}

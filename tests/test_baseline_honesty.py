@@ -2262,6 +2262,18 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "in rules/execution-rules.json, and prompts/story-verifier.md, which is "
         "where a verifier reads what may go in the field and so is the only "
         "place the words-and-never-behaviour constraint can be asserted",
+    "test_cross_run_history.py":
+        "its runs are driven against a workflow it builds and under execution "
+        "rules of its own, because what a record says about an execution is a "
+        "mechanism and the stage list and the blocked prefixes are inputs to "
+        "it. Two reads remain and both have what is shipped as their subject: "
+        "the schema this repository ships for the cross-run declaration, which "
+        "is the one place deciding which events reach which log and what a "
+        "record there carries, so an assertion about that declaration has to "
+        "read the shipped file; and the blocked_paths entry in "
+        "rules/execution-rules.json, which is a deployment fact no stage can "
+        "make — rules/ is blocked for every stage of every story — and which "
+        "story-081 therefore asserts rather than makes",
     "test_documented_claim_support.py":
         "its runs are driven by a workflow it builds, which is where the "
         "declaration story-051 adds is an input. What remains has what is "

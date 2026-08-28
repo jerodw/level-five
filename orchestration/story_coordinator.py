@@ -531,6 +531,224 @@ def load_history(run_dir: Path) -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# --------------------------------------------------------------------------
+# The cross-run history
+#
+# A run directory is execution state and is correctly not versioned, so
+# everything the harness knew about an execution goes with the directory when
+# it is deleted. The answer is a separate collection of append-only records
+# that outlive the executions they describe: harness-scoped logs under
+# history_dir, written through append_event as events occur rather than
+# assembled as a terminal summary, summaries and never copies, and bounded by
+# configuration.
+#
+# Which events are significant is read from
+# schemas/cross-run-history.schema.json and from nowhere else. Each declared
+# log names the execution-history kinds routed to it and the fields projected
+# into a record there, so selection and record shape are one file and no
+# condition in append_event decides either — the harness does not acquire a
+# fourth place where "which events matter" is settled.
+# --------------------------------------------------------------------------
+
+#: The declaration everything below reads.
+CROSS_RUN_HISTORY_SCHEMA = "cross-run-history"
+
+#: The one declared property of a log that is a selection rather than a
+#: projected field: its enum names the execution-history kinds routed there.
+#: A record carries the other declared fields, so what routed it is read off
+#: the enum that named its kind rather than repeated on every line.
+HISTORY_EVENT_PROPERTY = "event"
+
+#: How a record's timestamp is written, matching what append_event stamps an
+#: events.log line and an execution-history entry with. It is what a retention
+#: bound is compared against.
+HISTORY_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+#: The configured retention bound. Absent keeps everything, so pruning is
+#: opt-in.
+HISTORY_RETENTION_KEY = "history_retention_days"
+
+#: The resolved history directory for the run now executing, established once
+#: at run-directory creation rather than passed to each append_event call. A
+#: keyword argument with a default can be omitted at one call site and silently
+#: drop a record, which is the one failure mode an append-only store cannot
+#: have. None is "no run has established one", and then nothing is projected —
+#: which is what a caller appending an event to a hand-built run directory,
+#: outside any run, gets.
+_history_dir: Path | None = None
+
+
+def set_history_dir(directory: Path | None) -> None:
+    """Establish where this run's cross-run records go, for the whole run."""
+    global _history_dir
+    _history_dir = directory
+
+
+def history_log_declarations(harness_root: Path | None = None) -> dict[str, dict]:
+    """Each declared log's filename mapped to the shape of a record in it.
+
+    The schema ships with the harness code, so it is resolved by
+    schema_validator relative to its own module exactly as every other schema
+    is. A log declares itself as that log read whole — an array of parsed
+    lines — so the record shape is its `items`.
+    """
+    schema = schema_validator.load_schema(CROSS_RUN_HISTORY_SCHEMA, harness_root)
+    return {name: log["items"] for name, log in schema["properties"].items()}
+
+
+def history_record(
+    entry: dict, history: list[dict], story_id: str, declaration: dict
+) -> dict | None:
+    """The record a history entry projects into one log, or None for no record.
+
+    The entry's kind is checked against the log's declared enum and against
+    nothing else: an entry whose kind appears in no log's enum is projected
+    nowhere, so the selection is decided by the declaration alone.
+
+    Three values are derived rather than threaded through the coordinator to
+    serve this projection: the story id from the run directory's own name, the
+    status from the event kind that produced the record, and the retry count
+    from the retry decisions already present in the run's own execution
+    history, which append_event has loaded to number the entry it is
+    appending. Everything else comes off the entry, and a field the entry does
+    not carry is omitted rather than written null — the rule the run's own
+    structured history already follows.
+    """
+    kinds = declaration["properties"][HISTORY_EVENT_PROPERTY]["enum"]
+    kind = entry.get("event")
+    if kind not in kinds:
+        return None
+    values = dict(entry)
+    values["story_id"] = story_id
+    values["status"] = kind.removeprefix("story-")
+    values["retry_count"] = sum(
+        1 for recorded in history if recorded.get("retry_decision") == "retry"
+    )
+    return {
+        name: values[name]
+        for name in declaration["properties"]
+        if name != HISTORY_EVENT_PROPERTY and name in values
+    }
+
+
+def _append_history_records(run_dir: Path, entry: dict, history: list[dict]) -> None:
+    """Project one entry into every log whose declaration names its kind.
+
+    Opened for appending and never for writing: a record already written is
+    never rewritten by an append, and the single point at which a log is
+    rewritten is the prune below, which announces itself.
+    """
+    if _history_dir is None:
+        return
+    for log, declaration in history_log_declarations().items():
+        record = history_record(entry, history, run_dir.name, declaration)
+        if record is None:
+            continue
+        _history_dir.mkdir(parents=True, exist_ok=True)
+        with open(_history_dir / log, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+
+
+@dataclass(frozen=True)
+class HistoryPrune:
+    """What one run's prune did: what stopped it, and what it dropped."""
+
+    problems: list[str]
+    dropped: dict[str, int]
+
+
+def _record_is_older(record: object, cutoff: float) -> bool:
+    """Whether a parsed record's own timestamp puts it before the bound.
+
+    A record carrying no readable timestamp is *kept*. This store never
+    discards what it cannot judge, and dropping a line because its timestamp
+    could not be read would be the silent repair the prune exists to refuse.
+    """
+    stamp = record.get("timestamp") if isinstance(record, dict) else None
+    if not isinstance(stamp, str):
+        return False
+    try:
+        when = time.mktime(time.strptime(stamp, HISTORY_TIMESTAMP_FORMAT))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return when < cutoff
+
+
+def prune_history(directory: Path, config: dict) -> HistoryPrune:
+    """Bound the cross-run history by history_retention_days, or refuse.
+
+    This is the only thing that reads a log and the only thing that rewrites
+    one, which is what confines the rewrite of a committed record to a single
+    announced point and leaves the append path itself append-only.
+
+    It refuses rather than repairs. A line that is not valid JSON stops the
+    prune and refuses the run, naming the file and the line number: a store
+    that discards what it cannot parse and carries on is not append-only. Every
+    log is read and parsed *before* any is rewritten, so a malformed line in a
+    later log cannot leave an earlier one already rewritten, and the malformed
+    line and every other line are still there afterwards.
+
+    An unset bound keeps everything: nothing is dropped and no log is
+    rewritten. The logs are still read, because a corrupted record is worth
+    refusing on whether or not this deployment prunes.
+    """
+    parsed: dict[Path, list[tuple[str, object]]] = {}
+    for name in history_log_declarations():
+        path = directory / name
+        if not path.is_file():
+            continue
+        lines: list[tuple[str, object]] = []
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            try:
+                lines.append((line, json.loads(line)))
+            except json.JSONDecodeError as error:
+                return HistoryPrune(
+                    [f"{path}, line {number}: is not valid JSON ({error.msg})"], {}
+                )
+        parsed[path] = lines
+
+    configured = config.get(HISTORY_RETENTION_KEY)
+    if configured is None:
+        return HistoryPrune([], {})
+    try:
+        days = float(configured)
+    except (TypeError, ValueError):
+        days = -1.0
+    if days < 0 or days != days:  # NaN compares unequal to itself
+        return HistoryPrune(
+            [
+                f"{HISTORY_RETENTION_KEY} is {configured!r}, which is not a "
+                f"non-negative number of days"
+            ],
+            {},
+        )
+
+    cutoff = time.time() - days * 86400
+    dropped: dict[str, int] = {}
+    for path, lines in parsed.items():
+        kept = [line for line, record in lines if not _record_is_older(record, cutoff)]
+        if len(kept) == len(lines):
+            continue
+        dropped[path.name] = len(lines) - len(kept)
+        path.write_text(
+            "".join(f"{line}\n" for line in kept), encoding="utf-8"
+        )
+    return HistoryPrune([], dropped)
+
+
+def _refuse_bad_history(directory: Path, problems: list[str]) -> int:
+    """Refuse a run whose cross-run history could not be bounded."""
+    return refuse(
+        f"The cross-run history under {directory} could not be pruned:",
+        problems,
+        "Nothing was discarded, rewritten or dropped around: a store that "
+        "repairs what it cannot parse is not append-only. Repair the named "
+        "line by hand, then run the story again.",
+    )
+
+
 def append_event(
     run_dir: Path,
     message: str,
@@ -553,6 +771,13 @@ def append_event(
     execution-history.json, the same events rendered for a reader that wants
     to route a query rather than read a stream. One write path is the point:
     a second one, however correct, is drift waiting to happen.
+
+    A third output rides on the same call and is not a second write path: the
+    entry this builds is projected into every cross-run log whose declaration
+    names its kind, so a record outlives the run directory it describes. What
+    reaches which log is read from schemas/cross-run-history.schema.json; no
+    condition here decides it, and events.log and execution-history.json keep
+    exactly the format and content they have.
 
     History is evidence, never state. Nothing here is read back to make a
     routing decision; state.json remains the coordinator's only routing
@@ -584,6 +809,7 @@ def append_event(
     _history_path(run_dir).write_text(
         json.dumps(history, indent=2) + "\n", encoding="utf-8"
     )
+    _append_history_records(run_dir, entry, history)
 
     print(f"[{stamp}] {message}")
 
@@ -5389,6 +5615,36 @@ def run_story(
             file=sys.stderr,
         )
         return 1
+    # The cross-run history, established once for the whole run rather than
+    # handed to each append_event call: a keyword argument with a default can
+    # be omitted at one call site and silently drop a record, which is the one
+    # failure mode an append-only store cannot have.
+    #
+    # The prune runs here, at run-directory creation and above this run's first
+    # append, because that confines the only rewrite of a log to a single
+    # announced point and leaves the append path itself append-only. It refuses
+    # rather than repairs: a line it cannot parse stops it and refuses the run,
+    # with nothing discarded and nothing rewritten around.
+    history_directory = harness_config.history_dir(target_root, config)
+    set_history_dir(history_directory)
+    pruned = prune_history(history_directory, config)
+    if pruned.problems:
+        return _refuse_bad_history(history_directory, pruned.problems)
+    if pruned.dropped:
+        # A rewrite of a committed record is never silent. Only an actual drop
+        # is announced, so a deployment that prunes nothing — every deployment
+        # leaving history_retention_days unset — says nothing here.
+        append_event(
+            run_dir,
+            "cross-run history pruned to "
+            f"{HISTORY_RETENTION_KEY}={config[HISTORY_RETENTION_KEY]}: "
+            + ", ".join(
+                f"{name} dropped {count} record(s)"
+                for name, count in sorted(pruned.dropped.items())
+            ),
+            kind="note",
+        )
+
     if state and state.status == "paused":
         # A resume of a run that paused because capacity ran out, which is the
         # third interruption beside a crash and an escalation and is unlike

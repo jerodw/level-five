@@ -136,7 +136,12 @@ test_command: echo tests-ok
 tests_dir: tests/
 """
 
-GITIGNORE = ".harness/runs/\n.harness/logs/\n"
+# A target that keeps every run-produced directory out of its tree. The
+# cross-run history joins the two here because this module's subject is the
+# finished-branch refusal, and a target is free to decline to version its
+# history — this repository versions its own, and that decision is asserted
+# where it belongs rather than by every fixture that drives two runs.
+GITIGNORE = ".harness/runs/\n.harness/logs/\n.harness/history/\n"
 
 APP_AT_HEAD = "print('hello')\n"
 

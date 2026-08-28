@@ -205,6 +205,14 @@ def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
                           capture_output=True, text=True, check=check)
 
 
+#: What a target ignores when a test needs an escalation to find nothing to
+#: commit. The run directory dirties the tree by writing state.json, and the
+#: cross-run history dirties it again by appending the record of the run's own
+#: outcome; a target is free to decline to version its history, and whether
+#: this repository versions its own is asserted where that decision lives.
+QUIET_GITIGNORE = ".harness/runs/\n.harness/history/\n"
+
+
 def build_target(root: Path, gitignore: str = "",
                  test_command: str | None = None) -> Path:
     for sub in (".harness/standards", ".harness/stories", ".harness/runs",
@@ -434,7 +442,7 @@ def escalated_without_a_commit(tmp_path, harness_root) -> Path:
     clean when the escalation reaches its commit and `escalation_commit` stays
     empty — the one shape in which it does.
     """
-    target = build_target(tmp_path / "quiet-target", gitignore=".harness/runs/\n")
+    target = build_target(tmp_path / "quiet-target", gitignore=QUIET_GITIGNORE)
     escalate(target, harness_root, verdicts=[failing(1, retry=False)], edit=False)
     assert state_of(target)["escalation_commit"] == ""
     return target

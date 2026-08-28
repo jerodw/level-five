@@ -20,6 +20,18 @@ stories_dir: .harness/stories
 runs_dir: .harness/runs
 logs_dir: .harness/logs
 standards_dir: .harness/standards
+# The cross-run history — the append-only logs that outlive the run
+# directories they describe — is left at its default of .harness/history, and
+# unlike runs_dir and logs_dir above it is versioned and blocked to every
+# stage: version control decides what survives, blocked paths decide who may
+# write it, and a stage must not be able to edit the record of its own
+# execution.
+#
+# history_retention_days is deliberately left unset here, and the absence is
+# a decision rather than an oversight: unset keeps the whole of this
+# deployment's history, which is the evidence the records exist to preserve.
+# The key is proven configurable by test rather than by the shipped value.
+# history_retention_days: 90
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q -n auto
