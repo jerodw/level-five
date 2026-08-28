@@ -656,7 +656,7 @@ def test_the_record_such_a_run_writes_is_exactly_the_fields_the_schema_declares(
     record = clean_clone(story_target, tmp_path / "scratch",
                          FOREIGN_TEST_COMMAND, f"./{RUNNER_PATH}").as_record()
 
-    assert set(record) == {"ran", "command", "runner", "clone_path",
+    assert set(record) == {"ran", "command", "runner", "scope", "clone_path",
                            "exit_code", "output_tail"}
     assert set(record) <= set(SCHEMA["properties"])
     assert schema_validator.validate(record, SCHEMA) == []
@@ -897,7 +897,7 @@ def test_the_snapshot_this_replaced_reports_a_foreign_directory(story_target):
 def test_the_schema_uses_only_the_keywords_the_validator_supports():
     assert schema_validator.unsupported_keywords(SCHEMA) == []
     assert schema_validator.validate(
-        {"ran": True, "command": "x", "runner": "y"}, SCHEMA) == []
+        {"ran": True, "command": "x", "runner": "y", "scope": []}, SCHEMA) == []
 
 
 def test_no_union_keyword_appears_anywhere_in_the_schema():
@@ -918,7 +918,7 @@ def test_no_union_keyword_appears_anywhere_in_the_schema():
 
 
 def test_optional_fields_are_expressed_by_absence_from_required():
-    assert set(SCHEMA["required"]) == {"ran", "command", "runner"}
+    assert set(SCHEMA["required"]) == {"ran", "command", "runner", "scope"}
     optional = set(SCHEMA["properties"]) - set(SCHEMA["required"])
     assert optional == {"clone_path", "exit_code", "output_tail", "output_path",
                         "reason"}
@@ -926,13 +926,15 @@ def test_optional_fields_are_expressed_by_absence_from_required():
 
 def test_the_schema_catches_a_record_missing_a_required_field():
     """The schema constrains something: it is not vacuously satisfied."""
-    errors = schema_validator.validate({"ran": True, "command": "x"}, SCHEMA)
+    errors = schema_validator.validate(
+        {"ran": True, "command": "x", "scope": []}, SCHEMA)
     assert errors == ["$.runner: expected a required property, found it missing"]
 
 
 def test_the_schema_catches_a_wrongly_typed_exit_code():
     errors = schema_validator.validate(
-        {"ran": True, "command": "x", "runner": "y", "exit_code": "1"}, SCHEMA)
+        {"ran": True, "command": "x", "runner": "y", "scope": [],
+         "exit_code": "1"}, SCHEMA)
     assert len(errors) == 1
     assert "$.exit_code" in errors[0]
 
