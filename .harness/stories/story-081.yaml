@@ -1,0 +1,191 @@
+story:
+  id: story-081
+  title: A cross-run history outlives the runs it records
+  description: |
+    Run directories are execution state and are correctly not versioned, so
+    everything the harness knew about an execution goes with the directory when
+    it is deleted. Chapter 19's answer is a separate collection of append-only
+    records that outlive the executions they describe, and the lifetime and
+    durability contract settled on 2026-08-08 fixes its shape: harness-scoped
+    records under .harness/history/, written through append_event as events
+    occur rather than as a terminal summary, summaries never copies,
+    agent-blocked, and retention bounded by configuration.
+
+    This story creates .harness/history/execution-log.jsonl and
+    .harness/history/retry-log.jsonl. It takes the book's second layout — one
+    JSONL file per kind — because it is append-only, needs no directory
+    bookkeeping, and matches "recorded as they occur". Only the two logs the
+    harness can actually produce are created; inspection and adjudication are
+    Chapter 18 concepts this harness does not have, and are named as reserved
+    in the schema rather than shipped as empty files.
+
+    The record is a projection of the execution-history entry append_event
+    already builds, into whichever log declares that entry's event kind. Which
+    events are significant comes off schemas/cross-run-history.schema.json,
+    where each log's $defs entry enumerates the kinds it records and declares
+    the fields projected into it — so selection and record shape are one file
+    rather than a condition written into append_event, and the harness does not
+    acquire a fourth place where "which events matter" is decided. This follows
+    the precedent of story.schema.json, which drives the story parse rather
+    than only checking its result.
+
+    Retention is enforced rather than declared. A retention key nothing obeys
+    would fail this repository's own rule that every declared config key is
+    proven configurable by observing the harness obey it, so this story ships
+    pruning with the key. Pruning runs once per run, at run-directory creation
+    and before the first append, which confines the only rewrite of a log to a
+    single announced point and leaves the append path itself append-only.
+
+    Pruning is also the only thing that reads a log, which is where Chapter
+    19's silent-repair hazard bites: a store that discards what it cannot parse
+    and carries on is not append-only. So the prune refuses rather than
+    repairs — a line that is not valid JSON stops the prune and refuses the
+    run, naming the file and the line, and nothing is discarded or rewritten
+    around.
+
+    A calibration window is deliberately not configured. Chapter 19's late
+    addition observes that analysis needs the whole history while calibration
+    needs recent samples, and the conclusion drawn here is that one record
+    serves both: a window is a reader's parameter, not a retention bound, and
+    nothing reads these logs yet. The first calibration consumer is the story
+    that knows what window it needs, and it can express one as a query bound
+    over a log that was never pruned on its behalf.
+
+    The directory is committed and agent-blocked at once. Those are not in
+    tension: version control decides what survives, blocked paths decide who
+    may write it, and a stage must not be able to edit the record of its own
+    execution. The blocked_paths addition to rules/execution-rules.json is made
+    by hand and committed before this run starts, because rules/ is blocked for
+    every stage of every story and no stage exception can lift a blocked path.
+    This story therefore asserts that entry rather than making it.
+
+  workflow: story-workflow
+
+tasks:
+  - Write schemas/cross-run-history.schema.json, declaring one $defs entry per log. Each entry's event property enumerates the execution-history event kinds routed to that log, and its properties declare the fields projected into a record there. Name inspection-log.jsonl and adjudication-log.jsonl as reserved, with a note that this harness has no producer for either and does not create them.
+  - Route story-completed, escalated and budget-stopped to execution-log.jsonl, carrying story_id, status, retry_count, verifier_outcome and timestamp. Exclude capacity-paused, because a pause is not an outcome — the run resumes and emits one later.
+  - Route verification-failed and self-routed to retry-log.jsonl, carrying story_id, timestamp, stage, retry_decision, retry_category and retry_stage.
+  - Register the new schema in schemas/manifest.json.
+  - Extend append_event so that after it writes events.log and execution-history.json it projects the declared fields of the entry it just built into every log whose declaration names that entry's event kind. One write path, unchanged. Fields the entry does not carry are omitted rather than written null, which is the rule execution-history.json already follows.
+  - Derive story_id from the run directory name, status from the event kind, and retry_count by counting the retry decisions already present in the run's own execution history, which append_event has loaded. No new value is threaded through the coordinator to serve the projection.
+  - Establish the resolved history directory once per run rather than passing it to each append_event call. A keyword argument with a default can be omitted at one call site and silently drop a record, which is the one failure mode this store cannot have.
+  - Declare history_dir in schemas/harness-config.schema.json, defaulting to .harness/history, and resolve it against the target root the way runs_dir and logs_dir are resolved.
+  - Declare history_retention_days in schemas/harness-config.schema.json and enforce it. Unset keeps everything, so pruning is opt-in; set, records older than the bound are dropped from each log.
+  - Prune once per run, at run-directory creation and before the first append of that run, and announce the prune as an event so a rewrite of a committed record is never silent.
+  - Make the prune refuse rather than repair. A line that is not valid JSON stops the prune and refuses the run, naming the file and the line number. No line is discarded, and no line is rewritten around.
+  - Leave .harness/config.yaml's own history_retention_days unset, so this deployment keeps the whole of its own history — which is the evidence this story exists to preserve. The key is proven configurable by test rather than by the shipped value.
+  - Write the tests named in the verification requirements, including the configurability proofs for both new keys, and update the schema inventory and the config-key coverage assertions the new declarations affect.
+  - Record the mechanism in .harness/docs/ARCHITECTURE.md — the two scopes, why the record is a projection rather than a copy, why the selection lives in a schema, why pruning is confined to one point, why the prune refuses rather than repairs, and why the directory is committed and blocked at once.
+
+acceptance_criteria:
+  - schemas/cross-run-history.schema.json exists, is valid JSON Schema, is listed in schemas/manifest.json, and declares for each of execution-log.jsonl and retry-log.jsonl the event kinds it records and the fields a record there carries.
+  - The schema names inspection-log.jsonl and adjudication-log.jsonl as reserved and the harness creates neither, so no empty log is shipped for a producer that does not exist.
+  - A completed run appends exactly one record to .harness/history/execution-log.jsonl, and its status says the run completed.
+  - An escalated run appends exactly one record to .harness/history/execution-log.jsonl, and its status says the run escalated.
+  - A run that retries twice appends two records to .harness/history/retry-log.jsonl and one record to .harness/history/execution-log.jsonl.
+  - A record carries only the fields its log declares. No record reproduces a run artifact, and no record carries a field the declaration does not name.
+  - A run whose event kind appears in no log's declaration writes nothing to .harness/history/, so the selection is decided by the declaration alone.
+  - The records survive deletion of the run directory: delete the directory a completed run produced and both logs still hold that run's records.
+  - Each log is valid JSONL — one JSON object per line, no trailing partial line — and a second run appends to the file rather than rewriting it, so records from an earlier run are still present after a later one.
+  - No routing decision reads either log. The coordinator's routing sources are unchanged, and a search over orchestration/ finds no read of these files outside the prune.
+  - history_dir is declared in schemas/harness-config.schema.json, defaults to .harness/history, and a config pointing it elsewhere puts the logs there.
+  - history_retention_days is declared in schemas/harness-config.schema.json, and a configured bound prunes records older than it while leaving newer records untouched.
+  - history_retention_days unset prunes nothing, and .harness/config.yaml in this repository leaves it unset.
+  - A log line that is not valid JSON stops the prune and refuses the run, naming the file and the line number. The malformed line is still present in the file afterwards, and no other line has been removed or altered.
+  - Only the prune rewrites a log. The append path opens each log for appending and never for writing, so a record already written is never rewritten by an append.
+  - .harness/history/ appears in blocked_paths in rules/execution-rules.json, and a stage whose changed-files record names a path beneath it escalates the run with a blocked-path reason.
+  - .harness/history/ is not matched by any .gitignore rule, so the logs are versioned.
+  - .harness/docs/ARCHITECTURE.md documents the mechanism and the reasoning behind it, and every claim it makes about the harness's behaviour is one something in the repository can be seen to check.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/cross-run-history.schema.json first, because it is the declaration everything else reads. Give it a $defs entry per log whose event property carries the enum of kinds routed there and whose properties declare the projected fields, and a top-level shape that also validates a whole log read as an array of parsed lines.
+    - Add the schema to schemas/manifest.json.
+    - Declare history_dir and history_retention_days in schemas/harness-config.schema.json, and resolve history_dir in orchestration/harness_config.py beside the other directory keys.
+    - Add the prune to the coordinator at run-directory creation, above the first append of the run. Read each log, refuse on a line that is not valid JSON, drop records older than the bound when one is configured, rewrite the file, and announce what was dropped through append_event.
+    - Extend append_event last, once the declaration and the resolved directory both exist. After the existing two writes, consult the declaration for the entry's kind and project the declared fields into each matching log, opening it for appending.
+    - Establish the resolved history directory once per run so that no append_event call site can omit it.
+  likely_file_changes:
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: The new declaration — which events reach which log, and what a record there carries.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: Registers the new schema.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares history_dir and history_retention_days, which the pre-flight config check reads.
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: Resolves history_dir against the target root beside the other directory keys.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The projection inside append_event, the resolved history directory established once per run, and the prune at run-directory creation.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Comments recording that history_retention_days is left unset here on purpose, so a later reader does not read the absence as an oversight.
+    - file: tests/test_cross_run_history.py
+      stage: tester
+      reason: The records themselves — one per completed run, one per escalation, one per retry, the fields declared, survival of run-directory deletion, JSONL validity, append rather than rewrite, and no routing read.
+    - file: tests/test_cross_run_history_retention.py
+      stage: tester
+      reason: Pruning by a configured bound, nothing pruned when unset, and the prune refusing rather than repairing a malformed line.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The configurability proofs for history_dir and history_retention_days, and the set-equality coverage assertion the two new declarations affect.
+      reverting_breaks_the_suite: The coverage assertion is set equality between the declared config keys and the keys with proofs, so it goes red the moment the implementer declares the two new keys and can only be made green by adding their proofs here.
+    - file: tests/test_schema_inventory_location.py
+      stage: tester
+      reason: The schema inventory is asserted against schemas/manifest.json, so registering a new schema requires the inventory to name it.
+      reverting_breaks_the_suite: The inventory assertion fails against the manifest entry the implementer adds, so reverting this edit leaves the suite red.
+    - file: tests/test_artifact_schemas.py
+      stage: tester
+      reason: A new schema file is checked for validity and for its presence in the manifest alongside the others.
+      reverting_breaks_the_suite: This module enumerates the schemas it checks, so the new schema is unchecked until it is named here and the enumeration assertion fails without it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A section on the cross-run history — the two scopes, the projection, the schema-driven selection, the single prune point, refusal over repair, and committed-and-blocked.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/harness_config.py
+    - schemas/cross-run-history.schema.json
+    - schemas/harness-config.schema.json
+    - schemas/manifest.json
+    - .harness/config.yaml
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/execution-rules.json
+    - .harness/runs-archive/
+    - .gitignore
+    - prompts/
+    - templates/config.yaml
+    - workflows/
+    - schemas/execution-history.schema.json
+
+verification_requirements:
+  - Confirm a completed run appends exactly one execution record and an escalated run appends exactly one with the escalated status, from the run's own artifacts rather than from a re-reading of the code.
+  - Confirm a run that retries twice appends two retry records and one execution record.
+  - Confirm the records survive deletion of the run directory, which is the property the story exists for — delete a completed run's directory and read its records out of the logs afterwards.
+  - Confirm both logs are valid JSONL, one object per line, and that a later run appends to them rather than rewriting them.
+  - Confirm no record carries a field its log's declaration does not name, and that no record reproduces the content of a run artifact.
+  - Confirm the selection is decided by the declaration — an event kind named in neither log writes nothing.
+  - Confirm no routing decision reads either log, by search over orchestration/, and that the only read is the prune.
+  - Confirm a configured history_retention_days prunes older records and leaves newer ones, that unset prunes nothing, and that .harness/config.yaml here leaves it unset.
+  - Confirm a malformed log line stops the prune and refuses the run naming the file and line, and that the malformed line and every other line are still present and unaltered afterwards.
+  - Confirm .harness/history/ is in blocked_paths and that a stage record naming a path beneath it escalates the run, and confirm .harness/history/ is matched by no .gitignore rule.
+  - Confirm every behavioural claim the ARCHITECTURE.md section makes is one something in the repository checks, and report as unverified anything it asserts that nothing can.
+
+constraints:
+  - append_event stays the single write path for the harness's event record. The cross-run projection is a third output on the same call, not a second write path.
+  - History is evidence, never state. Nothing added here is read back to make a routing decision, and state.json remains the coordinator's only routing source.
+  - A cross-run record is a summary, not a copy. The per-run artifacts hold the detail, and a log that duplicates them inherits their size and loses its queryability.
+  - Which events are significant is read from the schema declaration. No condition in append_event decides it, and no second list of event kinds is introduced anywhere.
+  - The append path only appends. Every rewrite of a log happens at the single prune point, and it announces itself.
+  - The prune never repairs. A record it cannot parse stops it, and no line is dropped or rewritten to let it continue.
+  - events.log and execution-history.json keep exactly the format and content they have today. This story adds an output; it changes neither existing rendering, and schemas/execution-history.schema.json is unchanged.
+  - Inspection and adjudication logs are not created. Naming them as reserved in the schema is the whole of what this story does about them.
+  - Run directories, .harness/logs/ and their .gitignore status are unchanged, and the three hand-made archives under .harness/runs-archive/ stay as they are — they are preserved runs rather than summary records, and a different artifact.
+  - The harness stays target-agnostic. Nothing added here names this repository's test framework, layout or stack.
