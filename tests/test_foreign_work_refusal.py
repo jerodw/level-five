@@ -641,7 +641,8 @@ def test_a_clean_fresh_run_is_what_it_was_before_the_check_existed(target,
     assert state["escalation_commit"] == ""
 
     assert subject_of(target) == f"{STORY_ID}: {STORY_TITLE}"     # the commit
-    assert set(files_in(target)) == recorded_paths(target) | {DOC_OUTPUT}
+    assert set(files_in(target)) == (
+        recorded_paths(target) | {DOC_OUTPUT} | history_paths(target))
 
 
 def test_each_clean_run_expectation_above_can_fail(target, harness_root):
@@ -950,6 +951,37 @@ def recorded_paths(target_root: Path, story_id: str = STORY_ID) -> set[str]:
     return named
 
 
+def history_paths(target_root: Path) -> set[str]:
+    """The cross-run history lines this run itself wrote, if any.
+
+    Since story-082 a terminal path appends its record before it commits, so a
+    completed run's commit carries the run's own completion line as well as
+    what the stages left. That line is something *this run produced*, which is
+    what the assertions below are about — foreign work is what they refuse —
+    so it belongs in the expected set rather than being an exception to it.
+
+    Derived on both halves rather than spelled: the directory from the target's
+    own configuration through the resolution the coordinator uses, and the log
+    names from the schema that declares them, so a target relocating its
+    history or a schema declaring another log needs no edit here. Only logs the
+    run actually wrote are named, so a run that reached no declared kind
+    contributes nothing.
+
+    It cannot go vacuous in the direction that would matter: the assertions
+    below are set *equality*, so a helper that had stopped seeing a log the run
+    wrote and the commit carries reports a missing item rather than passing.
+    """
+    import harness_config
+
+    config = harness_config.load_config(target_root)
+    directory = harness_config.history_dir(target_root, config)
+    return {
+        str((directory / log).relative_to(target_root))
+        for log in story_coordinator.history_log_declarations(REPO_ROOT)
+        if (directory / log).is_file()
+    }
+
+
 def test_a_completed_runs_commit_holds_what_the_run_produced_and_nothing_older(
     target, harness_root,
 ):
@@ -968,7 +1000,8 @@ def test_a_completed_runs_commit_holds_what_the_run_produced_and_nothing_older(
     code, _ = run(target, harness_root)
     assert code == 0
 
-    assert set(files_in(target)) == recorded_paths(target) | {DOC_OUTPUT}
+    assert set(files_in(target)) == (
+        recorded_paths(target) | {DOC_OUTPUT} | history_paths(target))
     assert STRAY not in files_in(target)
     assert STRAY in files_in(target, developers)          # the control
 

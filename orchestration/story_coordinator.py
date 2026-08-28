@@ -5316,6 +5316,30 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     )
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
     _git(target_root, "add", "-A")
+    # The staging question is asked about the *work* and answered before
+    # anything is appended, then held. Appending first and looking at the index
+    # afterwards would make the tree dirty at the three-way choice every time,
+    # and the amend case below — a clean tree standing on this story's own
+    # escalation commit — would never occur again: the staged history line
+    # alone would route every completion to the ordinary commit. Asking first
+    # and re-staging afterwards keeps the choice about what the stages left and
+    # still sweeps the run's own completion record into the commit that
+    # completion leaves.
+    stages_left_work = _git(target_root, "diff", "--cached", "--quiet").returncode != 0
+    # The record is appended *before* the commit, which is the rule every
+    # terminal path follows: `_escalate`, the budget stop that goes through it,
+    # and `_pause` all write their record and then commit it. The cost is that a
+    # record states an outcome a moment before that outcome is demonstrably
+    # committed; the alternative is the untracked record this ordering exists to
+    # remove, so it is accepted. append_event is the only writer of the history
+    # logs and nothing later in the run stages anything, so a completion
+    # appended after the commit is a completion whose own record is untracked.
+    append_event(
+        run_dir,
+        f"story completed on branch {state.branch}",
+        kind="story-completed",
+    )
+    _git(target_root, "add", "-A")
     # Three outcomes, decided by what staging left and by what the branch tip
     # is. `--allow-empty` in two of them, for the reason the escalation commits
     # carry it: the commit is how a finished run is recognised —
@@ -5338,7 +5362,7 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     # `escalated_story`, by what the commit says about itself rather than by
     # its position or by counting — because rewriting anyone else's commit,
     # including another story's escalation, is not this run's to do.
-    if _git(target_root, "diff", "--cached", "--quiet").returncode != 0:
+    if stages_left_work:
         _git(target_root, "commit", "--allow-empty", "-m",
              completion_commit_message(state, title))
     elif _head_escalated(target_root) == state.story_id:
@@ -5347,11 +5371,6 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     else:
         _git(target_root, "commit", "--allow-empty", "-m",
              completion_commit_message(state, title))
-    append_event(
-        run_dir,
-        f"story completed on branch {state.branch}",
-        kind="story-completed",
-    )
     return 0
 
 

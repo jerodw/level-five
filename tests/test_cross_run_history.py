@@ -664,14 +664,16 @@ def land(root: Path, story_id: str, base: str) -> None:
     because the coordinator refuses to cut a new story branch from a previous
     story's branch. Fast-forward, since the base has not moved meanwhile.
 
-    The commit first is not bookkeeping: a run's completion commit is made
-    before the `story-completed` event is appended, so the last thing a
-    successful run does is write files — the run directory's own event record,
-    and now the history logs — that the commit did not sweep in. The tree the
-    run leaves is therefore dirty in tracked files, and a checkout away from
-    the branch refuses rather than discarding them. Committing them onto the
-    branch that produced them is what carries them onto the base, which is
-    what the assertion after this call reads.
+    The commit first is what carries whatever the run left onto the base, and
+    it is deliberately not conditioned on there being anything. Before
+    story-082 a completion appended its `story-completed` event *after* its
+    commit, so the last thing a successful run did was write files the commit
+    had not swept in — leaving the tree dirty in tracked files, which a
+    checkout away from the branch refuses rather than discards. That ordering
+    is now the other way round and this target's tree is clean here, so the
+    commit is usually an empty one. It stays because what this helper is for is
+    landing a finished branch whatever it left behind, and because an empty
+    commit costs the assertion after this call nothing.
     """
     conftest.commit_setup(root, f"Land {story_id}")
     git(root, "checkout", "-q", base)

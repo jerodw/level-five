@@ -11,6 +11,15 @@ nothing to commit standing on this story's own escalation commit, and nothing
 to commit anywhere else — are each entered for real rather than reasoned about
 from the source.
 
+Every amend case runs with a cross-run history directory established, which is
+what a real run has and what story-082 made matter: a completion now appends
+its own record before it commits, so a staged history line is present at the
+three-way choice, and a choice made on what is staged rather than on what the
+stages left would stop amending and undo this story silently. The two cases
+whose subject is an *empty* commit are driven without one, because a record to
+carry is precisely what they must not have; `complete` says so where the
+directory is established.
+
 The reading half is driven through **real merges**. `conftest.MERGE_METHODS`
 performs `git merge --no-ff`, `git merge --squash` followed by the commit a
 forge makes of it, and `git rebase` followed by a fast-forward, against
@@ -54,6 +63,7 @@ import pytest
 
 import conftest
 
+import harness_config
 import story_coordinator
 from agent_runner import AgentResult
 
@@ -151,6 +161,44 @@ def tracked_files(root: Path, revision: str = "HEAD") -> set[str]:
     return set(git(root, "ls-tree", "-r", "--name-only", revision).split())
 
 
+def changed_between(root: Path, first: str, second: str) -> set[str]:
+    return set(git(root, "diff", "--name-only", first, second).split())
+
+
+# --------------------------------------------------------------------------
+# The cross-run history a real completion also writes
+#
+# story-082 moved the run's own completion record above the commit that
+# completion leaves, so a completion driven with a history directory set stages
+# a line the choice below must not be confused by. Where the directory is, and
+# which logs live in it, are resolved through the harness rather than written
+# here.
+# --------------------------------------------------------------------------
+
+HISTORY_REL = harness_config.DEFAULT_HISTORY_DIR
+
+
+def history_paths(root: Path) -> set[str]:
+    """The repository-relative paths of the logs a completion wrote here."""
+    directory = Path(root) / HISTORY_REL
+    return {f"{HISTORY_REL}/{log}"
+            for log in story_coordinator.history_log_declarations()
+            if (directory / log).is_file()}
+
+
+def history_records(root: Path) -> list[dict]:
+    """Every cross-run record the run left, across every declared log."""
+    directory = Path(root) / HISTORY_REL
+    written = []
+    for log in story_coordinator.history_log_declarations():
+        path = directory / log
+        if path.is_file():
+            written += [json.loads(line)
+                        for line in path.read_text(encoding="utf-8").splitlines()
+                        if line.strip()]
+    return written
+
+
 # --------------------------------------------------------------------------
 # The repository `_complete` is driven against
 #
@@ -221,14 +269,43 @@ def completion_message(*, amended: bool) -> str:
 
 
 def complete(root: Path, *, coordinator=story_coordinator,
-             story_id: str = STORY_ID, title: str = STORY_TITLE) -> None:
-    """Finish a run in `root`, exactly as the coordinator finishes one."""
+             story_id: str = STORY_ID, title: str = STORY_TITLE,
+             history: bool = False) -> None:
+    """Finish a run in `root`, exactly as the coordinator finishes one.
+
+    `history` establishes a cross-run history directory for the completion, the
+    way `run_story` establishes one once per run. It matters to the cases that
+    turn on what staging left: since story-082 the completion appends its own
+    record before it commits, so a completion driven with a directory set
+    stages a history line the three-way choice below could be confused by —
+    and confusing it is exactly what would turn the amend case into the
+    ordinary one and silently undo this story. Driven without one,
+    `append_event` writes nothing to the tree and the cases go green under
+    conditions no real run has, which is why every amend case sets it.
+
+    It is not set everywhere, and the reason is worth stating: a completion
+    with a directory set always has something staged to commit, so the cases
+    below whose subject is an *empty* commit — the clean tree on an ordinary
+    tip, and the pre-story shape the mutant leaves for a rebase to drop — are
+    about a commit that carries nothing, and giving them a record to carry
+    would change their subject rather than strengthen them.
+
+    The record is asserted to have been written whenever one was asked for, so
+    a directory that stopped being established fails here rather than turning
+    every case that sets it back into a case that does not.
+    """
     run_dir = Path(root) / RUNS_REL / story_id
     run_dir.mkdir(parents=True, exist_ok=True)
     state = coordinator.RunState(story_id=story_id,
                                  branch=f"story/{story_id}")
     story = {"story": {"id": story_id, "title": title}}
-    assert coordinator._complete(run_dir, state, story, Path(root)) == 0
+    coordinator.set_history_dir(Path(root) / HISTORY_REL if history else None)
+    try:
+        assert coordinator._complete(run_dir, state, story, Path(root)) == 0
+    finally:
+        coordinator.set_history_dir(None)
+    assert bool(history_records(root)) == history, \
+        "the completion wrote a history record only when asked to"
 
 
 def dirty(root: Path) -> None:
@@ -251,6 +328,12 @@ def test_a_completion_with_something_to_commit_is_written_as_it_always_was(
     whether the tree is clean. So a green result here says the amend is
     conditioned on the tree and not on the tip alone, which no assertion about
     the dirty case by itself could say.
+
+    Both run with a history directory set, which is what a real run has and
+    what makes the pair the check on story-082's trap: the completion stages
+    its own record either way, so if the choice were made on what is staged
+    *after* the append rather than on what the stages left, the control below
+    would take this arm and stop amending.
     """
     subject = standing_on(tmp_path, escalation_message(STORY_ID),
                           name="content-to-commit")
@@ -258,7 +341,7 @@ def test_a_completion_with_something_to_commit_is_written_as_it_always_was(
     before = commit_count(subject)
     tracked_before = tracked_files(subject)
     dirty(subject)
-    complete(subject)
+    complete(subject, history=True)
 
     # A commit gained, not a commit rewritten: the escalation is still there,
     # with its own message, and it is the new tip's parent.
@@ -268,28 +351,34 @@ def test_a_completion_with_something_to_commit_is_written_as_it_always_was(
         escalation_message(STORY_ID).splitlines()[0]
     # The message is today's, with no amended paragraph in it.
     assert message_of(subject) == completion_message(amended=False)
-    # No new file: what the commit carries is the change the last stage made,
-    # and the run directory it also wrote is ignored.
-    assert tracked_files(subject) == tracked_before
+    # No new file beyond the run's own cross-run record: what the commit
+    # carries is the change the last stage made, and the run directory it also
+    # wrote is ignored.
+    assert tracked_files(subject) == tracked_before | history_paths(subject)
+    assert history_paths(subject), "the completion left no record to account for"
 
     control = standing_on(tmp_path, escalation_message(STORY_ID),
                           name="nothing-to-commit")
     control_before = commit_count(control)
-    complete(control)
+    complete(control, history=True)
     assert commit_count(control) == control_before, \
         "with nothing to commit the same tip is amended, not added to"
 
 
 def test_a_clean_tree_on_the_storys_own_escalation_commit_amends_it(tmp_path):
-    """The case the story adds, asserted on each of its consequences."""
+    """The case the story adds, asserted on each of its consequences.
+
+    Run with a history directory set, so the amend is observed under the
+    conditions a real run has: the completion appends its own record before it
+    commits, and the staged line must not turn this case into the ordinary one.
+    """
     root = standing_on(tmp_path, escalation_message(STORY_ID),
                        name="amended")
     escalation = git(root, "rev-parse", "HEAD").strip()
-    escalation_tree = tree_of(root, escalation)
     parent = git(root, "rev-parse", "HEAD~1").strip()
     before = commit_count(root)
 
-    complete(root)
+    complete(root, history=True)
 
     assert commit_count(root) == before, "an amend adds no commit"
     assert git(root, "rev-parse", "HEAD~1").strip() == parent
@@ -297,8 +386,13 @@ def test_a_clean_tree_on_the_storys_own_escalation_commit_amends_it(tmp_path):
         story_coordinator.completion_commit_subject(STORY_ID, STORY_TITLE)
     assert story_coordinator.COMPLETION_COMMIT_MARKER in message_of(root)
     # The tree the escalation committed, carried by the commit that now says
-    # the story finished: one commit doing both jobs is the whole repair.
-    assert tree_of(root) == escalation_tree
+    # the story finished: one commit doing both jobs is the whole repair. The
+    # only thing the amend adds to that tree is the run's own completion
+    # record, which is what the commit that says the story finished should
+    # carry — stated as an exact set, so a stage's work swept in here would be
+    # reported rather than absorbed.
+    assert changed_between(root, escalation, "HEAD") == history_paths(root)
+    assert history_paths(root), "the completion left no record to account for"
     assert conftest.CONSTRUCTED_WORK_REL in tracked_files(root)
 
 
@@ -312,7 +406,7 @@ def test_the_amended_body_records_the_escalation_and_the_dead_undo_command(
     """
     root = standing_on(tmp_path, escalation_message(STORY_ID),
                        name="amended-body")
-    complete(root)
+    complete(root, history=True)
     body = message_of(root)
 
     assert "escalated" in body
@@ -355,7 +449,7 @@ def test_another_storys_escalation_commit_is_never_amended(tmp_path):
     tip = git(subject, "rev-parse", "HEAD").strip()
     before = commit_count(subject)
 
-    complete(subject)
+    complete(subject, history=True)
 
     assert message_of(subject, tip) == composed(foreign), \
         "another story's escalation commit was rewritten"
@@ -366,7 +460,7 @@ def test_another_storys_escalation_commit_is_never_amended(tmp_path):
     control = standing_on(tmp_path, escalation_message(STORY_ID),
                           name="own-escalation")
     control_tip = git(control, "rev-parse", "HEAD").strip()
-    complete(control)
+    complete(control, history=True)
     assert git(control, "rev-parse", "HEAD").strip() != control_tip, \
         "the same call does rewrite this story's own escalation commit"
 
@@ -868,7 +962,12 @@ def revert_complete(tmp_path):
     return conftest.load_mutant(
         COORDINATOR_PATH,
         [(
-            '    if _git(target_root, "diff", "--cached", "--quiet").returncode != 0:\n'
+            # Anchored on the branch as it stands: story-082 moved the staging
+            # question above the append, so the condition is now the answer it
+            # recorded rather than a fresh look at the index. Same mutation,
+            # same subject — the amend arm removed, leaving the unconditional
+            # commit `_complete` wrote before story-065.
+            '    if stages_left_work:\n'
             '        _git(target_root, "commit", "--allow-empty", "-m",\n'
             '             completion_commit_message(state, title))\n'
             '    elif _head_escalated(target_root) == state.story_id:\n'
