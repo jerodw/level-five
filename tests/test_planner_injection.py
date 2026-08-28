@@ -617,7 +617,8 @@ def test_the_workflow_defines_the_four_expected_stages():
     assert len(set(stage_names())) == len(stage_names())
     assert declared_restrictions()
     assert all(stage in stage_names() for stage, _ in declared_restrictions())
-    assert rules()["blocked_paths"] == [".git/", ".harness/runs/", "rules/"]
+    assert rules()["blocked_paths"] == [
+        ".git/", ".harness/runs/", ".harness/history/", "rules/"]
 
     deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
     assert [stage["name"] for stage in deployed["stages"]] == [
@@ -750,7 +751,8 @@ def test_workflow_context_and_build_context_render_blocked_paths_identically(
     )
     injected = context_assembler.workflow_context(workflow(), the_rules)
     assert built["blocked_paths"] == injected["blocked_paths"]
-    assert built["blocked_paths"] == "- .git/\n- .harness/runs/\n- rules/"
+    assert built["blocked_paths"] == (
+        "- .git/\n- .harness/runs/\n- .harness/history/\n- rules/")
 
 
 # --------------------------------------------------------------------------

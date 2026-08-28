@@ -900,19 +900,24 @@ def test_the_blocked_prefix_is_the_one_the_fixture_rules_declare():
     assert not any("src/app.py".startswith(prefix) for prefix in blocked)
 
 
-# UNVERIFIED, and deliberately not asserted here: that *this* repository's
-# `rules/execution-rules.json` lists the history directory in `blocked_paths`.
-# It does not. The story says that entry "is made by hand and committed before
-# this run starts, because rules/ is blocked for every stage of every story and
-# no stage exception can lift a blocked path", and the hand edit was not made —
-# the shipped rule set still carries only `.git/`, `.harness/runs/` and
-# `rules/`. No stage of this run may add it, this one included, so an assertion
-# of it here could only be a permanently red test or a vacuous one, and neither
-# is validation. What the harness *does* about such an entry is asserted above,
-# against the fixture's own rules, in both directions: a stage record naming a
-# path beneath a blocked history directory escalates the run with a blocked-path
-# reason, and the same record without the prefix completes. Whoever makes the
-# hand edit should add the one-line read of the shipped file back here.
+def test_this_repository_blocks_the_history_directory_to_every_stage():
+    """The deployment fact, read out of the shipped rule set.
+
+    The tests above hold the *behaviour* — a stage record naming a path
+    beneath a blocked history directory escalates the run, and the same
+    record without the prefix completes — against the fixture's own rules.
+    This one holds the half those cannot: that this repository's own
+    `rules/execution-rules.json` carries the entry, so a stage of a real run
+    cannot edit the record of its own execution. It is a positive assertion
+    about a shipped file: drop the entry and it fails here.
+
+    No stage may write that file — `rules/` is blocked for every stage of
+    every story — so the entry is made by hand and asserted here.
+    """
+    shipped = json.loads(
+        (REPO_ROOT / "rules" / "execution-rules.json").read_text(
+            encoding="utf-8"))
+    assert BLOCKED_HISTORY_PREFIX in shipped["blocked_paths"]
 
 
 def git_ignores(relative: str) -> bool:
