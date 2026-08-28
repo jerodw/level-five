@@ -97,14 +97,19 @@ THIS_REPO_CONFIG = harness_config.load_config(REPO_ROOT)
 #: anything the harness would pick is impossible rather than unlikely.
 TOKEN = "xyzzy"
 
-#: The keys whose value cannot carry the token, with the reason. One entry,
-#: and it is a fact about the value's *type* rather than a concession: a
-#: duration is parsed to a number and a value that is not one refuses the run,
-#: so a token in it would prove nothing about anything.
+#: The keys whose value cannot carry the token, with the reason. Every entry
+#: is a fact about the value's *type* rather than a concession: a duration is
+#: parsed to a number and a value that is not one refuses the run, so a token
+#: in it would prove nothing about anything.
 TOKEN_EXEMPT: dict[str, str] = {
     "max_pause_wait_seconds": (
         "the value is a duration in seconds, parsed to a number and refused at "
         "pre-flight when it is not one, so it cannot carry a word"
+    ),
+    "history_retention_days": (
+        "the value is a retention bound in days, parsed to a non-negative "
+        "number and refused at the prune when it is not one, so it cannot "
+        "carry a word"
     ),
 }
 
@@ -117,12 +122,23 @@ PAUSE_WAIT = 4919
 WITHIN_THE_BOUND = PAUSE_WAIT - 19
 BEYOND_THE_BOUND = PAUSE_WAIT + 61
 
+#: How far back the retention fixture is configured to keep records. A bound no
+#: harness would choose and this repository does not configure, standing in for
+#: the token the value cannot carry, and pinned from both sides by the proof —
+#: a record just outside it is dropped, one just inside it is kept — so the
+#: number itself is what is being obeyed rather than merely something non-zero.
+RETENTION_DAYS = 4363
+DROPPED_AT_THE_BOUND = RETENTION_DAYS + 11
+KEPT_AT_THE_BOUND = RETENTION_DAYS - 11
+
 VARYING: dict[str, object] = {
     "allowed_tools": ["Bash(xyzzy:*)"],
     "architecture_docs": ["docs/xyzzy-architecture.md"],
     "base_branch": "xyzzy-base",
     "branch_prefix": "xyzzy-branch/",
     "census_command": "xyzzy-census --count",
+    "history_dir": ".harness/xyzzy-history",
+    "history_retention_days": str(RETENTION_DAYS),
     "logs_dir": ".harness/xyzzy-logs",
     "max_pause_wait_seconds": str(PAUSE_WAIT),
     "model": "xyzzy-model",
@@ -149,6 +165,8 @@ FALLBACKS: dict[str, object] = {
     "base_branch": None,
     "branch_prefix": "story/",
     "census_command": None,
+    "history_dir": harness_config.DEFAULT_HISTORY_DIR,
+    "history_retention_days": None,
     "logs_dir": ".harness/logs",
     "max_pause_wait_seconds": story_coordinator.NO_PAUSE_WAIT,
     "model": None,
@@ -203,6 +221,12 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "census_command": Proof(
         "test_census_command_is_the_command_the_suite_census_runs",
+        BEHAVIOURAL),
+    "history_dir": Proof(
+        "test_history_dir_is_where_the_cross_run_records_are_written",
+        BEHAVIOURAL),
+    "history_retention_days": Proof(
+        "test_history_retention_days_is_the_bound_the_prune_applies",
         BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
@@ -284,6 +308,16 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("census_command")',
          "None"),
+    ),
+    "history_dir": (
+        ("orchestration/harness_config.py",
+         'config.get("history_dir", DEFAULT_HISTORY_DIR)',
+         "DEFAULT_HISTORY_DIR"),
+    ),
+    "history_retention_days": (
+        ("orchestration/story_coordinator.py",
+         "configured = config.get(HISTORY_RETENTION_KEY)",
+         "configured = None"),
     ),
     "logs_dir": (
         ("orchestration/story_coordinator.py",
@@ -633,7 +667,7 @@ def clean_clone_record(run: Run) -> dict:
 
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
-    "census_command",
+    "census_command", "history_dir", "history_retention_days",
     "logs_dir", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "standards_dir",
     "stories_dir", "test_command", "test_selection_command", "tests_dir",
@@ -772,32 +806,68 @@ def test_the_three_runner_arguments_are_the_only_proofs_recorded_as_argument_lis
 # --------------------------------------------------------------------------
 
 
-def keys_read_in(path: Path) -> set[str]:
-    """Every literal key read out of a `config` mapping in one source file.
+def _module_level_strings(tree: ast.Module) -> dict[str, str]:
+    """Module-level names bound to a string literal, and what they are bound to.
 
-    Both forms the harness uses: `config.get("key")` and `config["key"]`. A
-    subscript through a *variable* is not a literal read and is not collected
-    — `harness_config.load_config` builds the mapping with `config[key]`, and
-    counting that would report the parser's own loop variable as a key.
+    A key named once at module scope and read through that name is still a
+    read: `story_coordinator` spells `history_retention_days` as a constant so
+    that the key and the sentence announcing a prune cannot disagree. Resolving
+    the binding is what keeps the equality below a statement about the keys the
+    harness reads rather than about how it spells them. Only module scope is
+    resolved, so a local variable — the loop variable
+    `harness_config.load_config` builds its mapping through — resolves to
+    nothing and is not collected.
+    """
+    bound: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not (isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                bound[target.id] = node.value.value
+    return bound
+
+
+def keys_read_in(path: Path) -> set[str]:
+    """Every key read out of a `config` mapping in one source file.
+
+    Both forms the harness uses: `config.get(key)` and `config[key]`, where the
+    key is a string literal or a module-level name bound to one. A subscript
+    through any *other* variable is not a read of a named key and is not
+    collected — `harness_config.load_config` builds the mapping with
+    `config[key]` inside a loop, and counting that would report the parser's own
+    loop variable as a key.
     """
     found: set[str] = set()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    constants = _module_level_strings(tree)
+
+    def named(node) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return constants.get(node.id)
+        return None
+
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "get"
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "config"
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)):
-            found.add(node.args[0].value)
+                and node.args):
+            key = named(node.args[0])
+            if key is not None:
+                found.add(key)
         if (isinstance(node, ast.Subscript)
                 and isinstance(node.value, ast.Name)
-                and node.value.id == "config"
-                and isinstance(node.slice, ast.Constant)
-                and isinstance(node.slice.value, str)):
-            found.add(node.slice.value)
+                and node.value.id == "config"):
+            key = named(node.slice)
+            if key is not None:
+                found.add(key)
     return found
 
 
@@ -877,11 +947,46 @@ def test_the_scan_does_not_count_a_subscript_through_a_variable(tmp_path):
         encoding="utf-8")
     assert keys_read_under([planted]) == set()
     # And over the real module, which both builds the mapping that way *and*
-    # reads one key by name: exactly the literal read is counted, and neither
-    # of the two variables the mapping is built through joins it.
+    # reads keys by name: exactly the named reads are counted, and neither of
+    # the two variables the mapping is built through joins them.
     read = keys_read_in(REPO_ROOT / "orchestration" / "harness_config.py")
-    assert read == {"tests_dir"}
+    assert read == {"tests_dir", "history_dir"}
     assert not read & {"key", "current_list"}
+
+
+def test_the_scan_resolves_a_key_read_through_a_module_level_constant(tmp_path):
+    """The other half of the scan's claim, also constructed.
+
+    A key spelled once at module scope and read through that name is still a
+    key the harness reads. A scan that saw only string literals would report
+    such a key as unread, and the equality above would then have to be weakened
+    to accommodate a key the schema declares and the scan cannot see — which is
+    how a coverage rule stops meaning anything.
+    """
+    planted = tmp_path / "reads_through_a_constant.py"
+    planted.write_text(
+        'SOME_KEY = "xyzzy_named"\n'
+        "def read(config):\n"
+        "    return config.get(SOME_KEY), config[SOME_KEY]\n",
+        encoding="utf-8")
+    assert keys_read_under([planted]) == {"xyzzy_named"}
+
+    # And the negative half: a name bound inside a function is not a module
+    # constant, so it resolves to nothing rather than to whatever a same-named
+    # constant elsewhere happens to hold.
+    local = tmp_path / "reads_through_a_local.py"
+    local.write_text(
+        "def read(config, names):\n"
+        "    for chosen in names:\n"
+        "        yield config.get(chosen)\n",
+        encoding="utf-8")
+    assert keys_read_under([local]) == set()
+
+    # And over the real module that does it: the constant the coordinator
+    # spells the retention key with resolves to the key the schema declares.
+    read = keys_read_in(REPO_ROOT / "orchestration" / "story_coordinator.py")
+    assert "history_retention_days" in read
+    assert "HISTORY_RETENTION_KEY" not in read
 
 
 # --------------------------------------------------------------------------
@@ -928,20 +1033,25 @@ def test_every_varying_value_carries_the_distinctive_token():
         assert TOKEN in rendered, key
 
 
-def test_the_token_exempt_key_states_why_and_carries_a_value_of_its_own():
+def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
     """What stands in for the token where the token cannot go.
 
-    A duration cannot carry a word, so what makes its value one the harness
-    would never pick is the number itself: distinct from the fallback, from
-    this repository's own configured bound, and pinned from both sides by the
-    proof rather than merely non-zero.
+    A number cannot carry a word, so what makes an exempt key's value one the
+    harness would never pick is the number itself: distinct from the fallback,
+    distinct from anything this repository configures, and pinned from both
+    sides by its proof rather than merely non-zero. The exemption is held shut
+    from both directions — every exempt key must be declared, and every exempt
+    key must state a reason — so it cannot be widened by a value that quietly
+    stops carrying the token.
     """
-    assert TOKEN_EXEMPT == {"max_pause_wait_seconds": TOKEN_EXEMPT[
-        "max_pause_wait_seconds"]}
-    assert TOKEN_EXEMPT["max_pause_wait_seconds"].strip()
-    assert str(PAUSE_WAIT) != FALLBACKS["max_pause_wait_seconds"]
-    assert str(PAUSE_WAIT) != THIS_REPO_CONFIG.get("max_pause_wait_seconds")
+    assert set(TOKEN_EXEMPT) <= set(DECLARED)
+    for key, reason in TOKEN_EXEMPT.items():
+        assert reason.strip(), key
+        assert VARYING[key] != FALLBACKS[key], key
+        assert VARYING[key] != THIS_REPO_CONFIG.get(key), key
+
     assert WITHIN_THE_BOUND < PAUSE_WAIT < BEYOND_THE_BOUND
+    assert KEPT_AT_THE_BOUND < RETENTION_DAYS < DROPPED_AT_THE_BOUND
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -971,7 +1081,7 @@ def test_the_decay_check_reports_a_proof_value_set_to_this_repositorys_own(key):
 
 
 # --------------------------------------------------------------------------
-# The ten behavioural proofs
+# The behavioural proofs
 # --------------------------------------------------------------------------
 
 
@@ -1036,6 +1146,90 @@ def test_logs_dir_is_where_the_stage_log_is_written(tmp_path):
     assert expected.is_file()
     assert not (run.target / ".harness" / "logs").exists()
     assert run.argument("log_path") == [expected] * len(run.stages)
+
+
+#: The logs the cross-run history declares, read off the declaration rather
+#: than written here: the two proofs below need somewhere to look and something
+#: to seed, and which logs exist is settled in the schema.
+HISTORY_LOGS = tuple(schema_validator.load_schema(
+    story_coordinator.CROSS_RUN_HISTORY_SCHEMA)["properties"])
+
+
+def seeded_history(target: Path, directory: str, days_ago: dict[str, float]) -> None:
+    """Write one record per marker into every declared log, and commit them.
+
+    Committed because a run refuses to start from a tree holding work it cannot
+    account for, and a history the test seeded is part of the repository the run
+    starts *from*.
+    """
+    path = target / directory
+    path.mkdir(parents=True, exist_ok=True)
+    for log in HISTORY_LOGS:
+        lines = []
+        for marker, age in sorted(days_ago.items()):
+            when = time.strftime(
+                story_coordinator.HISTORY_TIMESTAMP_FORMAT,
+                time.localtime(time.time() - age * 86400))
+            lines.append(json.dumps({"story_id": marker, "timestamp": when}))
+        (path / log).write_text("".join(f"{line}\n" for line in lines),
+                                encoding="utf-8")
+    _git(target, "add", "-A")
+    _git(target, "commit", "-q", "-m", "a history this run did not produce")
+
+
+def history_markers(target: Path, directory: str, log: str) -> list[str]:
+    text = (target / directory / log).read_text(encoding="utf-8")
+    return [json.loads(line)["story_id"] for line in text.splitlines() if line]
+
+
+def test_history_dir_is_where_the_cross_run_records_are_written(tmp_path):
+    """The configured directory holds the run's cross-run records, and the
+    default holds nothing.
+
+    A harness that had stopped reading the key would write the same records to
+    `.harness/history`, where the second assertion finds them.
+    """
+    run = complete_run(tmp_path)
+    configured = run.target / str(VARYING["history_dir"])
+    assert configured.is_dir()
+    assert {path.name for path in configured.iterdir()} <= set(HISTORY_LOGS)
+    assert {path.name for path in configured.iterdir()}
+    assert not (run.target / harness_config.DEFAULT_HISTORY_DIR).exists()
+    # The record really is this run's, so the directory is where the harness
+    # wrote rather than merely a directory it created.
+    written = [json.loads(line) for log in configured.iterdir()
+               for line in log.read_text(encoding="utf-8").splitlines() if line]
+    assert [record for record in written if record["story_id"] == STORY_ID]
+    assert harness_config.history_dir(run.target, run.config) == configured
+
+
+def test_history_retention_days_is_the_bound_the_prune_applies(tmp_path):
+    """The configured bound decides both halves, observed rather than read.
+
+    A seeded record older than the bound is dropped and one newer than it is
+    kept, so the number itself is what is being obeyed. A harness that had
+    stopped reading the key would fall back to keeping everything and leave the
+    older record where it was.
+    """
+    values = fixture_config()
+    directory = str(values["history_dir"])
+    harness = build_harness(tmp_path)
+    target = build_target(tmp_path, values)
+    seeded_history(target, directory, {"older-record": DROPPED_AT_THE_BOUND,
+                                       "newer-record": KEPT_AT_THE_BOUND})
+    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    runner = RecordingRunner(run_dir)
+    code = story_coordinator.run_story(STORY_ID, harness, target, runner)
+
+    assert code == 0, runner.calls
+    for log in HISTORY_LOGS:
+        surviving = history_markers(target, directory, log)
+        assert "older-record" not in surviving, log
+        assert "newer-record" in surviving, log
+    # The rewrite announced itself, so a committed record was never dropped in
+    # silence.
+    assert f"history_retention_days={RETENTION_DAYS}" in (
+        run_dir / "events.log").read_text(encoding="utf-8")
 
 
 def test_standards_dir_is_where_the_injected_standards_are_read_from(tmp_path):
@@ -1381,7 +1575,7 @@ def test_the_proof_for_each_key_goes_red_when_that_key_stops_being_read(
         key, tmp_path):
     """For every declared key, not for a sample of them.
 
-    This is the assertion that makes the twelve above mean something. A proof
+    This is the assertion that makes the proofs above mean something. A proof
     that configured its key and then asserted nothing about its effect would
     satisfy the coverage checks, satisfy the no-default check, and pass in a
     copy that no longer reads the key at all — and only this reports it.

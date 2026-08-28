@@ -263,12 +263,19 @@ def target(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def quiet_target(tmp_path: Path) -> Path:
-    """The same repository with its run directory ignored.
+    """The same repository with its run directory and its history ignored.
 
     The one shape in which an escalation can find nothing to commit: with the
-    run directory tracked, every run dirties the tree by writing state.json.
+    run directory tracked, every run dirties the tree by writing state.json,
+    and with the cross-run history tracked every run dirties it again by
+    appending the record of its own outcome. A target is free to decline to
+    version its history; this repository versions its own, and that decision
+    is asserted where it belongs rather than here.
     """
-    return build_target(tmp_path / "quiet-target", gitignore=".harness/runs/\n")
+    return build_target(
+        tmp_path / "quiet-target",
+        gitignore=".harness/runs/\n.harness/history/\n",
+    )
 
 
 @pytest.fixture

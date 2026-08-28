@@ -6,6 +6,7 @@
     "clean-clone-result",
     "correction-pass",
     "cost-record",
+    "cross-run-history",
     "execution-history",
     "harness-config",
     "retry-guidance",

@@ -211,6 +211,14 @@ def git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
                           capture_output=True, text=True, check=check)
 
 
+#: What a target ignores when a test needs an escalation to find nothing to
+#: commit. The run directory dirties the tree by writing state.json, and the
+#: cross-run history dirties it again by appending the record of the run's own
+#: outcome; a target is free to decline to version its history, and whether
+#: this repository versions its own is asserted where that decision lives.
+QUIET_GITIGNORE = ".harness/runs/\n.harness/history/\n"
+
+
 def build_target(root: Path, *, harness_inside: bool,
                  gitignore: str = "") -> Path:
     """A target repository, optionally carrying the harness inside it.
@@ -619,7 +627,7 @@ def test_an_escalation_that_committed_nothing_refuses_in_neither_fixture(
     for name, harness_inside in (("quiet-shared", True),
                                  ("quiet-separate", False)):
         root = build_target(tmp_path / name, harness_inside=harness_inside,
-                            gitignore=".harness/runs/\n")
+                            gitignore=QUIET_GITIGNORE)
         harness = root if harness_inside else separate_harness
         escalate(root, harness, edit=False)
 
@@ -630,7 +638,7 @@ def test_an_escalation_that_committed_nothing_refuses_in_neither_fixture(
         # refuse — so the empty result above is the empty commit's doing.
         loud = build_target(tmp_path / f"{name}-edited",
                             harness_inside=harness_inside,
-                            gitignore=".harness/runs/\n")
+                            gitignore=QUIET_GITIGNORE)
         loud_harness = loud if harness_inside else separate_harness
         escalate(loud, loud_harness, edit=True)
         assert state_of(loud)["escalation_commit"] != ""
@@ -724,7 +732,7 @@ def test_an_unestablishable_root_falls_through_to_the_revision_comparison(
     does refuse.
     """
     target = build_target(tmp_path / "fallthrough", harness_inside=False,
-                          gitignore=".harness/runs/\n")
+                          gitignore=QUIET_GITIGNORE)
     fake = build_harness(tmp_path / "harness-not-a-repo", as_repository=False)
     assert story_coordinator._revision(fake) == ""
     assert story_coordinator.same_repository(target, fake) is False
@@ -738,7 +746,7 @@ def test_an_unestablishable_root_falls_through_to_the_revision_comparison(
     assert resumed.calls[0] == VERIFIER_STAGE["name"]
 
     control = build_target(tmp_path / "fallthrough-control",
-                           harness_inside=False, gitignore=".harness/runs/\n")
+                           harness_inside=False, gitignore=QUIET_GITIGNORE)
     escalate(control, separate_harness)
     assert guard(control, separate_harness) != []           # the control
 
