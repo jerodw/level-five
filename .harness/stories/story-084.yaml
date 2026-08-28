@@ -1,0 +1,123 @@
+story:
+  id: story-084
+  title: A rerun keeps the output that explains it
+  description: |
+    A self-route caused by a red suite writes its reason into a self-route
+    record and points the reader at the suite run's output file. The rerun it
+    triggers overwrites that file, and the result record beside it, with the
+    next run's. By the time a human reads the record, the artifact it cites
+    holds a different run - usually the green one that ended the story - and
+    nothing says so. The loss is silent and total: a reader cannot tell an
+    overwritten file from a first run's.
+
+    This story keeps every suite run the coordinator makes. The canonical pair
+    at the run-directory root keeps its present meaning exactly - the most
+    recent run - so every reader that already knows those names reads what it
+    read before. Beside it, each run also writes a pair keyed by the stage, the
+    attempt and the try, derived from the artifact name the workflow declares,
+    so no run's evidence is written over by the run after it. The self-route
+    record and the statement it hands the re-running stage cite the keyed pair,
+    which is the path that will still hold what that self-route saw.
+
+    The try number is the one the invocation's own prompt file already carries,
+    so the prompt a stage was given and the suite run judging that turn share a
+    key rather than two derivations that happen to agree.
+
+    Retention is unbounded and the bound is structural: one pair per
+    invocation, invocations per attempt no more than the stage's declared
+    self-route budget plus one, attempts no more than the retry budget. The
+    files are small and run directories are gitignored, so nothing here prunes
+    and no configured key is added.
+
+    Evidence only. Nothing routes on a retained file, no branch reads one, and
+    the reason text a self-route writes is unchanged - it stays a truncated
+    summary, and what changes is what it points at.
+  workflow: story-workflow
+
+tasks:
+  - Add a function to orchestration/story_coordinator.py that derives a suite run's retained result filename from the declared artifact name together with the stage, the attempt and the try, in the shape self_route_result_file and prompt_file already use, accepting a wildcard try number so discovery and writing share one spelling.
+  - Give suite_run_check the attempt and the try number as required keyword-only arguments, so no call site can write an unkeyed run by omission.
+  - Have suite_run_check write the retained pair - the result record and the whole combined output - beside the canonical pair it already writes, with each record's output_path naming the output file that sits beside it, so both pairs are internally consistent.
+  - Have the returned result name the retained output, so the self-route record and statement cite the paths that survive the next run rather than the canonical stem.
+  - Name the retained result record rather than the canonical artifact in the self-route's artifacts list at the suite-failed site, so the record's artifacts array and its statement both lead to that run's evidence.
+  - Include the retained names in interrupted_attempt_artifacts and entry_artifacts, derived through the same function that writes them and the workflow's own suite-run declaration, so a resume that zeroes the self-route count does not write over the interrupted attempt's retained runs.
+  - Adapt the existing assertions that pin the self-route's cited path to the canonical output filename, and the docstring that describes the overwrite this story removes.
+  - Write a standing test module for the retention - that two suite runs both survive, that a single-run story keeps the same shape, that each cited path resolves to its own run, that a resume does not overwrite, and that nothing routes on any of it.
+  - Record the retained pair in .harness/docs/ARCHITECTURE.md, in the section on the suite runs the coordinator makes, together with the bound and the fact that nothing reads a retained file.
+
+acceptance_criteria:
+  - A run in which a stage self-routes on a red suite leaves both suite runs readable afterwards - each run's result record and each run's whole combined output.
+  - The retained filenames are derived from the artifact name the workflow declares, keyed by stage, attempt and try, and no artifact name is spelled anywhere in orchestration/.
+  - The try number a suite run is keyed by is the same number the prompt file for the invocation it judges carries, so the first suite run of an attempt is try 0 and the run after the first self-route is try 1.
+  - suite-run-result.json and its output file are still written at the run-directory root and still hold the most recent run, so every existing reader of those names sees what it saw before this story.
+  - The output_path in each retained record names the retained output file beside it, and the output_path in the canonical record names the canonical output file beside it - neither record points at the other's.
+  - The artifacts array of a self-route record caused by a red suite names the retained result record and the retained output file, and its statement names those same paths.
+  - The path a self-route record cites holds the output of the run that self-route was caused by, in a run whose later suite run passed.
+  - A story with a single suite run writes the retained pair too, so the common case is not a special case.
+  - The self-route reason is unchanged - it still carries the truncated failure summary it carried before, and is not widened to carry more failures.
+  - A resume of an interrupted attempt archives that attempt's retained pairs before the resumed stage's first suite run writes on those names.
+  - A workflow that declares no suite run writes neither pair, exactly as it wrote neither file before.
+  - No coordinator decision reads a retained file - the routing a run takes on a green or a red suite is exactly what it was before this story.
+  - The clean-clone check and the revert check write what they wrote before, under the names they wrote it under.
+  - The suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read suite_output_file, _write_suite_output and suite_run_check at orchestration/story_coordinator.py:1780-1805 and 2257-2352, and self_route_result_file and prompt_file at 3758-3788, so the retained name is written in the shape those two already establish.
+    - Add the retained-name function beside self_route_result_file, taking the declared artifact, the stage, the attempt and the try number, stripping the .json suffix the way suite_output_file already does and accepting a wildcard try. The retained output filename comes from passing the retained result name to suite_output_file, so the output name is derived once and not twice.
+    - Give suite_run_check required keyword-only attempt and try_number arguments, and write the retained result and the retained output there, beside the canonical pair. Build the record once and write the two copies with each copy's output_path set to the output file beside it, in the pointer-rewriting shape _archive_companion_output already uses for an archived record.
+    - Return a result whose output_path is the retained output, so the caller's self-route names what survives.
+    - At the suite-failed site around orchestration/story_coordinator.py:6548, pass the attempt and state.self_route_count into suite_run_check, and derive the retained result name through the same function for the self-route's artifacts list.
+    - Add the retained result and retained output globs to entry_artifacts and to the discovery interrupted_attempt_artifacts uses, reading the declared artifact off suite_run_declaration so the names come from the loaded workflow rather than from a literal.
+    - Run tests/test_coordinator_runs_the_suite.py and repair the assertions the new cited path makes wrong.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The retained-name function, suite_run_check's new arguments and second write, the returned output_path, the self-route artifacts list at the suite-failed site, and the resume-time discovery in entry_artifacts and interrupted_attempt_artifacts.
+    - file: tests/test_coordinator_runs_the_suite.py
+      stage: implementer
+      reason: Two assertions spell the self-route's cited path as the canonical output filename, and a third test's docstring describes the overwrite this story removes.
+      reverting_breaks_the_suite: test_the_statement_names_both_the_record_and_the_path_to_the_output asserts the record's artifacts array equals the canonical artifact and the canonical output path, and test_the_re_run_invocation_is_given_the_record_and_the_output_path asserts that same canonical path appears in the re-run's prompt. Both paths become the retained ones the moment the change lands, so reverting these edits leaves two assertions describing paths the coordinator no longer cites, and the suite fails on them.
+    - file: tests/test_retained_suite_runs.py
+      stage: tester
+      reason: The standing module for the retention - both runs of a red-then-green story readable afterwards, the single-run case keeping the same shape, each cited path resolving to its own run, a resume not writing over an interrupted attempt's pairs, an undeclared workflow writing neither pair, and nothing routing on any of it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section on the suite runs the coordinator makes gains the retained pair, what keys it, why the canonical pair still means the most recent run, the structural bound on how many are kept, and that nothing reads them.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_coordinator_runs_the_suite.py
+    - tests/test_retained_suite_runs.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - schemas/
+    - .harness/config.yaml
+    - prompts/
+    - The clean-clone check and the revert check - clean_clone_check, run_clean_clone, revert_check and _run_selection
+    - self_route_statement's suite-failed text beyond the paths it names
+    - The self-route budget, the retry budget, and every routing decision
+
+verification_requirements:
+  - Confirm by driving a run through two coordinator suite runs that both runs' records and both runs' whole outputs are readable when the run ends, and that the path the self-route record names holds the failing run rather than the later one.
+  - Confirm the retained names are derived from the declared artifact and the invocation's own try number - the same number the prompt file for that invocation carries - rather than from a literal written in orchestration/.
+  - Confirm a run with a single suite run writes the retained pair, so the retention shape is not conditional on a self-route having happened.
+  - Confirm each record's output_path names the file beside it, by reading both records of a two-run story and following both pointers.
+  - Confirm the canonical pair still holds the most recent run and is still what the verifier's rendered context is given.
+  - Confirm the self-route reason still truncates - the summary it carries is the one it carried before, not a widened list.
+  - Confirm a resume archives an interrupted attempt's retained pairs before the resumed stage's first suite run lands on those names, by search over the discovery functions as well as by driving it.
+  - Confirm nothing routes on a retained file - no coordinator decision reads one, and a green or red suite produces the routing it produced before.
+  - Confirm the clean-clone check and the revert check write what they wrote before, under the names they wrote it under.
+  - Confirm the new test module's assertions can fail - each carries a control showing it reports when the property it asserts is absent.
+
+constraints:
+  - The canonical pair keeps its present meaning. Nothing that reads suite-run-result.json or its output file by name may find something different from what it found before this story.
+  - Do not make a retained file a routing input. Nothing branches on one, and no escalation, refusal or verdict consults one.
+  - Do not change when a self-route fires, how many are allowed, or what its reason says. The reason stays a truncated summary for a prompt; only the path it points at moves.
+  - Do not prune, expire or delete a retained file, and do not add a configured retention key. The bound is the self-route and retry budgets the workflow already declares.
+  - Do not change the clean-clone check or the revert check. Each runs once per run and overwrites nothing, and neither is what this story is about.
+  - Do not rename or remove a field of the suite run record, and do not change its schema. A retained record is the same shape as the canonical one.
+  - Standard library only, and no artifact name is written in orchestration/ - the retained names derive from the artifact the workflow declares.
+  - Do not weaken or delete an existing assertion to make it pass. The assertions this story adapts are adapted to the paths the coordinator now cites, not loosened.
