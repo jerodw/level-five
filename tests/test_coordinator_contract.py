@@ -92,12 +92,19 @@ def harness_root(tmp_path: Path) -> Path:
 RETRY_CATEGORY, RETRY_STAGE = first_retry_route(WORKFLOW)
 
 # Every status the coordinator may write. A run starts `running` and ends in
-# one of ENDING_STATUSES; the source check below fails if a fourth appears.
-# Ending is not the same as final: since story-020 an `escalated` run can be
-# resumed, which returns its status to `running`. `completed` is the one a
-# rerun still refuses.
+# one of ENDING_STATUSES; the source check below fails if one outside this set
+# appears. Ending is not the same as final: since story-020 an `escalated` run
+# can be resumed, which returns its status to `running`. `completed` is the one
+# a rerun still refuses.
 ENDING_STATUSES = {"completed", "escalated"}
-STATUSES = {"running", *ENDING_STATUSES}
+#: Since story-080 a run can also stop without ending. A stage invocation that
+#: failed because capacity ran out leaves the run `paused`: no counter was
+#: spent, no summary was written, and a resume continues it where it stopped.
+#: It is deliberately outside ENDING_STATUSES — a pause is an interruption, not
+#: an outcome — and inside the pinned set below, which is what stops a fifth
+#: status appearing unnoticed.
+PAUSED_STATUS = "paused"
+STATUSES = {"running", PAUSED_STATUS, *ENDING_STATUSES}
 
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}

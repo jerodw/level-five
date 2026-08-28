@@ -36,6 +36,7 @@
           "correction-pass-recorded",
           "self-routed",
           "budget-stopped",
+          "capacity-paused",
           "escalated",
           "story-completed",
           "note"

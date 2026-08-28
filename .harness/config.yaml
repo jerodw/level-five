@@ -8,6 +8,14 @@ branch_prefix: story/
 # base_branch: develop
 permission_mode: acceptEdits
 # model: leave unset to use the developer's default Claude Code model
+# How long a run paused because capacity ran out may wait in place before the
+# process exits, in seconds — five hours here. It bounds a wait whose length
+# the harness has been told: a signal naming a reset time within it is slept
+# to and the stage re-entered, one naming a reset time beyond it exits, and one
+# naming no reset time exits without sleeping at all. The pause is written and
+# committed before any sleep begins, so a process killed while waiting leaves a
+# run a fresh l5-run resumes at the stage it paused on.
+max_pause_wait_seconds: 18000
 stories_dir: .harness/stories
 runs_dir: .harness/runs
 logs_dir: .harness/logs

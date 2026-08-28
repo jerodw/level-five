@@ -1154,7 +1154,18 @@ def test_the_same_scan_reports_a_bypass_that_was_planted(expected):
     """The control for the scan above, once per kind of bypass the story
     forbids: planted into a copy of the source, which the same scan does
     report."""
-    anchor = "    if state is None or state.status == \"escalated\":"
+    # The condition as it now stands, taken from the guard the scan itself
+    # locates rather than written out a second time. It used to be spelled
+    # here, and story-080 adding `paused` beside `escalated` moved it — an
+    # anchor that restates the line is an anchor every later edit to the line
+    # breaks, while the statement the scan finds is the statement the control
+    # means to plant into.
+    guard = _guard_statement(COORDINATOR_SOURCE)
+    anchor = COORDINATOR_SOURCE.splitlines()[guard.lineno - 1]
+    # The whole condition has to be on that one line for the planting below to
+    # be planting into the guard rather than into part of it.
+    assert anchor.startswith("    if ") and anchor.endswith(":"), anchor
+    condition = anchor[len("    if "):-1]
     assert anchor in COORDINATOR_SOURCE
     if expected == "environ":
         planted = COORDINATOR_SOURCE.replace(
@@ -1165,8 +1176,7 @@ def test_the_same_scan_reports_a_bypass_that_was_planted(expected):
     else:
         planted = COORDINATOR_SOURCE.replace(
             anchor,
-            '    if (state is None or state.status == "escalated") and not '
-            'config.get("allow_dirty"):',
+            f'    if ({condition}) and not config.get("allow_dirty"):',
             1)
     assert planted != COORDINATOR_SOURCE
     assert expected in escapes_in(planted)

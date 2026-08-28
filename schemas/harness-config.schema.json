@@ -31,6 +31,10 @@
       "type": "string",
       "description": "Directory, relative to the target root, holding raw agent output logs. Defaults to .harness/logs."
     },
+    "max_pause_wait_seconds": {
+      "type": "string",
+      "description": "How long a run paused on capacity exhaustion may wait in place before the process exits, in seconds. A ceiling on a wait whose length the harness has been told, never a duration it sleeps in the absence of one: a capacity signal carrying a reset time within this bound is slept to and the stage re-entered, one carrying a reset time beyond it exits, and one carrying no reset time at all exits without sleeping. A string like every other configured scalar, because the config parser coerces nothing; it is parsed to a non-negative number and a value that is not one refuses the run at pre-flight, naming the key and the value. Unset, it is zero — never wait, always exit paused — so the only duration written in harness source is the one that means do not wait, and every wait the harness takes comes from here."
+    },
     "model": {
       "type": "string",
       "description": "The Claude model each stage invocation is run with. Unset, the agent runner passes no model and the developer's default is used."
