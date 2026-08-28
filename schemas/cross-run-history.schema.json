@@ -6,15 +6,21 @@
   "properties": {
     "execution-log.jsonl": {
       "type": "array",
-      "description": "One record per execution of a story that reached an outcome. Written to .harness/history/execution-log.jsonl, one JSON object per line, appended as the outcome occurs rather than assembled as a terminal summary.",
+      "description": "One record per point an execution reached, rather than one per execution that reached an outcome. Written to .harness/history/execution-log.jsonl, one JSON object per line, appended as the point is reached rather than assembled as a terminal summary. A run that paused for capacity, was resumed and then completed therefore leaves three lines in that order, so a resumed execution is distinguishable in the record from an uninterrupted one — which is the whole reason a pause and a resume are recorded here at all: a pause carries its own exit code precisely so a caller can tell it from completion and from escalation, and an execution that reached one and left no line was indistinguishable in this log from one that never started.",
       "items": {
         "type": "object",
         "required": ["story_id", "status", "timestamp"],
         "properties": {
           "event": {
             "type": "string",
-            "description": "The execution-history event kinds routed to this log. This enum is the selection and nothing else decides it: an entry whose kind appears here is projected into this log, and an entry whose kind appears in no log's enum is projected nowhere. capacity-paused is deliberately absent, because a pause is not an outcome — the run resumes and emits one later. The property is not projected into a record: it declares which kinds arrive here, not a field a line carries.",
-            "enum": ["story-completed", "escalated", "budget-stopped"]
+            "description": "The execution-history event kinds routed to this log. This enum is the selection and nothing else decides it: an entry whose kind appears here is projected into this log, and an entry whose kind appears in no log's enum is projected nowhere. The property is not projected into a record: it declares which kinds arrive here, not a field a line carries.",
+            "enum": [
+              "story-completed",
+              "escalated",
+              "budget-stopped",
+              "capacity-paused",
+              "resumed"
+            ]
           },
           "story_id": {
             "type": "string",
@@ -22,8 +28,14 @@
           },
           "status": {
             "type": "string",
-            "description": "How the execution ended, derived from the event kind that produced the record rather than threaded through the coordinator to serve this projection.",
-            "enum": ["completed", "escalated", "budget-stopped"]
+            "description": "The point the execution reached, derived from the event kind that produced the record rather than threaded through the coordinator to serve this projection. Two of these values do not end an execution: capacity-paused says the run stopped to wait, and resumed says it continued, so a line carrying either is a point rather than an outcome.",
+            "enum": [
+              "completed",
+              "escalated",
+              "budget-stopped",
+              "capacity-paused",
+              "resumed"
+            ]
           },
           "retry_count": {
             "type": "integer",
