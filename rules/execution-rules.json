@@ -4,6 +4,7 @@
   "blocked_paths": [
     ".git/",
     ".harness/runs/",
+	".harness/history/",
     "rules/"
   ]
 }
