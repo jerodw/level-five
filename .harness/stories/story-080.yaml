@@ -1,0 +1,234 @@
+story:
+  id: story-080
+  title: A capacity stop pauses the run rather than ending it
+  description: |
+    Every non-zero agent exit is treated identically today. `run_story`
+    escalates on `if not result.ok`, so an invocation stopped by a provider
+    rate limit or an exhausted plan quota produces exactly what a genuinely
+    broken one produces: an escalated run, an escalation summary, and a run
+    directory that has to be moved aside before the story can go again.
+    Chapter 18 names capacity exhaustion as a third source of interruption,
+    distinct from a crash and from an escalation, and Chapter 13 draws the line
+    this story turns on — a budget ceiling is a reason to stop, capacity
+    exhaustion is only a reason to wait. The harness currently discards good
+    work over a condition that waiting would have resolved.
+
+    This story adds the third interruption. A stage invocation that failed
+    because capacity ran out leaves the run `paused` rather than `escalated`,
+    with its counters untouched, its evidence intact and no escalation summary
+    written; and a paused run continues at the stage it paused on, whether the
+    process waited or died in between.
+
+    Four decisions the request left open are decided here.
+
+    **Detection happens where the stream is already read.** `agent_runner` is
+    the one module that talks to a model, and its loop over the CLI's
+    `stream-json` output already reads the result event for the final text and
+    the reported cost. It classifies there too, and `AgentResult` carries the
+    answer. The coordinator routes on that field and never on a string, so
+    nothing reads the run log back — a second parser of the harness's own
+    output is precisely what the cost story avoided when it took the spend off
+    the result event rather than off the log. The signals live in one named
+    constant in `agent_runner`, which is the only place that may know what the
+    CLI says. Anything unmatched is an ordinary failure and escalates exactly
+    as it does today: a wrong classification either hangs a broken run or
+    discards a recoverable one, so the classifier answers no unless the signal
+    is one it holds.
+
+    **A pause commits the tree.** The chapter says an exhausted monthly quota
+    may not clear for days, and work left uncommitted for days is what the
+    escalation commit already exists to protect. It is also close to forced:
+    the clean-tree pre-flight refuses a run whose target tree is dirty, and it
+    covers escalated resumes precisely because an escalation leaves a clean
+    tree, so a pause that left the tree dirty would be refused by the very
+    resume it exists to allow. The pause therefore makes the same two commits
+    an escalation makes, through the same functions, under its own subject and
+    its own message — its own, because `escalated_story` and `_head_escalated`
+    read the escalation subject to identify an escalation commit, and a pause
+    is not one. The message says outright that a resume is automatic and that
+    nothing is wrong with the work.
+
+    **The process waits only when it has been told how long.** The wait is
+    bounded by `max_pause_wait_seconds`, a new configured key, set to five
+    hours in this repository. Three cases, and the third is the one that keeps
+    the mechanism honest: a known reset time within the configured bound is
+    slept to and the stage re-entered; a known reset time beyond it exits; and
+    an *unknown* reset time exits immediately, without sleeping at all. The
+    bound is a ceiling on a wait whose length the harness has been told, never
+    a duration it sleeps in the absence of one — a harness that guessed would
+    hang a run for five hours on a signal it did not understand.
+
+    The pause is written to `state.json` and committed *before* any sleep
+    begins. That ordering is the whole reason a sleep is safe: the durability
+    is unconditional and the wait is opportunistic, so a process killed mid-
+    sleep leaves a run a fresh process resumes with nothing lost. And the state
+    transitions a capacity resume makes live in one function that the in-
+    process wait and the fresh-process resume both call, so waiting in place is
+    the ordinary resume plus a sleep rather than a second recovery path.
+
+    **Counters do not reset, and no entry is opened.** This is the decision the
+    request flagged as plausibly differing from the escalation case, and it
+    does. The existing resume zeroes `retry_count`, `verification_iterations`,
+    `self_route_count` and `entry_cost_usd`, and opens `resumes/resume-K/` to
+    keep the closed entry's evidence out of the way of names the reset would
+    re-occupy. All of that follows from a developer deciding, after
+    investigating, to fund another attempt. A capacity resume is not that
+    decision: it is automatic, nothing was wrong, and the stage did not fail —
+    it did not run. So a capacity resume archives nothing, moves nothing,
+    opens no entry and resets nothing. It re-enters the same stage on the same
+    attempt and re-renders the same prompt file, which is the file that attempt
+    was about to be run with. The consequence worth naming is that a paused run
+    cannot spend its way past the run ceiling by pausing: the allowance
+    survives the pause exactly as the retry count does.
+
+    Nothing else is added to `state.json`. `status` takes a fifth value and
+    that is the whole of the change: what the pause was and when capacity is
+    expected back go into a `capacity-paused` event, because that is a record
+    of why and when rather than something routed on, and `append_event` is the
+    single write path for events. The reset time is used by the wait and never
+    persisted — after the process exits, resuming is a human's decision and no
+    stored timestamp participates in it.
+
+    The configured bound is read as a string, like every other configured
+    value, because the config parser coerces nothing. It is parsed to a
+    non-negative number and a value that is not one refuses the run at pre-
+    flight, in the shape `cost_ceiling_problems` already established for a
+    ceiling that cannot be compared. Absent, it is zero — never sleep, always
+    exit paused — so the only duration written in harness source is the one
+    that means "do not wait", and every wait the harness ever takes comes from
+    configuration.
+  workflow: story-workflow
+
+tasks:
+  - Classify capacity exhaustion in `orchestration/agent_runner.py`, from the result event the streaming loop already reads, and carry the answer on `AgentResult` in a defaulted field so every fake runner in the suite is unchanged and "not a capacity failure" stays distinguishable from "not asked".
+  - Add `paused` as a fourth `RunState.status` value, and a `capacity-paused` event kind to `schemas/execution-history.schema.json`.
+  - Pause the run at the agent-failure site in `run_story`, above the self-route decision, when the result carries a capacity classification - leaving `retry_count`, `verification_iterations`, `self_route_count`, `entry_cost_usd` and `resume_count` untouched, writing no `escalation-summary.md`, and recording the reason and any reset time in the event.
+  - Commit the tree the pause stopped on, in the two-commit shape the escalation already uses and through the same functions, under a pause subject and message distinct from the escalation's so the escalation-commit readers cannot mistake one for the other.
+  - Declare `max_pause_wait_seconds` in `schemas/harness-config.schema.json`, read it as the string the config parser produces, parse it to a non-negative number, and refuse the run at pre-flight when it is not one.
+  - Set `max_pause_wait_seconds` to five hours in `.harness/config.yaml` and in `templates/config.yaml`.
+  - Wait in place only when the classification carries a reset time and the wait it implies is within the configured bound; exit with a pause exit code distinct from completion and escalation when the reset time is beyond the bound or absent altogether. Take the sleep as an injected parameter, as the agent runner already is, so no test sleeps.
+  - Write the state transitions a capacity resume makes once, in a function the in-process wait and the fresh-process resume both call.
+  - Resume a paused run by the ordinary `l5-run` path - continuing at the recorded stage with no archive, no entry, no counter reset and no unchanged-since-escalation guard - and add `paused` to the clean-tree pre-flight beside `escalated`, since a pause commits.
+  - Adapt `tests/test_config_keys_are_obeyed.py` to the new declared key, which its coverage assertion turns red the moment the schema declares it: the varying value, the fallback, the proof entry, the proof itself, and the module docstring's account of the `xyzzy` convention, which a duration cannot carry.
+  - Write validation that a capacity failure pauses and an ordinary failure still escalates, that a paused run resumed in a fresh process continues where it stopped, and that the wait is taken only when its length is known and within the bound.
+
+acceptance_criteria:
+  - A stage invocation failing with a capacity signal leaves the run with status `paused`, writes no `escalation-summary.md`, and leaves `retry_count`, `verification_iterations`, `self_route_count`, `entry_cost_usd` and `resume_count` exactly as they were before the invocation.
+  - A stage invocation failing for any other reason escalates exactly as it does today, with the same reason string, the same self-route behaviour before it, and an escalation summary written.
+  - A capacity failure consumes no self-route attempt - the pause is decided above the self-route decision, so a stage under an unspent self-route budget still pauses rather than re-running itself.
+  - A capacity failure renders no new `prompt-<stage>-attempt-N.md` under a later attempt number, because no attempt was spent.
+  - The run's `capacity-paused` event names what was detected and, when the signal carried one, when capacity is expected back; `schemas/execution-history.schema.json` declares that event kind and the written history validates against it.
+  - "`state.json` gains no new field: the pause is expressed by the `status` value alone, and no reset time is persisted anywhere in it."
+  - A pause commits what the run left in the target tree, in the same two-commit shape an escalation leaves, so the tree is clean when the process exits.
+  - "A pause commit's subject is not read as an escalation by `escalated_story` or `_head_escalated`, and an escalation commit's subject is not read as a pause: each reader answers only for its own kind, demonstrated against both subjects."
+  - The pause commit's message says the run paused on capacity, that nothing about the work has been rejected, that a resume continues it, and how to return the changes to the working tree.
+  - The state written and the commit made both land before any sleep begins, so a process killed while waiting leaves a run a fresh process resumes at the stage it paused on.
+  - A capacity signal carrying a reset time within the configured bound sleeps to that time and then re-enters the same stage, and the run continues to completion from there.
+  - A capacity signal carrying a reset time beyond the configured bound sleeps not at all and returns the pause exit code.
+  - A capacity signal carrying no reset time sleeps not at all and returns the pause exit code - demonstrated by the injected sleep never having been called, not by reasoning about the code.
+  - The pause exit code is distinct from the completion code and from the escalation code, so a caller can tell a run that must be looked at from one that may simply be run again.
+  - A paused run resumed in a fresh process continues at the stage it paused on with its artifacts intact, opens no entry directory, archives no attempt, and carries every counter forward unchanged.
+  - A paused run is not refused by the guard that refuses a resume of a run whose story, tree and harness are unchanged - that guard applies to an escalation, and a pause has nothing to have changed.
+  - "`max_pause_wait_seconds` is declared in `schemas/harness-config.schema.json`, is set to five hours in both `.harness/config.yaml` and `templates/config.yaml`, and appears as a duration in neither `orchestration/` nor `hooks/`."
+  - A configured `max_pause_wait_seconds` that is not a non-negative number refuses the run at pre-flight, naming the key and the value, before any run directory is created and before any agent is invoked.
+  - An absent `max_pause_wait_seconds` waits for nothing at all: a capacity signal with a reset time one second away still exits paused.
+  - The harness sleeps for a duration read from configuration and for no duration written in its own source, proven by configuring a value the harness would never choose and observing it obey that value.
+  - "`l5-status` reports a paused run without a change to `orchestration/run_status.py`, because it renders the recorded status rather than a list of statuses it knows."
+  - The whole suite passes.
+
+technical_plan:
+  implementation_steps:
+    - "Classify in `agent_runner.run_agent`. The loop already reads each `stream-json` line and acts on the result event; add the classification there, from the fields of that event, against one named constant of the signals the CLI emits, and return it on `AgentResult` in a field defaulted to None. Defaulted for the reason `cost_usd` was: every fake runner in the suite constructs an `AgentResult` and none of them may need changing, and None must keep meaning \"nothing was said\" rather than \"nothing was wrong\"."
+    - "Add the `paused` status and the `capacity-paused` event kind. The status is a fourth value of an existing field; resist adding anything beside it, because the pause is a status and the reason is an event."
+    - "Pause at the `if not result.ok` site, above the `self_route` call. The order matters and is the point: a capacity failure must not spend a self-route, because the stage did not fail at its work. Write the state, append the event, and commit - in that order, so the run's own record of the pause is inside the commit, which is the ordering `_commits_the_tree_it_ends_on` already enforces for an escalation and the reason it is a wrapper rather than a line inside `_escalate`."
+    - "Reuse the escalation's commit functions rather than writing a second pair. `commit_escalated_work` and `commit_escalated_tree` differ from what a pause needs only in the message they carry, so lift the message out as a parameter and give the pause its own subject template, its own marker and its own undo command. What must not be shared is the subject: `escalated_story` builds its pattern from `ESCALATION_SUBJECT_TEMPLATE`, so a pause commit that reused it would be reported as an escalation by `_head_escalated` and amended by `_complete`."
+    - "Decide the wait with a pure function over the reset time, the current time and the configured bound, returning the seconds to sleep or nothing. Take `sleep` as a parameter of `run_story` defaulted to `time.sleep`, exactly as the runner is a parameter, so the tests observe the decision without taking it."
+    - "Write the resume transitions once. A capacity resume sets the status back to `running` and appends a `resumed` event, and does nothing else - no archive, no entry, no reset. The in-process wait calls it and continues the loop at the same stage index; the fresh-process resume calls it in the `if state:` block, in a branch that returns before reaching the archive, the entry move and the counter resets that an escalated or crashed resume runs. Both paths through one function is what stops them drifting."
+    - "Extend the clean-tree pre-flight's condition from `state is None or state.status == \"escalated\"` to include `paused`, on the same reasoning the comment there already gives for an escalation: the pause left the tree clean, so anything uncommitted now is the developer's own."
+    - "Declare and read the configured bound. `load_config` coerces nothing, so the schema declares a string and the coordinator parses it, refusing a value that is not a non-negative number in the shape `_is_a_ceiling` and `_refuse_bad_cost_ceilings` established. The pre-flight refusal goes above the run-directory creation, with the other pre-flight refusals, so a bad value leaves no run directory and invokes no agent."
+    - "Adapt the config-key proof module in the same change. `tests/test_config_keys_are_obeyed.py` asserts set equality between the declared keys and `KEY_PROOFS`, so the schema declaration reddens it immediately: it needs a `VARYING` entry, a `FALLBACKS` entry of zero, a `KEY_PROOFS` entry and the proof node itself. The module's convention is that every varying value carries the token `xyzzy`, which a duration cannot; use a duration the harness would never pick and amend the docstring to say why this one key is exempt from the token. The mutation control still bites: with the read replaced by its zero fallback, a proof that observes a sleep of the configured length goes red."
+    - "Update `scripts/l5-run`'s module docstring, which today says a run whose state says it escalated resumes at the recorded stage. That is now one of two statuses that resume, and the docstring is the first thing a reader of the script meets."
+  likely_file_changes:
+    - file: orchestration/agent_runner.py
+      stage: implementer
+      reason: Classifies capacity exhaustion from the result event its streaming loop already reads, and carries the answer on AgentResult in a defaulted field. It is the only module that may know what the CLI says.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The paused status, the pause at the agent-failure site, the pause commit's subject and message, the wait decision and the injected sleep, the shared capacity-resume transition, the paused branch of the resume path, the clean-tree pre-flight condition, and the pre-flight refusal of a bound that is not a number.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: Declares the capacity-paused event kind. The enum is the contract the written history is validated against, so an undeclared kind would make the history invalid the first time a run paused.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares max_pause_wait_seconds. The declared set is what the pre-flight checks a target's config against, so an undeclared key would refuse every run of a target that carries it.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Sets this repository's bound to five hours. The number lives here rather than in harness source, so the harness holds no duration but the zero that means never wait.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The template a fresh l5-init writes. Adding the key here keeps a newly initialised target consistent with this one rather than widening the drift between them.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: implementer
+      reason: The module asserts set equality between the declared config keys and its own KEY_PROOFS, so declaring max_pause_wait_seconds turns it red in the same change that declares it. It needs the varying value, the fallback, the proof entry, the proof node, and a docstring amendment for the xyzzy convention a duration cannot carry.
+      reverting_breaks_the_suite: Reverting this edit while the schema still declares the key fails the coverage assertion in both directions - a declared key with no proof, and an AST-scanned read the proofs do not cover - so the suite is red with the adaptation removed and green with it. It is a test adaptation forced by a deliberate change elsewhere in the same story, not a change to what any existing assertion demands: every other key keeps its proof, its varying value and its fallback exactly as they are.
+    - file: scripts/l5-run
+      stage: implementer
+      reason: Its module docstring says a run whose state says it escalated resumes at the recorded stage, which is now one of two statuses that resume.
+    - file: tests/test_capacity_pause.py
+      stage: tester
+      reason: Independent validation of the story's claims - a capacity failure pauses and an ordinary failure escalates, counters and artifacts survive, the commit is made and its subject is not an escalation's, the wait is taken only when its length is known and within the bound, and a paused run resumed in a fresh process continues where it stopped. Named for the behaviour it validates.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the third interruption beside the crash and the escalation - what is detected and where, why a pause commits, why counters survive a capacity resume when they do not survive an escalated one, and the three cases of the wait.
+    - file: README.md
+      stage: documenter
+      reason: Describes what happens when a run stops. A fourth status a developer can meet, and an exit code they can act on, belong where the other three are described.
+
+scope:
+  modify:
+    - orchestration/agent_runner.py
+    - orchestration/story_coordinator.py
+    - schemas/execution-history.schema.json
+    - schemas/harness-config.schema.json
+    - .harness/config.yaml
+    - templates/config.yaml
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_capacity_pause.py
+    - scripts/l5-run
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - hooks/
+    - prompts/
+    - workflows/
+    - rules/
+    - orchestration/harness_config.py
+    - orchestration/plan_validation.py
+    - orchestration/run_status.py
+    - .harness/stories/
+    - .harness/standards/
+
+verification_requirements:
+  - Confirm the classification is decided from the result event the agent runner already reads and from nothing else - that no code path reads the run log back, and that the signals it matches are written in one place in `orchestration/agent_runner.py` and nowhere in the coordinator.
+  - Confirm an ordinary agent failure is unchanged in every respect - the self-route it still takes, the reason it escalates with, and the summary it writes - by driving a failure carrying no capacity classification and comparing against the behaviour on the base revision.
+  - Confirm the pause spends nothing: no self-route, no attempt, no prompt file under a later number, and no change to any counter, read off `state.json` before and after rather than inferred.
+  - Confirm the state and the commit both land before the sleep, by driving a pause whose wait is within the bound and observing the recorded state and the commit at the moment the injected sleep is called.
+  - Confirm all three wait cases against the injected sleep - reset within the bound sleeps and re-enters, reset beyond the bound does not sleep, no reset at all does not sleep - and that the last of these is demonstrated by the sleep never being called rather than by argument.
+  - Confirm a paused run resumed in a fresh process opens no entry directory, archives no attempt and resets no counter, by comparing the run directory and `state.json` across the resume.
+  - Confirm the pause commit and the escalation commit are told apart by the readers that identify an escalation, in both directions, and that a completion after a resumed pause is not amended over a pause commit.
+  - Confirm the five-hour bound is obeyed from configuration and appears as a duration nowhere in `orchestration/` or `hooks/`, and that a target configuring no bound waits for nothing.
+  - Confirm a `max_pause_wait_seconds` that is not a non-negative number refuses the run before any run directory exists and before any agent is invoked.
+  - Confirm the written `execution-history.json` validates against its schema with a `capacity-paused` entry present, and that `l5-status` reports the paused run without `orchestration/run_status.py` having changed.
+
+constraints:
+  - The coordinator never reasons about a capacity failure. It routes on a field the agent runner set, and no string match, tail read or log parse decides a pause inside `orchestration/story_coordinator.py`.
+  - No second parser of the harness's own output. The classification is made in the loop that already reads the stream, beside the cost the same event carries.
+  - No duration is written in harness source except the zero that means never wait. Every wait the harness takes is read from configuration.
+  - The harness never sleeps on a signal whose length it does not know. An unknown reset time exits, and the configured bound is a ceiling on a known wait rather than a default for an unknown one.
+  - "`state.json` gains no field. The pause is a status; the reason and the reset time are an event, written through `append_event`, which stays the single write path for events."
+  - No new file beside `state.json` is created for the pause, and no routing decision reads `events.log`, `execution-history.json` or any record.
+  - A pause is never an escalation. No `escalation-summary.md` is written, no escalation event is appended, and the pause commit's subject is its own.
+  - The escalation's own behaviour is untouched. Its commits, its summary, its resume guard and its exit code are exactly what they are today, and the pause reuses its commit functions rather than editing what they do for an escalation.
+  - Budget ceilings the harness sets on itself stay out of scope. `stopped_on_cost` and the cost ceilings keep their current meaning and their current behaviour; a capacity pause is the external limit that clears on its own, and the two must not be blended.
+  - Checkpoints, `execution-history.json`'s own story, `retry-history.json` and the `attempts/` archive are out of scope beyond the one event kind this story declares.
+  - No test may be weakened, skipped or deselected to accommodate the new key. The one existing test module this story edits is adapted to a declaration it cannot otherwise satisfy, and every assertion it already makes about every other key is left exactly as it stands.
