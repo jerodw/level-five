@@ -73,7 +73,8 @@
       },
       "correction_pass": {
         "result": "correction-pass.json",
-        "budget": 1,
+        "budget": 2,
+        "budget_reason": "Two, raised from one after story-086. A pass corrects the locations its findings name, and the verification after it can find the same claim standing somewhere the first findings did not reach: story-086's budget went on an exclusivity claim in .harness/docs/ARCHITECTURE.md, and the next verification found the same claim in a test docstring with nothing left to spend, so it shipped recorded and uncorrected. One budget covers the findings a verification raises; the second covers what correcting them reveals. This is a ceiling on how many times the words may be revisited and not a licence to keep going: a pass changes prose and never behaviour, so neither pass can move what any test asserts. Nothing reads this key; it records the judgement where a reader of the definition meets the budget.",
         "stage": "documenter"
       },
       "on_failure": {
