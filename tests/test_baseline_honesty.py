@@ -2210,6 +2210,18 @@ def live_artifact_reading_modules() -> list[str]:
 #: It is asserted equal to what the scan reports in both directions, so it
 #: cannot grow silently and cannot keep a name whose module was converted.
 DECLARED_LIVE_ARTIFACT_READERS = {
+    "test_a_stage_cannot_edit_its_own_story.py":
+        "its runs are driven against a workflow it builds and under execution "
+        "rules of its own, because what a run does with a record naming a "
+        "blocked path is a mechanism and the stage list and the blocked "
+        "prefixes are inputs to it. Two reads remain and both have what is "
+        "shipped as their subject: the blocked_paths entry in "
+        "rules/execution-rules.json, which is a deployment fact no stage can "
+        "make — rules/ is blocked for every stage of every story — and which "
+        "story-086 therefore asserts rather than makes; and the stories_dir "
+        "this repository configures in .harness/config.yaml, because the "
+        "claim is that this deployment's own story directory is the one the "
+        "shipped rule set blocks, which a fixture's directory cannot say",
     "test_capacity_pause.py":
         "the workflow its runs execute is built and the pause bound those "
         "targets configure is its own, because what a capacity classification "

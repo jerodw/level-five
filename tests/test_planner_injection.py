@@ -618,7 +618,8 @@ def test_the_workflow_defines_the_four_expected_stages():
     assert declared_restrictions()
     assert all(stage in stage_names() for stage, _ in declared_restrictions())
     assert rules()["blocked_paths"] == [
-        ".git/", ".harness/runs/", ".harness/history/", "rules/"]
+        ".git/", ".harness/runs/", ".harness/history/", ".harness/stories/",
+        "rules/"]
 
     deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
     assert [stage["name"] for stage in deployed["stages"]] == [
@@ -683,6 +684,23 @@ def test_the_rendered_prompt_with_workflow_facts_has_no_leftover_placeholder():
     assert PLACEHOLDER.search(rendered_prompt_with_workflow_facts()) is None
 
 
+def blocked_paths_the_template_names_itself() -> set[str]:
+    """The blocked paths `planner.md` spells in its own prose.
+
+    The same aliasing the stage names already have: two injections into one
+    template, and a stripped render still carries whatever the *other* one
+    supplied. `.harness/stories/` is named in step 4 as role guidance — list
+    the directory to pick the next story number — which is a statement about
+    where the planner writes rather than a restatement of the blocked list, so
+    it survives the strip for a reason having nothing to do with the
+    injection. Derived from the template rather than listed, so a path that
+    stops being named here changes the exception rather than needing this test
+    edited.
+    """
+    prose = PLACEHOLDER.sub("", planner_template())
+    return {path for path in rules()["blocked_paths"] if path in prose}
+
+
 def test_the_workflow_fact_coverage_comes_from_the_injection_not_leftover_prose():
     """Negative control: strip the three placeholders and every coverage
     check above must lose ground. A coverage assertion that passes against a
@@ -693,7 +711,12 @@ def test_the_workflow_fact_coverage_comes_from_the_injection_not_leftover_prose(
     rendered = context_assembler.render(stripped, full_context())
     assert missing_stage_names(rendered) != set()
     assert missing_restrictions(rendered) == set(declared_restrictions())
-    assert missing_blocked_paths(rendered) == set(rules()["blocked_paths"])
+
+    aliased = blocked_paths_the_template_names_itself()
+    # The collapse has to be real: some blocked path must go missing, or the
+    # equality below would hold against a template that names all of them.
+    assert aliased < set(rules()["blocked_paths"])
+    assert missing_blocked_paths(rendered) == set(rules()["blocked_paths"]) - aliased
 
 
 # --------------------------------------------------------------------------
@@ -751,8 +774,15 @@ def test_workflow_context_and_build_context_render_blocked_paths_identically(
     )
     injected = context_assembler.workflow_context(workflow(), the_rules)
     assert built["blocked_paths"] == injected["blocked_paths"]
-    assert built["blocked_paths"] == (
-        "- .git/\n- .harness/runs/\n- .harness/history/\n- rules/")
+
+    # Derived from the rules this assertion loaded and both renders consumed,
+    # not restated: the claim here is that the two renders agree, and a second
+    # literal listing of the blocked paths is a second maintenance site rather
+    # than part of that claim. The anchor above is where the shipped list is
+    # named as a literal.
+    expected = "\n".join(f"- {path}" for path in the_rules["blocked_paths"])
+    assert the_rules["blocked_paths"], "an emptied rule set renders nothing"
+    assert built["blocked_paths"] == expected
 
 
 # --------------------------------------------------------------------------
