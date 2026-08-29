@@ -653,6 +653,16 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
                   if outbox.__name__ in text)
 
 
+#: The one module outside the queue that reaches it, exempt by name and by
+#: nothing else. story-091's transport answers in the `Filing` values the
+#: queue defines, so it must name the queue to import them — but it is not a
+#: module a run executes: nothing the coordinator reaches imports it, and the
+#: only thing that builds one is `l5-sync`. The exemption is held shut from
+#: both sides below, so a module that stopped importing the queue and a module
+#: that started executing inside a run are each reported.
+REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN = "command_transport.py"
+
+
 def orchestration_sources() -> dict[str, str]:
     return {path.name: path.read_text(encoding="utf-8")
             for path in sorted(ORCHESTRATION.glob("*.py"))
@@ -660,17 +670,28 @@ def orchestration_sources() -> dict[str, str]:
 
 
 def test_no_module_a_run_executes_reaches_the_outbox():
-    assert modules_reaching_the_outbox(orchestration_sources()) == []
+    sources = orchestration_sources()
+    assert modules_reaching_the_outbox(sources) == [
+        REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN
+    ]
+    # The other side of the exemption: a name that stopped importing the queue
+    # is an exemption nobody notices has gone stale, and the module a run
+    # actually executes is still held to reaching the queue not at all.
+    assert REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN in sources
+    assert outbox.__name__ in sources[REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN]
+    assert outbox.__name__ not in sources["story_coordinator.py"]
 
 
 def test_the_scan_reports_a_planted_call_site():
-    """Control: the emptiness above must mean no module reaches the queue, not
-    that the scan has stopped seeing anything."""
+    """Control: the report above must mean no *other* module reaches the queue,
+    not that the scan has stopped seeing anything."""
     sources = orchestration_sources()
     victim = "story_coordinator.py"
     assert victim in sources
     sources[victim] += f"\nimport {outbox.__name__}\n"
-    assert modules_reaching_the_outbox(sources) == [victim]
+    assert modules_reaching_the_outbox(sources) == [
+        REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN, victim
+    ]
 
 
 def test_the_only_drain_site_the_repository_ships_is_the_script():

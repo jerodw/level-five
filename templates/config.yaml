@@ -15,6 +15,24 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: {test_command}
+# How the harness files an outbox entry: one command, invoked once per entry,
+# through which it knows nothing else about the tracker. The entry goes to it
+# on stdin as JSON and its key is in the environment as L5_SYNC_KEY; the last
+# non-empty line of stdout is the reference, recorded and never parsed; exit 0
+# lands the entry, exit 75 leaves it pending for a later sync, and any other
+# non-zero code fails it terminally. The command must be idempotent given the
+# key — it searches by that key before it creates — which is what makes a lost
+# response safe to retry, and it must not commit. l5-init installs a reference
+# implementation at .harness/sync/github.sh; read its header for the whole
+# contract before writing your own. Both keys are commented out so a freshly
+# initialized repository opts in to filing rather than discovering that it
+# files: uncomment sync_command and nothing else changes until you do.
+# sync_command: .harness/sync/github.sh
+# How long that command may run before it is killed, in seconds. The kill
+# reaches its process group, so a command that spawned children leaves none
+# behind. Delete the key and the bound is 60 seconds — a real one, because a
+# timeout of zero would be no timeout at all.
+# sync_timeout_seconds: 60
 # Where this repository's tests live, as a path prefix ending in a slash. It is
 # what the workflow's {{tests_dir}} token resolves to: the stage restricted from
 # creating tests is restricted here, and the stage that writes them is told to
