@@ -1,0 +1,373 @@
+story:
+  id: story-091
+  title: One command files a story
+  description: |
+    The harness files an outbox entry by invoking one configured command and
+    knowing nothing else about the tracker. The payload goes to the command on
+    stdin, a reference comes back on stdout, and the exit code says landed,
+    retry, or stop. GitLab, Jira and files-in-source-control are then scripts a
+    target writes rather than code the harness carries.
+
+    This is the move the harness already makes everywhere it meets a target's
+    tooling. test_command, census_command and test_selection_command are
+    configuration; the harness knows one substitution point and nothing about
+    the selector syntax on either side of it, and story-039 and story-041
+    forbid a target-stack literal in harness source. An issue tracker is the
+    same class of thing, and a built-in provider per tracker would be that rule
+    broken once per tracker.
+
+    It also dissolves the multi-call problem. Filing a finding means creating
+    the issue, labelling it, and putting it on a project board — three API
+    calls and a partial-failure surface. The harness makes one invocation.
+    Those three calls are the command's business, and atomicity is a contract
+    the command owes rather than state the harness has to track.
+
+    The load-bearing sentence of the whole design is that the command must be
+    idempotent given the key. The harness hands it the idempotency key and the
+    command searches by that key before it creates, which is what makes the
+    ambiguous write — created, response lost — safe to retry. The harness
+    cannot enforce it, so it is documented as a contract and demonstrated by
+    the reference implementation. It is also why this transport offers no
+    look_up at all: an ambiguous write is resolved by re-invoking an idempotent
+    command, not by a second call the harness makes, and outbox._look_up
+    already reports no problem for a transport offering none.
+
+    Three outcomes are read as transient rather than terminal, all for one
+    reason — nothing was established about whether the request arrived: the
+    timeout, a command that cannot be launched at all, and an exit of zero that
+    named no reference. A misconfiguration a human fixes should be waiting
+    pending when they fix it, not marked failed and needing reconciliation.
+
+    orchestration/outbox.py is not touched. It defines the transport contract
+    and injects one; this story writes a transport against that contract, and
+    keeping the queue module free of any subprocess is what preserves the
+    property its docstring states. The coordinator is not touched either: no
+    sweep call site is added inside a run, which is the next story's work.
+  workflow: story-workflow
+
+tasks:
+  - Add orchestration/command_transport.py, holding the whole of what it means
+    to file an entry by running a command. It is the only place in the harness
+    that spawns a subprocess for the outbox, and it answers with the Filing
+    that orchestration/outbox.py already defines, so outbox.sync consumes it
+    through the contract it already has.
+  - Have the transport render the entry to the command's stdin as JSON, put the
+    entry's key in the environment as L5_SYNC_KEY beside the copy inside that
+    document, and take both from entry["key"] so the two cannot disagree.
+  - Map the exit code onto the three answers a filing can give. Zero lands the
+    entry and the reference is the last non-empty line of stdout. The
+    designated transient code is 75, which is EX_TEMPFAIL — the sysexits
+    convention for a temporary failure that should be retried, and far from the
+    codes a shell produces by accident. Every other non-zero code is terminal.
+  - Record what the command said when it did not land the entry. The error text
+    the transport carries back is drawn from the command's stderr, bounded to a
+    tail, so a failed or pending entry says why in its own file.
+  - Treat as transient, and say which of them it was, the three outcomes that
+    establish nothing about whether the request arrived — the command that ran
+    past its timeout, the command that could not be launched at all, and the
+    command that exited zero without naming a reference.
+  - Bound the reference the transport will accept, because it is written into a
+    durable file and validated against the entry schema. A stdout that names
+    something longer than the bound is transient with a reason rather than
+    written.
+  - Enforce the timeout by killing the process group rather than the process.
+    The command is spawned in its own session, so a command that spawned
+    children of its own leaves none of them behind.
+  - Declare sync_command and sync_timeout_seconds in
+    schemas/harness-config.schema.json, and state at each what it means, what
+    its absence means, and what the harness will never do with its value.
+  - Give sync_timeout_seconds a default of 60 seconds when the key is unset,
+    rather than the zero max_pause_wait_seconds defaults to. A timeout of zero
+    here would be no timeout at all, which is the failure the rule exists to
+    prevent, so the default duration written in harness source is a real one.
+  - Have scripts/l5-sync build the transport from the configuration and pass it
+    to outbox.sync, and refuse with a message naming the key and the value when
+    sync_timeout_seconds is not a positive number. The refusal lives here
+    because no run reads these keys; the coordinator is not involved.
+  - Rewrite the paragraph of scripts/l5-sync's docstring that says no provider
+    ships with the harness, since one now does, and keep the paragraph that
+    says no sweep runs inside a story run, since that is still true.
+  - Ship templates/sync/github.sh — a gh-based reference implementation that
+    searches by the key before it creates, creates the issue with its label,
+    adds it to the project board, prints the URL, and maps its failures onto
+    the three exit codes. Its header documents the contract it satisfies,
+    including that a sync command must not commit.
+  - Have scripts/l5-init create the target's .harness/sync/ directory, install
+    that script into it, and leave it executable, in the shape the standards
+    templates are already installed in.
+  - Add sync_command and sync_timeout_seconds to templates/config.yaml
+    commented out, with the explanation beside them, so a freshly initialized
+    target opts in to filing rather than discovering that it files.
+  - Wire this repository to the reference implementation: install
+    .harness/sync/github.sh and set both keys live in .harness/config.yaml, so
+    the shipped script is exercised by the repository that ships it.
+  - Write the transport's regression suite in tests/test_command_transport.py,
+    driven by fixture commands the test writes rather than by a network.
+  - Add the two proofs tests/test_config_keys_are_obeyed.py requires of a newly
+    declared key, and the TOKEN_EXEMPT entry sync_timeout_seconds needs,
+    stating that a duration is parsed to a number and so cannot carry a word.
+
+acceptance_criteria:
+  - A command that exits 0 and prints a reference lands the entry, and the
+    entry on disk records that reference and is in the landed state.
+  - The reference recorded is the last non-empty line of the command's stdout,
+    and a command that prints other lines before it still lands the reference
+    it named last.
+  - The reference is never parsed and nothing is decided from its content: a
+    reference that is not a URL lands exactly as one that is.
+  - A command that exits 75 leaves the entry pending with its attempt count
+    incremented and last_error recording what the command said on stderr.
+  - A command that exits with any other non-zero code leaves the entry failed,
+    and a later sync does not invoke the command for it again.
+  - A command that runs past sync_timeout_seconds is killed and the entry is
+    left pending, not failed, with the reason naming the timeout.
+  - The kill reaches the process group: a command that spawned a child which
+    outlives it leaves no such child running once the transport has returned.
+  - A sync_command that names a path that does not exist, or a file that is not
+    executable, leaves the entry pending with a reason naming what could not be
+    launched, and never raises into the caller.
+  - A command that exits 0 and prints nothing leaves the entry pending with a
+    reason saying it named no reference, since exiting zero without one
+    establishes nothing about whether the request arrived.
+  - A command that prints a reference longer than the transport's bound leaves
+    the entry pending with a reason naming the bound, and writes no oversized
+    reference into the entry.
+  - The command receives the entry as JSON on stdin, carrying the key, the
+    identity, the state and the payload the entry holds.
+  - The command receives the entry's key in its environment as L5_SYNC_KEY, and
+    that value equals the key inside the document on stdin.
+  - The transport exposes no look_up attribute, and a sync of an entry with a
+    prior attempt therefore adds no lookup note and files through the command
+    exactly once.
+  - A command invoked twice under the same key that creates once — the fixture
+    standing in for an idempotent provider — leaves one filing behind and lands
+    the entry, which is the ambiguous write resolved by the command rather than
+    by the harness.
+  - l5-sync with sync_command configured passes a transport to outbox.sync and
+    no longer reports that no transport is configured.
+  - l5-sync with no sync_command configured behaves exactly as it does today:
+    it reports the queue as it stands, says nothing was filed, and applies the
+    same exit rule.
+  - l5-sync with sync_timeout_seconds set to something that is not a positive
+    number refuses, naming the key and the value, and files nothing.
+  - sync_timeout_seconds unset gives a timeout of 60 seconds rather than of
+    zero, and a command is bounded by it.
+  - l5-init creates .harness/sync/ in a target, installs github.sh into it, and
+    the installed file is executable.
+  - templates/config.yaml carries both keys commented out, so a config file
+    l5-init writes loads with neither key set.
+  - This repository's .harness/config.yaml sets both keys and .harness/sync/
+    holds the executable reference script.
+  - The declared config keys and the keys the harness reads are still equal in
+    both directions, and each new key carries a proof that varies it to a value
+    the harness would never pick and observes the harness obey it.
+  - The proof for sync_timeout_seconds pins the bound from both sides: a
+    command that finishes inside it lands and one that runs past it is killed,
+    so the number itself is what is obeyed rather than merely something
+    non-zero.
+  - orchestration/outbox.py is byte-identical to what it was before this story,
+    and orchestration/story_coordinator.py is untouched.
+  - No test in the suite reaches a network, and every command the suite drives
+    is a file the test wrote.
+
+technical_plan:
+  implementation_steps:
+    - Write orchestration/command_transport.py. It imports Filing, filed,
+      refused and deferred from outbox and answers only in those, so the
+      mapping from an exit code to a state is stated once and outbox decides
+      the state from the answer exactly as it does for any transport.
+    - Give the module its constants with the reason beside each: the transient
+      exit code 75 and why EX_TEMPFAIL rather than a small number a shell
+      produces by accident; the default timeout of 60 seconds and why it is not
+      zero; the reference length bound and why a durable file needs one; the
+      stderr tail bound; and the environment variable name.
+    - Build the transport as a small object holding the command string, the
+      timeout and the working directory, with a file(entry) method. shlex.split
+      the command, in the shape the clean-clone check already splits
+      test_command, so the harness reads the argument syntax and interprets
+      nothing else about it.
+    - Spawn through subprocess.run with start_new_session=True so the child
+      leads its own process group, and on TimeoutExpired kill the group with
+      os.killpg before answering. Reap the child after the kill so the
+      transport leaves nothing behind.
+    - Answer deferred for a launch failure — OSError from the spawn — naming
+      the command that could not be launched, and never let that OSError
+      escape.
+    - Read the answer off the exit code. Zero takes the last non-empty line of
+      stdout as the reference and answers filed; an empty or oversized
+      reference answers deferred with the reason. The transient code answers
+      deferred and every other non-zero code answers refused, each carrying a
+      tail of stderr as its error text.
+    - Add the two keys to schemas/harness-config.schema.json in alphabetical
+      position, describing the contract at sync_command — stdin, stdout, the
+      three exit codes, idempotency given the key, and that a sync command must
+      not commit — since the schema is where a reader meets the vocabulary.
+    - Have scripts/l5-sync read both keys, validate the duration, construct the
+      transport when a command is configured, and pass it to outbox.sync. The
+      configuration reads live here rather than in the transport module, so the
+      AST scan in tests/test_config_keys_are_obeyed.py finds them where it
+      already looks.
+    - Write templates/sync/github.sh. It reads the entry from stdin, takes the
+      key from L5_SYNC_KEY, searches the tracker for an existing issue carrying
+      that key before creating anything, prints the URL of what it found or
+      created, and exits 75 for the failures that are worth retrying. Its
+      header states the contract, and states that it must not commit.
+    - Have scripts/l5-init add sync to the directories it creates and copy
+      templates/sync/*.sh into it, setting the executable bit on each, in the
+      loop shape the standards templates are copied in.
+    - Add the commented keys to templates/config.yaml, and set them live in
+      this repository's .harness/config.yaml alongside an installed
+      .harness/sync/github.sh.
+    - Write tests/test_command_transport.py against fixture commands the test
+      writes into tmp_path: one that exits 0 with a canned reference, one that
+      exits 75, one that exits terminally, one that sleeps past the timeout,
+      one that spawns a child that outlives it, one that exits 0 silently, one
+      that prints an oversized reference, one that is not executable, and one
+      that appends to a file only when a search of that file finds nothing —
+      the idempotent provider, invoked twice under one key and creating once.
+      Assertions about stdin, L5_SYNC_KEY and the absent look_up sit beside
+      them, and l5-init's installation is checked in the same module.
+    - Add the proofs to tests/test_config_keys_are_obeyed.py: sync_command set
+      to a fixture script whose path carries the distinctive token and observed
+      to be the command that ran, and sync_timeout_seconds given a distinctive
+      small bound and pinned from both sides. sync_timeout_seconds also gains
+      its TOKEN_EXEMPT entry, saying that the value is a duration parsed to a
+      number and so cannot carry a word.
+  likely_file_changes:
+    - file: orchestration/command_transport.py
+      stage: implementer
+      reason: The transport itself — the spawn, the timeout and its process
+        group kill, the stdin document, the environment, and the mapping from
+        an exit code to one of the three answers outbox already understands.
+    - file: scripts/l5-sync
+      stage: implementer
+      reason: The wiring point. It reads the two keys, validates the duration,
+        constructs the transport and passes it to outbox.sync, and its
+        docstring stops saying that no provider ships with the harness.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The two new keys and their contract, which is where a reader
+        meets what a sync command is asked to promise.
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: The reference implementation, which doubles as the documentation
+        of the contract a target's own script must satisfy.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: Both keys, commented out with their explanation, so a freshly
+        initialized target opts in to filing rather than discovering that it
+        files.
+    - file: scripts/l5-init
+      stage: implementer
+      reason: It creates the target's .harness/sync/ directory and installs the
+        reference script into it, executable.
+    - file: .harness/sync/github.sh
+      stage: implementer
+      reason: This repository wired to the shipped script, so the reference
+        implementation is exercised by the repository that ships it.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: This repository's live sync_command and sync_timeout_seconds.
+    - file: tests/test_command_transport.py
+      stage: tester
+      reason: The story's regression suite, driven entirely by fixture commands
+        the test writes — the three exit codes, the timeout and its process
+        group, the launch failure, the empty and oversized references, the
+        stdin document, the environment key, the absent look_up, the idempotent
+        double invocation, and l5-init's installation.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: A newly declared key needs a proof that varies it and observes
+        the harness obey it, and sync_timeout_seconds needs its TOKEN_EXEMPT
+        entry because a duration cannot carry the token.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The new module, the two configuration keys, the template and
+        l5-init's new installation step, and a section stating the contract and
+        why idempotency given the key is the sentence the design rests on.
+
+scope:
+  modify:
+    - orchestration/command_transport.py
+    - scripts/l5-sync
+    - scripts/l5-init
+    - schemas/harness-config.schema.json
+    - templates/config.yaml
+    - templates/sync/github.sh
+    - .harness/config.yaml
+    - .harness/sync/github.sh
+    - tests/test_command_transport.py
+    - tests/test_config_keys_are_obeyed.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/story_coordinator.py
+    - orchestration/harness_config.py
+    - schemas/outbox-entry.schema.json
+    - schemas/manifest.json
+    - workflows/
+    - prompts/
+    - hooks/
+    - templates/standards/
+
+verification_requirements:
+  - Confirm each of the three exit codes produces the state it is meant to: a
+    reference lands the entry, 75 leaves it pending with the attempt counted,
+    and any other non-zero code fails it terminally.
+  - Confirm the timeout kills the command and leaves the entry pending, and
+    that the kill reached the process group by observing that a child the
+    command spawned is gone once the transport has returned.
+  - Confirm the three transient-rather-than-terminal outcomes each answer
+    transient and each say which one they were: the timeout, the command that
+    could not be launched, and the zero exit that named no reference.
+  - Confirm the entry reaches the command on stdin as JSON and that L5_SYNC_KEY
+    carries the same key the document carries.
+  - Confirm the transport offers no look_up, and that syncing an entry with a
+    prior attempt therefore records no lookup note.
+  - Confirm the idempotent fixture invoked twice under one key creates once and
+    lands the entry, which is the ambiguous write resolved by the command.
+  - Confirm l5-sync with a configured command files through it, that l5-sync
+    with none behaves exactly as it did before this story, and that a
+    sync_timeout_seconds which is not a positive number refuses naming the key
+    and the value.
+  - Confirm l5-init creates .harness/sync/, installs the reference script
+    executable, and writes a config in which neither new key is set.
+  - Confirm this repository carries the installed script and both live keys.
+  - Confirm the declared config keys and the keys the harness reads are still
+    equal in both directions, and that each new key's proof varies it to a
+    value neither a default nor this repository's own.
+  - Confirm orchestration/outbox.py and orchestration/story_coordinator.py are
+    unchanged by this story.
+  - Confirm the whole suite passes under the configured test command, including
+    the tests this story adds, and that no test in it reaches a network.
+
+constraints:
+  - orchestration/outbox.py is not modified. It defines the transport contract
+    and injects one; a story that found itself editing the queue module to make
+    a transport work has widened a contract story-089 and story-090 settled.
+  - No sweep call site is added inside a run and the coordinator is not
+    modified. l5-sync stays the only drain site the harness ships.
+  - No change to the entry states, to the entry schema, or to how a key is
+    derived from an identity.
+  - No third-party dependency. The transport uses the standard library alone,
+    and what the reference script requires is the target's business rather than
+    the harness's.
+  - The reference is opaque. It is recorded and never parsed, and nothing in
+    the harness decides anything from its content.
+  - The timeout is not optional and its absence is not zero. Every path through
+    the transport is bounded in time.
+  - A sync command must not commit. It writes; a human or a run commits. The
+    harness does not enforce this and says so rather than implying a check that
+    does not exist.
+  - Every test drives a command the test itself wrote. No test reaches a
+    network, invokes gh, or depends on a tracker existing.
+  - Existing tests are not weakened or skipped. l5-sync's behaviour with no
+    command configured is held unchanged by the assertions that already cover
+    it.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 13:03:07
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
