@@ -616,14 +616,18 @@ def test_the_statement_names_both_the_record_and_the_path_to_the_output(
     red_then_green_run,
 ):
     """What the re-running stage is told: where the coordinator's record is,
-    and where the whole output of the run it is diagnosing lives."""
+    and where the whole output of the run it is diagnosing lives. Both are the
+    retained pair, keyed by this stage, attempt and try, rather than the
+    canonical pair the rerun writes over."""
     _, _, run_dir = red_then_green_run
     _, record = self_route_records(run_dir)[0]
+    failed_result = story_coordinator.retained_suite_result_file(
+        SUITE_ARTIFACT, DECLARING, 1, 0)
     failed_output = str(run_dir / story_coordinator.suite_output_file(
-        SUITE_ARTIFACT))
+        failed_result))
 
-    assert record["artifacts"] == [SUITE_ARTIFACT, failed_output]
-    assert SUITE_ARTIFACT in record["statement"]
+    assert record["artifacts"] == [failed_result, failed_output]
+    assert failed_result in record["statement"]
     assert failed_output in record["statement"]
 
 
@@ -635,7 +639,8 @@ def test_the_re_run_invocation_is_given_the_record_and_the_output_path(
     _, runner, run_dir = red_then_green_run
     first, second = runner.prompts[DECLARING]
     failed_output = str(run_dir / story_coordinator.suite_output_file(
-        SUITE_ARTIFACT))
+        story_coordinator.retained_suite_result_file(
+            SUITE_ARTIFACT, DECLARING, 1, 0)))
 
     assert '"exit_code": 1' in second
     assert failed_output in second
@@ -648,8 +653,10 @@ def test_the_output_that_stage_is_pointed_at_holds_the_failing_run(
     red_then_green_run,
 ):
     """The path named is a file that exists, and it is the *failing* run's
-    output — the run that has since been overwritten by the passing one in the
-    record, but whose output the stage was given while it was current."""
+    output. Since story-084 it still is when the run ends: the passing run
+    writes over the canonical pair and leaves this one, so the path the record
+    cites holds the run that self-route was caused by rather than the one that
+    ended the story."""
     _, runner, run_dir = red_then_green_run
     _, record = self_route_records(run_dir)[0]
     assert Path(record["artifacts"][1]).is_file()

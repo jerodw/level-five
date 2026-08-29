@@ -1285,14 +1285,43 @@ def interrupted_attempt_artifacts(
     the interrupted attempt's own self-routes wrote. Those names cannot be
     derived from the workflow alone — the count that produced them is live state
     the resume has already discarded — so when the run directory is given they
-    are read off it by self_route_artifacts. It is optional so a caller asking
-    only what the workflow declares gets exactly what it got before.
+    are read off it by self_route_artifacts. The retained suite-run pairs that
+    attempt wrote are keyed by the same discarded count and are read off the
+    directory beside them, by retained_suite_artifacts. The run directory is
+    optional so a caller asking only what the workflow declares gets exactly
+    what it got before.
     """
     names = archivable_artifacts(stages) + [
         prompt_file(stage["name"], attempt) for stage in stages
     ]
     if run_dir is not None:
         names += self_route_artifacts(run_dir, stages, attempt)
+        names += retained_suite_artifacts(run_dir, stages, attempt)
+    return names
+
+
+def retained_suite_artifacts(
+    run_dir: Path, stages: list[dict], attempt: int | str
+) -> list[str]:
+    """The retained suite-run pairs one attempt left behind.
+
+    Read off the run directory for the reason self_route_artifacts is: the try
+    number keying them is the self-route count, which is live state a resume has
+    already zeroed, so nothing records how high it reached. The globs come from
+    retained_suite_result_file and suite_output_file — the same functions that
+    write the names, with the try wildcarded — so what is found cannot drift
+    from what was written, and the artifact comes off the workflow's own
+    suite-run declaration rather than from a literal. A workflow declaring no
+    suite run has no such names, and this reports none.
+    """
+    declared = suite_run_declaration(stages).get("result")
+    if not declared:
+        return []
+    names: list[str] = []
+    for stage in stages:
+        result = retained_suite_result_file(declared, stage["name"], attempt, "*")
+        for pattern in (result, suite_output_file(result)):
+            names.extend(sorted(path.name for path in run_dir.glob(pattern)))
     return names
 
 
@@ -1301,18 +1330,21 @@ def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
 
     Everything at the run root whose name is keyed by retry_count or by
     verification_iterations: the attempt-numbered prompts, the try-suffixed
-    prompts and self-route records those attempts wrote, the verification
-    iteration files, and the attempts/ directory. Zeroing the counters puts the
-    next attempt back on attempt 1 and iteration 1, so these are exactly the
-    names an entry has to take with it.
+    prompts and self-route records those attempts wrote, the retained suite-run
+    pairs those attempts wrote, the verification iteration files, and the
+    attempts/ directory. Zeroing the counters puts the next attempt back on
+    attempt 1 and iteration 1, so these are exactly the names an entry has to
+    take with it.
 
     The prompt and self-route names come through prompt_file and
     self_route_result_file with the attempt and the try number wildcarded, the
     way self_route_artifacts already discovers what a discarded count wrote, so
     discovery cannot drift from writing; the stage names come off the loaded
-    workflow. The attempts directory is derived from attempt_dir for the same
-    reason. Names are run-relative, so a move keeps each one's position beneath
-    the run directory rather than flattening it.
+    workflow, and the retained pairs through retained_suite_artifacts, which
+    reads the artifact off the workflow's own suite-run declaration. The
+    attempts directory is derived from attempt_dir for the same reason. Names
+    are run-relative, so a move keeps each one's position beneath the run
+    directory rather than flattening it.
 
     The record is not here and must not be: the run's retry record, its cost
     record, its two renderings of the event stream, its state file and its
@@ -1328,6 +1360,7 @@ def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
             self_route_result_file(stage["name"], "*", "*"),
         ):
             names.extend(path.name for path in run_dir.glob(pattern))
+    names.extend(retained_suite_artifacts(run_dir, stages, "*"))
     names.extend(
         str(path.relative_to(run_dir))
         for path in run_dir.glob("verification/iteration-*.json")
@@ -2261,6 +2294,8 @@ def suite_run_check(
     artifact: str,
     *,
     stage_name: str,
+    attempt: int,
+    try_number: int,
 ) -> CleanCloneResult:
     """Run the target's configured test command in its own working tree.
 
@@ -2293,6 +2328,21 @@ def suite_run_check(
     Every path here records an empty scope: this run is the configured test
     command as configured, and the coordinator narrows it by nothing. That
     says nothing about what the configured command covers.
+
+    Two pairs are written, not one. The canonical pair at the run-directory
+    root keeps its present meaning exactly — the most recent run — so every
+    reader that already knows those names reads what it read before. Beside it
+    a pair keyed by the stage, the attempt and the try is written through
+    `retained_suite_result_file`, so no run's evidence is written over by the
+    run after it: a self-route caused by a red suite points its reader at a
+    path that still holds what that self-route saw. Each record's `output_path`
+    names the output file beside it rather than the other pair's, and the
+    result returned names the retained output, so the self-route record and the
+    statement it hands the re-running stage cite what survives.
+
+    `attempt` and `try_number` are required and keyword-only for the reason
+    `stage_name` is: a defaulted argument would let a call site write an unkeyed
+    run by omission, which is the overwrite this keying exists to remove.
     """
     command = config.get("test_command")
     if not command:
@@ -2307,6 +2357,7 @@ def suite_run_check(
             ),
         )
 
+    retained = retained_suite_result_file(artifact, stage_name, attempt, try_number)
     argv = shlex.split(command)
     runner = argv[0]
     named = shlex.join(argv)
@@ -2333,8 +2384,15 @@ def suite_run_check(
             scope=(),
             reason=f"the configured test command could not be run: {error}",
         )
+        canonical_output = None
     else:
         output = result.stdout + result.stderr
+        # The whole output is written twice, beside each record that points at
+        # it, so following either record's own pointer reaches that record's
+        # run rather than the other pair's file.
+        canonical_output = _write_suite_output(
+            run_dir / suite_output_file(artifact), output
+        )
         decided = CleanCloneResult(
             ran=True,
             command=named,
@@ -2343,11 +2401,24 @@ def suite_run_check(
             exit_code=result.returncode,
             output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
             output_path=_write_suite_output(
-                run_dir / suite_output_file(artifact), output
+                run_dir / suite_output_file(retained), output
             ),
         )
+    # One record, written twice with each copy's output_path repointed at the
+    # output file beside it, in the shape _archive_companion_output already uses
+    # for an archived record. The returned result carries the retained pointer,
+    # so a caller citing it cites the path the next run will not write over.
+    retained_record = decided.as_record()
+    canonical_record = dict(retained_record)
+    if canonical_output is None:
+        canonical_record.pop("output_path", None)
+    else:
+        canonical_record["output_path"] = canonical_output
     (run_dir / artifact).write_text(
-        json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
+        json.dumps(canonical_record, indent=2) + "\n", encoding="utf-8"
+    )
+    (run_dir / retained).write_text(
+        json.dumps(retained_record, indent=2) + "\n", encoding="utf-8"
     )
     return decided
 
@@ -3772,6 +3843,30 @@ def self_route_result_file(
     spelling of the name rather than two that agree today.
     """
     return f"self-route-{stage_name}-attempt-{attempt}-try-{try_number}.json"
+
+
+def retained_suite_result_file(
+    artifact: str, stage_name: str, attempt: int, try_number: int | str
+) -> str:
+    """Where one suite run's result is kept, keyed so no later run overwrites it.
+
+    The declared artifact's stem, then the stage, the attempt and the try, in
+    the shape `self_route_result_file` and `prompt_file` already establish. The
+    stem is stripped the way `suite_output_file` strips it, so the artifact name
+    is the workflow's and nothing here spells one. The retained output filename
+    comes from passing this name to `suite_output_file`, so the output is
+    derived from the result rather than shaped a second time.
+
+    The try number is the self-route count the state carries — the same number
+    the prompt file for the invocation this run judges is keyed by — so the
+    prompt a stage was given and the suite run judging that turn share a key
+    rather than two derivations that happen to agree.
+
+    A caller may pass `"*"` for the attempt or the try to build the glob over
+    what is already written, so discovery and writing share one spelling.
+    """
+    stem = artifact[: -len(".json")] if artifact.endswith(".json") else artifact
+    return f"{stem}-{stage_name}-attempt-{attempt}-try-{try_number}.json"
 
 
 def prompt_file(stage_name: str, attempt: int, try_number: int | str = 0) -> str:
@@ -6545,8 +6640,20 @@ def run_story(
         suite_run = stage.get("suite_run") or {}
         suite_artifact = suite_run.get("result")
         if suite_artifact:
+            # The attempt and the try key the pair this run retains. The try is
+            # the same self_route_count the prompt for the invocation this run
+            # judges was keyed by, so the two share a key by construction.
             ran = suite_run_check(
-                run_dir, target_root, config, suite_artifact, stage_name=name
+                run_dir,
+                target_root,
+                config,
+                suite_artifact,
+                stage_name=name,
+                attempt=attempt,
+                try_number=state.self_route_count,
+            )
+            retained_suite = retained_suite_result_file(
+                suite_artifact, name, attempt, state.self_route_count
             )
             if not ran.ran:
                 # A check that could not run permits nothing, as the
@@ -6578,10 +6685,12 @@ def run_story(
                         f"the suite the coordinator ran after {name} exited "
                         f"{ran.exit_code}: {_clean_clone_failures(ran.output_tail or '')}"
                     ),
-                    # The record and the whole output, so the statement the
-                    # re-running stage reads names both and the record's own
-                    # artifacts array carries both.
-                    artifacts=[suite_artifact, ran.output_path or suite_artifact],
+                    # The retained record and the retained whole output, so the
+                    # statement the re-running stage reads names both and the
+                    # record's own artifacts array carries both — the paths
+                    # that still hold this run when the rerun has written the
+                    # canonical pair over with its own.
+                    artifacts=[retained_suite, ran.output_path or retained_suite],
                     attempt=attempt,
                 )
                 if decision.taken:
