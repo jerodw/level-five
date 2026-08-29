@@ -35,6 +35,23 @@ standards_dir: .harness/standards
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q -n auto
+# How this repository files an outbox entry: the reference implementation it
+# ships, installed into .harness/sync/ by l5-init and wired up here, so the
+# script the harness hands to every target is the script this repository is
+# itself exercised by. The harness invokes it once per entry and knows nothing
+# else about the tracker — the entry on stdin, the key in L5_SYNC_KEY, the
+# reference as the last non-empty line of stdout, and an exit code saying
+# landed (0), retry (75) or stop (anything else). The command is idempotent
+# given the key, which is what makes a lost response safe to retry, and it
+# does not commit. Read .harness/sync/github.sh for the whole contract.
+sync_command: .harness/sync/github.sh
+# How long that command may run before it is killed, in seconds. The kill
+# reaches its process group, so a command that spawned children of its own
+# leaves none behind, and the entry is left pending rather than failed —
+# running past a timeout establishes nothing about whether the request
+# arrived. Delete the key and the bound is 60 seconds, which is a real one:
+# zero here would be no timeout at all.
+sync_timeout_seconds: 120
 # The command the revert check substitutes a nominated test into. {test} is the
 # substitution point; everything else is this repository's own selector syntax,
 # which the harness neither parses nor understands. A writing stage that names

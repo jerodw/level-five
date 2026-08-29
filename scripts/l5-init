@@ -30,7 +30,7 @@ def main() -> int:
         print(f"{harness_dir} already initialized.", file=sys.stderr)
         return 1
 
-    for sub in ("standards", "docs", "stories", "runs", "logs"):
+    for sub in ("standards", "docs", "stories", "runs", "logs", "sync"):
         (harness_dir / sub).mkdir(parents=True, exist_ok=True)
 
     config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")
@@ -41,6 +41,14 @@ def main() -> int:
         (harness_dir / "standards" / template.name).write_text(
             template.read_text(encoding="utf-8"), encoding="utf-8"
         )
+
+    # The reference sync commands, installed executable because the harness
+    # launches one as a command rather than reading it. A target opts in by
+    # naming one in sync_command; installing it does not file anything.
+    for script in sorted((TEMPLATES / "sync").glob("*.sh")):
+        installed = harness_dir / "sync" / script.name
+        installed.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
+        installed.chmod(0o755)
 
     print(f"Initialized {harness_dir}")
     print("Next: replace the starter standards in .harness/standards/, then plan a story with l5-plan.")

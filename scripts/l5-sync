@@ -17,9 +17,13 @@ or a poisoned entry, naming each one. A poisoned file — one that is not an
 entry — is named and left exactly as it is: the harness cannot know what a
 human meant by it.
 
-No provider ships with the harness, so an ordinary invocation says that no
-transport is configured, reports the queue as it stands, and applies the
-same exit rule.
+A target files an entry by configuring sync_command, one command the harness
+invokes per entry and knows nothing else about the tracker through: the entry
+on stdin, a reference on stdout, and an exit code saying landed, retry or
+stop. A reference implementation ships at templates/sync/github.sh, installed
+into a target's .harness/sync/ by l5-init. With no sync_command configured
+this says that no transport is configured, reports the queue as it stands,
+and applies the same exit rule.
 """
 import sys
 from pathlib import Path
@@ -27,8 +31,46 @@ from pathlib import Path
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
+import command_transport  # noqa: E402
 import harness_config  # noqa: E402
 import outbox  # noqa: E402
+
+#: The configuration keys this script reads. The reads live here rather than
+#: in the transport module because no run reads them — the coordinator is not
+#: involved in a sweep — and because this is where the AST scan in
+#: tests/test_config_keys_are_obeyed.py already looks for a configured key.
+TIMEOUT_KEY = "sync_timeout_seconds"
+
+
+def build_transport(config: dict, target_root: Path):
+    """The transport this configuration describes, or the reason it is refused.
+
+    Returns `(transport, problem)`. No configured command is not a problem: a
+    target that files nothing is the ordinary case, and it gets no transport
+    and no complaint. A sync_timeout_seconds that is not a positive number is
+    a problem, and it is refused here rather than obeyed — a timeout of zero
+    or of a word is no timeout at all, which is the failure the bound exists
+    to prevent.
+    """
+    command = config.get("sync_command")
+    declared = config.get(TIMEOUT_KEY)
+    if declared is None:
+        timeout = command_transport.DEFAULT_TIMEOUT_SECONDS
+    else:
+        try:
+            timeout = float(declared)
+        except (TypeError, ValueError):
+            timeout = None
+        if timeout is None or timeout <= 0:
+            return None, (
+                f"{TIMEOUT_KEY}: {declared!r} is not a positive number of "
+                "seconds, and a sync command must be bounded in time"
+            )
+    if not command:
+        return None, ""
+    return command_transport.CommandTransport(
+        command=command, timeout=timeout, cwd=target_root
+    ), ""
 
 
 def report(summary, queue: Path) -> int:
@@ -63,8 +105,15 @@ def main() -> int:
         print(__doc__.strip(), file=sys.stderr)
         return 1
     target_root = harness_config.find_target_root(Path.cwd())
+    config = harness_config.load_config(target_root)
+    transport, problem = build_transport(config, target_root)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 1
     queue = outbox.queue_dir(target_root)
-    return report(outbox.sync(queue, harness_root=HARNESS_ROOT), queue)
+    return report(
+        outbox.sync(queue, transport, harness_root=HARNESS_ROOT), queue
+    )
 
 
 if __name__ == "__main__":

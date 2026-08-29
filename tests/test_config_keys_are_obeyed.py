@@ -10,14 +10,14 @@ So nothing here asserts that a key is *mentioned*. Each key is set to a value
 this harness would never choose, and the harness is then observed acting on
 that value. Almost every value carries the token ``xyzzy``, which makes an
 accidental coincidence with anything the harness would pick impossible rather
-than unlikely. `max_pause_wait_seconds` is the one key exempt from that
-convention, and the exemption is forced rather than chosen: the value is a
-*duration*, parsed to a number and refused at pre-flight when it is not one,
-so a value carrying the token would refuse every run in this module rather
-than proving anything. `TOKEN_EXEMPT` names it, and what stands in for the
-token is stated at `VARYING`: a duration no harness would pick, pinned from
-both sides by the proof, which observes a wait just inside it taken and a wait
-just outside it declined.
+than unlikely. The keys `TOKEN_EXEMPT` names are exempt from that convention,
+and each exemption is forced rather than chosen: the value is a *number* —
+a duration, a retention bound, a count of hops — parsed as one and refused or
+defaulted when it is not, so a value carrying the token would prove nothing
+about anything. What stands in for the token is stated at each of them in
+`VARYING`: a number no harness would pick, pinned from both sides by that
+key's own proof, which observes the harness obeying the bound on one side and
+declining past it on the other.
 
 * `KEY_PROOFS` maps each declared key to the node id that proves it and to
   what "proven" means for it. Most are proven **behaviourally**: the fixture
@@ -66,8 +66,10 @@ from pathlib import Path
 
 import pytest
 
+import command_transport
 import conftest
 import harness_config
+import outbox
 import run_status
 import schema_validator
 import story_coordinator
@@ -116,6 +118,10 @@ TOKEN_EXEMPT: dict[str, str] = {
         "fallen back to the default when it is not one, so a value carrying a "
         "word would be the default under another name and would prove nothing"
     ),
+    "sync_timeout_seconds": (
+        "the value is a duration in seconds, parsed to a positive number and "
+        "refused by l5-sync when it is not one, so it cannot carry a word"
+    ),
 }
 
 #: How long the pause wait fixture is configured to allow. A duration no
@@ -148,6 +154,32 @@ KEPT_AT_THE_BOUND = RETENTION_DAYS - 11
 #: in this module still completes with it configured.
 MANDATE_DEPTH = 0
 
+#: How long the fixture allows a sync command to run. Not a whole number of
+#: seconds, which no harness would pick: the default written in harness source
+#: is sixty and this repository configures a hundred and twenty. It stands in
+#: for the token the value cannot carry, and the proof pins it from both sides
+#: — a command that finishes inside it lands and one that runs past it is
+#: killed — so the number itself is what is obeyed rather than merely
+#: something non-zero.
+#:
+#: What makes both sides cheap *and* decisive is that the bound sits below the
+#: default: a command asked to sleep for `SLEEPS_PAST_THE_BOUND` is killed at
+#: the configured bound, and under the default it would finish and land. So a
+#: harness that stopped reading the key fails the second half in seconds
+#: rather than after a minute of waiting.
+SYNC_TIMEOUT = 1.3
+SLEEPS_PAST_THE_BOUND = 4
+
+#: The default the fallback comparison and the ordering above are stated
+#: against, read off the transport rather than written here.
+DEFAULT_SYNC_TIMEOUT = command_transport.DEFAULT_TIMEOUT_SECONDS
+
+#: Where the fixture's sync command lives inside the target, and what it
+#: prints. The path carries the token, so a landed entry naming this reference
+#: can only have come from the harness running the configured command.
+SYNC_COMMAND_REL = "xyzzy-sync/files-the-entry.sh"
+SYNC_REFERENCE = "https://tracker.example/xyzzy-issue-1"
+
 VARYING: dict[str, object] = {
     "allowed_tools": ["Bash(xyzzy:*)"],
     "architecture_docs": ["docs/xyzzy-architecture.md"],
@@ -164,6 +196,8 @@ VARYING: dict[str, object] = {
     "runs_dir": ".harness/xyzzy-runs",
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
+    "sync_command": SYNC_COMMAND_REL,
+    "sync_timeout_seconds": str(SYNC_TIMEOUT),
     "test_command": "xyzzy-runner --all",
     "test_selection_command": "xyzzy-selector --only {test}",
     "tests_dir": "xyzzy-checks/",
@@ -193,6 +227,8 @@ FALLBACKS: dict[str, object] = {
     "runs_dir": ".harness/runs",
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
+    "sync_command": None,
+    "sync_timeout_seconds": DEFAULT_SYNC_TIMEOUT,
     "test_command": None,
     "test_selection_command": None,
     "tests_dir": None,
@@ -270,6 +306,12 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "stories_dir": Proof(
         "test_stories_dir_is_where_the_story_artifact_is_read_from",
+        BEHAVIOURAL),
+    "sync_command": Proof(
+        "test_sync_command_is_the_command_an_entry_is_filed_by_running",
+        BEHAVIOURAL),
+    "sync_timeout_seconds": Proof(
+        "test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to",
         BEHAVIOURAL),
     "test_command": Proof(
         "test_test_command_is_the_command_the_clean_clone_path_builds",
@@ -383,6 +425,16 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("stories_dir", ".harness/stories")',
          '".harness/stories"'),
+    ),
+    "sync_command": (
+        ("scripts/l5-sync",
+         'command = config.get("sync_command")',
+         "command = None"),
+    ),
+    "sync_timeout_seconds": (
+        ("scripts/l5-sync",
+         "declared = config.get(TIMEOUT_KEY)",
+         "declared = None"),
     ),
     "test_command": (
         ("orchestration/story_coordinator.py",
@@ -697,8 +749,8 @@ EXPECTED_KEYS = (
     "census_command", "history_dir", "history_retention_days",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "standards_dir",
-    "stories_dir", "test_command", "test_selection_command", "tests_dir",
-    "verification_runner", "workflow",
+    "stories_dir", "sync_command", "sync_timeout_seconds", "test_command",
+    "test_selection_command", "tests_dir", "verification_runner", "workflow",
 )
 
 
@@ -1079,6 +1131,11 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
 
     assert WITHIN_THE_BOUND < PAUSE_WAIT < BEYOND_THE_BOUND
     assert KEPT_AT_THE_BOUND < RETENTION_DAYS < DROPPED_AT_THE_BOUND
+    # And the sync bound, which is pinned on both sides at once: a command
+    # sleeping past it is killed under the configured value and would finish
+    # and land under the default, so the second half of its proof is what
+    # separates the number from merely being non-zero.
+    assert 0 < SYNC_TIMEOUT < SLEEPS_PAST_THE_BOUND < DEFAULT_SYNC_TIMEOUT
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -1154,6 +1211,99 @@ def test_stories_dir_is_where_the_story_artifact_is_read_from(tmp_path):
     # is the artifact at the configured path governing rather than merely
     # sitting there.
     assert "Sample story for coordinator tests" in run.prompt_for("implementer")
+
+
+#: What the fixture enqueues so there is something for a sync command to file.
+#: The identity carries the token for the same reason every varying value
+#: does: nothing the harness recognises may be what makes this land.
+SYNC_IDENTITY = {"kind": "xyzzy-finding", "subject": STORY_ID}
+SYNC_PAYLOAD = {"title": "xyzzy: something to file"}
+
+
+@dataclass
+class Sweep:
+    """One drain of a fixture target's queue, and what it left behind.
+
+    The two keys below are read by `scripts/l5-sync` and by nothing a run
+    executes — the coordinator is not involved in a sweep — so their proofs are
+    driven at the script rather than through `run_story`. The script is loaded
+    through the shared loader, so a proof running in a mutated copy loads that
+    copy's script rather than this repository's.
+    """
+
+    entry: dict
+    transport: object
+    problem: str
+
+
+def swept(tmp_path: Path, *, sleeps: int = 0, **overrides: object) -> Sweep:
+    """Build a fixture target, install its sync command, and drain its queue.
+
+    The command is a file this fixture writes, at the path the configuration
+    names, printing a reference this module chose. Nothing reaches a network,
+    and the path carries the token — so an entry landed with that reference
+    can only have come from the harness running the *configured* command.
+    """
+    values = fixture_config(**overrides)
+    target = build_target(tmp_path, values)
+    command = target / str(values["sync_command"])
+    command.parent.mkdir(parents=True, exist_ok=True)
+    command.write_text(
+        "#!/bin/sh\n"
+        + (f"sleep {sleeps}\n" if sleeps else "")
+        + f'echo "{SYNC_REFERENCE}"\n',
+        encoding="utf-8")
+    command.chmod(0o755)
+
+    queue = outbox.queue_dir(target)
+    key = outbox.enqueue(queue, SYNC_PAYLOAD, SYNC_IDENTITY)
+    l5_sync = conftest.load_script("l5-sync")
+    transport, problem = l5_sync.build_transport(
+        harness_config.load_config(target), target)
+    if transport is not None or not problem:
+        outbox.sync(queue, transport)
+    return Sweep(
+        entry=json.loads(
+            outbox.entry_path(queue, key).read_text(encoding="utf-8")),
+        transport=transport,
+        problem=problem,
+    )
+
+
+def test_sync_command_is_the_command_an_entry_is_filed_by_running(tmp_path):
+    """The configured command is the one that ran, observed at the entry.
+
+    The reference on the landed entry is the one the fixture's own script
+    printed, and that script sits at the configured path and nowhere else. A
+    harness that had stopped reading the key would build no transport at all,
+    and the entry would still be pending.
+    """
+    swept_queue = swept(tmp_path)
+    assert swept_queue.problem == ""
+    assert swept_queue.transport.command == SYNC_COMMAND_REL
+    assert swept_queue.entry["state"] == outbox.LANDED
+    assert swept_queue.entry["reference"] == SYNC_REFERENCE
+
+
+def test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to(tmp_path):
+    """The configured bound decides both halves, observed rather than read.
+
+    A command that finishes inside it lands; the same command asked to sleep
+    past it is killed and its entry left pending, naming the bound. The two
+    runs differ in that sleep alone, so what separates them can only be the
+    number the configuration carries — and the number is below the default
+    written in harness source, so a harness that had fallen back to that
+    default would let the second command finish and land.
+    """
+    inside = swept(tmp_path / "inside")
+    assert inside.transport.timeout == SYNC_TIMEOUT
+    assert inside.entry["state"] == outbox.LANDED
+    assert inside.entry["reference"] == SYNC_REFERENCE
+
+    beyond = swept(tmp_path / "beyond", sleeps=SLEEPS_PAST_THE_BOUND)
+    assert beyond.entry["state"] == outbox.PENDING
+    assert "reference" not in beyond.entry
+    assert str(SYNC_TIMEOUT) in beyond.entry["last_error"]
 
 
 def test_runs_dir_is_where_the_run_state_is_written_and_read_back(tmp_path):
@@ -1603,7 +1753,12 @@ def test_allowed_tools_reaches_both_the_runner_and_the_rendered_prompt(tmp_path)
 #: prompt and rule files a run loads, this repository's config file (the
 #: module reads it to check no proof value coincides with it), and the two
 #: test files. Copying only this keeps collection there to one module.
-COPIED_TREES = ("orchestration", "schemas", "workflows", "prompts", "rules")
+#:
+#: `scripts` is among them because two keys are read there and nowhere else:
+#: no run reads them, so their proofs drive the script and their mutations
+#: must land in the copy's own script rather than in this repository's.
+COPIED_TREES = ("orchestration", "schemas", "workflows", "prompts", "rules",
+                "scripts")
 COPIED_TESTS = ("conftest.py", MODULE_NAME)
 
 
