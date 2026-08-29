@@ -1,0 +1,325 @@
+story:
+  id: story-092
+  title: The sweep runs where failure is free
+  description: |
+    The outbox is drained opportunistically, at the points where a failure to
+    drain costs nothing: a non-refusing sweep in the l5-run pre-flight, a sweep
+    after the completion commit, and the queue surfaced read-only in l5-status.
+    l5-sync stays the explicit entry point; these are the paths that mean a
+    developer rarely has to run it.
+
+    Every other pre-flight in this coordinator refuses, and that consistency is
+    the point of them. This one must not, and the design says so in a way a
+    later reader cannot undo by accident: the opportunistic entry point returns
+    a Summary and has no type in which a refusal can be expressed, and the
+    refusable variant l5-sync uses is a different function. A sweep at the top
+    of a run is an attempt to be helpful with a network that may be down; if it
+    can refuse, the outbox becomes exactly the blocker the whole design exists
+    to prevent.
+
+    One sweep, three call sites. The drain lives in one module so the sites
+    cannot drift, which is the shape story-080 used for the two capacity
+    resumes.
+  workflow: story-workflow
+
+tasks:
+  - Add orchestration/outbox_sweep.py, holding the drain every site shares in
+    two functions with deliberately different types - a refusable transport
+    build for l5-sync and a total sweep that cannot refuse.
+  - Move build_transport out of scripts/l5-sync into the new module and have
+    the script call it, so its refusal behaviour is unchanged and the drain is
+    written once.
+  - Give outbox.sync a limit on how many pending entries one sweep attempts to
+    file, and have it name what the limit left undone rather than truncating
+    silently.
+  - Declare sweep_max_entries in the harness configuration schema, read it in
+    the sweep module, and default it in source.
+  - Call the sweep from run_story, below every refusing pre-flight and above
+    the first stage invocation.
+  - Call the sweep from _complete, after the completion commit.
+  - Show the queue in l5-status - pending counts, failed entries with their
+    last error, and poisoned files - by reading entries as data, with no
+    transport built and no network call made.
+  - Replace the two assertions in tests/test_outbox.py this story deliberately
+    retires with the stronger rules that succeed them, each held shut from both
+    sides and each keeping its planted control.
+  - Write the story's regression suite, including the end-to-end run whose
+    every sweep fails and which still starts, still runs and still completes.
+  - Prove the new configuration key governs, in the shape every other declared
+    key is proven in.
+
+acceptance_criteria:
+  - orchestration/outbox_sweep.py exists and is the only module in the
+    repository that calls outbox.sync.
+  - outbox_sweep.sweep returns an outbox.Summary on every path and returns
+    nothing else. It has no parameter, no return value and no exception by
+    which it could tell a caller to stop, so a call site cannot turn it into a
+    refusal without changing the function.
+  - A sweep whose configured timeout is not a positive number, whose configured
+    limit is not a positive integer, whose transport raises on every entry,
+    whose transport is absent, or whose queue directory cannot be listed each
+    return a Summary carrying a note saying which, and none of them raises.
+  - scripts/l5-sync refuses a sync_timeout_seconds that is not a positive
+    number, naming the key and the value, exactly as it did before this story,
+    and refuses a sweep_max_entries that is not a positive integer in the same
+    shape. The refusable build and the total sweep are different functions, and
+    l5-sync calls the refusable one.
+  - outbox.sync accepts a limit on how many pending entries it attempts to
+    file. Entries beyond it are left pending and unattempted, and the summary
+    carries a note naming the limit and how many entries it left undone.
+  - The limit counts filing attempts and not entries read. A queue of landed,
+    failed and poisoned entries is fully reported however small the limit is,
+    because none of those reaches a transport.
+  - sweep_max_entries is declared in schemas/harness-config.schema.json, is
+    read by orchestration/outbox_sweep.py, and defaults in source to a positive
+    integer. Its description states that the worst case of one sweep is the
+    limit multiplied by sync_timeout_seconds, so a reader raising one knows to
+    consider the other.
+  - A run's pre-flight sweeps the queue after the history prune and before the
+    first stage is invoked, and reports what it did in that run's events.log.
+  - A run refused by any pre-flight above that point sweeps nothing - the
+    undeclared key, the bad pause wait, the unreadable story, the unresolved
+    mandate, the unknown workflow, the finished branch, the bad base and the
+    dirty tree each leave the queue exactly as it was.
+  - A run whose every sweep fails entirely still passes pre-flight, still runs
+    every stage, still commits its work and still completes, and its exit
+    status is the status it would have had with no queue at all.
+  - _complete sweeps after the completion commit rather than before it, so a
+    slow provider cannot delay the durability of the work. A test observes the
+    ordering rather than inferring it from the code.
+  - _escalate and _pause sweep nothing. A crashed, escalated or paused run
+    leaves its entries for the next run or for an explicit l5-sync.
+  - l5-status reports the queue - the pending count, each failed entry with its
+    last error, and each poisoned file - and builds no transport, spawns no
+    subprocess for the outbox and files nothing. A queue holding pending and
+    failed entries is reported identically whether or not sync_command is
+    configured.
+  - l5-status with an unreadable or absent queue directory reports the runs it
+    was asked for and says the queue could not be read, rather than failing.
+  - The rule that no module a run executes reaches the queue is replaced by the
+    rule that succeeds it: a run reaches the queue only through the sweep seam.
+    story_coordinator.py calls neither outbox.sync nor outbox.enqueue, the
+    modules that name the queue are exactly the declared ones, and each is held
+    shut from both sides so a stale exemption and a planted call site are both
+    reported.
+  - The module docstrings that this story makes false are rewritten rather than
+    left standing - orchestration/outbox.py's paragraph saying no sweep runs
+    inside a story run and that l5-sync is the only drain site shipped, and
+    scripts/l5-sync's paragraph saying the same.
+  - The non-refusal is stated where it is written. orchestration/outbox_sweep.py
+    and both coordinator call sites carry a comment saying that this sweep must
+    not refuse, and why restoring consistency with the pre-flight refusals
+    around it would defeat the mechanism.
+  - The whole suite passes under the configured test command, including the
+    tests this story adds, and no test in it reaches a network.
+
+technical_plan:
+  implementation_steps:
+    - Write orchestration/outbox_sweep.py. Its docstring states the split the
+      module exists to hold - one drain, three call sites, two entry points
+      whose types differ because one of them may refuse and the other may not.
+    - Move build_transport(config, target_root) -> (transport, problem) into it
+      unchanged from scripts/l5-sync, keeping TIMEOUT_KEY and the reads in the
+      literal-resolvable idiom tests/test_config_keys_are_obeyed.py already
+      scans for. Add the same treatment for the new limit key.
+    - Add sweep(target_root, config, harness_root, *, run_dir=None) -> Summary
+      beside it. It builds the transport, and where the build reports a problem
+      it sweeps with no transport and carries the problem into the returned
+      summary's notes. It calls outbox.sync with the resolved limit and returns
+      whatever comes back. It returns a Summary on every path and raises on
+      none, and the comment above it says that a later reader who gives it a
+      way to refuse has removed the guarantee the queue exists to make.
+    - Give the module a one-line renderer for a summary, so the two coordinator
+      call sites and l5-status say the same thing about the same queue rather
+      than each composing their own sentence. scripts/l5-sync keeps its own
+      multi-line report - a terminal invocation the developer asked for says
+      more than an aside inside a run.
+    - Add a limit parameter to outbox.sync. It bounds filing attempts, checked
+      before each call into _file_one's filing path rather than at the top of
+      the loop, so landed, failed and poisoned entries are still read and
+      reported under any limit. Pending entries past the bound are tallied as
+      pending and left unattempted, and one note names the limit and the count
+      it left undone.
+    - Declare sweep_max_entries in schemas/harness-config.schema.json in
+      alphabetical position, describing what it bounds, that it counts filing
+      attempts rather than entries, that the worst case of a sweep is the limit
+      multiplied by sync_timeout_seconds, that l5-sync refuses a value that is
+      not a positive integer while an opportunistic sweep notes it and files
+      nothing, and what it defaults to.
+    - Have scripts/l5-sync import the moved functions rather than defining
+      them, and refuse a bad limit exactly as it refuses a bad timeout, above
+      the command for the reason the timeout check already sits above it.
+    - Add the pre-flight call site in run_story, immediately after
+      prune_history and its refusal and above the first stage invocation, with
+      the run directory passed so the summary reaches events.log through
+      append_event. Nothing about its result is read - no branch, no early
+      return, no status.
+    - Add the completion call site at the end of _complete, after the last git
+      commit and before the return, with the same shape and the same comment.
+    - Add the queue section to run_status.format_listing, reading through
+      outbox.entry_files and outbox.read_entry alone. It builds no transport
+      and imports nothing that can spawn a subprocess. A queue directory that
+      does not exist is an empty queue rather than an error, which entry_files
+      already answers; a directory that cannot be listed is reported as such.
+    - Add the commented key to templates/config.yaml beside the two sync keys,
+      so a freshly initialized target sees what bounds a sweep.
+    - Widen tests/test_outbox.py's exemption constant from one name to the
+      declared set and rewrite the two assertions this story retires into the
+      rules that succeed them, keeping both planted controls.
+    - Add the sweep_max_entries entries to tests/test_config_keys_are_obeyed.py
+      - EXPECTED_KEYS, the configured value carrying a distinctive number, the
+      fallback, the mutation table entry naming the read in outbox_sweep.py,
+      the TOKEN_EXEMPT reason that a count cannot carry a word, and a
+      behavioural proof that pins the number from both sides by seeding a queue
+      larger than the limit and observing exactly the limit attempted.
+    - Write tests/test_opportunistic_sweep.py against a fake transport and a
+      fake agent runner, with the end-to-end failing-sweep run as its first
+      test, since that is the guarantee the whole story is for.
+  likely_file_changes:
+    - file: orchestration/outbox_sweep.py
+      stage: implementer
+      reason: The shared drain - the moved transport build, the total sweep
+        that cannot refuse, and the one-line rendering the three sites share.
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: sync gains the bound on filing attempts and the note naming what
+        the bound left undone, and the docstring paragraph saying no sweep runs
+        inside a story run stops being true.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The two call sites - the pre-flight sweep below the history prune
+        and the sweep after the completion commit - each with the comment
+        saying why this one may not refuse.
+    - file: orchestration/run_status.py
+      stage: implementer
+      reason: The queue section of the listing, read as data with no transport
+        and no network call.
+    - file: scripts/l5-sync
+      stage: implementer
+      reason: It imports the moved functions rather than defining them, refuses
+        a bad limit as it refuses a bad timeout, and its docstring stops
+        claiming to be the only drain site the harness ships.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The sweep_max_entries declaration, which is where a reader meets
+        what bounds a sweep and what the bound costs at worst.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The new key commented out with its explanation, beside the sync
+        keys it is read with.
+    - file: tests/test_opportunistic_sweep.py
+      stage: tester
+      reason: The story's regression suite - the run whose every sweep fails
+        and still completes, the two call sites and their ordering against the
+        completion commit, the refused runs that sweep nothing, the escalated
+        and paused runs that sweep nothing, the bound and what it reports, and
+        l5-status reporting a queue without touching a transport.
+    - file: tests/test_outbox.py
+      stage: tester
+      reason: The two assertions this story deliberately retires are replaced
+        by the rules that succeed them, widened by name and held shut from both
+        sides, with both planted controls kept.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: A newly declared key needs a proof that varies it and observes
+        the harness obey it, plus its fallback, its mutation-control entry and
+        its TOKEN_EXEMPT reason.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The new module, the new configuration key, the three sites, and a
+        section stating why this is the one pre-flight that may not refuse and
+        what replaced the two assertions that said no run reaches the queue.
+
+scope:
+  modify:
+    - orchestration/outbox_sweep.py
+    - orchestration/outbox.py
+    - orchestration/story_coordinator.py
+    - orchestration/run_status.py
+    - scripts/l5-sync
+    - schemas/harness-config.schema.json
+    - templates/config.yaml
+    - tests/test_opportunistic_sweep.py
+    - tests/test_outbox.py
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_l5_status_cli.py
+    - tests/test_run_status.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/command_transport.py
+    - orchestration/harness_config.py
+    - schemas/outbox-entry.schema.json
+    - schemas/manifest.json
+    - templates/sync/
+    - .harness/sync/
+    - scripts/l5-init
+    - workflows/
+    - prompts/
+    - hooks/
+    - templates/standards/
+
+verification_requirements:
+  - Confirm a run whose every sweep fails - a transport that raises on every
+    entry, with the queue seeded pending - passes pre-flight, runs every stage,
+    commits its work, completes, and exits with the status it would have had
+    with an empty queue.
+  - Confirm the sweep call sites cannot refuse by inspecting the function they
+    call: it returns a Summary on every path, raises on none, and neither
+    coordinator call site reads anything from its result.
+  - Confirm each way a sweep can go wrong returns a summary carrying the reason
+    - a bad timeout, a bad limit, an absent transport, a transport that raises,
+    a transport that answers with nonsense, and a queue that cannot be listed.
+  - Confirm the pre-flight sweep runs below the history prune and above the
+    first stage invocation, and that a run refused by a pre-flight above it
+    leaves the queue untouched.
+  - Confirm the completion sweep runs after the completion commit and not
+    before, by observing the ordering rather than by reading the source.
+  - Confirm an escalated run and a paused run each sweep nothing, and that
+    their entries are still there for a later run or an l5-sync.
+  - Confirm the bound is obeyed: a queue of more pending entries than the limit
+    attempts exactly the limit, leaves the rest pending and unattempted, and
+    names the limit and the remainder in what it reports.
+  - Confirm the bound counts filings and not reads: a queue of landed, failed
+    and poisoned entries is fully reported under a limit smaller than it.
+  - Confirm l5-status reports pending counts, failed entries with their last
+    error and poisoned files, and that it builds no transport and files
+    nothing - including with sync_command configured, where a sweep would
+    otherwise have had one to build.
+  - Confirm scripts/l5-sync behaves exactly as it did before this story for
+    every case it already covered, including its exit rule and its refusal of a
+    sync_timeout_seconds that is not a positive number.
+  - Confirm the declared config keys and the keys the harness reads are still
+    equal in both directions, and that sweep_max_entries has a proof varying it
+    to a value that is neither the default nor this repository's own.
+  - Confirm the two retired assertions have successors rather than deletions:
+    the modules naming the queue are exactly the declared set, a stale
+    exemption is reported, a planted call site is reported, and
+    story_coordinator.py still calls neither outbox.sync nor outbox.enqueue.
+  - Confirm the whole suite passes under the configured test command, including
+    the tests this story adds, and that no test in it reaches a network.
+
+constraints:
+  - No change to the entry states, to the entry schema, or to the transport
+    contract. A sweep files what the outbox already knows how to file.
+  - No retry backoff policy beyond what the outbox already defines. If backoff
+    turns out to be needed it is a finding for a later story rather than
+    something invented here.
+  - l5-sync stays the explicit entry point and its behaviour is unchanged. The
+    sweeps this story adds are additional, never a replacement.
+  - A sweep never blocks, delays or refuses a run. Durability first, network
+    second, and no call site reads a sweep's result to decide anything.
+  - l5-status stays instant and works offline. It parses no payload, builds no
+    transport and makes no network call.
+  - No silent cap. Whatever a bound leaves undone is named in what the sweep
+    reports.
+  - No third-party dependency, and no test that reaches a network. Every
+    transport in the suite is a fake.
+  - orchestration/command_transport.py is not modified. The sweep uses the
+    transport the previous story settled rather than widening it.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 15:42:24
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
