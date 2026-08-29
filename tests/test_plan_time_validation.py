@@ -385,15 +385,20 @@ def test_plan_validation_introduces_no_second_parser_or_validator():
         assert second_readers(f"{source}\n{planted}\n") != [], planted
 
 
-#: The one module outside the coordinator that validates an artifact against a
-#: schema, exempted by name and by nothing else. Its subject is a different
-#: artifact — what the first of l5-plan's two planner invocations wrote, which
-#: is an agent-authored answer and is therefore checked against the schema the
-#: prompt asked it to satisfy, exactly as every other agent-authored artifact
-#: is. The rule this test holds is about the *story* artifact having one
-#: reader, and the exemption is held shut from both sides below so it cannot
-#: quietly become a second one.
-VALIDATES_ANOTHER_ARTIFACT = "orchestration/workflow_selection.py"
+#: The modules outside the coordinator that validate an artifact against a
+#: schema, exempted by name and by nothing else. Each one's subject is a
+#: different artifact: `workflow_selection` checks what the first of l5-plan's
+#: two planner invocations wrote, an agent-authored answer held to the schema
+#: the prompt asked it to satisfy exactly as every other agent-authored
+#: artifact is; `outbox` checks what it reads back out of its own queue, which
+#: is how a poisoned entry is a decidable condition rather than a judgement.
+#: The rule these tests hold is about the *story* artifact having one reader,
+#: and each exemption is held shut from both sides below so it cannot quietly
+#: become a second one.
+VALIDATES_ANOTHER_ARTIFACT = (
+    "orchestration/workflow_selection.py",
+    "orchestration/outbox.py",
+)
 
 
 def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinator():
@@ -405,7 +410,7 @@ def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinato
                 if not path.is_file() or path.name == "__init__.py":
                     continue
                 relative = str(path.relative_to(HARNESS_ROOT))
-                if relative == VALIDATES_ANOTHER_ARTIFACT:
+                if relative in VALIDATES_ANOTHER_ARTIFACT:
                     continue
                 hits = [
                     line.strip() for line in read(relative).splitlines()
@@ -429,17 +434,18 @@ def test_the_only_caller_of_the_parser_and_the_validator_is_still_the_coordinato
     assert now == callers(at_baseline)
 
 
-def test_the_exempt_module_validates_something_that_is_not_a_story():
-    """The other side of the exemption, so it cannot go stale or widen.
+@pytest.mark.parametrize("exempt", VALIDATES_ANOTHER_ARTIFACT)
+def test_the_exempt_module_validates_something_that_is_not_a_story(exempt):
+    """The other side of each exemption, so none can go stale or widen.
 
     An exemption naming a module that has stopped validating anything is a
     hole nobody notices; one naming a module that has started reading story
     artifacts is the very thing the rule above forbids, hidden behind the
-    name. So the exempt module must exist, must actually call the validator,
+    name. So every exempt module must exist, must actually call the validator,
     must call the story parser nowhere, and must name neither the story schema
     nor the story artifact's own directory.
     """
-    source = (HARNESS_ROOT / VALIDATES_ANOTHER_ARTIFACT).read_text(
+    source = (HARNESS_ROOT / exempt).read_text(
         encoding="utf-8")
     assert "schema_validator.validate(" in source
     assert "story_parser" not in source

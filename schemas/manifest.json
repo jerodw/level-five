@@ -9,6 +9,7 @@
     "cross-run-history",
     "execution-history",
     "harness-config",
+    "outbox-entry",
     "retry-guidance",
     "retry-history",
     "revert-check-result",

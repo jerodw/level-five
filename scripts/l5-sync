@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Drain the outbox: the harness's durable local queue of work to file.
+
+Usage: l5-sync
+The target repository is found by walking up from the current directory
+to the nearest .harness/config.yaml.
+
+This is the explicit drain, and the only drain site the harness ships. No
+sweep runs inside a story run: nothing enqueues anything yet, so there is
+no queue accumulating unattended for a forgotten one to strand, and the
+story that adds a producer is the first point at which an automatic sweep
+earns its call site.
+
+It exits zero for a queue it drained and for one left holding only pending
+entries a later sync will retry, and non-zero for a queue holding a failed
+or a poisoned entry, naming each one. A poisoned file — one that is not an
+entry — is named and left exactly as it is: the harness cannot know what a
+human meant by it.
+
+No provider ships with the harness, so an ordinary invocation says that no
+transport is configured, reports the queue as it stands, and applies the
+same exit rule.
+"""
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import harness_config  # noqa: E402
+import outbox  # noqa: E402
+
+
+def report(summary, queue: Path) -> int:
+    """Say what the drain found, and return the exit code the summary implies.
+
+    The module collects; this decides how to say it and what it is worth. A
+    failed or poisoned entry is what a later sweep cannot resolve on its own,
+    so those and only those are worth a non-zero status.
+    """
+    print(f"outbox: {queue}")
+    if not summary.transport:
+        print("no transport is configured, so nothing was filed")
+    print(
+        f"landed {summary.landed}, pending {summary.pending}, "
+        f"failed {summary.failed}, poisoned {summary.poisoned}"
+    )
+    for key in summary.pending_keys:
+        print(f"  pending: {key}")
+    for key in summary.failed_keys:
+        print(f"  failed:  {key}")
+    for poisoned in summary.poisoned_files:
+        print(f"  poisoned: {poisoned.path}")
+        for problem in poisoned.problems:
+            print(f"      {problem}")
+    for note in summary.notes:
+        print(f"  note: {note}")
+    return 1 if summary.blocked else 0
+
+
+def main() -> int:
+    if len(sys.argv) > 1:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+    target_root = harness_config.find_target_root(Path.cwd())
+    queue = outbox.queue_dir(target_root)
+    return report(outbox.sync(queue, harness_root=HARNESS_ROOT), queue)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

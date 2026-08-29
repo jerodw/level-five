@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "outbox-entry",
+  "description": "One item in the harness's durable local queue of work it wants to file externally. The outbox writes this shape and reads it back, so what an entry is and what makes one poisoned are one file rather than two agreeing definitions. An entry is written before anything is filed and the network is only ever opportunistic: a failure to file never blocks a story, never delays a commit and never refuses a run, so the queue is gitignored rather than merely untracked — a pending entry that was only untracked would be reported by the clean-tree pre-flight and refuse the next run, which is exactly the blocking this queue exists not to do. WHAT IT DOES NOT CARRY: no provider name, no endpoint, no credential and no transport configuration. The transport is injected and the entry says only what is to be filed and what has happened to it so far. Optional fields are expressed by absence rather than by null, as clean-clone-result and suite-run-result do: an entry that has never been filed has no error to report, and one that has landed no longer carries the payload it no longer needs. A file under the queue directory that is not valid JSON, or that does not satisfy this schema, is POISONED: it is named in what a sync reports, counted, and left byte-for-byte as it is. The harness cannot know what a human meant by it, and destroying the evidence is the one unrecoverable move.",
+  "type": "object",
+  "required": ["key", "identity", "state", "attempts", "created_at", "updated_at"],
+  "properties": {
+    "key": {
+      "type": "string",
+      "description": "The client-generated idempotency key the entry is filed under, and the name of the file holding it. A sha256 digest over the canonical JSON of the identity below, in the shape story_digest already uses. It is derived from the identity alone and never from the payload, so an entry whose payload gains a field later keeps the key it was filed under — which is what lets an ambiguous outcome be resolved by asking the provider about the key rather than by trusting local state."
+    },
+    "identity": {
+      "type": "object",
+      "description": "What the caller declares this entry to BE, as distinct from what it says. Whatever the caller puts here decides the key, so two enqueue calls carrying the same identity produce one key however their payloads differ, and two carrying different identities produce two. The harness neither interprets nor constrains its contents."
+    },
+    "state": {
+      "type": "string",
+      "enum": ["pending", "landed", "failed"],
+      "description": "pending is written but not filed — a later sync retries it, and this is what an entry is written as and what a transient failure leaves it as. landed is confirmed by the provider: it records the reference and drops the payload it no longer needs. failed is terminal — the provider refused the entry on its own terms, and no sweep files it again unattended."
+    },
+    "payload": {
+      "type": "object",
+      "description": "What is to be filed, in whatever shape the transport takes. Absent once the entry has landed, because a filed entry no longer needs the body it was filed with and the provider is authoritative for what was filed."
+    },
+    "attempts": {
+      "type": "integer",
+      "description": "How many times filing this entry has been attempted. Zero on an entry that has been written and never offered to a transport, which is the one state in which local absence is unambiguous. Any other value means a request may have arrived and the response may have been lost, so a sync looks the key up before filing it a second time rather than risking a duplicate a human would have to reconcile."
+    },
+    "last_error": {
+      "type": "string",
+      "description": "What the last failed attempt reported, recorded on the entry so a later sweep and a human read the same record. Absent when nothing has failed."
+    },
+    "reference": {
+      "type": "string",
+      "description": "What the provider answered with when the entry landed — the provider's own name for what was filed. Absent unless the state is landed."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "When the entry was written, in the form events.log and the mandate block use."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "When the entry was last written, in the same form. Equal to created_at on an entry nothing has happened to since."
+    }
+  }
+}

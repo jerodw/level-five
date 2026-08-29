@@ -503,6 +503,17 @@ NEW_PLACEHOLDERS = (
 
 NO_CONFIG_MESSAGE = "No .harness/config.yaml found here or above. Run l5-init first."
 
+#: Every entry point that resolves a target repository, with the arguments an
+#: ordinary invocation gives it. Two assertions below read this — that each one
+#: calls the shared lookup, and that each one refuses identically without a
+#: config — so a script added here is a script both of them cover.
+ENTRY_POINTS = (
+    ("l5-run", ("story-001",)),
+    ("l5-status", ()),
+    ("l5-plan", ("a story request",)),
+    ("l5-sync", ()),
+)
+
 
 def workflow() -> dict:
     """The workflow whose facts the injection carries — the one built above."""
@@ -893,8 +904,14 @@ def test_find_target_root_exits_with_the_no_config_message(tmp_path):
     assert str(excinfo.value) == NO_CONFIG_MESSAGE
 
 
-def test_all_three_scripts_call_the_shared_lookup():
-    for name in ("l5-run", "l5-plan", "l5-status"):
+def test_every_entry_point_resolving_a_target_calls_the_shared_lookup():
+    """Named for what it checks rather than for how many scripts it iterates.
+
+    It counted three when it was written and l5-sync makes it four, which is
+    the drift a count in a name always has: the name and the list said the
+    same thing, and only one of them moved.
+    """
+    for name, _ in ENTRY_POINTS:
         source = (SCRIPTS / name).read_text(encoding="utf-8")
         assert "harness_config.find_target_root(Path.cwd())" in source, name
 
@@ -907,11 +924,7 @@ def test_the_walk_up_loop_appears_exactly_once_in_the_repository():
     assert hits == ["harness_config.py"]
 
 
-@pytest.mark.parametrize("script,args", [
-    ("l5-run", ("story-001",)),
-    ("l5-status", ()),
-    ("l5-plan", ("a story request",)),
-])
+@pytest.mark.parametrize("script,args", ENTRY_POINTS)
 def test_each_entry_point_fails_identically_with_no_config(tmp_path, script, args):
     """The message and exit status are byte-for-byte what l5-run produced
     before the extraction, for every caller."""

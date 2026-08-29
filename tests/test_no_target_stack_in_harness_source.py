@@ -159,6 +159,9 @@ PERMANENT_MENTIONS: dict[tuple[str, str], str] = {
     ('scripts/l5-status',
      '#!/usr/bin/env python3'):
         "the harness's own entry point is a Python program and says so to the kernel",
+    ('scripts/l5-sync',
+     '#!/usr/bin/env python3'):
+        "the harness's own entry point is a Python program and says so to the kernel",
     ('orchestration/story_coordinator.py',
      '    count that cannot be spent, and `True` is not a budget however much Python'):
         "names the language this validation itself is written in, explaining why a bool is refused",
