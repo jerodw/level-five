@@ -13,6 +13,12 @@ than trusted — the rule that a required output must be written by the attempt
 that ran, applied to an output no attempt is asked for. Nothing here lets a
 stage prompt, a stage output or a planning session supply the block.
 
+What the observing process observes is the developer answering: `approved`
+below is how `l5-plan` asks, and it is the whole of the evidence behind a
+block. Nothing else here reads a stream, and `confer` reads none at all, so a
+process holding a recorded approval of some other kind confers through the
+same seam without prompting.
+
 The conferring record goes into the declared harness-scoped log through the
 coordinator's own per-log append, with the history directory passed
 explicitly. That seam is what this module needed and did not have:
@@ -26,8 +32,10 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 import harness_config
+import plan_run_offer
 import story_coordinator
 
 #: The key the block is written under, and the only line this module looks for
@@ -47,6 +55,18 @@ CONFERRED_EVENT = "mandate-conferred"
 #: the block and a timestamp in the log are one form rather than two.
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+#: The replies that answer the approval question yes. Everything else answers
+#: no, including the empty line: the run offer's Enter-runs-it default is the
+#: opposite bias, and approval is the one question this process may not read a
+#: silence as a yes to.
+APPROVALS = ("y", "yes")
+
+#: What the developer is handed on a rejection, so the artifacts left in the
+#: tree can be removed with one command rather than by hand. Handed over rather
+#: than acted on, following PAUSE_UNDO_COMMAND: a rejection deletes nothing,
+#: and a destructive default would belong behind a flag this adds none of.
+REMOVE_COMMAND = "rm"
+
 
 @dataclass(frozen=True)
 class Mandate:
@@ -54,7 +74,13 @@ class Mandate:
 
     `stamped` is whether the block was appended. When it is false, `detail`
     says why and the artifact on disk is untouched — this module never
-    rewrites, repairs or removes an artifact, and never appends twice.
+    rewrites, repairs or removes an artifact except where the developer has
+    just authorized the discard, and never appends twice.
+
+    `discarded_block` is whether that conferral removed a block the session
+    wrote. It is what the conferring record says so a reader of the log can
+    tell a conferral onto a clean artifact from one the developer approved
+    with a session-written block in front of them.
     """
 
     path: Path
@@ -64,6 +90,79 @@ class Mandate:
     conferred_at: str
     stamped: bool
     detail: str
+    discarded_block: bool = False
+
+
+def approved(stream: TextIO) -> bool:
+    """Whether the developer on `stream` approves the plan.
+
+    The default is no, which is the opposite of the run offer's Enter-runs-it,
+    so this is its own function rather than a second caller of `should_run`:
+    the run offer risks a run nobody wanted, and this risks a mandate nobody
+    conferred. The reply is read once and never re-asked.
+
+    A stream that is not a terminal answers no *without reading*, and a read
+    that reaches end of input answers no — the same one-directional bias
+    `can_prompt` already takes, reused rather than spelled a second time here.
+    """
+    if not plan_run_offer.can_prompt(stream):
+        return False
+    reply = stream.readline()
+    if reply == "":
+        return False
+    return reply.strip().lower() in APPROVALS
+
+
+def strip_mandate(text: str) -> str:
+    """The artifact without its block, and with every other byte where it was.
+
+    By line extent — the key line and the indented region beneath it — never by
+    parsing and re-serialising, which would reformat everything the session
+    wrote in order to remove four lines of it.
+
+    A blank line and a full-line comment are held rather than decided on when
+    they are met, because either can be inside the block or after it: held
+    lines are discarded once another indented line proves the block continues,
+    and written back out once a top-level key or the end of the file proves it
+    did not. So a block ending the file, one followed by another top-level key,
+    and one carrying blank or comment lines of its own all come out with the
+    rest of the artifact untouched.
+    """
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not _opens_the_block(lines[index]):
+            kept.append(lines[index])
+            index += 1
+            continue
+        index += 1
+        held: list[str] = []
+        while index < len(lines):
+            line = lines[index]
+            if _undecided(line):
+                held.append(line)
+                index += 1
+                continue
+            if line.startswith((" ", "\t")):
+                held = []
+                index += 1
+                continue
+            break
+        kept.extend(held)
+    return "".join(kept)
+
+
+def _opens_the_block(line: str) -> bool:
+    content = line.rstrip("\r\n")
+    return content.rstrip() == f"{MANDATE_KEY}:" or content.startswith(
+        f"{MANDATE_KEY}: "
+    )
+
+
+def _undecided(line: str) -> bool:
+    content = line.strip()
+    return content == "" or content.startswith("#")
 
 
 def carries_a_mandate(text: str) -> bool:
@@ -121,31 +220,52 @@ def block(conferred_by: str, conferred_at: str) -> str:
     )
 
 
-def confer(path: Path, target_root: Path, now: float | None = None) -> Mandate:
+def confer(
+    path: Path,
+    target_root: Path,
+    now: float | None = None,
+    *,
+    discarding: bool = False,
+) -> Mandate:
     """Append a mandate to one artifact, or report why nothing was appended.
 
+    This neither prompts nor reads any stream. What it is handed is a decision
+    already taken — `now` is when the authorizing act was observed, and
+    `discarding` says the developer was shown the session-written block and
+    approved anyway — so a process that observed an act some other way confers
+    through exactly this seam.
+
     Two things refuse, and neither touches the artifact: a session that already
-    wrote a block, and a target whose git identity cannot say who conferred
-    anything. Otherwise the block is appended to the text the session wrote,
-    leaving every byte of it in place, and what was written is returned so the
-    caller can record it.
+    wrote a block the caller has not authorized discarding, and a target whose
+    git identity cannot say who conferred anything. Otherwise the block is
+    appended to the text the session wrote, leaving every byte of it in place,
+    and what was written is returned so the caller can record it.
     """
     story_id = path.stem
     text = path.read_text(encoding="utf-8")
     conferred_at = time.strftime(
         TIMESTAMP_FORMAT, time.localtime(now if now is not None else time.time())
     )
+    discarded = False
     if carries_a_mandate(text):
-        return Mandate(
-            path,
-            story_id,
-            "",
-            "",
-            "",
-            False,
-            f"the artifact already carries a {MANDATE_KEY} block, and a block "
-            f"this process did not write is a block nothing observed",
-        )
+        if not discarding:
+            return Mandate(
+                path,
+                story_id,
+                "",
+                "",
+                "",
+                False,
+                f"the artifact already carries a {MANDATE_KEY} block, and a "
+                f"block this process did not write is a block nothing "
+                f"observed",
+            )
+        # The developer was shown the block and approved its discard, so the
+        # write happens here rather than in the script: the scan that holds
+        # `report` to writing nothing is what keeps the observing process's
+        # writes in one module.
+        text = strip_mandate(text)
+        discarded = True
     conferred_by = git_identity(target_root)
     if not conferred_by:
         return Mandate(
@@ -170,6 +290,7 @@ def confer(path: Path, target_root: Path, now: float | None = None) -> Mandate:
         conferred_at,
         True,
         "",
+        discarded,
     )
 
 
@@ -192,6 +313,7 @@ def record(target_root: Path, config: dict, conferred: Mandate) -> Path:
             "conferred_by": conferred.conferred_by,
             "source_kind": conferred.source_kind,
             "recorded_by": RECORDED_BY,
+            "discarded_session_block": conferred.discarded_block,
         },
         conferred.story_id,
         [],

@@ -49,6 +49,17 @@ not satisfy it is refused at pre-flight.
 
 {{story_schema}}
 
+One part of the contract above is not yours to write, and the schema cannot
+tell you which: the mandate block. It records the act that authorized this
+work, and it is written by the harness process that observed that act —
+l5-plan asks the developer whether they approve the plan once this session
+has ended, and writes down what it saw them answer. Nothing you write is
+evidence of that, so an artifact that comes back from a session already
+carrying a block is refused, and the refusal discards this whole session's
+output rather than repairing the artifact. Write everything else the schema
+declares and leave that block out; its absence from what you write is
+correct rather than an omission for someone to fill in.
+
 The story dialect is not JSON and it is not YAML. The schema above says
 what must be present; the skeleton below is an illustration of how to
 write it — indentation, block scalars, and dash-prefixed items. Read the
