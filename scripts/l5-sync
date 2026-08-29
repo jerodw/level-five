@@ -5,11 +5,12 @@ Usage: l5-sync
 The target repository is found by walking up from the current directory
 to the nearest .harness/config.yaml.
 
-This is the explicit drain, and the only drain site the harness ships. No
-sweep runs inside a story run: nothing enqueues anything yet, so there is
-no queue accumulating unattended for a forgotten one to strand, and the
-story that adds a producer is the first point at which an automatic sweep
-earns its call site.
+This is the explicit drain. It is no longer the only one: the coordinator
+sweeps opportunistically in the l5-run pre-flight and again after the
+completion commit, and l5-status reports the queue read-only. Those sweeps
+are additional and never a replacement — they share this script's drain
+through orchestration/outbox_sweep.py, and they cannot refuse a run, which
+is why this script and not they is where a bad configuration is refused.
 
 It exits zero for a queue it drained and for one left holding only pending
 entries a later sync will retry, and non-zero for a queue holding a failed
@@ -31,46 +32,16 @@ from pathlib import Path
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
-import command_transport  # noqa: E402
 import harness_config  # noqa: E402
 import outbox  # noqa: E402
+import outbox_sweep  # noqa: E402
 
-#: The configuration keys this script reads. The reads live here rather than
-#: in the transport module because no run reads them — the coordinator is not
-#: involved in a sweep — and because this is where the AST scan in
-#: tests/test_config_keys_are_obeyed.py already looks for a configured key.
-TIMEOUT_KEY = "sync_timeout_seconds"
-
-
-def build_transport(config: dict, target_root: Path):
-    """The transport this configuration describes, or the reason it is refused.
-
-    Returns `(transport, problem)`. No configured command is not a problem: a
-    target that files nothing is the ordinary case, and it gets no transport
-    and no complaint. A sync_timeout_seconds that is not a positive number is
-    a problem, and it is refused here rather than obeyed — a timeout of zero
-    or of a word is no timeout at all, which is the failure the bound exists
-    to prevent.
-    """
-    command = config.get("sync_command")
-    declared = config.get(TIMEOUT_KEY)
-    if declared is None:
-        timeout = command_transport.DEFAULT_TIMEOUT_SECONDS
-    else:
-        try:
-            timeout = float(declared)
-        except (TypeError, ValueError):
-            timeout = None
-        if timeout is None or timeout <= 0:
-            return None, (
-                f"{TIMEOUT_KEY}: {declared!r} is not a positive number of "
-                "seconds, and a sync command must be bounded in time"
-            )
-    if not command:
-        return None, ""
-    return command_transport.CommandTransport(
-        command=command, timeout=timeout, cwd=target_root
-    ), ""
+#: The refusable half of the drain, imported rather than defined here so this
+#: script and the sweeps inside a run cannot drift about what a transport is.
+#: Named locally because this is where a developer running the drain by hand
+#: meets it, and because a caller that had it under this name still has it.
+build_transport = outbox_sweep.build_transport
+sweep_limit = outbox_sweep.sweep_limit
 
 
 def report(summary, queue: Path) -> int:
@@ -106,13 +77,23 @@ def main() -> int:
         return 1
     target_root = harness_config.find_target_root(Path.cwd())
     config = harness_config.load_config(target_root)
-    transport, problem = build_transport(config, target_root)
+    # Both bounds are checked above the command, for the reason the timeout
+    # check already sat above it: a target that declares a bound the harness
+    # cannot obey is told so whether or not it has a command to file with.
+    # This is the refusable half of the drain; the sweeps inside a run call
+    # the total half, which notes exactly these problems and files nothing.
+    limit, problem = outbox_sweep.sweep_limit(config)
+    if not problem:
+        transport, problem = outbox_sweep.build_transport(config, target_root)
     if problem:
         print(problem, file=sys.stderr)
         return 1
     queue = outbox.queue_dir(target_root)
     return report(
-        outbox.sync(queue, transport, harness_root=HARNESS_ROOT), queue
+        outbox_sweep.drain(
+            queue, transport, harness_root=HARNESS_ROOT, limit=limit
+        ),
+        queue,
     )
 
 

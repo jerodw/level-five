@@ -33,6 +33,15 @@ test_command: {test_command}
 # behind. Delete the key and the bound is 60 seconds — a real one, because a
 # timeout of zero would be no timeout at all.
 # sync_timeout_seconds: 60
+# How many pending entries one sweep of the outbox attempts to file. It counts
+# filing attempts, not entries read, so a queue of landed, failed or poisoned
+# entries is fully reported however small this is. What the bound leaves is
+# named in what the sweep reports rather than truncated silently. The worst
+# case of one sweep is this multiplied by sync_timeout_seconds, and the
+# opportunistic sweeps sit in front of a run and after its completion commit —
+# so raise one only having considered the other. Delete the key and the bound
+# is 20.
+# sweep_max_entries: 20
 # Where this repository's tests live, as a path prefix ending in a slash. It is
 # what the workflow's {{tests_dir}} token resolves to: the stage restricted from
 # creating tests is restricted here, and the stage that writes them is told to

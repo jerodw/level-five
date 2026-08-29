@@ -34,6 +34,7 @@ from pathlib import Path
 import agent_runner
 import context_assembler
 import harness_config
+import outbox_sweep
 import schema_validator
 import story_parser
 
@@ -5673,7 +5674,9 @@ def resume_from_capacity(run_dir: Path, state: RunState) -> None:
     _resumed(run_dir, state, note=" after a capacity pause")
 
 
-def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) -> int:
+def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
+              *, config: dict | None = None,
+              harness_root: Path | None = None) -> int:
     state.status = "completed"
     state.current_stage = ""
     save_state(run_dir, state)
@@ -5754,6 +5757,29 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path) ->
     else:
         _git(target_root, "commit", "--allow-empty", "-m",
              completion_commit_message(state, title))
+    # The second opportunistic sweep, *after* the completion commit and not
+    # before it. A sweep talks to a provider that may be slow or unreachable,
+    # and nothing about the durability of the work may wait on that: the work
+    # is committed above, and only then is the queue offered to the network.
+    #
+    # This one must not refuse either, for the reason the pre-flight sweep must
+    # not: making it consistent with the checks that refuse would let a queue
+    # nobody can drain turn a finished story into a failed one. Its result is
+    # read by nothing — the return below is 0 whatever the sweep found — and
+    # `_escalate` and `_pause` sweep nothing at all, so a crashed, escalated or
+    # paused run leaves its entries for the next run or for an explicit
+    # l5-sync.
+    #
+    # It is the one sweep that reports into no run directory, and that is the
+    # same rule seen from the other side rather than an inconsistency. Every
+    # line this run appends is inside the commit above; a line appended after
+    # it leaves events.log and execution-history.json modified, and in a target
+    # that tracks its run directory the *next* run's clean-tree pre-flight then
+    # refuses — the sweep having become the thing that blocks a run, which is
+    # the one outcome this whole design exists to prevent. So the sweep runs
+    # and reports nowhere. What it did is observable where it can be observed
+    # without writing: at the transport, which is called after the commit.
+    outbox_sweep.sweep(target_root, config or {}, harness_root)
     return 0
 
 
@@ -6297,6 +6323,29 @@ def run_story(
         f"{resolution.identity or 'an identity the mandate does not name'}",
         kind="note",
     )
+
+    # The opportunistic sweep, below every refusing pre-flight and above the
+    # first stage invocation. Every check above this point refuses — the
+    # undeclared configuration key, the bad pause wait, the unreadable story,
+    # the unresolved mandate, the unknown workflow, the finished branch, the
+    # bad base, the dirty tree, the unparseable history, and the two resume
+    # collisions — so a run refused for any of those reasons leaves the queue
+    # exactly as it was. It sits below the workflow announcement and the
+    # mandate note for story-072's reason: the first thing a run says is still
+    # which workflow is executing for which story.
+    #
+    # **This one must not refuse, and that is the whole reason it is a
+    # different function from the one l5-sync calls.** Restoring consistency
+    # with the refusals above it would defeat the mechanism: a sweep is an
+    # attempt to be helpful with a network that may be down, and a sweep that
+    # could say no would make the outbox the blocker the queue exists to
+    # prevent — an undrainable queue stopping the run that was going to drain
+    # it. `outbox_sweep.sweep` returns a Summary on every path and raises on
+    # none, and nothing about its result is read here: no branch, no early
+    # return, no status. The run directory is passed so what it did reaches
+    # this run's events.log, which is safe here and is not safe after the
+    # completion commit — see the sweep at the end of `_complete`.
+    outbox_sweep.sweep(target_root, config, harness_root, run_dir=run_dir)
 
     # A declared base is where the new branch is cut from. Undeclared, the
     # start point stays HEAD exactly as it was, and the pre-flight above is
@@ -7532,4 +7581,7 @@ def run_story(
             duration_seconds=elapsed(),
         )
 
-    return _complete(run_dir, state, reading.parsed, target_root)
+    return _complete(
+        run_dir, state, reading.parsed, target_root,
+        config=config, harness_root=harness_root,
+    )

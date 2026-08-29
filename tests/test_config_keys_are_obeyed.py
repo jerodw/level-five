@@ -70,6 +70,7 @@ import command_transport
 import conftest
 import harness_config
 import outbox
+import outbox_sweep
 import run_status
 import schema_validator
 import story_coordinator
@@ -121,6 +122,10 @@ TOKEN_EXEMPT: dict[str, str] = {
     "sync_timeout_seconds": (
         "the value is a duration in seconds, parsed to a positive number and "
         "refused by l5-sync when it is not one, so it cannot carry a word"
+    ),
+    "sweep_max_entries": (
+        "the value is a count of filing attempts, parsed to a positive integer "
+        "and refused by l5-sync when it is not one, so it cannot carry a word"
     ),
 }
 
@@ -174,6 +179,26 @@ SLEEPS_PAST_THE_BOUND = 4
 #: against, read off the transport rather than written here.
 DEFAULT_SYNC_TIMEOUT = command_transport.DEFAULT_TIMEOUT_SECONDS
 
+#: How many entries the fixture allows one sweep to attempt filing. A bound no
+#: harness would pick: the default written in harness source is twenty and this
+#: repository configures none. It stands in for the token the value cannot
+#: carry, and its proof pins it from both sides — a queue holding more pending
+#: entries than the bound has exactly the bound attempted and the remainder
+#: left untouched — so the number itself is what is obeyed rather than merely
+#: something non-zero.
+#:
+#: What makes both sides decisive is that the bound sits below the default and
+#: the seeded queue sits between them: under the configured bound two entries
+#: are left unattempted, and under the default every one of them would be
+#: filed. So a harness that stopped reading the key fails on the count rather
+#: than on anything that could also have gone wrong for another reason.
+SWEEP_MAX_ENTRIES = 3
+SEEDED_PENDING_ENTRIES = SWEEP_MAX_ENTRIES + 2
+
+#: The default the fallback comparison and the ordering above are stated
+#: against, read off the sweep module rather than written here.
+DEFAULT_SWEEP_MAX_ENTRIES = outbox_sweep.DEFAULT_MAX_ENTRIES
+
 #: Where the fixture's sync command lives inside the target, and what it
 #: prints. The path carries the token, so a landed entry naming this reference
 #: can only have come from the harness running the configured command.
@@ -196,6 +221,7 @@ VARYING: dict[str, object] = {
     "runs_dir": ".harness/xyzzy-runs",
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
+    "sweep_max_entries": str(SWEEP_MAX_ENTRIES),
     "sync_command": SYNC_COMMAND_REL,
     "sync_timeout_seconds": str(SYNC_TIMEOUT),
     "test_command": "xyzzy-runner --all",
@@ -227,6 +253,7 @@ FALLBACKS: dict[str, object] = {
     "runs_dir": ".harness/runs",
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
+    "sweep_max_entries": DEFAULT_SWEEP_MAX_ENTRIES,
     "sync_command": None,
     "sync_timeout_seconds": DEFAULT_SYNC_TIMEOUT,
     "test_command": None,
@@ -306,6 +333,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "stories_dir": Proof(
         "test_stories_dir_is_where_the_story_artifact_is_read_from",
+        BEHAVIOURAL),
+    "sweep_max_entries": Proof(
+        "test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts",
         BEHAVIOURAL),
     "sync_command": Proof(
         "test_sync_command_is_the_command_an_entry_is_filed_by_running",
@@ -426,13 +456,23 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
          'config.get("stories_dir", ".harness/stories")',
          '".harness/stories"'),
     ),
+    # The three sweep keys are read in the seam rather than in the script.
+    # story-092 moved the transport build out of `scripts/l5-sync` and into
+    # `orchestration/outbox_sweep.py` so the script and the two sweeps inside a
+    # run cannot drift about what a transport is; the script imports the moved
+    # functions, so the read the mutation has to reach is now in the module.
+    "sweep_max_entries": (
+        ("orchestration/outbox_sweep.py",
+         "declared = config.get(LIMIT_KEY)",
+         "declared = None"),
+    ),
     "sync_command": (
-        ("scripts/l5-sync",
+        ("orchestration/outbox_sweep.py",
          'command = config.get("sync_command")',
          "command = None"),
     ),
     "sync_timeout_seconds": (
-        ("scripts/l5-sync",
+        ("orchestration/outbox_sweep.py",
          "declared = config.get(TIMEOUT_KEY)",
          "declared = None"),
     ),
@@ -749,7 +789,8 @@ EXPECTED_KEYS = (
     "census_command", "history_dir", "history_retention_days",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "standards_dir",
-    "stories_dir", "sync_command", "sync_timeout_seconds", "test_command",
+    "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
+    "test_command",
     "test_selection_command", "tests_dir", "verification_runner", "workflow",
 )
 
@@ -1136,6 +1177,10 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
     # and land under the default, so the second half of its proof is what
     # separates the number from merely being non-zero.
     assert 0 < SYNC_TIMEOUT < SLEEPS_PAST_THE_BOUND < DEFAULT_SYNC_TIMEOUT
+    # And the sweep bound, pinned the same way: the seeded queue sits between
+    # the configured bound and the default, so the configured value leaves
+    # entries unattempted where the default would file every one of them.
+    assert 0 < SWEEP_MAX_ENTRIES < SEEDED_PENDING_ENTRIES < DEFAULT_SWEEP_MAX_ENTRIES
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -1224,11 +1269,13 @@ SYNC_PAYLOAD = {"title": "xyzzy: something to file"}
 class Sweep:
     """One drain of a fixture target's queue, and what it left behind.
 
-    The two keys below are read by `scripts/l5-sync` and by nothing a run
-    executes — the coordinator is not involved in a sweep — so their proofs are
-    driven at the script rather than through `run_story`. The script is loaded
-    through the shared loader, so a proof running in a mutated copy loads that
-    copy's script rather than this repository's.
+    The sweep keys are read in `orchestration/outbox_sweep.py`, which both
+    `scripts/l5-sync` and the coordinator's two opportunistic sweeps go
+    through. Their proofs are driven at that seam rather than through
+    `run_story`, because what they govern is the drain rather than anything a
+    stage does. The script is loaded through the shared loader, so a proof
+    running in a mutated copy loads that copy's script — and, through it, that
+    copy's seam — rather than this repository's.
     """
 
     entry: dict
@@ -1304,6 +1351,66 @@ def test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to(tmp_path):
     assert beyond.entry["state"] == outbox.PENDING
     assert "reference" not in beyond.entry
     assert str(SYNC_TIMEOUT) in beyond.entry["last_error"]
+
+
+def counting_sync_command(target: Path, values: dict) -> Path:
+    """The fixture's sync command, rewritten to record every invocation.
+
+    The same script `swept` installs — at the configured path, printing the
+    reference this module chose, reaching no network — with one line added that
+    appends the key it was handed to a journal. Counting the lines is how many
+    entries were *attempted*, which is what the bound bounds.
+    """
+    command = target / str(values["sync_command"])
+    command.parent.mkdir(parents=True, exist_ok=True)
+    journal = target / "xyzzy-filing-attempts.log"
+    command.write_text(
+        "#!/bin/sh\n"
+        f'echo "$L5_SYNC_KEY" >> "{journal}"\n'
+        f'echo "{SYNC_REFERENCE}"\n',
+        encoding="utf-8")
+    command.chmod(0o755)
+    return journal
+
+
+def test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts(tmp_path):
+    """The configured bound decides how much of the queue one sweep touches.
+
+    A queue holding more pending entries than the bound has exactly the bound
+    attempted, observed at the command rather than inferred from the summary:
+    the fixture's own script records each invocation, and it sits at the
+    configured path and nowhere else. What the bound left is named rather than
+    truncated silently, so the note is asked for the bound and the remainder.
+
+    Both numbers are pinned. The seeded queue sits between the configured bound
+    and the default written in harness source, so a harness that had fallen
+    back to that default would file every entry and leave no remainder at all.
+    """
+    values = fixture_config()
+    target = build_target(tmp_path, values)
+    journal = counting_sync_command(target, values)
+
+    queue = outbox.queue_dir(target)
+    for ordinal in range(SEEDED_PENDING_ENTRIES):
+        assert outbox.enqueue(
+            queue, SYNC_PAYLOAD, {**SYNC_IDENTITY, "ordinal": ordinal})
+
+    summary = outbox_sweep.sweep(
+        target, harness_config.load_config(target), REPO_ROOT)
+
+    attempted = journal.read_text(encoding="utf-8").splitlines()
+    assert len(attempted) == SWEEP_MAX_ENTRIES
+    assert len(set(attempted)) == SWEEP_MAX_ENTRIES, "one entry was filed twice"
+    assert summary.landed == SWEEP_MAX_ENTRIES
+    # The rest are left pending and unattempted rather than dropped, so the
+    # queue still holds every entry it held.
+    left = SEEDED_PENDING_ENTRIES - SWEEP_MAX_ENTRIES
+    assert summary.pending == left
+    assert len(outbox.entry_files(queue)) == SEEDED_PENDING_ENTRIES
+
+    stated = " ".join(summary.notes)
+    assert str(SWEEP_MAX_ENTRIES) in stated, stated
+    assert str(left) in stated, stated
 
 
 def test_runs_dir_is_where_the_run_state_is_written_and_read_back(tmp_path):
