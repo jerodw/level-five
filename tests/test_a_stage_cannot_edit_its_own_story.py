@@ -319,8 +319,12 @@ def test_this_repository_blocks_the_story_directory_to_every_stage():
     The tests above hold the behaviour against this module's own rules. This
     one holds the half they cannot: that this repository's own
     `rules/execution-rules.json` carries the entry, so a stage of a real run
-    cannot edit the story that governs it. Drop the entry and it fails here —
-    and here only, which is the point of the division.
+    cannot edit the story that governs it. Drop the entry and it fails here,
+    along with the literal anchor in `tests/test_planner_injection.py` that
+    pins the shipped `blocked_paths` list and the resolved-path assertion
+    below — and no behavioural case, which is the point of the division: the
+    escalation, its control and the predicate run against this module's own
+    rule set and say nothing about what this repository declares.
 
     The entry is spelled as the directory this repository configures its
     stories at, so the assertion is that *this deployment's* story directory
