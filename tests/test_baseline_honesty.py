@@ -2335,6 +2335,16 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "under test rather than inputs to it; the planner half drives the real "
         "scripts/l5-plan, which resolves this repository as its own harness "
         "root and so can only be compared against what is deployed",
+    "test_outbox.py":
+        "one assertion, and what it claims is a deployment fact: that "
+        "schemas/outbox-entry.schema.json is a file this repository ships and "
+        "is named in schemas/manifest.json, which is one of story-089's "
+        "acceptance criteria and which no fixture can say — a manifest built "
+        "under a temporary directory would state only what the test had just "
+        "written into it. Everything else in the module is driven against a "
+        "queue under tmp_path, a fake transport and a fake runner, because "
+        "what the outbox does with a transport's answer is a mechanism and the "
+        "entries are inputs to it",
     "test_plan_assignment_refusal.py":
         "the refusal is decided against this repository's own declarations: "
         "which stage may create what, here, in this deployment",

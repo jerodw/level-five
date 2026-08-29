@@ -106,6 +106,7 @@ All harness capabilities are invoked through `l5-` scripts in `scripts/`:
 | `l5-run` | Execute an approved story through the story workflow |
 | `l5-status` | Show a snapshot of story runs (status, current stage, retries), or one run's detail |
 | `l5-assist` | Launch the interactive assist agent with harness context |
+| `l5-sync` | Drain the outbox — the durable local queue of work to file externally — reporting what landed, what is still pending, and what no sweep will clear on its own |
 
 Example:
 
@@ -127,8 +128,8 @@ Example:
     templates/       starter files l5-init copies into a new target repository
     tests/           the coordinator's test suite, run without model calls
     .harness/        target-repository state: config, standards, stories, and
-                     docs/ARCHITECTURE.md; plus runs, logs and requests, which
-                     are gitignored execution state
+                     docs/ARCHITECTURE.md; plus runs, logs, requests and the
+                     outbox queue, which are gitignored execution state
 
 The harness pieces (`workflows/`, `schemas/`, `prompts/`, `orchestration/`, `rules/`, `scripts/`, `hooks/`, `templates/`) are reusable across target repositories. The `.harness/` directory is target-repository state; run `l5-init` to create it in any other repository you want the harness to work on.
 

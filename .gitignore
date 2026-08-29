@@ -7,3 +7,9 @@ __pycache__/
 .harness/logs/
 .pytest_cache/
 .harness/requests/
+# The outbox queue, and this one is ignored rather than merely untracked for a
+# reason the entries beside it do not need: every clean-tree pre-flight reads
+# git status --porcelain, which reports untracked files, so a pending entry
+# that was only untracked would dirty the tree and refuse the next run — the
+# mechanism whose whole purpose is never to block would be the thing blocking.
+.harness/outbox/
