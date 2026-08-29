@@ -1,6 +1,7 @@
-"""Independent validation for story-089: the outbox never blocks a run.
+"""Independent validation for the outbox: it never blocks a run, and it is
+total over what it is handed.
 
-Written from the story's acceptance criteria rather than from the
+Written from the stories' acceptance criteria rather than from the
 implementation. The subjects are kept apart deliberately:
 
   * **the key.** A pure function over a mapping, so it is driven directly and
@@ -28,6 +29,15 @@ implementation. The subjects are kept apart deliberately:
     another entry point's rather than against a message written here, which is
     what "identically to the other entry points, byte for byte" asks for.
 
+  * **totality.** Every way an item can fail to become an entry, driven one at
+    a time rather than as one case: a payload json cannot render, an identity
+    json cannot render — which is the path a widened `except` clause alone
+    would leave open, so it is driven separately — a structure that refers to
+    itself, and a queue that cannot be written to. What each of them returns,
+    what the queue holds afterwards, and where the drop was reported are asked
+    separately, because a fix can get any one of them right while getting
+    another wrong.
+
   * **the guarantee.** A full run through a workflow built by
     `conftest.build_workflow` and materialized into a harness root this module
     owns — the coordinator's completing a run is a mechanism, and the workflow
@@ -48,14 +58,25 @@ Every absence asserted here carries a demonstration that it can fail:
   * "filing was not called a second time" sits beside the attempt-zero case,
     where the same recorder shows the lookup skipped and the filing made;
   * "no module a run executes reaches the outbox" sits beside the same scan
-    over a source with the call planted in it, which the scan must report.
+    over a source with the call planted in it, which the scan must report;
+  * "a drop wrote no entry" sits beside an ordinary call into the same queue,
+    which the same listing must report;
+  * "a successful enqueue writes nothing to stderr" sits beside a drop in the
+    same test, whose line the same capture holds;
+  * "no run directory means no events.log anywhere" sits beside the same sweep
+    over a tree where a run directory was given, which must find the log;
+  * "the outbox imports no coordinator at module scope" sits beside the same
+    scan over a source with a module-scope import planted in it, and beside
+    the same scan finding the import the module does make inside a function.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -862,3 +883,540 @@ def test_the_committed_listing_would_report_a_queue_file_that_was_committed(
 
     committed = committed_paths(target_root)
     assert [path for path in committed if path.startswith(QUEUE_REL)] != []
+
+
+# ==========================================================================
+# Totality: enqueue is total over the payload and the identity it is handed
+# ==========================================================================
+
+
+#: A value json cannot render, and the one the story says a producer will
+#: reach for first: this codebase passes `Path` through nearly every seam.
+UNRENDERABLE_VALUE = Path("/where/the/artifact/lives")
+
+#: What a producer would naturally write, and what raised before this story.
+PATH_PAYLOAD = {"artifact": UNRENDERABLE_VALUE}
+
+#: An identity json cannot render. Driven separately from the payload above,
+#: because the key is derived before the entry is written and a guard placed
+#: only around the write would leave this one raising into the caller.
+PATH_IDENTITY = {"kind": "sample", "artifact": UNRENDERABLE_VALUE}
+
+
+def recursive_payload() -> dict:
+    """A structure that refers to itself, which json refuses differently."""
+    payload = {"title": "something to file"}
+    payload["itself"] = payload
+    return payload
+
+
+class ReprRaises:
+    """A value that cannot be rendered by json and cannot be repr'd either.
+
+    The last resort of the drop message: reporting a drop must not itself
+    become the raise the reporting exists to remove.
+    """
+
+    def __repr__(self):
+        raise RuntimeError("even repr will not answer for this")
+
+
+def queue_files(queue: Path) -> list[str]:
+    """Every name the queue directory holds, partials included.
+
+    Partials included deliberately: "nothing is written" is a claim about the
+    directory and not only about the files a sync would read.
+    """
+    return sorted(path.name for path in queue.iterdir()) if queue.is_dir() else []
+
+
+@pytest.fixture
+def unwritable_queue(tmp_path: Path) -> Path:
+    """A queue whose directory cannot be created, because a file is in the way."""
+    blocked = tmp_path / "a-file-where-a-target-root-would-be"
+    blocked.write_text("not a directory\n", encoding="utf-8")
+    return outbox.queue_dir(blocked)
+
+
+def test_the_unwritable_queue_really_cannot_be_written_to(unwritable_queue):
+    """The control for every assertion that uses that fixture: the queue below
+    refuses a write, so a drop there is the guard working rather than a path
+    that quietly succeeded."""
+    with pytest.raises(OSError):
+        outbox.write_entry(unwritable_queue,
+                           {"key": expected_key(IDENTITY), "payload": PAYLOAD})
+
+
+def test_a_payload_json_cannot_render_is_refused_rather_than_raising(queue):
+    result = outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY)
+    assert result == ""
+    assert queue_files(queue) == []
+
+
+def test_an_identity_json_cannot_render_is_refused_rather_than_raising(queue):
+    """The path a widened `except` clause alone would leave open: the key is
+    derived from the identity before anything is written, so a guard that does
+    not cover the derivation never sees this one."""
+    result = outbox.enqueue(queue, PAYLOAD, PATH_IDENTITY)
+    assert result == ""
+    assert queue_files(queue) == []
+
+
+def test_a_recursive_payload_is_refused_rather_than_raising(queue):
+    result = outbox.enqueue(queue, recursive_payload(), IDENTITY)
+    assert result == ""
+    assert queue_files(queue) == []
+
+
+def test_an_unwritable_queue_is_refused_and_returns_the_empty_string(
+        unwritable_queue):
+    """The return this story changes: the key used to come back on this path
+    whether or not anything had been written."""
+    assert outbox.enqueue(unwritable_queue, PAYLOAD, IDENTITY) == ""
+    assert queue_files(unwritable_queue) == []
+
+
+def test_the_same_listing_reports_the_entry_an_ordinary_call_writes(queue):
+    """The control for the three emptiness assertions above. Every refusal is
+    driven into a queue that a serializable call fills, so an empty listing is
+    a fact about what the drop wrote and not about a listing that cannot see
+    anything."""
+    key = outbox.enqueue(queue, PAYLOAD, IDENTITY)
+    assert queue_files(queue) == [outbox.entry_path(queue, key).name]
+
+    for payload, identity in ((PATH_PAYLOAD, IDENTITY),
+                              (PAYLOAD, PATH_IDENTITY),
+                              (recursive_payload(), OTHER_IDENTITY)):
+        assert outbox.enqueue(queue, payload, identity) == ""
+    # The refusals added nothing and removed nothing.
+    assert queue_files(queue) == [outbox.entry_path(queue, key).name]
+
+
+# --------------------------------------------------------------------------
+# The ordinary path is exactly what it was
+# --------------------------------------------------------------------------
+
+
+#: A fixed instant, so the entry a call writes is fully determined and can be
+#: compared against a spelling of it rather than against the module's own.
+FIXED_NOW = 1_700_000_000.0
+
+
+def expected_entry(identity: dict, payload: dict, now: float) -> dict:
+    """The entry the story says a serializable call writes, spelled out here."""
+    stamped = time.strftime(outbox.TIMESTAMP_FORMAT, time.localtime(now))
+    return {
+        "key": expected_key(identity),
+        "identity": identity,
+        "state": outbox.PENDING,
+        "payload": payload,
+        "attempts": 0,
+        "created_at": stamped,
+        "updated_at": stamped,
+    }
+
+
+def test_a_serializable_call_writes_exactly_the_entry_it_wrote_before(queue):
+    """Same key, same name, same fields, same values, and the same bytes.
+
+    The bytes are compared against a rendering written here — sorted keys,
+    indented, one trailing newline — rather than against the module's own
+    dump, so this says what the file *is* rather than that the writer agrees
+    with itself.
+    """
+    expected = expected_entry(IDENTITY, PAYLOAD, FIXED_NOW)
+    key = outbox.enqueue(queue, PAYLOAD, IDENTITY, FIXED_NOW)
+
+    assert key == expected["key"]
+    written = outbox.entry_path(queue, key)
+    assert queue_files(queue) == [written.name]
+    assert json.loads(written.read_text(encoding="utf-8")) == expected
+    assert written.read_text(encoding="utf-8") == (
+        json.dumps(expected, indent=2, sort_keys=True) + "\n")
+
+
+def test_reading_a_serializable_entry_back_is_unaffected(queue):
+    key = outbox.enqueue(queue, PAYLOAD, IDENTITY, FIXED_NOW)
+    entry, problems = outbox.read_entry(outbox.entry_path(queue, key))
+    assert problems == []
+    assert entry == expected_entry(IDENTITY, PAYLOAD, FIXED_NOW)
+
+
+# --------------------------------------------------------------------------
+# A refused item is not a silent one
+# --------------------------------------------------------------------------
+
+
+def stderr_lines(capsys, *, logged: bool = False) -> list[str]:
+    """The drop's lines on stderr, with stdout held to what the sinks explain.
+
+    The coordinator's shared append echoes every line it writes to events.log
+    onto stdout, so a drop given a run directory leaves one there as well —
+    that is the log sink, not a second report. A drop given no run directory
+    never reaches that append, so stdout must be empty, and `logged` says
+    which of the two the caller is asserting about.
+    """
+    captured = capsys.readouterr()
+    on_stdout = [line for line in captured.out.splitlines() if line.strip()]
+    if logged:
+        assert on_stdout != [], "the log sink echoed nothing to stdout"
+    else:
+        assert on_stdout == [], f"a drop wrote to stdout: {on_stdout}"
+    return [line for line in captured.err.splitlines() if line.strip()]
+
+
+def one_drop_line(capsys, *, logged: bool = False) -> str:
+    lines = stderr_lines(capsys, logged=logged)
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def test_every_drop_writes_one_line_to_stderr_naming_what_and_why(
+        queue, unwritable_queue, capsys):
+    """Each drop is reported, each report names the identity it lost, and the
+    four reports differ — so "why" is carried rather than being one message
+    four causes share."""
+    drops = [
+        (queue, PATH_PAYLOAD, IDENTITY),
+        (queue, PAYLOAD, PATH_IDENTITY),
+        (queue, recursive_payload(), IDENTITY),
+        (unwritable_queue, PAYLOAD, IDENTITY),
+    ]
+    lines = []
+    for target, payload, identity in drops:
+        assert outbox.enqueue(target, payload, identity) == ""
+        line = one_drop_line(capsys)
+        assert repr(identity) in line, line
+        # Something beyond the identity is said, and that something is the
+        # reason: no two of these causes report the same sentence.
+        assert line.replace(repr(identity), "").strip() != ""
+        lines.append(line)
+    assert len(set(lines)) == len(drops), lines
+
+
+def test_a_successful_enqueue_writes_nothing_to_stderr(queue, capsys):
+    key = outbox.enqueue(queue, PAYLOAD, IDENTITY)
+    assert key
+    assert stderr_lines(capsys) == []
+
+    # The control: the same capture holds a line when the same queue refuses
+    # an item, so the emptiness above is silence rather than a capture that
+    # sees nothing.
+    assert outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY) == ""
+    assert stderr_lines(capsys) != []
+
+
+def test_a_drop_whose_identity_cannot_be_rendered_still_reports(queue, capsys):
+    """repr is the last resort and it can fail too. A message that raised while
+    explaining a drop would be the failure this reporting exists to remove."""
+    unrenderable = {"kind": "sample", "subject": ReprRaises()}
+    with pytest.raises(RuntimeError):
+        repr(unrenderable["subject"])
+
+    assert outbox.enqueue(queue, PAYLOAD, unrenderable) == ""
+    assert queue_files(queue) == []
+    line = one_drop_line(capsys)
+    assert outbox.UNRENDERABLE_IDENTITY in line, line
+
+
+# --------------------------------------------------------------------------
+# The run's events.log
+# --------------------------------------------------------------------------
+
+
+def events_log_lines(run_dir: Path) -> list[str]:
+    text = (run_dir / "events.log").read_text(encoding="utf-8")
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def message_of(line: str) -> str:
+    """The message half of a `[timestamp] message` line.
+
+    The timestamp is parsed rather than skipped, so a line that is not in the
+    log's one-line format fails here instead of being trimmed into shape.
+    """
+    assert line.startswith("["), line
+    stamp, bracket, message = line[1:].partition("] ")
+    assert bracket, line
+    time.strptime(stamp, outbox.TIMESTAMP_FORMAT)
+    return message
+
+
+def events_logs_under(root: Path) -> list[Path]:
+    return sorted(root.rglob("events.log"))
+
+
+@pytest.fixture
+def drop_run_dir(tmp_path: Path) -> Path:
+    run_dir = tmp_path / "a-target" / ".harness" / "runs" / "story-001"
+    run_dir.mkdir(parents=True)
+    return run_dir
+
+
+COORDINATOR_LINE = "a line the coordinator wrote for itself"
+
+
+def test_a_drop_given_a_run_directory_appends_to_that_runs_events_log(
+        queue, drop_run_dir, capsys):
+    """The same message reaches both sinks, and it reaches the log in the
+    format the log already carries — which is asserted against a line the
+    coordinator's own append wrote into the same file rather than against a
+    format spelled here."""
+    assert outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY,
+                          run_dir=drop_run_dir) == ""
+    on_stderr = one_drop_line(capsys, logged=True)
+
+    story_coordinator.append_event(drop_run_dir, COORDINATOR_LINE)
+    lines = events_log_lines(drop_run_dir)
+    assert [message_of(line) for line in lines] == [on_stderr, COORDINATOR_LINE]
+
+
+def test_a_drop_given_no_run_directory_writes_no_events_log_anywhere(
+        tmp_path, capsys):
+    root = tmp_path / "a-target"
+    queue = outbox.queue_dir(root)
+    run_dir = root / ".harness" / "runs" / "story-001"
+    run_dir.mkdir(parents=True)
+
+    assert outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY) == ""
+    assert one_drop_line(capsys)
+    assert events_logs_under(root) == []
+
+    # The control: the same drop with the run directory named writes the log
+    # the sweep above looked for, so the empty sweep is a fact about the call
+    # that omitted it rather than about a sweep looking in the wrong place.
+    assert outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY, run_dir=run_dir) == ""
+    assert one_drop_line(capsys, logged=True)
+    assert events_logs_under(root) == [run_dir / "events.log"]
+
+
+def test_a_successful_enqueue_given_a_run_directory_writes_no_events_log(
+        queue, drop_run_dir):
+    assert outbox.enqueue(queue, PAYLOAD, IDENTITY, run_dir=drop_run_dir)
+    assert events_logs_under(drop_run_dir) == []
+
+    # The control: a drop through the same argument does write it.
+    assert outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY,
+                          run_dir=drop_run_dir) == ""
+    assert events_logs_under(drop_run_dir) == [drop_run_dir / "events.log"]
+
+
+def test_the_run_directory_cannot_be_passed_where_now_goes(queue):
+    """Keyword-only, so an existing call renders as it did and the new argument
+    cannot slide into the position `now` occupies."""
+    with pytest.raises(TypeError):
+        outbox.enqueue(queue, PAYLOAD, IDENTITY, None, Path("a-run-dir"))
+
+
+# --------------------------------------------------------------------------
+# Reporting that cannot be delivered is still not a failure to enqueue
+# --------------------------------------------------------------------------
+
+
+class ExplodingStream:
+    """A stderr that cannot be written to."""
+
+    def write(self, text):
+        raise OSError("the stream went away")
+
+    def flush(self):
+        raise OSError("the stream went away")
+
+
+def test_a_run_directory_that_does_not_exist_does_not_stop_the_drop(
+        queue, tmp_path, capsys):
+    missing = tmp_path / "a-run-directory-that-was-never-created"
+    assert not missing.exists()
+
+    assert outbox.enqueue(queue, PATH_PAYLOAD, IDENTITY, run_dir=missing) == ""
+    assert queue_files(queue) == []
+    assert not missing.exists()
+    # The sink that could be reached was still written to.
+    assert one_drop_line(capsys)
+
+
+def test_a_drop_no_sink_can_carry_is_still_a_drop_rather_than_a_raise(
+        queue, tmp_path, monkeypatch):
+    """Both sinks fail at once: an unwritable stderr and a run directory that
+    is not there. The item is lost, which is the same case as an unwritable
+    queue, and nothing escapes into the caller."""
+    stream = ExplodingStream()
+    with pytest.raises(OSError):
+        print("the stream really does refuse", file=stream)
+
+    monkeypatch.setattr(sys, "stderr", stream)
+    result = outbox.enqueue(
+        queue, PATH_PAYLOAD, IDENTITY,
+        run_dir=tmp_path / "a-run-directory-that-was-never-created")
+
+    assert result == ""
+    assert queue_files(queue) == []
+
+
+def test_an_ordinary_call_still_succeeds_with_an_unwritable_stderr(
+        queue, monkeypatch):
+    """The control for the assertion above: with the same broken stream in
+    place a serializable call still writes its entry, so the empty return there
+    is the drop and not the stream having broken enqueue itself."""
+    monkeypatch.setattr(sys, "stderr", ExplodingStream())
+    key = outbox.enqueue(queue, PAYLOAD, IDENTITY)
+    assert key == expected_key(IDENTITY)
+    assert queue_files(queue) == [outbox.entry_path(queue, key).name]
+
+
+# --------------------------------------------------------------------------
+# The coordinator is not pulled in by importing the outbox
+# --------------------------------------------------------------------------
+
+
+#: The module the outbox must not import at module scope, read off the module
+#: itself rather than written here.
+COORDINATOR_MODULE = story_coordinator.__name__
+
+OUTBOX_SOURCE = Path(outbox.__file__).read_text(encoding="utf-8")
+
+
+def _imported_names(nodes) -> set[str]:
+    names = set()
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def module_scope_imports(source: str) -> set[str]:
+    """Every module imported at the top level of a source."""
+    return _imported_names(ast.parse(source).body)
+
+
+def deeper_imports(source: str) -> set[str]:
+    """Every module imported anywhere below the top level."""
+    tree = ast.parse(source)
+    top = {id(node) for node in tree.body}
+    return _imported_names(node for node in ast.walk(tree)
+                           if id(node) not in top)
+
+
+def test_the_outbox_has_no_module_scope_import_of_the_coordinator():
+    assert COORDINATOR_MODULE not in module_scope_imports(OUTBOX_SOURCE)
+
+
+def test_the_scan_reports_a_planted_module_scope_import():
+    """First control: the same scan over the same source with the import
+    planted at module scope reports it."""
+    planted = f"import {COORDINATOR_MODULE}\n{OUTBOX_SOURCE}"
+    assert COORDINATOR_MODULE in module_scope_imports(planted)
+
+
+def test_the_coordinator_is_imported_below_module_scope():
+    """Second control, and the other half of the story's claim: the capability
+    is there, reached from inside a function body. Without this the assertion
+    above would pass just as happily against a module that had dropped the
+    import altogether."""
+    assert COORDINATOR_MODULE in deeper_imports(OUTBOX_SOURCE)
+
+
+IMPORT_PROBE = (
+    "import sys\n"
+    "sys.path.insert(0, {orchestration!r})\n"
+    "import outbox\n"
+    "print(sorted(name for name in ({coordinator!r}, 'outbox')\n"
+    "             if name in sys.modules))\n"
+)
+
+
+def test_importing_the_outbox_does_not_pull_the_coordinator_in():
+    """The source scan's executable counterpart, in a fresh interpreter.
+
+    The probe reports which of the two names the interpreter has loaded, so the
+    coordinator's absence sits beside the outbox's presence in one answer: a
+    probe that could see neither would fail on the second name.
+    """
+    probe = subprocess.run(
+        [sys.executable, "-c",
+         IMPORT_PROBE.format(orchestration=str(ORCHESTRATION),
+                             coordinator=COORDINATOR_MODULE)],
+        capture_output=True, text=True, timeout=60)
+    assert probe.returncode == 0, probe.stderr
+    assert json.loads(probe.stdout.replace("'", '"')) == ["outbox"]
+
+
+# --------------------------------------------------------------------------
+# A lookup that raises keeps its reason
+# --------------------------------------------------------------------------
+
+
+def test_a_failing_lookup_records_its_reason_and_still_files(queue):
+    """The behaviour is unchanged — the entry falls through to filing and
+    lands — and what changes is that the reason survives in the summary."""
+    key = attempted_once(queue)
+    broken = FakeTransport(answer=filing(SECOND_REFERENCE), lookup_raises=True)
+
+    summary = outbox.sync(queue, broken)
+
+    assert broken.looked_up == [key]
+    assert broken.filed == [key]
+    assert entry_of(queue, key)["state"] == outbox.LANDED
+    assert len(summary.notes) == 1, summary.notes
+    note = summary.notes[0]
+    assert key in note
+    # The reason is the fake's own, so the note carries what failed rather
+    # than a sentence about lookups in general.
+    assert "the provider could not be asked" in note
+
+
+def test_a_transport_offering_no_lookup_adds_no_note(queue):
+    """The absence, with the failing lookup above as its control: the same
+    summary field carries a note when something failed, and carries none when
+    nothing did, because there was nothing to fail."""
+    key = attempted_once(queue)
+    no_lookup = FilingOnlyTransport(filing(SECOND_REFERENCE))
+
+    summary = outbox.sync(queue, no_lookup)
+
+    assert no_lookup.filed == [key]
+    assert entry_of(queue, key)["state"] == outbox.LANDED
+    assert summary.notes == ()
+
+
+def test_a_lookup_that_answers_with_nothing_adds_no_note(queue):
+    """A provider that does not know the key established nothing, but nothing
+    raised, so there is no reason to record."""
+    key = attempted_once(queue)
+    unknowing = FakeTransport(answer=filing(SECOND_REFERENCE), lookups={})
+
+    summary = outbox.sync(queue, unknowing)
+
+    assert unknowing.looked_up == [key]
+    assert summary.notes == ()
+
+
+# --------------------------------------------------------------------------
+# The totality belongs to enqueue, and was not moved into its parts
+# --------------------------------------------------------------------------
+
+
+def test_identity_key_still_raises_on_an_identity_it_cannot_render():
+    with pytest.raises(TypeError):
+        outbox.identity_key(PATH_IDENTITY)
+    with pytest.raises(ValueError):
+        outbox.identity_key(recursive_payload())
+
+
+def test_write_entry_still_unlinks_its_temporary_and_reraises(queue):
+    key = expected_key(IDENTITY)
+    entry = dict(expected_entry(IDENTITY, PATH_PAYLOAD, FIXED_NOW), key=key)
+
+    with pytest.raises(TypeError):
+        outbox.write_entry(queue, entry)
+
+    # Neither the entry nor the temporary it was being written through.
+    assert queue_files(queue) == []
+
+    # The control: the same call with a payload json can render writes one
+    # file under the entry's name, so the emptiness above is the unlink and
+    # not a listing pointed at the wrong directory.
+    outbox.write_entry(queue, expected_entry(IDENTITY, PAYLOAD, FIXED_NOW))
+    assert queue_files(queue) == [outbox.entry_path(queue, key).name]
