@@ -235,6 +235,30 @@ def decisions_reading_the_scope(source: str) -> list[int]:
             if _reads_the_scope(node)]
 
 
+#: The one rule the scope may be decided through, since story-085: whether a
+#: passing suite run's recorded scope is a subset of an earlier failing run's,
+#: which is what decides that the pass supersedes the failure. story-083
+#: recorded the scope and routed on nothing; story-085 routes on it, and this
+#: names the one decision that may. It is an exemption held shut from both
+#: sides — a decision on the scope taken anywhere else is still reported by the
+#: assertion below, and a repository that stops taking this one through the
+#: rule fails the assertion beside it.
+SHADOW_RULE = "suite_run_shadows"
+
+
+def _calls_the_shadow_rule(node: ast.AST) -> bool:
+    return any(isinstance(child, ast.Call)
+               and isinstance(child.func, ast.Name)
+               and child.func.id == SHADOW_RULE
+               for child in ast.walk(node))
+
+
+def decisions_outside_the_shadow_rule(source: str) -> list[int]:
+    """The line of every decision on the scope taken other than through the rule."""
+    return [node.lineno for node in _decision_subjects(ast.parse(source))
+            if _reads_the_scope(node) and not _calls_the_shadow_rule(node)]
+
+
 #: A branch on the field, and a comparison of it, appended to a source to show
 #: the scan reports a read when there is one.
 BRANCHING_ON_THE_SCOPE = f"\nif result.{SCOPE}:\n    pass\n"
@@ -244,19 +268,31 @@ COMPARING_THE_SCOPE = f"\nnarrowed = result.{SCOPE} != ()\n"
 @pytest.mark.parametrize("module", ORCHESTRATION_MODULES,
                          ids=lambda path: path.name)
 def test_no_decision_under_orchestration_consults_the_scope(module):
-    """This story records; it does not route. The field is declared, passed
-    along and serialized, and no branch, comparison or assertion anywhere in
-    `orchestration/` takes its value as a subject."""
+    """The scope is decided through one rule and read inline by nothing. It is
+    declared, passed along and serialized, and no branch, comparison or
+    assertion anywhere in `orchestration/` takes its value as a subject except
+    by handing it to the rule that owns the comparison."""
     source = module.read_text(encoding="utf-8")
-    assert decisions_reading_the_scope(source) == []
+    assert decisions_outside_the_shadow_rule(source) == []
+
+
+def test_the_exempt_rule_is_one_the_coordinator_actually_decides_through():
+    """The other side of the exemption. A name kept after its decision is gone
+    is a hole nobody notices, so the coordinator must still take a decision on
+    the scope, and it must be that one."""
+    taken = decisions_reading_the_scope(COORDINATOR_SOURCE)
+    assert taken, "no decision reads the scope; the exemption above is stale"
+    assert decisions_outside_the_shadow_rule(COORDINATOR_SOURCE) == []
 
 
 @pytest.mark.parametrize("planted", [BRANCHING_ON_THE_SCOPE,
                                      COMPARING_THE_SCOPE],
                          ids=["a branch", "a comparison"])
 def test_the_same_scan_reports_a_decision_planted_in_that_source(planted):
-    """The control, in both shapes a decision on the field would take."""
+    """The control, in both shapes a decision on the field would take. Both
+    scans report it: the exemption admits the rule, not the field."""
     assert decisions_reading_the_scope(COORDINATOR_SOURCE + planted)
+    assert decisions_outside_the_shadow_rule(COORDINATOR_SOURCE + planted)
 
 
 # --------------------------------------------------------------------------
