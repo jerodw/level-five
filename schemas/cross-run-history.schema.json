@@ -84,6 +84,10 @@
           "recorded_by": {
             "type": "string",
             "description": "The harness process that observed the act and wrote the block. Absent when the entry carried none."
+          },
+          "discarded_session_block": {
+            "type": "boolean",
+            "description": "Whether this conferral discarded a mandate block the planning session had written into the artifact. The observing process refuses such a block rather than trusting it, and the developer it asks is shown that the block is there and that approving discards it, so a true here records an approval given with that in front of them and a false records a conferral onto an artifact that carried none. It is written on every conferral rather than only on the true case, because a boolean has a false to say and absence would then mean either that or a record written before this field existed. A rejection writes no record at all — nothing was conferred, and this log holds conferrals — so a plan the developer declined leaves no line here, and that absence is the mechanism working rather than a gap in it."
           }
         }
       }

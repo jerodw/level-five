@@ -1059,8 +1059,19 @@ def artifact_path(planning: Planning) -> Path:
     return planning.stories_dir / f"{PLANNED_ID}.yaml"
 
 
+#: The reply that accepts phase one's proposal: Enter alone.
+CONFIRMS = b"\n"
+
+#: The reply that approves the plan when the session ends, and the one that
+#: declines the offer to run what was committed. Both are spelled where they
+#: are decided rather than as second literals here, and a test that gets as far
+#: as either question writes them in the order the script asks.
+APPROVES = conftest.APPROVES.encode()
+DECLINES = conftest.DECLINES.encode()
+
+
 def plan_on_a_terminal(planning: Planning, harness: Path, *args: str,
-                       reply: bytes = b"\n", cwd: Path | None = None,
+                       reply: bytes = CONFIRMS, cwd: Path | None = None,
                        **stub) -> tuple[int, str]:
     """Run the real `scripts/l5-plan` with a pty for its three streams.
 
@@ -1068,6 +1079,12 @@ def plan_on_a_terminal(planning: Planning, harness: Path, *args: str,
     way `test_plan_run_offer` writes its own: nothing between here and the
     confirmation reads stdin — the stub session does not — so the bytes wait
     in the terminal's buffer until the confirmation reads them.
+
+    A test whose subject stops at the confirmation writes that one reply. One
+    that runs past it writes the answers to the questions that follow too, in
+    the order the script asks them: the confirmation, then the approval
+    story-088 asks before it stamps anything, then the offer to run what was
+    committed.
 
     `cwd` is where the developer invoked `l5-plan` from, and defaults to the
     target root because that is where they usually are. Somewhere else inside
@@ -1250,7 +1267,7 @@ def test_the_confirmed_workflow_is_what_the_artifact_is_held_to(
     below, whose artifact names the workflow that was confirmed and commits."""
     head = planning.head()
     status, output = plan_on_a_terminal(
-        planning, planning_harness, "a story request", reply=b"\n",
+        planning, planning_harness, "a story request", reply=CONFIRMS + APPROVES,
         L5_STUB_SELECTION=answer(ADDING["name"]),
         L5_STUB_WRITE=writes((relative_artifact(), planned(PRESERVING["name"]))))
 
@@ -1270,7 +1287,7 @@ def test_a_confirmed_session_commits_the_artifact_naming_that_workflow(
     which is what follows a successful commit."""
     head = planning.head()
     status, output = plan_on_a_terminal(
-        planning, planning_harness, "a story request", reply=b"\nn\n",
+        planning, planning_harness, "a story request", reply=CONFIRMS + APPROVES + DECLINES,
         L5_STUB_SELECTION=answer(ADDING["name"]),
         L5_STUB_WRITE=writes((relative_artifact(), planned(ADDING["name"]))))
 
@@ -1666,7 +1683,7 @@ def test_an_unnamed_plan_reaches_a_proposal_by_the_route_production_uses(
     """
     head = planning.head()
     status, output = plan_on_a_terminal(
-        planning, planning_harness, "a story request", reply=b"\nn\n",
+        planning, planning_harness, "a story request", reply=CONFIRMS + APPROVES + DECLINES,
         L5_STUB_SELECTION=answer(ADDING["name"]),
         L5_STUB_WRITE=writes((relative_artifact(), planned(ADDING["name"]))))
 

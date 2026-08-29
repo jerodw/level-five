@@ -53,6 +53,7 @@ from pathlib import Path
 
 import pytest
 
+import conftest
 import context_assembler
 import harness_config
 import plan_run_offer
@@ -120,6 +121,17 @@ def should_run(stream):
         return blocking.readline().strip() == ""
 '''
 
+#: The approval l5-plan asks for before it stamps anything, answered yes
+#: whatever stdin is. The control below drives a /dev/null stdin, where the
+#: real approval reads end of input and rejects — so without this the run stops
+#: before it reaches the offer, and the control would be reporting the approval
+#: rather than the offer it is about.
+APPROVING_MANDATE = '''
+
+def approved(stream):
+    return True
+'''
+
 
 # --------------------------------------------------------------------------
 # A harness root whose l5-run is a stub, and the runners that drive it.
@@ -148,7 +160,8 @@ class Harness:
         return planning.env(L5_RUN_STUB_LOG=str(self.log), **stub)
 
 
-def stubbed_harness(tmp_path: Path, offer_source: str | None = None) -> Harness:
+def stubbed_harness(tmp_path: Path, offer_source: str | None = None,
+                    approve_source: str | None = None) -> Harness:
     """A harness root whose l5-run is the stub above.
 
     `scripts/l5-plan` is a copy of the shipped script rather than a symlink,
@@ -159,6 +172,8 @@ def stubbed_harness(tmp_path: Path, offer_source: str | None = None) -> Harness:
 
     `offer_source`, when given, replaces `orchestration/plan_run_offer.py`; it
     is used by the one control that needs an offer that behaves differently.
+    `approve_source` is appended to `orchestration/plan_mandate.py` in the same
+    copy, so that control can get as far as the offer it is about.
     """
     root = tmp_path / "stubbed-harness"
     (root / "scripts").mkdir(parents=True)
@@ -170,6 +185,12 @@ def stubbed_harness(tmp_path: Path, offer_source: str | None = None) -> Harness:
         shutil.copytree(HARNESS_ROOT / "orchestration", root / "orchestration")
         (root / "orchestration" / PLAN_RUN_OFFER.name).write_text(
             offer_source, encoding="utf-8")
+        if approve_source is not None:
+            mandate = root / "orchestration" / "plan_mandate.py"
+            mandate.write_text(
+                mandate.read_text(encoding="utf-8") + approve_source,
+                encoding="utf-8",
+            )
     plan = root / "scripts" / "l5-plan"
     plan.write_text(L5_PLAN.read_text(encoding="utf-8"), encoding="utf-8")
     plan.chmod(0o755)
@@ -210,6 +231,13 @@ def plan_on_a_terminal(harness: Harness, planning: Planning, *args: str,
     `test_plan_commit`'s interrupt test writes its own: nothing between here and
     the offer reads stdin — the stub session does not — so the bytes wait in the
     terminal's buffer until the offer reads them.
+
+    An approving reply is written ahead of it, because since story-088 the
+    offer is the *second* question the script asks: it approves the plan first,
+    and only an approved plan is stamped, committed and pushed as far as the
+    offer. `reply` therefore still means what it always meant here — the answer
+    to the offer — and a test that writes none still leaves the offer
+    unanswered, which is what its own control turns on.
     """
     import pty
 
@@ -222,6 +250,7 @@ def plan_on_a_terminal(harness: Harness, planning: Planning, *args: str,
         start_new_session=True,
     )
     os.close(slave)
+    os.write(master, conftest.APPROVES.encode())
     if reply is not None:
         os.write(master, reply)
     return drain(process, master)
@@ -472,6 +501,7 @@ def test_a_bounded_wait_reports_an_offer_that_asks_anyway(tmp_path: Path,
     blocking = stubbed_harness(
         tmp_path / "blocking",
         PLAN_RUN_OFFER.read_text(encoding="utf-8") + BLOCKING_OFFER,
+        APPROVING_MANDATE,
     )
     fifo = tmp_path / "never-written"
     os.mkfifo(fifo)

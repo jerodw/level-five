@@ -97,6 +97,7 @@ shipped definition is what it reads.
 """
 import inspect
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1762,12 +1763,42 @@ def planned_artifact() -> str:
     refused for that as well — which would make the byte-for-byte assertion
     below a statement about two refusals rather than about this one.
 
-    `report` is called in-process here, where stdin is not a terminal, so
-    nothing stamps a block and the one written in is the one validation sees.
+    `report` is called through `approving_report` below, which drives the
+    story-088 approval the way a developer does, so the block written in is
+    discarded and replaced by the one that approval confers — and validation
+    still sees an artifact carrying exactly one.
     """
     return (artifact("story-900")
             + plan_block((PRESENT_FILE, RESTRICTED_STAGE))
             + conftest.MANDATE_BLOCK)
+
+
+def approving_report(root: Path, stories_dir: Path, before) -> int:
+    """`report` driven as a developer drives it: at a terminal, approving.
+
+    Since story-088 the script asks whether the plan is approved before it
+    stamps anything, and refuses an artifact that arrived carrying a block
+    where there is no terminal to put that block to. This module's subject is
+    the assignment refusal that comes *after* the stamp, so its calls have to
+    get past both, and they get past them through the shipped decisions rather
+    than around them: the root is made a repository with an identity, so there
+    is somebody for a mandate to be conferred by, and stdin is a real terminal
+    carrying the approving reply.
+    """
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "A Developer"],
+        ["git", "config", "user.email", "developer@example.com"],
+    ):
+        subprocess.run(command, cwd=root, check=True)
+    with conftest.a_terminal_for_stdin() as terminal:
+        with os.fdopen(os.dup(terminal), "r") as stream:
+            original = sys.stdin
+            sys.stdin = stream
+            try:
+                return L5_PLAN_SCRIPT.report(root, stories_dir, before, STAGES)
+            finally:
+                sys.stdin = original
 
 
 def test_report_passes_the_target_root_it_was_given_to_the_check(
@@ -1789,7 +1820,7 @@ def test_report_passes_the_target_root_it_was_given_to_the_check(
 
     monkeypatch.setattr(plan_validation, "artifact_problems", spy)
 
-    L5_PLAN_SCRIPT.report(empty, stories_dir, before, STAGES)
+    approving_report(empty, stories_dir, before)
 
     assert seen == [empty]
 
@@ -1811,7 +1842,7 @@ def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
     path.write_text(planned_artifact(), encoding="utf-8")
     _, empty = roots(tmp_path)
 
-    status = L5_PLAN_SCRIPT.report(empty, stories_dir, before, STAGES)
+    status = approving_report(empty, stories_dir, before)
     printed = capsys.readouterr()
 
     (problem,) = plan_validation.assignment_problems(PRESENT, STAGES, empty)
@@ -1824,14 +1855,17 @@ def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
     summary = f"l5-plan: committed nothing; {path} remain in the working tree.\n"
     assert printed.out.endswith(summary)
     # Since story-087 the refusing path says one more thing when nothing
-    # stamped a mandate — which is the case here, because `report` is called
-    # in-process and stdin is not a terminal. It is identified rather than
-    # quoted: its wording belongs to that story and this module's subject is
-    # the assignment refusal. What is still byte-exact is that the notice is
-    # one line and the summary is the last.
-    notice = printed.out[: -len(summary)]
-    assert re.search(r"(?i)no mandate was stamped", notice), notice
-    assert notice.count("\n") == 1, notice
+    # stamped a mandate, and since story-088 that is the headless case rather
+    # than this one: this call approves at a terminal, so a mandate *was*
+    # stamped and the notice is not owed. Both halves are asserted, because
+    # "the notice is absent" alone would pass just as happily against a path
+    # that stamped nothing and stopped saying so. They are identified rather
+    # than quoted: that wording belongs to those stories and this module's
+    # subject is the assignment refusal.
+    before_the_summary = printed.out[: -len(summary)]
+    assert not re.search(r"(?i)no mandate was stamped", before_the_summary)
+    assert re.search(r"(?i)runs on a mandate conferred by",
+                     before_the_summary), before_the_summary
 
 
 @pytest.fixture

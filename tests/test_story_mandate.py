@@ -987,10 +987,17 @@ def test_an_artifact_that_arrives_carrying_a_mandate_is_refused(planning):
     A block this process did not write is a block nothing observed, so it is
     refused rather than trusted or replaced. The artifact stays exactly as the
     session wrote it: this process never repairs, rewrites or removes one.
+
+    Driven without a terminal since story-088, which is where the refusal
+    now lives: with a terminal there is a developer to put the block to, and
+    approving it is an act this process observed and may act on, so the
+    unconditional refusal is what a headless invocation gets. That is also the
+    forgery this closes — a headless l5-plan committing a block nobody saw.
     """
     forged = artifact(PLANNED_ID) + conftest.MANDATE_BLOCK
     head = planning.head()
-    result = run_plan(planning, L5_STUB_WRITE=session_writing(forged))
+    result = plan_without_a_terminal(
+        planning, L5_STUB_WRITE=session_writing(forged))
 
     assert result.returncode == 1
     assert planning.head() == head
@@ -1008,9 +1015,12 @@ def test_one_session_artifact_carrying_a_block_stamps_none_of_them(planning):
     Two artifacts, one of them carrying a block the session wrote. Neither is
     stamped, which is the same rule the commit already follows: one artifact
     that cannot be committed commits none of them.
+
+    Driven without a terminal for the reason its neighbour above is: since
+    story-088 that is where a session-written block is refused outright.
     """
     clean = artifact("story-901", title="A second planned story")
-    result = run_plan(planning, L5_STUB_WRITE=writes(
+    result = plan_without_a_terminal(planning, L5_STUB_WRITE=writes(
         (f".harness/stories/{PLANNED_ID}.yaml",
          artifact(PLANNED_ID) + conftest.MANDATE_BLOCK),
         (".harness/stories/story-901.yaml", clean)))
@@ -1175,9 +1185,11 @@ def test_a_refused_session_writes_no_conferring_record(planning):
     """Nothing observed, nothing recorded.
 
     The control is every test above that does write one: the same fixture and
-    the same invocation, differing only in the block the session wrote.
+    the same invocation, differing only in the block the session wrote — and,
+    since story-088, in the terminal, because a block put to a developer who
+    approves it is conferred rather than refused.
     """
-    assert run_plan(planning, L5_STUB_WRITE=session_writing(
+    assert plan_without_a_terminal(planning, L5_STUB_WRITE=session_writing(
         artifact(PLANNED_ID) + conftest.MANDATE_BLOCK)).returncode == 1
     assert not (planning.root / harness_config.DEFAULT_HISTORY_DIR /
                 CONFERRED_LOG).exists()
@@ -1253,30 +1265,32 @@ def mandate_problems(path: Path) -> list[str]:
     return [problem for problem in full if problem not in relaxed]
 
 
-def test_the_mandate_era_corpus_set_is_empty_as_this_story_runs():
-    """And an empty set proves nothing, which is why the control below exists.
+def test_the_mandate_era_corpus_set_has_filled():
+    """The inversion of what this asserted when the era was declared.
 
-    This story's own artifact was written by the l5-plan that predates the
-    stamping it adds, so no committed artifact yet falls inside the era. Every
-    artifact in the era is required to satisfy the requirement by the test
-    after this one — and today that test iterates over nothing, so on its own
-    it would stay green if the requirement had never been declared at all.
-    What holds the requirement is the constructed pair below, which shows the
-    same validation accepting an artifact that carries a block and refusing
-    one that does not.
+    story-087 wrote its own artifact with the l5-plan that predates the
+    stamping it adds, so no committed artifact fell inside the era and this
+    asserted the set empty — saying outright that an empty set proves nothing
+    and that what held the requirement was the constructed pair below. The
+    first artifact stamped by the process story-087 landed has since been
+    committed, so the set has filled, and asserting it non-empty is the
+    stronger statement: it is what stops the test after this one iterating over
+    nothing and staying green whatever the requirement says. The constructed
+    pair below is kept, because it is still what shows the same validation
+    accepting a block and refusing its absence.
     """
     era = [path.stem for path in committed_artifacts()
            if path.stem >= MANDATE_ERA_STORY]
-    assert era == []
-    assert MANDATE_ERA_STORY > max(path.stem for path in committed_artifacts())
+    assert era != []
+    assert MANDATE_ERA_STORY <= max(path.stem for path in committed_artifacts())
 
 
 def test_every_artifact_of_the_mandate_era_carries_a_mandate():
     """The requirement, over the artifacts it applies to.
 
-    Empty today. It is written now rather than when the set first fills,
-    because the boundary it reads is a constant one story moves and this is
-    what makes moving it enough.
+    Written when the set was empty, because the boundary it reads is a
+    constant one story moves and this is what makes moving it enough. The set
+    has since filled, and the test above is what says so.
     """
     for path in committed_artifacts():
         if path.stem >= MANDATE_ERA_STORY:

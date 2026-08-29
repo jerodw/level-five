@@ -18,6 +18,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
 import harness_config  # noqa: E402
+import plan_mandate  # noqa: E402
 import story_coordinator  # noqa: E402
 
 
@@ -610,20 +611,33 @@ MANDATE_ERA_STORY = "story-088"
 #: getting before a terminal was needed here.
 DECLINES = "no\n"
 
+#: What a pre-loaded reply says to the approval question l5-plan asks before it
+#: stamps anything. It is spelled as plan_mandate spells it rather than as a
+#: second literal, so a change to what answers that question yes reaches every
+#: module driving the script through a terminal.
+APPROVES = f"{plan_mandate.APPROVALS[0]}\n"
+
 
 @contextlib.contextmanager
-def a_terminal_for_stdin(reply: str = DECLINES):
-    """A pty to hand a child as stdin, with one reply already waiting in it.
+def a_terminal_for_stdin(reply: str = APPROVES + DECLINES):
+    """A pty to hand a child as stdin, with the replies already waiting in it.
 
     l5-plan stamps a mandate only where stdin is a terminal, because a terminal
-    is where the developer who approved the plan was. A module whose subject is
+    is where the developer it asks for approval is. A module whose subject is
     something else — what a session commits, where it commits it, what it
     refuses, what it prints afterwards — therefore needs its invocation to have
     one, or the artifact is refused for the block nobody conferred and the
     module's own subject is never reached.
 
-    The reply is written before the child starts because the script may also
-    ask whether to run the story it committed, and a question nothing answers
+    There are two replies rather than one because the script asks two
+    questions, and they are answered in the order it asks them: approval first,
+    which is what lets the run reach a commit at all, and then the offer to run
+    the story that was committed, which is declined so a module about
+    committing does not start a run. A single reply would land on the approval
+    question and reject it, so every such module would stop short of its own
+    subject.
+
+    They are written before the child starts because a question nothing answers
     is a test that hangs rather than one that fails. Nothing else about the
     invocation changes: stdout and stderr stay the caller's, so a module that
     captures them still captures them.

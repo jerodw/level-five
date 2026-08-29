@@ -35,17 +35,25 @@ That confirmation needs a terminal, so an invocation with neither a terminal
 nor --workflow is refused before anything is invoked, written or committed. A
 call site that plans without a terminal names its workflow.
 
-When the session ends, the artifact it wrote is stamped with the mandate the
-coordinator resolves before it will run anything: this process observed the
-developer approve the plan, so this process records it, and no agent is ever
-asked to. An artifact that came back from the session already carrying a block
-is refused with nothing stamped and nothing committed, and an invocation with
-no terminal stamps nothing at all — its artifact is then refused for the block
-it does not carry, which is the correct outcome rather than a gap.
+When the session ends, this script asks the developer whether they approve the
+plan, and stamps the mandate the coordinator resolves before it will run
+anything only on their answer — so the block records an act this process
+watched happen rather than one it inferred from a terminal and a file. No
+agent is ever asked to write it.
+
+A rejection stamps nothing, commits nothing and pushes nothing, removes
+nothing, and says where the artifacts are and what removes them. An artifact
+that came back from the session already carrying a block is put to the
+developer as part of that same question, since approving discards it; with no
+terminal there is nobody to ask, so such an artifact is refused with nothing
+stamped and nothing committed. An invocation with no terminal and no such
+block stamps nothing at all — its artifact is then refused for the block it
+does not carry, which is the correct outcome rather than a gap.
 """
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -372,25 +380,57 @@ def report(
     if not artifacts:
         print("l5-plan: the session added no story artifact; committed nothing.")
         return 0
+    # A block the session wrote is detected here, immediately after the
+    # artifacts are known and above everything that decides anything about
+    # them, so it is found whether or not there is a terminal: a headless
+    # invocation that let one through would be the path by which an agent's own
+    # block reaches a commit no process observed.
+    written = [
+        path
+        for path in artifacts
+        if plan_mandate.carries_a_mandate(path.read_text(encoding="utf-8"))
+    ]
     # The mandate is stamped between the snapshot and the validation, so the
     # artifact the validation is handed is the artifact the coordinator would
     # run: a block appended afterwards would be a block the plan-time check
     # never saw, and one appended after the commit would not be in it.
     #
     # It is stamped only where there is a terminal, because a terminal is where
-    # the developer who confirmed the plan was. A headless invocation therefore
-    # stamps nothing and falls through to the validation below, which refuses
-    # the artifact for the block it does not carry — and is told, beside the
-    # schema fault, that what is missing is the human.
+    # the developer who approved the plan is asked. A headless invocation
+    # therefore stamps nothing and falls through to the validation below, which
+    # refuses the artifact for the block it does not carry — and is told, beside
+    # the schema fault, that what is missing is the human.
     stamping = plan_run_offer.can_prompt(sys.stdin)
     conferred: list = []
-    if stamping and not stamp(target_root, config or {}, artifacts, conferred):
-        print(
-            "l5-plan: stamped nothing and committed nothing; "
-            f"{', '.join(str(path) for path in artifacts)} "
-            "remain in the working tree."
-        )
-        return 1
+    if written and not stamping:
+        return refuse_session_block(written, artifacts)
+    if stamping:
+        # The developer approves before the schema check runs, and that ordering
+        # is forced rather than chosen: the stamp has to precede validation
+        # because the schema declares the block, and the approval has to precede
+        # the stamp because the stamp is the record of it. So an approved
+        # artifact can still be refused below for a fault — which leaves
+        # everything in the tree to re-run from, and is cheaper than validating
+        # against a second, relaxed spelling of the schema.
+        if not approve(written):
+            return reject(artifacts, written)
+        # Read after the answer rather than before the question, so conferred_at
+        # is when the approval was observed rather than when the session ended.
+        approved_at = time.time()
+        if not stamp(
+            target_root,
+            config or {},
+            artifacts,
+            conferred,
+            discarding=bool(written),
+            now=approved_at,
+        ):
+            print(
+                "l5-plan: stamped nothing and committed nothing; "
+                f"{', '.join(str(path) for path in artifacts)} "
+                "remain in the working tree."
+            )
+            return 1
     # Validation sits between the snapshot and the commit, so an artifact that
     # would be refused at pre-flight is never committed. It refuses rather
     # than warning — a warning here is a warning nobody sees, because the
@@ -488,19 +528,119 @@ def report(
     return offer(artifacts, base)
 
 
+def refuse_session_block(written: Sequence[Path], artifacts: Sequence[Path]) -> int:
+    """Refuse artifacts carrying a session-written block with nobody to ask.
+
+    Reached only where there is no terminal, so there is no developer to put
+    the block to and nothing may be discarded on an agent's word. Nothing is
+    stamped, nothing is committed and nothing is removed; the artifacts stay
+    exactly as the session wrote them.
+
+    Printed through the shared refusal rather than `refuse_bad_story`, which
+    exists so plan time and pre-flight word one defect identically: pre-flight
+    has nothing to say about this one — it would resolve the block and permit
+    the run, which is the forgery this closes — so there is no second wording
+    for it to agree with, and what the message owes instead is where the
+    repair is.
+    """
+    story_coordinator.refuse(
+        "l5-plan will not confer a mandate on an artifact that arrived with one:",
+        [
+            f"{path} already carries a {plan_mandate.MANDATE_KEY} block, and a "
+            f"block this process did not write is a block nothing observed"
+            for path in written
+        ],
+        "There is no terminal here, so there is no developer to put that block "
+        "to and nothing discards it on an agent's word. Plan from a terminal, "
+        "where approving the plan is what discards it and stamps what this "
+        "process saw.",
+    )
+    print(
+        "l5-plan: stamped nothing and committed nothing; "
+        f"{', '.join(str(path) for path in artifacts)} "
+        "remain in the working tree."
+    )
+    return 1
+
+
+def approve(written: Sequence[Path]) -> bool:
+    """Ask the developer whether they approve what the session planned.
+
+    Asked after the session has ended and before anything is stamped,
+    committed or pushed, so what the mandate records is an act this process
+    observed rather than one it inferred from a terminal and a file. The
+    decision is `plan_mandate.approved`'s; the wording is this script's.
+
+    A session-written block is folded into this same question rather than
+    repaired quietly or refused outright: the developer is told the block is
+    there and that approving discards it, because an agent that ignored an
+    explicit instruction about the one field it must not write is an agent
+    whose remaining output deserves a closer read.
+    """
+    if written:
+        for path in written:
+            print(
+                f"l5-plan: {path} carries a {plan_mandate.MANDATE_KEY} block "
+                f"the session wrote, which it was told not to write."
+            )
+        print(
+            "l5-plan: approving discards that block and stamps the mandate "
+            "this process observed; read the rest of what the session wrote "
+            "with that in mind."
+        )
+    print(
+        "l5-plan: approve this plan? y approves and stamps the mandate, "
+        "anything else rejects: ",
+        end="",
+        flush=True,
+    )
+    return plan_mandate.approved(sys.stdin)
+
+
+def reject(artifacts: Sequence[Path], written: Sequence[Path]) -> int:
+    """Say what a rejection left behind, and hand over the command that clears it.
+
+    Nothing is stamped, written, committed or pushed, and nothing is removed —
+    including a session-written block, because leave-and-warn leaves
+    everything. The command that removes the artifacts is handed over rather
+    than run, following the PAUSE_UNDO_COMMAND idiom: a destructive default
+    belongs behind an explicit flag, and this adds none.
+    """
+    paths = [str(path) for path in artifacts]
+    print("l5-plan: rejected; stamped nothing, committed nothing, pushed nothing.")
+    for path in artifacts:
+        print(f"l5-plan: {path} is in the working tree, unstamped and uncommitted")
+    if written:
+        print(
+            f"l5-plan: the {plan_mandate.MANDATE_KEY} block the session wrote "
+            f"is left where it is; nothing was removed."
+        )
+    print(
+        "l5-plan: left there, they are what the next run's clean-tree "
+        "pre-flight refuses on, and what a later completion commit staging "
+        "the whole tree would absorb."
+    )
+    print(
+        f"l5-plan: remove them with: "
+        f"{plan_mandate.REMOVE_COMMAND} {' '.join(paths)}"
+    )
+    return 1
+
+
 def stamp(
     target_root: Path,
     config: dict,
     artifacts: Sequence[Path],
     conferred: list,
+    discarding: bool = False,
+    now: float | None = None,
 ) -> bool:
     """Confer a mandate on each artifact the session wrote, and record it.
 
-    Every artifact is examined before any is stamped, so a session that wrote a
-    block of its own is refused with nothing stamped at all — the same reason
-    one failing artifact commits none of them: a partial stamp would invent a
-    split the session did not have. Nothing is deleted and nothing is repaired;
-    a refused artifact stays exactly as the session wrote it.
+    Reached only on an approval, so `now` is when that approval was read and is
+    what `conferred_at` records — the time the act was observed, not the time
+    the session ended. `discarding` is that same approval given over a
+    session-written block the developer was shown.
 
     Returns whether every artifact was stamped, and appends what was conferred
     to `conferred`, which is what the caller commits the records of once the
@@ -508,21 +648,8 @@ def stamp(
     decides what happens and this decides how it is said, which is the division
     `report` already keeps with `plan_commit` and `plan_validation`.
     """
-    written = [path for path in artifacts if plan_mandate.carries_a_mandate(
-        path.read_text(encoding="utf-8"))]
-    if written:
-        for path in written:
-            story_coordinator.refuse_bad_story(
-                path,
-                [
-                    f"it already carries a {plan_mandate.MANDATE_KEY} block, "
-                    f"and a block this process did not write is a block "
-                    f"nothing observed"
-                ],
-            )
-        return False
     for path in artifacts:
-        one = plan_mandate.confer(path, target_root)
+        one = plan_mandate.confer(path, target_root, now, discarding=discarding)
         if not one.stamped:
             story_coordinator.refuse_bad_story(path, [one.detail])
             return False

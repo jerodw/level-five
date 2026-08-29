@@ -643,6 +643,11 @@ def plan_and_answer(target: Planning, harness: Path, reply: bytes,
     nothing between here and the offer reads stdin — the stub session does
     not — so the bytes wait in the terminal's buffer until the offer reads
     them.
+
+    An approving reply is written ahead of it, because since story-088 the
+    offer is the second question the script asks and only an approved plan is
+    committed as far as it. `reply` therefore still means the answer to the
+    offer, which is what both callers here are about.
     """
     import pty
 
@@ -654,7 +659,7 @@ def plan_and_answer(target: Planning, harness: Path, reply: bytes,
         stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
     )
     os.close(slave)
-    os.write(master, reply)
+    os.write(master, conftest.APPROVES.encode() + reply)
     return drain(process, master)
 
 
