@@ -5,6 +5,7 @@
     ".git/",
     ".harness/runs/",
 	".harness/history/",
+	".harness/stories/",
     "rules/"
   ]
 }
