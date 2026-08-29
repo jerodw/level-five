@@ -2,11 +2,22 @@
 
 One guarantee holds the whole module up: **a failure to file never blocks a
 story, never delays a commit and never refuses a run**. Durability is
-unconditional and the network is opportunistic. `enqueue` writes one entry and
-returns; `sync` drains the queue through an injected transport and returns a
-summary whatever happens; neither raises into its caller, for any transport
-behaviour — one that fails, one that raises, one that returns nonsense, and one
-that is absent. Every other guarantee here rests on that one.
+unconditional and the network is opportunistic. `enqueue` is total over the
+payload and the identity it is handed — an item it cannot render is refused
+rather than coerced, and the run is kept; `sync` drains the queue through an
+injected transport and returns a summary whatever happens; neither raises into
+its caller, for any transport behaviour — one that fails, one that raises, one
+that returns nonsense, and one that is absent. Every other guarantee here rests
+on that one.
+
+A refused item is not a silent one. Every drop produces a message, on stderr
+always and in the run's events.log when `enqueue` is given a run directory, so
+a later reader sees that something went wrong rather than inferring it from an
+absence. Nothing is coerced on the way: a `default=str` would let an entry say
+something the producer did not say, and a transport would deliver it later as
+though the producer had said it. Refusing loses the item, which is the failure
+mode this module already documents and accepts for a queue that cannot be
+written to.
 
 The failure that decides the design is the **ambiguous write**: the request
 arrived, the item was created, and the response never came back. The existence
@@ -44,6 +55,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -84,6 +96,13 @@ ENTRY_SUFFIX = ".json"
 #: The same form events.log, execution-history.json and the mandate block use,
 #: so a timestamp on an entry and a timestamp in a log are one form.
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+#: What a drop says. Composed in one place so the reasons a drop can have
+#: cannot disagree about what a drop looks like.
+DROP_MESSAGE = "outbox: dropped an item for identity {identity}: {reason}"
+
+#: What an identity renders as when even repr will not answer for it.
+UNRENDERABLE_IDENTITY = "<an identity that cannot be rendered>"
 
 
 def queue_dir(target_root: Path) -> Path:
@@ -189,26 +208,80 @@ def write_entry(queue: Path, entry: dict) -> Path:
     return destination
 
 
-def enqueue(queue: Path, payload: dict, identity: dict, now: float | None = None) -> str:
-    """Write one pending entry and return the key it was written under.
+def rendered_identity(identity) -> str:
+    """An identity rendered for a drop message, by means that cannot fail.
 
-    The key is the digest of the identity, so calling this twice with one
-    identity writes one entry twice rather than two entries — the second write
-    replaces the first at the same name, which is what an idempotency key is
-    for. Nothing is filed here and no transport is consulted: durability is
-    what this call buys, and the network is somebody else's opportunity.
-
-    It does not raise into its caller either, and what that costs is stated
-    rather than hidden: a queue that cannot be written to loses this item, and
-    the caller is told the key it would have been written under regardless.
-    Losing one item is the lesser failure. The alternative is a producer
-    inside a run raising because a directory could not be written, which is
-    the queue becoming the thing that stops a story — the one outcome every
-    part of this module exists to prevent.
+    Through `repr` rather than through json, because the identity in a drop
+    message is by definition one json could not render, and a message that
+    raised while explaining a drop would be the failure this reporting exists
+    to remove. An object whose own `repr` raises is not rendered either, and
+    then it is named as unrenderable rather than allowed to escape.
     """
-    key = identity_key(identity)
-    stamped = _now(now)
     try:
+        return repr(identity)
+    except Exception:  # noqa: BLE001 - a total rendering has no other answer
+        return UNRENDERABLE_IDENTITY
+
+
+def _report_drop(message: str, run_dir: Path | None) -> None:
+    """Say that an item was dropped, on every sink that can be reached.
+
+    stderr always, and the run's events.log too when a run directory is given
+    — through the coordinator's shared append, so a drop reaches the log in
+    the one-line format the log already carries rather than through a second
+    writer of it. That import is inside the function body for two reasons: the
+    producer story will have a module the coordinator reaches importing this
+    one, and an import at module scope would close that cycle; and a call that
+    never drops anything then pays nothing for the capability.
+
+    Every sink is guarded on its own, so a sink that fails degrades to the
+    next one and a failure to report is never a failure to enqueue. Where no
+    sink can be reached the drop is unreported — the same case as a queue
+    directory that cannot be written to, stated here rather than hidden.
+    """
+    try:
+        print(message, file=sys.stderr)
+    except Exception:  # noqa: BLE001 - reporting may not become the failure
+        pass
+    if run_dir is None:
+        return
+    try:
+        from story_coordinator import append_event
+
+        append_event(Path(run_dir), message)
+    except Exception:  # noqa: BLE001 - reporting may not become the failure
+        pass
+
+
+def enqueue(queue: Path, payload: dict, identity: dict, now: float | None = None,
+            *, run_dir: Path | None = None) -> str:
+    """Write one pending entry, total over the payload and the identity given.
+
+    Whatever it is handed, it returns: an item that cannot be rendered as an
+    entry is refused and the run is kept. Nothing is written, nothing is
+    raised, and the empty string comes back to say that nothing landed. The
+    key — the digest of the identity — is returned only once the entry is on
+    disk, so calling this twice with one identity writes one entry twice
+    rather than two entries, the second write replacing the first at the same
+    name, which is what an idempotency key is for. Nothing is filed here and
+    no transport is consulted: durability is what this call buys, and the
+    network is somebody else's opportunity.
+
+    What a drop costs is stated rather than hidden: the item is lost. A
+    payload or an identity json cannot render, a recursive structure, and a
+    queue that cannot be written to are all that same loss, and none of them
+    is coerced into something writable — an entry that says something the
+    producer did not say is delivered later as though the producer had said
+    it. Losing one item is the lesser failure; the alternative is a producer
+    inside a run raising, which is the queue becoming the thing that stops a
+    story, the one outcome every part of this module exists to prevent.
+
+    A refused item is not a silent one. Every drop is reported on stderr, and
+    in the run's events.log as well when `run_dir` names one.
+    """
+    try:
+        key = identity_key(identity)
+        stamped = _now(now)
         write_entry(
             queue,
             {
@@ -221,8 +294,19 @@ def enqueue(queue: Path, payload: dict, identity: dict, now: float | None = None
                 "updated_at": stamped,
             },
         )
-    except OSError:
-        pass
+    except (OSError, TypeError, ValueError) as error:
+        # One drop site rather than three, so the queue that cannot be
+        # written to, the value json cannot render and the recursive
+        # structure cannot disagree about what a drop looks like. TypeError
+        # is what json raises for a value it cannot render and ValueError is
+        # what it raises for a structure that refers to itself; the key
+        # derivation is inside the guard because identity_key raises the
+        # first of those before write_entry is ever reached.
+        _report_drop(
+            DROP_MESSAGE.format(identity=rendered_identity(identity), reason=error),
+            run_dir,
+        )
+        return ""
     return key
 
 
@@ -407,7 +491,12 @@ def _file_one(queue: Path, entry: dict, transport, tally: _Tally,
         # The entry has been offered to a provider before, so its absence
         # here says nothing about whether it arrived. Ask about the key
         # rather than risk a duplicate a human would have to reconcile.
-        reference = _look_up(transport, entry["key"])
+        reference, problem = _look_up(transport, entry["key"])
+        if problem:
+            # The lookup established nothing and the entry falls through to
+            # filing exactly as it did before, but the reason survives rather
+            # than being swallowed by the helper that met it.
+            tally.notes.append(f"{entry['key']}: {problem}")
         if reference:
             _land(queue, entry, reference, tally, now)
             return
@@ -459,20 +548,26 @@ def _file(transport, entry: dict) -> Filing:
     return answer
 
 
-def _look_up(transport, key: str) -> str:
-    """What the provider holds for a key, or nothing it could establish.
+def _look_up(transport, key: str) -> tuple[str, str]:
+    """What the provider holds for a key, and the reason it could not say.
 
-    A lookup that raises, that is not offered at all, or that answers with
-    something other than a reference establishes nothing, and the entry is
-    filed as it would have been without the lookup. That is the safe
-    direction: the filing operation is what a provider is asked to make
-    idempotent, and the key is what it is asked to make it idempotent on.
+    Returns `(reference, problem)`. A lookup that raises, that is not offered
+    at all, or that answers with something other than a reference establishes
+    nothing, and the entry is filed as it would have been without the lookup.
+    That is the safe direction: the filing operation is what a provider is
+    asked to make idempotent, and the key is what it is asked to make it
+    idempotent on.
+
+    What changed is that a lookup that *raises* carries its reason back rather
+    than having it swallowed here, so the caller can record it. A transport
+    offering no lookup at all reports no problem, because nothing failed —
+    there was nothing to fail.
     """
     look_up = getattr(transport, "look_up", None)
     if look_up is None:
-        return ""
+        return "", ""
     try:
         answer = look_up(key)
-    except Exception:  # noqa: BLE001 - establishing nothing is the answer
-        return ""
-    return answer if isinstance(answer, str) else ""
+    except Exception as error:  # noqa: BLE001 - establishing nothing is the answer
+        return "", f"the lookup raised: {error}"
+    return (answer if isinstance(answer, str) else ""), ""
