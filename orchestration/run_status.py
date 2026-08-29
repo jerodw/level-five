@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 
 import harness_config
+import outbox
+import outbox_sweep
 import story_coordinator
 
 TAIL_LINES = 10
@@ -40,6 +42,70 @@ def tail_events(run_dir: Path, count: int = TAIL_LINES) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()[-count:]
 
 
+def format_queue(target_root: Path) -> list[str]:
+    """The outbox as it stands, read as data and nothing else.
+
+    l5-status stays instant and works offline, so this builds no transport,
+    spawns no subprocess for the outbox and files nothing: it reads the queue
+    through `outbox.entry_files` and `outbox.read_entry` alone, which is why a
+    queue holding pending and failed entries reports identically whether or
+    not sync_command is configured — nothing here looks at that key. The
+    headline goes through the sweep module's own renderer, so the aside a run
+    logs and the section a listing prints say the same thing about the same
+    queue.
+
+    A queue directory that does not exist is an empty queue rather than an
+    error, which `entry_files` already answers. One that cannot be listed is
+    reported as such: the runs the developer asked for are still printed, and
+    the queue says it could not be read rather than failing the command.
+    """
+    queue = outbox.queue_dir(target_root)
+    try:
+        files = outbox.entry_files(queue)
+    except OSError as error:
+        return [f"outbox: the queue could not be read: {error}", f"  at {queue}"]
+
+    pending: list[str] = []
+    landed: list[str] = []
+    failed: list[tuple[str, str]] = []
+    poisoned: list[outbox.Poisoned] = []
+    for path in files:
+        entry, problems = outbox.read_entry(path)
+        if entry is None:
+            poisoned.append(outbox.Poisoned(path.name, tuple(problems)))
+            continue
+        state = entry["state"]
+        if state == outbox.LANDED:
+            landed.append(entry["key"])
+        elif state == outbox.FAILED:
+            failed.append((entry["key"], entry.get("last_error", "")))
+        else:
+            pending.append(entry["key"])
+
+    summary = outbox.Summary(
+        landed=len(landed),
+        pending=len(pending),
+        failed=len(failed),
+        poisoned=len(poisoned),
+        landed_keys=tuple(landed),
+        pending_keys=tuple(pending),
+        failed_keys=tuple(key for key, _ in failed),
+        poisoned_files=tuple(poisoned),
+        # Nothing was filed, because nothing here files: this is a report of
+        # the queue rather than a drain of it.
+        transport=False,
+    )
+    lines = [outbox_sweep.render(summary), f"  at {queue}"]
+    for key, last_error in failed:
+        lines.append(f"  failed: {key}")
+        lines.append(f"      {last_error or 'no error was recorded'}")
+    for entry in poisoned:
+        lines.append(f"  poisoned: {entry.path}")
+        for problem in entry.problems:
+            lines.append(f"      {problem}")
+    return lines
+
+
 def format_listing(target_root: Path) -> str:
     runs_dir = _runs_dir(target_root)
     run_dirs = (
@@ -47,8 +113,9 @@ def format_listing(target_root: Path) -> str:
         if runs_dir.is_dir()
         else []
     )
+    queue_section = format_queue(target_root)
     if not run_dirs:
-        return "no runs found"
+        return "\n".join(["no runs found", ""] + queue_section)
 
     rows = [_LIST_HEADERS]
     for run_dir in run_dirs:
@@ -65,10 +132,14 @@ def format_listing(target_root: Path) -> str:
                 )
             )
     widths = [max(len(row[i]) for row in rows) for i in range(len(_LIST_HEADERS))]
-    return "\n".join(
+    listing = [
         "  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
         for row in rows
-    )
+    ]
+    # The queue below the runs, in every case: the runs are what the developer
+    # asked for and the queue is the aside, so a queue that could not be read
+    # costs the listing nothing.
+    return "\n".join(listing + [""] + queue_section)
 
 
 def format_detail(target_root: Path, story_id: str) -> str:

@@ -57,8 +57,11 @@ Every absence asserted here carries a demonstration that it can fail:
     which must name the files the run did commit;
   * "filing was not called a second time" sits beside the attempt-zero case,
     where the same recorder shows the lookup skipped and the filing made;
-  * "no module a run executes reaches the outbox" sits beside the same scan
-    over a source with the call planted in it, which the scan must report;
+  * "a run reaches the queue only through the sweep seam" sits beside three
+    demonstrations that the same scans can fail: a module outside the declared
+    set with the queue's name planted in it, a declared module with the name
+    taken out of it, and the coordinator with each of the queue's own writing
+    operations planted as a call;
   * "a drop wrote no entry" sits beside an ordinary call into the same queue,
     which the same listing must report;
   * "a successful enqueue writes nothing to stderr" sits beside a drop in the
@@ -83,6 +86,7 @@ import pytest
 
 import conftest
 import outbox
+import outbox_sweep
 import schema_validator
 import story_coordinator
 from agent_runner import AgentResult
@@ -643,7 +647,14 @@ def test_l5_sync_calls_the_shared_target_root_lookup():
 
 
 # --------------------------------------------------------------------------
-# No drain site inside a run
+# A run reaches the queue only through the sweep seam
+#
+# story-092 retired the two rules that stood here — that no module a run
+# executes reaches the outbox, and that `l5-sync` is the only drain site the
+# repository ships. Both were true only while nothing swept inside a run, and
+# the coordinator now sweeps twice. What replaces them is stricter about the
+# thing that actually matters: a run may reach the queue, but only through one
+# seam, and the drain itself is written in exactly one place.
 # --------------------------------------------------------------------------
 
 
@@ -653,14 +664,34 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
                   if outbox.__name__ in text)
 
 
-#: The one module outside the queue that reaches it, exempt by name and by
-#: nothing else. story-091's transport answers in the `Filing` values the
-#: queue defines, so it must name the queue to import them — but it is not a
-#: module a run executes: nothing the coordinator reaches imports it, and the
-#: only thing that builds one is `l5-sync`. The exemption is held shut from
-#: both sides below, so a module that stopped importing the queue and a module
-#: that started executing inside a run are each reported.
-REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN = "command_transport.py"
+#: The modules outside the queue that may name it, exempt by name and by
+#: nothing else — the successor to the single exemption this rule carried
+#: before a run swept anything. Each is named with what earns it:
+#:
+#:   command_transport.py  answers in the `Filing` values the queue defines,
+#:                         so it must name the queue to import them.
+#:   outbox_sweep.py       the seam itself: the one module that calls the
+#:                         queue's drain, and the only route a run has to it.
+#:   run_status.py         reads the queue as data for the l5-status listing,
+#:                         building no transport and filing nothing.
+#:   story_coordinator.py  reaches the queue through the seam and nowhere
+#:                         else, which is what the check below decides.
+#:
+#: The set is held shut from both sides: a module outside it that starts
+#: naming the queue is reported, and a module inside it that stops naming the
+#: queue is a stale exemption nobody would otherwise notice.
+MODULES_THAT_MAY_NAME_THE_QUEUE = (
+    "command_transport.py",
+    f"{outbox_sweep.__name__}.py",
+    "run_status.py",
+    "story_coordinator.py",
+)
+
+#: The queue's own operations, which the coordinator must reach through the
+#: seam rather than call for itself. Naming the queue is permitted above;
+#: draining or writing to it directly is not, and these are the two names that
+#: would say it had.
+QUEUE_OPERATIONS = ("sync", "enqueue")
 
 
 def orchestration_sources() -> dict[str, str]:
@@ -669,39 +700,98 @@ def orchestration_sources() -> dict[str, str]:
             if path.name != f"{outbox.__name__}.py"}
 
 
-def test_no_module_a_run_executes_reaches_the_outbox():
+def repository_sources() -> dict[str, str]:
+    """Every module and entry point this repository ships, by name.
+
+    `scripts/` as well as `orchestration/`, because the drain site the rule
+    below is about used to be a script and the question is where it is now
+    rather than which directory it is in.
+    """
+    return {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(list(ORCHESTRATION.glob("*.py")) +
+                           [p for p in SCRIPTS.iterdir() if p.is_file()])
+    }
+
+
+def queue_operations_called_in(source: str) -> list[str]:
+    """Which of the queue's own operations a source calls directly."""
+    return [name for name in QUEUE_OPERATIONS
+            if f"{outbox.__name__}.{name}(" in source]
+
+
+def drain_sites(sources: dict[str, str]) -> list[str]:
+    """Which of `sources` calls the queue's drain."""
+    return sorted(name for name, text in sources.items()
+                  if f"{outbox.__name__}.sync(" in text)
+
+
+def test_a_run_reaches_the_queue_only_through_the_sweep_seam():
     sources = orchestration_sources()
-    assert modules_reaching_the_outbox(sources) == [
-        REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN
-    ]
-    # The other side of the exemption: a name that stopped importing the queue
-    # is an exemption nobody notices has gone stale, and the module a run
-    # actually executes is still held to reaching the queue not at all.
-    assert REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN in sources
-    assert outbox.__name__ in sources[REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN]
-    assert outbox.__name__ not in sources["story_coordinator.py"]
+    assert modules_reaching_the_outbox(sources) == sorted(
+        MODULES_THAT_MAY_NAME_THE_QUEUE)
+    # The other side of every exemption: a name that stopped naming the queue
+    # is an exemption nobody notices has gone stale.
+    for name in MODULES_THAT_MAY_NAME_THE_QUEUE:
+        assert name in sources, name
+        assert outbox.__name__ in sources[name], name
+    # And what the coordinator's own exemption buys: it may reach the queue,
+    # through the seam, and it calls neither of the queue's own operations.
+    assert queue_operations_called_in(sources["story_coordinator.py"]) == []
+    assert outbox_sweep.__name__ in sources["story_coordinator.py"]
 
 
 def test_the_scan_reports_a_planted_call_site():
-    """Control: the report above must mean no *other* module reaches the queue,
-    not that the scan has stopped seeing anything."""
+    """Control: the report above must mean no *undeclared* module reaches the
+    queue, not that the scan has stopped seeing anything.
+
+    The victim is derived rather than named, so this stays a control over
+    whatever modules the repository holds rather than over one that may itself
+    join the declared set later.
+    """
     sources = orchestration_sources()
-    victim = "story_coordinator.py"
-    assert victim in sources
+    victim = next(name for name in sorted(sources)
+                  if name not in MODULES_THAT_MAY_NAME_THE_QUEUE)
     sources[victim] += f"\nimport {outbox.__name__}\n"
-    assert modules_reaching_the_outbox(sources) == [
-        REACHES_THE_QUEUE_FROM_OUTSIDE_A_RUN, victim
-    ]
+    assert victim in modules_reaching_the_outbox(sources)
 
 
-def test_the_only_drain_site_the_repository_ships_is_the_script():
-    drains = sorted(
-        path.name
-        for path in sorted(list(ORCHESTRATION.glob("*.py")) +
-                           [p for p in SCRIPTS.iterdir() if p.is_file()])
-        if f"{outbox.__name__}.sync(" in path.read_text(encoding="utf-8")
-    )
-    assert drains == ["l5-sync"]
+@pytest.mark.parametrize("name", MODULES_THAT_MAY_NAME_THE_QUEUE)
+def test_the_scan_reports_an_exemption_that_has_gone_stale(name):
+    """Control: a declared module that has stopped naming the queue is
+    reported, so the set above is a set of live exemptions rather than a list
+    that has outlived what it exempted."""
+    sources = orchestration_sources()
+    sources[name] = sources[name].replace(outbox.__name__, "a_module_by_another_name")
+    assert name not in modules_reaching_the_outbox(sources)
+
+
+@pytest.mark.parametrize("operation", QUEUE_OPERATIONS)
+def test_the_scan_reports_a_queue_operation_planted_in_the_coordinator(operation):
+    """Control: the empty list above is a fact about the coordinator's source
+    rather than about a check that has stopped recognising a call."""
+    planted = (orchestration_sources()["story_coordinator.py"]
+               + f"\n{outbox.__name__}.{operation}(queue)\n")
+    assert queue_operations_called_in(planted) == [operation]
+
+
+def test_the_only_module_that_calls_the_queues_drain_is_the_sweep_seam():
+    """One drain, written once. Where this used to name `l5-sync`, the script
+    now reaches the drain through the seam like everything else, so the seam is
+    the single place `sync` is called from."""
+    assert drain_sites(repository_sources()) == [f"{outbox_sweep.__name__}.py"]
+
+
+def test_the_drain_scan_reports_a_second_call_site():
+    """Control for the singleton above, against every module that is not the
+    seam: a drain planted anywhere else is reported, so a list of one is a fact
+    about this repository rather than a scan that finds at most one thing."""
+    sources = repository_sources()
+    victim = next(name for name in sorted(sources)
+                  if name != f"{outbox_sweep.__name__}.py")
+    sources[victim] += f"\n{outbox.__name__}.sync(queue, None)\n"
+    assert drain_sites(sources) == sorted(
+        [victim, f"{outbox_sweep.__name__}.py"])
 
 
 # --------------------------------------------------------------------------

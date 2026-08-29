@@ -43,12 +43,13 @@ in: a reference lands it, a terminal error fails it, a transient error leaves
 it pending with the attempt counted and the error recorded. A transport that
 *raises* is treated as a transient failure and the exception does not escape.
 
-Nothing enqueues anything yet — the producer is a later story, and `l5-sync`
-is the only drain site shipped here. That is why no sweep runs inside a story
-run: there is no queue accumulating unattended for a forgotten one to strand,
-and the story that adds a producer is the first point at which an automatic
-sweep earns its call site. It can add one without touching this contract,
-because `sync` never raises into its caller.
+Sweeps do now run inside a story run, and they reach this module through one
+seam: `orchestration/outbox_sweep.py` is the only caller of `sync`, and the
+coordinator sweeps through it in the l5-run pre-flight and again after the
+completion commit. `l5-sync` stays the explicit drain. That those sweeps are
+safe to place inside a run rests entirely on the guarantee above — `sync` never
+raises into its caller and has no way to tell one to stop — which is why the
+seam is a module with a total entry point rather than a call site each.
 """
 from __future__ import annotations
 
@@ -415,6 +416,19 @@ class _Tally:
     failed: list = field(default_factory=list)
     poisoned: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    #: The reasons a transport failed to answer usefully, in the order they
+    #: were first met and one entry per attempt that met them. Collected here
+    #: rather than noted per entry so that a queue of twenty entries behind one
+    #: unreachable provider reports the reason once with a count, rather than
+    #: twenty times in a line a run's events.log carries.
+    transport_problems: list = field(default_factory=list)
+    #: How many entries have been offered to a transport, and how many were
+    #: left pending because the bound had been reached. Counted separately
+    #: because the bound is on *filing attempts*: an entry that never reaches
+    #: a transport — landed, failed, poisoned — costs nothing and is reported
+    #: however small the bound is.
+    attempted: int = 0
+    unattempted: int = 0
 
     def summary(self, transport: bool) -> Summary:
         return Summary(
@@ -437,7 +451,7 @@ class _Tally:
 
 
 def sync(queue: Path, transport=None, harness_root: Path | None = None,
-         now: float | None = None) -> Summary:
+         now: float | None = None, *, limit: int | None = None) -> Summary:
     """Drain the queue through a transport, and never raise into the caller.
 
     Every path through this function returns a summary. A transport that is
@@ -447,6 +461,21 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
     failure too. That total-ness is not politeness — it is the guarantee the
     whole queue exists to make, and a caller may call this anywhere in a run
     knowing it cannot be the thing that stops one.
+
+    Both of those last two also leave a **note** naming the reason, once per
+    distinct reason with the number of attempts that met it. A sweep reports
+    itself in one line, and a queue reported as counts alone says nothing
+    about why nothing was filed — which for an unreachable provider is the
+    only thing a reader wants to know.
+
+    `limit` bounds how many pending entries this sweep *attempts to file*, so
+    that a sweep in front of a run has a worst case a reader can compute: the
+    limit multiplied by however long one filing may take. It counts filing
+    attempts and not entries read — a landed, failed or poisoned entry reaches
+    no transport, costs nothing, and is fully reported however small the bound
+    is. Entries past the bound are left pending and unattempted, and the
+    summary carries a note naming the limit and how many it left undone: a cap
+    whose effect is not stated is a cap that reads as an empty queue.
     """
     tally = _Tally()
     try:
@@ -456,15 +485,39 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
         return tally.summary(transport is not None)
     for path in files:
         try:
-            _sync_one(queue, path, transport, tally, harness_root, now)
+            _sync_one(queue, path, transport, tally, harness_root, now, limit)
         except Exception as error:  # noqa: BLE001 - the guarantee is the point
             tally.notes.append(f"{path.name}: {error}")
             tally.pending.append(path.stem)
+    for problem, count in _counted(tally.transport_problems):
+        tally.notes.append(
+            f"{count} entr{'y' if count == 1 else 'ies'} could not be filed: "
+            f"{problem}"
+        )
+    if tally.unattempted:
+        tally.notes.append(
+            f"the limit of {limit} filing attempt(s) left "
+            f"{tally.unattempted} pending entr"
+            f"{'y' if tally.unattempted == 1 else 'ies'} unattempted"
+        )
     return tally.summary(transport is not None)
 
 
+def _counted(problems: list) -> list[tuple[str, int]]:
+    """Each distinct problem once, with how many attempts met it.
+
+    First-seen order rather than sorted, so a reader of the notes meets the
+    reasons in the order the sweep met them.
+    """
+    counts: dict[str, int] = {}
+    for problem in problems:
+        counts[problem] = counts.get(problem, 0) + 1
+    return list(counts.items())
+
+
 def _sync_one(queue: Path, path: Path, transport, tally: _Tally,
-              harness_root: Path | None, now: float | None) -> None:
+              harness_root: Path | None, now: float | None,
+              limit: int | None = None) -> None:
     entry, problems = read_entry(path, harness_root)
     if entry is None:
         # Left exactly as it is: named, counted, and otherwise untouched.
@@ -481,6 +534,15 @@ def _sync_one(queue: Path, path: Path, transport, tally: _Tally,
     if transport is None:
         tally.pending.append(entry["key"])
         return
+    if limit is not None and tally.attempted >= limit:
+        # The bound is checked here rather than at the top of the loop, so an
+        # entry that would never have reached a transport is still read and
+        # still reported. What the bound leaves behind is left exactly as it
+        # is — pending, unattempted, and counted so the note can name it.
+        tally.unattempted += 1
+        tally.pending.append(entry["key"])
+        return
+    tally.attempted += 1
     _file_one(queue, entry, transport, tally, now)
 
 
@@ -500,7 +562,17 @@ def _file_one(queue: Path, entry: dict, transport, tally: _Tally,
         if reference:
             _land(queue, entry, reference, tally, now)
             return
-    answer = _file(transport, entry)
+    answer, problem = _file(transport, entry)
+    if problem:
+        # The transport failed to answer at all, which is a fact about the
+        # sweep rather than about this entry: the entry records it as its own
+        # last_error either way, but a pending entry's last_error reaches no
+        # reader of the summary — not the one line a coordinator sweep puts in
+        # events.log, and not the l5-status queue section, which prints a last
+        # error only for an entry that failed terminally. Without this the
+        # case the whole design is most about, a provider that is unreachable,
+        # is the one case a reader is given a count and no cause.
+        tally.transport_problems.append(problem)
     if answer.reference:
         _land(queue, entry, answer.reference, tally, now)
         return
@@ -532,20 +604,31 @@ def _land(queue: Path, entry: dict, reference: str, tally: _Tally,
     tally.landed.append(entry["key"])
 
 
-def _file(transport, entry: dict) -> Filing:
+def _file(transport, entry: dict) -> tuple[Filing, str]:
     """The transport's filing operation, with a raise read as transient.
 
-    A transport that raises has told us nothing about whether the request
+    Returns `(filing, problem)`, in `_look_up`'s shape and for its reason. A
+    transport that raises has told us nothing about whether the request
     arrived, which is exactly the ambiguous write — so it leaves the entry
     pending with the attempt counted, and the next sync asks about the key.
+    One that answers with something that is not a filing has said just as
+    little. The *routing* of both is unchanged; what the problem adds is that
+    the reason survives to the summary rather than reaching only the entry
+    file, which no reader of a sweep's one line ever opens.
+
+    A transport that answered — a refusal, or a deferral of its own — reports
+    no problem, because nothing about the transport failed. That answer is the
+    provider speaking, and it is already carried by the entry's own state.
     """
     try:
         answer = transport.file(entry)
     except Exception as error:  # noqa: BLE001 - a raise is a transient failure
-        return deferred(f"the transport raised: {error}")
+        problem = f"the transport raised: {error}"
+        return deferred(problem), problem
     if not isinstance(answer, Filing):
-        return deferred("the transport answered with something that is not a filing")
-    return answer
+        problem = "the transport answered with something that is not a filing"
+        return deferred(problem), problem
+    return answer, ""
 
 
 def _look_up(transport, key: str) -> tuple[str, str]:

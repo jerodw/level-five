@@ -450,11 +450,14 @@ def invert_completion(tmp_path):
                 '    _git(target_root, "add", "-A")\n',
                 '',
             ),
+            # The anchor ends at the last commit rather than at `return 0`:
+            # story-092 put the completion sweep between the two, and what
+            # this inversion is about is the record landing after the commit
+            # rather than what else happens on the way out of the function.
             (
                 '    else:\n'
                 '        _git(target_root, "commit", "--allow-empty", "-m",\n'
-                '             completion_commit_message(state, title))\n'
-                '    return 0\n',
+                '             completion_commit_message(state, title))\n',
                 '    else:\n'
                 '        _git(target_root, "commit", "--allow-empty", "-m",\n'
                 '             completion_commit_message(state, title))\n'
@@ -462,8 +465,7 @@ def invert_completion(tmp_path):
                 '        run_dir,\n'
                 '        f"story completed on branch {state.branch}",\n'
                 '        kind="story-completed",\n'
-                '    )\n'
-                '    return 0\n',
+                '    )\n',
             ),
         ],
         name="coordinator_completing_before_it_records", tmp_path=tmp_path)
