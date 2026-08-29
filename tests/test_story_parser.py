@@ -14,6 +14,8 @@ import schema_validator
 import story_parser
 from story_parser import StoryParseError
 
+import conftest
+
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 STORIES_DIR = HARNESS_ROOT.joinpath(".harness", "stories")
 
@@ -126,6 +128,13 @@ verification_requirements:
 
 constraints:
   - stdlib only
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 
@@ -296,6 +305,23 @@ def test_stories_predating_the_schema_still_parse():
         assert parsed["story"]["id"] == path.stem
 
 
+def contract_for(path: Path, schema: dict) -> dict:
+    """The schema an artifact is validated against, given when it was written.
+
+    An artifact predating the mandate era is validated against the schema with
+    the mandate requirement alone dropped, because the block is written by the
+    process that observes an authorizing act and no such process existed when
+    that artifact was written. Nothing else about the schema is relaxed, so no
+    artifact between story-007 and the era boundary drops out of corpus
+    validation for anything but that one requirement. The parse is steered by
+    the shipped schema either way: dropping a name from `required` changes what
+    is validated, never what is read.
+    """
+    if path.stem >= conftest.MANDATE_ERA_STORY:
+        return schema
+    return conftest.schema_without_the_mandate_requirement(schema)
+
+
 def test_every_committed_story_parses_and_validates():
     schema = story_schema()
     failures = []
@@ -305,7 +331,7 @@ def test_every_committed_story_parses_and_validates():
         except StoryParseError as error:
             failures.append(f"{path.name}: {error}")
             continue
-        for problem in schema_validator.validate(parsed, schema):
+        for problem in schema_validator.validate(parsed, contract_for(path, schema)):
             failures.append(f"{path.name}: {problem}")
     assert not failures, "\n".join(failures)
 

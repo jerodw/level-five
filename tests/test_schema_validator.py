@@ -178,6 +178,9 @@ def test_story_schema_describes_the_full_shape():
         "scope",
         "verification_requirements",
         "constraints",
+        # story-087: what conferred the right to run the work is required of
+        # the artifact, and resolved before a run creates anything.
+        "mandate",
     ]
     assert "technical_plan" in schema["properties"]
     assert "technical_plan" not in schema["required"]

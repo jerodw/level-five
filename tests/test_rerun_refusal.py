@@ -120,6 +120,13 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 CONFIG = """\
@@ -664,6 +671,10 @@ FIRST_RUN_EVENTS = [
     # as well as the story. The name is the one
     # `conftest.configured_workflow` configures this target to run.
     f"workflow story-workflow started for {STORY_ID}",
+    # story-087: the second thing a run says is what its pre-flight mandate
+    # walk resolved, for the same reason the claim-support note below is
+    # listed rather than dropped — this stays an exact equality.
+    conftest.MANDATE_NOTE,
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
     "documenter stage started",

@@ -35,6 +35,16 @@ ORIGINAL_STORY_SECTIONS = (
     "constraints",
 )
 
+#: The section story-087 added to the enforced set, in the position the schema
+#: declares it. Kept apart from the six above rather than folded into them:
+#: that tuple is what story-005 enforced, and stating the addition separately
+#: is what lets this module go on making the "unchanged since story-005" claim
+#: its assertions are named for. Both assertions below stay exact equality in
+#: both directions against the union.
+MANDATE_SECTION = ("mandate",)
+
+ENFORCED_STORY_SECTIONS = ORIGINAL_STORY_SECTIONS + MANDATE_SECTION
+
 PLACEHOLDER = re.compile(r"\{\{[a-z_]+\}\}")
 
 
@@ -160,7 +170,7 @@ def test_no_schema_constrains_a_field_the_validator_cannot_check(harness_root):
 
 def test_story_schema_types_its_nested_shape(harness_root):
     schema = schema_validator.load_schema("story", harness_root)
-    assert tuple(schema["required"]) == ORIGINAL_STORY_SECTIONS
+    assert tuple(schema["required"]) == ENFORCED_STORY_SECTIONS
     assert "technical_plan" in schema["properties"]
     assert "technical_plan" not in schema["required"]
     plan = schema["properties"]["technical_plan"]["properties"]
@@ -183,6 +193,12 @@ def test_deeply_nested_error_path_names_every_step(harness_root):
         "scope": {"modify": [], "do_not_modify": []},
         "verification_requirements": ["c"],
         "constraints": ["d"],
+        "mandate": {
+            "source": {"kind": "human"},
+            "conferred_at": "2026-08-28 09:00:00",
+            "conferred_by": "A Developer <developer@example.com>",
+            "recorded_by": "l5-plan",
+        },
         "technical_plan": {
             "likely_file_changes": [
                 {"file": "a.py", "stage": "implementer", "reason": "ok"},
@@ -399,7 +415,7 @@ def test_enforced_story_sections_are_unchanged_and_schema_derived(harness_root):
     required = tuple(
         json.loads((harness_root / "schemas" / "story.schema.json").read_text())["required"]
     )
-    assert required == ORIGINAL_STORY_SECTIONS
+    assert required == ENFORCED_STORY_SECTIONS
     problems = story_coordinator.read_story("story:\n  id: x\n").problems
     missing = {
         problem.split(":")[0].removeprefix("$.")
@@ -407,7 +423,7 @@ def test_enforced_story_sections_are_unchanged_and_schema_derived(harness_root):
         if "found it missing" in problem
     }
     missing = {section for section in missing if "." not in section}
-    assert missing == set(ORIGINAL_STORY_SECTIONS) - {"story"}
+    assert missing == set(ENFORCED_STORY_SECTIONS) - {"story"}
 
 
 def test_the_section_list_tracks_the_schema_file_rather_than_a_constant(tmp_path):

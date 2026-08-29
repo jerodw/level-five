@@ -194,6 +194,13 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 CONFIG = f"""\
@@ -478,8 +485,13 @@ def change_the_code(target_root: Path) -> None:
 
 
 def amend_the_story(target_root: Path) -> None:
+    # The extra constraint goes into the last array rather than onto the end of
+    # the text: since story-087 the artifact ends with its mandate block, and a
+    # line after that lands inside the block and makes the story unparseable —
+    # which would be refused at pre-flight for a reason nothing here is about.
     write(target_root / ".harness" / "stories" / f"{STORY_ID}.yaml",
-          STORY + "  - and keep the sample behavior working\n")
+          conftest.with_one_more_constraint(
+              STORY, "  - and keep the sample behavior working\n"))
 
 
 def ready_to_resume(target_root: Path,

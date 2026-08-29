@@ -70,7 +70,8 @@ import pytest
 
 import conftest
 from conftest import story_diff
-from test_plan_commit import Planning, STUB, bare_remote, writes
+from test_plan_commit import (Planning, STUB, as_the_session_left_it,
+                              bare_remote, writes)
 
 import harness_config
 import plan_validation
@@ -256,14 +257,23 @@ tests_dir: {tests_dir}
 APP_AT_HEAD = "print('hello')\n"
 
 
-def story_text(declared: str | None = None, story_id: str = STORY_ID) -> str:
+def story_text(declared: str | None = None, story_id: str = STORY_ID,
+               mandate: bool = True) -> str:
     """The story artifact, naming a workflow or naming none.
 
     Naming none is the compatibility shape: exactly what every artifact
     written before this field existed carries.
+
+    It carries a mandate by default, because since story-087 a run whose
+    mandate does not resolve to a human is refused before anything is created
+    and this module's subject is which workflow a run loads. An artifact a
+    *planning session* writes asks for `mandate=False`: the block is written
+    by l5-plan when the session ends, and one that arrives from a session
+    already carrying it is refused rather than trusted.
     """
     line = f"  workflow: {declared}\n" if declared else ""
-    return STORY.format(story_id=story_id, workflow_line=line)
+    text = STORY.format(story_id=story_id, workflow_line=line)
+    return text + conftest.MANDATE_BLOCK if mandate else text
 
 
 def write(path: Path, text: str) -> None:
@@ -1108,13 +1118,29 @@ def planning(tmp_path) -> Planning:
 
 
 def plan(planning: Planning, harness: Path, *args: str,
-         **stub) -> subprocess.CompletedProcess:
-    """Run the real `scripts/l5-plan` out of a harness root the test built."""
-    return subprocess.run(
-        [sys.executable, str(harness / "scripts" / "l5-plan"), *args],
-        cwd=planning.root, env=planning.env(**stub),
-        capture_output=True, text=True,
-    )
+         terminal: bool = True, **stub) -> subprocess.CompletedProcess:
+    """Run the real `scripts/l5-plan` out of a harness root the test built.
+
+    Stdin is a terminal with a declining reply already in it: since story-087
+    l5-plan stamps the mandate a run resolves only where there is one, and an
+    artifact carrying none is refused before it is committed. This module's
+    subject is what the plan-time checks do, so its sessions need the terminal
+    that lets them reach those checks at all.
+
+    One test asks for `terminal=False`, because a missing terminal is its
+    subject rather than an obstacle to it.
+    """
+    command = [sys.executable, str(harness / "scripts" / "l5-plan"), *args]
+    if not terminal:
+        return subprocess.run(
+            command, cwd=planning.root, env=planning.env(**stub),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        )
+    with conftest.a_terminal_for_stdin() as stdin:
+        return subprocess.run(
+            command, cwd=planning.root, env=planning.env(**stub),
+            stdin=stdin, capture_output=True, text=True,
+        )
 
 
 def session_prompt(planning: Planning) -> str:
@@ -1168,6 +1194,7 @@ def test_l5_plan_without_the_argument_and_without_a_terminal_is_refused(
     """
     head = planning.head()
     result = plan(planning, planning_harness, "a story request",
+                  terminal=False,
                   L5_STUB_WRITE=writes((relative_artifact(),
                                         planned(CONFIGURED["name"]))))
 
@@ -1301,7 +1328,8 @@ PLANNED_ID = "story-900"
 
 
 def planned(declared: str | None) -> str:
-    return story_text(declared, story_id=PLANNED_ID)
+    """What the stub session writes: no mandate, because l5-plan confers it."""
+    return story_text(declared, story_id=PLANNED_ID, mandate=False)
 
 
 def artifact_path(planning: Planning) -> Path:
@@ -1349,8 +1377,10 @@ def test_a_session_whose_artifact_names_no_definition_is_refused(
     # The artifact is the developer's: left where the session wrote it,
     # uncommitted, which is the state they can repair and re-run from.
     assert artifact_path(planning).is_file()
-    assert artifact_path(planning).read_text(encoding="utf-8") == planned(
-        UNDEFINED)
+    # story-087: l5-plan confers the mandate between the snapshot and the
+    # validation, so what a refusal leaves is the session's bytes plus that
+    # block. The session's own text is still compared byte for byte.
+    assert as_the_session_left_it(artifact_path(planning)) == planned(UNDEFINED)
     assert planning.head() == head
     assert relative_artifact() in untracked(planning)
 

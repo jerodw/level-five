@@ -9,7 +9,8 @@
     "acceptance_criteria",
     "scope",
     "verification_requirements",
-    "constraints"
+    "constraints",
+    "mandate"
   ],
   "properties": {
     "story": {
@@ -108,6 +109,40 @@
       "type": "array",
       "description": "Standing limits on how the story may be implemented.",
       "items": { "type": "string" }
+    },
+    "mandate": {
+      "type": "object",
+      "description": "What conferred the right to run this work, and the whole of what the coordinator resolves before a run creates anything. It is written by the harness process that observed the authorizing act and never by an agent: an artifact that arrives from a planning session already carrying one is refused rather than trusted, on the rule that a required output must be written by the attempt that ran. Resolution is a walk — follow source until kind is human — so an absent block, an id that does not resolve, a chain that returns to an id already visited, and a chain longer than the configured mandate_max_depth each refuse the run, and each says which of the four it was. The walk knows no kind but human: what any other kind means is settled by this declaration and by what a lookup can answer for it, never by a condition in the coordinator, which is where workflow selection and history routing already put their own vocabulary. There is deliberately no digest of the artifact's content beside it: the approver and the editor are the same person, an agent editing an approved artifact is closed by blocking the directory it lives in, and a forged block is caught by the record the conferring process writes.",
+      "required": ["source", "conferred_at", "conferred_by", "recorded_by"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "description": "What the right to run came from. A kind of human terminates the walk in one hop, with no lookup consulted and nothing reached for; every other kind is handed to the lookup, which answers with the mandate that source carries or answers nothing at all — and answering nothing is an id that did not resolve rather than a permission.",
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "description": "What conferred the right. The value human is the one the walk recognises, and it is where the walk ends; any other value is resolved through id."
+            },
+            "id": {
+              "type": "string",
+              "description": "What a non-human source is resolved through, and what a repeat visit is recognised by. Absent for a source whose kind is human, because a human is where the walk ends and there is nothing further to follow."
+            }
+          }
+        },
+        "conferred_at": {
+          "type": "string",
+          "description": "When the authorizing act was observed, in the YYYY-MM-DD HH:MM:SS form events.log and execution-history.json already use. Read by nothing that routes; it is what makes the record answerable later."
+        },
+        "conferred_by": {
+          "type": "string",
+          "description": "The identity the authorizing act was observed from, taken by the conferring process from the target repository's own git identity. It is what a resolved walk terminates at and what the run's evidence names."
+        },
+        "recorded_by": {
+          "type": "string",
+          "description": "The harness process that observed the act and wrote this block. It is not the agent that wrote the body around it, and it is never one: a block naming a stage, a prompt or a planning agent is a block nothing observed."
+        }
+      }
     },
     "stage_exceptions": {
       "type": "array",

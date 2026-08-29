@@ -59,10 +59,12 @@ from conftest import (NothingToCompareAgainst, declared_origins,
 from test_plan_commit import (  # noqa: F401 - fixtures used by name
     Planning,
     artifact,
+    as_the_session_left_it,
     bare_remote,
     make_planning,
     remote_refs,
     run_plan,
+    stamped,
     writes,
 )
 from test_plan_time_validation import L5_RUN, install, run_script
@@ -651,7 +653,11 @@ def test_both_artifacts_this_file_uses_are_what_they_claim_to_be():
     and the clean one would pass if it were unreadable."""
     for name, text in (("offending", OFFENDING_ARTIFACT),
                        ("well-named", WELL_NAMED_ARTIFACT)):
-        reading = story_coordinator.read_story(text)
+        # Stamped: the two constants are what a *session* writes, and since
+        # story-087 a session writes no mandate — l5-plan confers it when the
+        # session ends. Without the block the only thing either reading would
+        # report is the missing mandate, which is nothing this file is about.
+        reading = story_coordinator.read_story(stamped(text))
         assert reading.problems == [], (name, reading.problems)
         assert plan_validation.strictness_problems(reading.parsed, STAGES) == [], name
         assert plan_validation.assignment_problems(reading.parsed, STAGES, REPO_ROOT) == [], name
@@ -697,7 +703,7 @@ def test_the_control_for_every_incomplete_story_above_is_the_complete_one():
 
 def test_artifact_problems_reports_the_new_class(tmp_path: Path):
     path = tmp_path / "story-900.yaml"
-    path.write_text(OFFENDING_ARTIFACT, encoding="utf-8")
+    path.write_text(stamped(OFFENDING_ARTIFACT), encoding="utf-8")
     found = plan_validation.artifact_problems([path], STAGES, REPO_ROOT,
         REPO_ROOT, WORKFLOW['name'])
     assert list(found) == [path]
@@ -706,7 +712,7 @@ def test_artifact_problems_reports_the_new_class(tmp_path: Path):
 
 def test_artifact_problems_holds_the_well_named_artifact_back(tmp_path: Path):
     path = tmp_path / "story-901.yaml"
-    path.write_text(WELL_NAMED_ARTIFACT, encoding="utf-8")
+    path.write_text(stamped(WELL_NAMED_ARTIFACT), encoding="utf-8")
     assert plan_validation.artifact_problems([path], STAGES, REPO_ROOT,
         REPO_ROOT, WORKFLOW['name']) == {}
 
@@ -726,7 +732,7 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(
     assert not any(OFFENDING in problem for problem in found[unparseable])
 
     reached = tmp_path / "story-903.yaml"
-    reached.write_text(OFFENDING_ARTIFACT, encoding="utf-8")
+    reached.write_text(stamped(OFFENDING_ARTIFACT), encoding="utf-8")
     assert any(OFFENDING in problem
                for problem in plan_validation.artifact_problems(
                    [reached], STAGES, REPO_ROOT,
@@ -793,7 +799,9 @@ def test_l5_plan_leaves_the_offending_artifact_uncommitted_and_prints_it(
     assert remote_refs(planning.remote) == refs_before
 
     written = planning.root / ARTIFACT_PATH
-    assert written.read_text(encoding="utf-8") == OFFENDING_ARTIFACT
+    # story-087: the mandate is conferred between the snapshot and the
+    # validation, so a refused artifact is the session's bytes plus that block.
+    assert as_the_session_left_it(written) == OFFENDING_ARTIFACT
     assert ARTIFACT_PATH in planning.status()
 
     printed = result.stdout + result.stderr
@@ -823,7 +831,10 @@ def test_pre_flight_does_not_start_refusing_the_naming_class(planning: Planning)
     Asserted by pre-flight getting past the story checks: it reaches the
     clean-tree refusal, which names the dirty path rather than the artifact.
     """
-    install(planning, "story-900", OFFENDING_ARTIFACT)
+    # Stamped: a committed artifact is one l5-plan has already conferred a
+    # mandate on, and pre-flight refuses one without a mandate above the
+    # clean-tree refusal this test is about reaching.
+    install(planning, "story-900", stamped(OFFENDING_ARTIFACT))
     (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
 
     result = run_script(L5_RUN, planning, "story-900")

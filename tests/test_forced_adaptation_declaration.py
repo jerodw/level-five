@@ -279,7 +279,14 @@ def test_the_schema_states_what_the_declaration_decides_and_what_it_does_not():
 
 
 def declared_artifact(declaring: str | None, file: str = GOVERNED_FILE) -> str:
-    """A story artifact whose one plan entry optionally carries a declaration."""
+    """A story artifact whose one plan entry optionally carries a declaration.
+
+    It carries a mandate because since story-087 the story schema requires
+    one, and every reading below goes through `read_story` or
+    `artifact_problems` and asserts the problems it reports are exactly the
+    ones this module is about. The block is appended last so the plan entry
+    the assertions manipulate keeps the position it had.
+    """
     text = (artifact("story-900")
             + "\ntechnical_plan:\n  likely_file_changes:\n"
             + f"    - file: {file}\n"
@@ -287,7 +294,7 @@ def declared_artifact(declaring: str | None, file: str = GOVERNED_FILE) -> str:
             + "      reason: the plan expects this\n")
     if declaring is not None:
         text += f"      {FIELD}: {declaring}\n"
-    return text
+    return text + conftest.MANDATE_BLOCK
 
 
 def parsed_entry(text: str) -> dict:
@@ -329,6 +336,10 @@ def test_the_schema_is_what_types_it_and_a_non_string_is_refused():
         "constraints": ["preserve existing behavior"],
         "technical_plan": {"likely_file_changes": [
             entry(GOVERNED_FILE, FIXTURE_STAGE, declaring=DECLARED)]},
+        # story-087 requires a mandate of every story, and this structure is
+        # validated whole: without one the acceptance below would report a
+        # problem about something this test has nothing to say about.
+        "mandate": conftest.MANDATE_VALUE,
     }
     only = story["technical_plan"]["likely_file_changes"][0]
 
@@ -551,7 +562,18 @@ def test_artifact_problems_accepts_the_declared_artifact_against_either_reading(
 
 
 def committed(story_id: str) -> str:
-    return (STORIES_DIR / f"{story_id}.yaml").read_text(encoding="utf-8")
+    """One committed artifact, carrying the mandate today's schema requires.
+
+    The artifacts reconstructed below were written before story-087, and a
+    committed artifact is an execution record that is never edited to satisfy a
+    contract written after it. What these reconstructions are is a *plan as it
+    would be validated today*, so the block l5-plan would confer is appended to
+    the copy this module builds and the artifact on disk is left alone. Every
+    other byte is the artifact's own, which is what makes the surgery below
+    surgery on the real plan.
+    """
+    text = (STORIES_DIR / f"{story_id}.yaml").read_text(encoding="utf-8")
+    return text + conftest.MANDATE_BLOCK
 
 
 def without_grants(text: str) -> str:

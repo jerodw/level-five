@@ -331,9 +331,19 @@ ANOTHER_LOGS_DIR = "var/planning-logs"
 APP_AT_HEAD = "print('hello')\n"
 
 
-def story_text(declared: str | None = None, story_id: str = STORY_ID) -> str:
+def story_text(declared: str | None = None, story_id: str = STORY_ID,
+               mandate: bool = True) -> str:
+    """The artifact, with or without the block a run resolves before it starts.
+
+    A story a test installs for the coordinator carries one, because since
+    story-087 a run whose mandate does not resolve to a human is refused
+    before anything is created. A story a *planning session* writes carries
+    none: l5-plan confers the block when the session ends, and an artifact
+    that arrives from a session already carrying one is refused.
+    """
     line = f"  workflow: {declared}\n" if declared else ""
-    return STORY.format(story_id=story_id, workflow_line=line)
+    text = STORY.format(story_id=story_id, workflow_line=line)
+    return text + conftest.MANDATE_BLOCK if mandate else text
 
 
 def write(path: Path, text: str) -> None:
@@ -1037,7 +1047,8 @@ def answer(workflow: str | None, reasoning: str = REASONING) -> str:
 
 
 def planned(declared: str | None) -> str:
-    return story_text(declared, story_id=PLANNED_ID)
+    """What the stub session writes: no mandate, because l5-plan confers it."""
+    return story_text(declared, story_id=PLANNED_ID, mandate=False)
 
 
 def relative_artifact() -> str:
@@ -1422,11 +1433,19 @@ def test_an_invocation_with_no_terminal_and_no_flag_is_refused(
     assert planning.head() == head
 
 
-def test_the_same_invocation_stating_a_workflow_plans_commits_and_pushes(
+def test_the_same_invocation_stating_a_workflow_plans_and_is_then_refused(
     planning, planning_harness,
 ):
-    """The control the absences above need, and the story's promise that a
-    headless session with the flag behaves exactly as it did."""
+    """The control the absences above need: with the flag, a session *does*
+    run and is rendered against the definition the flag names, so the empty
+    invocation list above is the refusal rather than a fixture that never
+    invokes anything.
+
+    Where it ends changed with story-087 and is asserted as it now is: a
+    headless invocation has no terminal, so no human was present to confer a
+    mandate, nothing is stamped and nothing is committed or pushed. The
+    session still ran, which is the half this control exists for.
+    """
     head = planning.head()
     before = subprocess.run(
         ["git", "-C", str(planning.remote), "rev-parse", DEFAULT_BRANCH],
@@ -1437,14 +1456,15 @@ def test_the_same_invocation_stating_a_workflow_plans_commits_and_pushes(
         "a story request",
         L5_STUB_WRITE=writes((relative_artifact(), planned(ADDING["name"]))))
 
-    assert result.returncode == 0, result.stderr + result.stdout
     made = invocations(planning)
     assert len(made) == 1
     assert rendered_against(made[0], ADDING)
-    assert planning.head() != head
+    assert result.returncode != 0, result.stdout
+    assert re.search(r"(?i)no human present", result.stdout), result.stdout
+    assert planning.head() == head
     assert subprocess.run(
         ["git", "-C", str(planning.remote), "rev-parse", DEFAULT_BRANCH],
-        capture_output=True, text=True).stdout.strip() != before
+        capture_output=True, text=True).stdout.strip() == before
 
 
 @pytest.mark.parametrize("stdin", ["", f"{ADDING['name']}\n", "\n"])

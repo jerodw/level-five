@@ -21,7 +21,11 @@ import schema_validator
 import story_coordinator
 import story_parser
 from agent_runner import AgentResult
-from conftest import commit_setup
+from conftest import (
+    MANDATE_ERA_STORY,
+    commit_setup,
+    schema_without_the_mandate_requirement,
+)
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 STORIES_DIR = HARNESS_ROOT.joinpath(".harness", "stories")
@@ -97,6 +101,13 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 
@@ -192,6 +203,20 @@ def test_the_schema_is_not_weakened_to_accommodate_pre_schema_artifacts():
     assert set(entry["required"]) == {"file", "reason", "stage"}
 
 
+def contract_for(path: Path, schema: dict) -> dict:
+    """The schema an artifact is validated against, given when it was written.
+
+    The mandate requirement alone is dropped for an artifact predating the era
+    the imported constant names: the block is written by the process that
+    observes an authorizing act, and no such process existed when that artifact
+    was written. Every other part of the schema still bites, so nothing between
+    story-007 and the boundary drops out of validation for any other reason.
+    """
+    if path.stem >= MANDATE_ERA_STORY:
+        return schema
+    return schema_without_the_mandate_requirement(schema)
+
+
 def test_every_committed_story_artifact_parses_and_validates():
     schema = story_schema()
     failures = []
@@ -201,7 +226,7 @@ def test_every_committed_story_artifact_parses_and_validates():
         except story_parser.StoryParseError as error:
             failures.append(f"{path.name}: {error}")
             continue
-        for problem in schema_validator.validate(parsed, schema):
+        for problem in schema_validator.validate(parsed, contract_for(path, schema)):
             failures.append(f"{path.name}: {problem}")
     assert not failures, "\n".join(failures)
 

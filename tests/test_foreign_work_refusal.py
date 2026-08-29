@@ -129,6 +129,13 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 CONFIG = """\
@@ -587,6 +594,11 @@ CLEAN_RUN_EVENTS = [
     # list make the stages below ambiguous on their own. The name is the one
     # `conftest.configured_workflow` configures this target to run.
     "workflow story-workflow started for story-001",
+    # story-087: the second thing a run says is what its pre-flight mandate
+    # walk resolved, recorded now that there is a run directory to record it
+    # in. Listed rather than dropped, for the reason the claim-support note
+    # below is listed: this stays an exact equality on the whole stream.
+    conftest.MANDATE_NOTE,
     "implementer stage started", "implementer stage completed",
     "tester stage started", "tester stage completed",
     "documenter stage started",

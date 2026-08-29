@@ -713,6 +713,9 @@ def test_a_plan_entry_without_a_stage_fails_validation():
             {"file": "src/app.py", "reason": "because"}]},
         "scope": {"modify": ["src/"], "do_not_modify": ["rules/"]},
         "verification_requirements": ["v"], "constraints": ["c"],
+        # story-087 requires a mandate of every story. It is here so the one
+        # problem below is the missing stage, which is this test's subject.
+        "mandate": conftest.MANDATE_VALUE,
     }
     problems = schema_validator.validate(story, story_schema())
     assert len(problems) == 1
@@ -760,6 +763,13 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 
@@ -919,7 +929,14 @@ def test_this_storys_own_artifact_parses_and_validates_under_the_new_schema():
     assert path.is_file()
     schema = story_schema()
     parsed = story_parser.parse(path.read_text(encoding="utf-8"), schema)
-    assert schema_validator.validate(parsed, schema) == []
+    # This artifact predates the mandate era, and a committed artifact is an
+    # execution record that is not edited to satisfy a contract written after
+    # it. So it is held to every part of the schema but the one requirement
+    # added after it was written, through the shared relaxation that drops that
+    # requirement and nothing else.
+    assert path.stem < conftest.MANDATE_ERA_STORY
+    assert schema_validator.validate(
+        parsed, conftest.schema_without_the_mandate_requirement(schema)) == []
     for entry in parsed["technical_plan"]["likely_file_changes"]:
         assert entry["stage"]
 

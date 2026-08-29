@@ -132,10 +132,12 @@ from test_plan_commit import (  # noqa: F401
     ARTIFACT,
     Planning,
     artifact,
+    as_the_session_left_it,
     bare_remote,
     make_planning,
     remote_refs,
     run_plan,
+    stamped,
     writes,
 )
 from test_plan_time_validation import L5_RUN, install, run_script
@@ -455,20 +457,30 @@ def test_every_artifact_this_file_uses_is_what_it_claims_to_be():
     for name, text in (("conflicting", CONFLICTING_ARTIFACT),
                        ("reassigned", REASSIGNED_ARTIFACT),
                        ("granted", GRANTED_ARTIFACT)):
-        reading = story_coordinator.read_story(text)
+        # Stamped: the three constants above are what a *session* writes, and
+        # since story-087 a session writes no mandate — l5-plan confers it
+        # afterwards. A reading of one is a reading of what the artifact
+        # becomes, and without the block the only thing it would report is the
+        # missing mandate, which is nothing this module is about.
+        reading = story_coordinator.read_story(stamped(text))
         assert reading.problems == [], (name, reading.problems)
         assert story_coordinator.stage_exception_problems(
             reading.parsed, STAGES) == [], name
         assert plan_validation.strictness_problems(reading.parsed, STAGES) == [], name
     assert plan_validation.assignment_problems(
-        story_coordinator.read_story(CONFLICTING_ARTIFACT).parsed, STAGES, ABSENT_ROOT) != []
+        story_coordinator.read_story(stamped(CONFLICTING_ARTIFACT)).parsed,
+        STAGES, ABSENT_ROOT) != []
     for clean in (REASSIGNED_ARTIFACT, GRANTED_ARTIFACT):
         assert plan_validation.assignment_problems(
-            story_coordinator.read_story(clean).parsed, STAGES, ABSENT_ROOT) == []
+            story_coordinator.read_story(stamped(clean)).parsed,
+            STAGES, ABSENT_ROOT) == []
 
 
 def test_artifact_problems_reports_the_new_class(tmp_path: Path):
-    path = write_artifact(tmp_path, CONFLICTING_ARTIFACT)
+    # Stamped, here and at every call driven straight at the validation: what
+    # this check is handed in a real session is the artifact after l5-plan has
+    # conferred the mandate story-087 requires.
+    path = write_artifact(tmp_path, stamped(CONFLICTING_ARTIFACT))
     found = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT,
         HARNESS_ROOT, WORKFLOW['name'])
     assert list(found) == [path]
@@ -477,7 +489,7 @@ def test_artifact_problems_reports_the_new_class(tmp_path: Path):
 
 def test_artifact_problems_holds_the_clean_resolutions_back(tmp_path: Path):
     for index, text in enumerate((REASSIGNED_ARTIFACT, GRANTED_ARTIFACT)):
-        path = write_artifact(tmp_path, text, f"story-90{index}.yaml")
+        path = write_artifact(tmp_path, stamped(text), f"story-90{index}.yaml")
         assert plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT,
         HARNESS_ROOT, WORKFLOW['name']) == {}
 
@@ -497,14 +509,16 @@ def test_a_story_that_fails_the_gate_yields_that_and_nothing_further(tmp_path: P
     # Schema-invalid, and carrying the conflict: still only the schema problem.
     invalid = write_artifact(
         tmp_path,
-        CONFLICTING_ARTIFACT.replace("tasks:\n  - do the sample work\n", ""),
+        stamped(CONFLICTING_ARTIFACT).replace(
+            "tasks:\n  - do the sample work\n", ""),
         "story-901.yaml")
     found = plan_validation.artifact_problems([invalid], STAGES, ABSENT_ROOT,
         HARNESS_ROOT, WORKFLOW['name'])
     assert found[invalid]
     assert not any(STORY_031_FILE in problem for problem in found[invalid])
 
-    reached = write_artifact(tmp_path, CONFLICTING_ARTIFACT, "story-902.yaml")
+    reached = write_artifact(tmp_path, stamped(CONFLICTING_ARTIFACT),
+                             "story-902.yaml")
     assert any(STORY_031_FILE in problem
                for problem in plan_validation.artifact_problems(
                    [reached], STAGES, ABSENT_ROOT,
@@ -519,7 +533,7 @@ def test_the_strictness_check_still_reports_beside_the_new_one(tmp_path: Path):
             + f"  - the {RESTRICTED_STAGE} leaves {RESTRICTED_PREFIX} alone "
               f"entirely\n"
             + plan_block((STORY_031_FILE, STORY_031_STAGE)))
-    path = write_artifact(tmp_path, both)
+    path = write_artifact(tmp_path, stamped(both))
     problems = plan_validation.artifact_problems([path], STAGES, ABSENT_ROOT,
         HARNESS_ROOT, WORKFLOW['name'])[path]
     assert any("states a restriction the workflow does not" in p for p in problems)
@@ -580,7 +594,10 @@ def test_pre_flight_does_not_start_refusing_the_assignment_class(planning: Plann
     Asserted by pre-flight getting past the story checks — it reaches the
     clean-tree refusal, which names the dirty path rather than the artifact.
     """
-    install(planning, "story-900", CONFLICTING_ARTIFACT)
+    # Stamped: a committed artifact is one l5-plan has already conferred a
+    # mandate on, and pre-flight refuses an artifact without one above the
+    # clean-tree refusal this test is about reaching.
+    install(planning, "story-900", stamped(CONFLICTING_ARTIFACT))
     (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
 
     result = run_script(L5_RUN, planning, "story-900")
@@ -591,8 +608,8 @@ def test_pre_flight_does_not_start_refusing_the_assignment_class(planning: Plann
     # Control: an artifact pre-flight *does* refuse is refused for the
     # artifact, so getting past it above means something.
     install(planning, "story-900",
-            CONFLICTING_ARTIFACT + exceptions_block(UNDEFINED_STAGE,
-                                                    RESTRICTED_PREFIX))
+            stamped(CONFLICTING_ARTIFACT
+                    + exceptions_block(UNDEFINED_STAGE, RESTRICTED_PREFIX)))
     refused = run_script(L5_RUN, planning, "story-900")
     assert "story-900.yaml" in refused.stderr
 
@@ -626,7 +643,10 @@ def test_l5_plan_leaves_a_conflicting_artifact_uncommitted_and_prints_the_proble
     assert remote_refs(planning.remote) == refs_before
 
     written = (planning.root / ARTIFACT_PATH)
-    assert written.read_text(encoding="utf-8") == CONFLICTING_ARTIFACT
+    # story-087: l5-plan confers the mandate between the snapshot and the
+    # validation, so what the refusal leaves is the session's bytes plus that
+    # block. The session's own text is still compared byte for byte.
+    assert as_the_session_left_it(written) == CONFLICTING_ARTIFACT
     assert ARTIFACT_PATH in planning.status()
 
     printed = result.stdout + result.stderr
@@ -1169,7 +1189,7 @@ def test_the_schema_still_accepts_a_grant_at_every_granularity():
     for create in (RESTRICTED_PREFIX, FILE_GRANT,
                    f"{RESTRICTED_PREFIX}subdirectory/"):
         text = artifact("story-900") + exceptions_block(RESTRICTED_STAGE, create)
-        reading = story_coordinator.read_story(text)
+        reading = story_coordinator.read_story(stamped(text))
         assert reading.problems == [], (create, reading.problems)
         assert story_coordinator.stage_exception_problems(
             reading.parsed, STAGES) == [], create
@@ -1541,7 +1561,8 @@ def test_artifact_problems_reports_against_either_root_and_words_it_from_one(
     is why the pair here is still a pair.
     """
     holding, empty = roots(tmp_path)
-    text = artifact("story-900") + plan_block((PRESENT_FILE, RESTRICTED_STAGE))
+    text = stamped(
+        artifact("story-900") + plan_block((PRESENT_FILE, RESTRICTED_STAGE)))
     path = write_artifact(tmp_path, text, "story-903.yaml")
 
     for root, expected in ((holding, "modification"), (empty, "creation")):
@@ -1571,9 +1592,17 @@ def test_artifact_problems_reports_against_either_root_and_words_it_from_one(
 
 
 def story_on_disk(story_id: str) -> tuple[Path, dict]:
-    """One committed artifact and its parse, through the reader a run uses."""
+    """One committed artifact and its parse, through the reader a run uses.
+
+    Read with the mandate story-087 requires appended to the copy, never to the
+    file: the artifacts below were committed before that requirement existed,
+    and a committed artifact is an execution record that is not edited to
+    satisfy a contract written after it. Every other byte, and everything the
+    surgery below does to it, is the committed plan's own.
+    """
     path = STORIES_DIR / f"{story_id}.yaml"
-    reading = story_coordinator.read_story(path.read_text(encoding="utf-8"))
+    reading = story_coordinator.read_story(
+        stamped(path.read_text(encoding="utf-8")))
     assert reading.problems == [], (story_id, reading.problems)
     return path, reading.parsed
 
@@ -1587,7 +1616,8 @@ def governed_entries(story: dict) -> list[dict]:
             and e.get("file", "").startswith(RESTRICTED_PREFIX)]
 
 
-def test_story_056s_committed_artifact_carrying_its_grants_is_reported_by_nothing():
+def test_story_056s_committed_artifact_carrying_its_grants_is_reported_by_nothing(
+        tmp_path: Path):
     """The case this story exists for, read from disk through a run's reader.
 
     Two controls, so this is not an artifact the check merely never looked at:
@@ -1596,7 +1626,12 @@ def test_story_056s_committed_artifact_carrying_its_grants_is_reported_by_nothin
     """
     path, story = story_on_disk("story-056")
 
-    assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT,
+    # Validated as a copy carrying the mandate story-087 requires, for the
+    # reason `story_on_disk` gives: the artifact on disk predates the
+    # requirement and is not edited to meet it.
+    validated = write_artifact(
+        tmp_path, stamped(path.read_text(encoding="utf-8")), path.name)
+    assert plan_validation.artifact_problems([validated], STAGES, HARNESS_ROOT,
         HARNESS_ROOT, WORKFLOW['name']) == {}
 
     governed = governed_entries(story)
@@ -1639,8 +1674,8 @@ def test_the_corpus_costs_the_artifacts_it_reports_nothing():
     assert set(reported) != set(stories)
     assert "story-056" not in reported
     for name, story in reported.items():
-        assert story_coordinator.read_story(
-            (STORIES_DIR / f"{name}.yaml").read_text(encoding="utf-8")
+        assert story_coordinator.read_story(stamped(
+            (STORIES_DIR / f"{name}.yaml").read_text(encoding="utf-8"))
         ).problems == [], name
         assert story_coordinator.stage_exception_problems(story, STAGES) == [], name
 
@@ -1718,6 +1753,23 @@ def test_the_docstring_states_the_rule_as_it_now_stands():
 L5_PLAN_SCRIPT = load_script("l5-plan", name="l5_plan_for_story_042")
 
 
+def planned_artifact() -> str:
+    """The artifact the two `report` calls below are handed.
+
+    It carries a mandate, so the one thing validation has to say about it is
+    the assignment problem this module is about. Since story-087 the block is
+    in the story schema's required list, and an artifact without one would be
+    refused for that as well — which would make the byte-for-byte assertion
+    below a statement about two refusals rather than about this one.
+
+    `report` is called in-process here, where stdin is not a terminal, so
+    nothing stamps a block and the one written in is the one validation sees.
+    """
+    return (artifact("story-900")
+            + plan_block((PRESENT_FILE, RESTRICTED_STAGE))
+            + conftest.MANDATE_BLOCK)
+
+
 def test_report_passes_the_target_root_it_was_given_to_the_check(
         tmp_path: Path, monkeypatch):
     """Not read off the source: the check records the root it was called with."""
@@ -1725,8 +1777,7 @@ def test_report_passes_the_target_root_it_was_given_to_the_check(
     stories_dir.mkdir()
     before = plan_commit.snapshot(stories_dir)
     (stories_dir / "story-900.yaml").write_text(
-        artifact("story-900") + plan_block((PRESENT_FILE, RESTRICTED_STAGE)),
-        encoding="utf-8")
+        planned_artifact(), encoding="utf-8")
     _, empty = roots(tmp_path)
     seen: list[Path] = []
 
@@ -1757,8 +1808,7 @@ def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
     stories_dir.mkdir()
     before = plan_commit.snapshot(stories_dir)
     path = stories_dir / "story-900.yaml"
-    path.write_text(artifact("story-900") + plan_block(
-        (PRESENT_FILE, RESTRICTED_STAGE)), encoding="utf-8")
+    path.write_text(planned_artifact(), encoding="utf-8")
     _, empty = roots(tmp_path)
 
     status = L5_PLAN_SCRIPT.report(empty, stories_dir, before, STAGES)
@@ -1771,9 +1821,17 @@ def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
         f"  - {problem}\n"
         "Fix the artifact or re-run planning before executing the story.\n"
     )
-    assert printed.out == (
-        f"l5-plan: committed nothing; {path} remain in the working tree.\n"
-    )
+    summary = f"l5-plan: committed nothing; {path} remain in the working tree.\n"
+    assert printed.out.endswith(summary)
+    # Since story-087 the refusing path says one more thing when nothing
+    # stamped a mandate — which is the case here, because `report` is called
+    # in-process and stdin is not a terminal. It is identified rather than
+    # quoted: its wording belongs to that story and this module's subject is
+    # the assignment refusal. What is still byte-exact is that the notice is
+    # one line and the summary is the last.
+    notice = printed.out[: -len(summary)]
+    assert re.search(r"(?i)no mandate was stamped", notice), notice
+    assert notice.count("\n") == 1, notice
 
 
 @pytest.fixture
@@ -1871,28 +1929,33 @@ def test_l5_plan_words_the_problem_from_the_target_root_not_its_cwd(
     work.mkdir()
     assert not (work / PRESENT_FILE).exists()
 
-    from_holding = subprocess.run(
-        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
-         "--workflow", PLANNED_WORKFLOW, "add a thing"],
-        cwd=work,
-        env=planning_holding.env(L5_STUB_WRITE=writes(
-            (f"../{ARTIFACT_PATH}", PRESENT_ARTIFACT))),
-        capture_output=True, text=True,
-    )
+    # Both invocations below are given a terminal for stdin, as `run_plan`
+    # does: since story-087 a session with none stamps no mandate and its
+    # artifact is refused for that instead of for the fault this test is about.
+    with conftest.a_terminal_for_stdin() as stdin:
+        from_holding = subprocess.run(
+            [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
+             "--workflow", PLANNED_WORKFLOW, "add a thing"],
+            cwd=work,
+            env=planning_holding.env(L5_STUB_WRITE=writes(
+                (f"../{ARTIFACT_PATH}", PRESENT_ARTIFACT))),
+            stdin=stdin, capture_output=True, text=True,
+        )
 
     assert from_holding.returncode != 0
     assert "modification" in from_holding.stdout + from_holding.stderr
 
     (planning_holding.root / PRESENT_FILE).unlink()
-    from_empty = subprocess.run(
-        [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
-         "--workflow", PLANNED_WORKFLOW, "add a thing"],
-        cwd=work,
-        env=planning_holding.env(L5_STUB_WRITE=writes(
-            (f"../{ARTIFACT_PATH.replace('900', '901')}",
-             PRESENT_ARTIFACT.replace("story-900", "story-901")))),
-        capture_output=True, text=True,
-    )
+    with conftest.a_terminal_for_stdin() as stdin:
+        from_empty = subprocess.run(
+            [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
+             "--workflow", PLANNED_WORKFLOW, "add a thing"],
+            cwd=work,
+            env=planning_holding.env(L5_STUB_WRITE=writes(
+                (f"../{ARTIFACT_PATH.replace('900', '901')}",
+                 PRESENT_ARTIFACT.replace("story-900", "story-901")))),
+            stdin=stdin, capture_output=True, text=True,
+        )
 
     assert from_empty.returncode != 0
     assert PRESENT_FILE in from_empty.stdout + from_empty.stderr

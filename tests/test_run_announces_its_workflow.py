@@ -197,9 +197,19 @@ tests_dir: {tests_dir}
 APP_AT_HEAD = "print('hello')\n"
 
 
-def story_text(declared: str | None = None, story_id: str = STORY_ID) -> str:
+def story_text(declared: str | None = None, story_id: str = STORY_ID,
+               mandate: bool = True) -> str:
+    """The artifact, with or without the block a run resolves before it starts.
+
+    A story a test hands straight to the coordinator carries one, because since
+    story-087 a run whose mandate does not resolve to a human is refused before
+    anything is created. A story a *planning session* writes carries none: the
+    block is written by l5-plan when the session ends, and an artifact arriving
+    from a session already carrying one is refused rather than trusted.
+    """
     line = f"  workflow: {declared}\n" if declared else ""
-    return STORY.format(story_id=story_id, workflow_line=line)
+    text = STORY.format(story_id=story_id, workflow_line=line)
+    return text + conftest.MANDATE_BLOCK if mandate else text
 
 
 def write(path: Path, text: str) -> None:
@@ -662,7 +672,8 @@ def announced_on_the_terminal(output: str) -> list[str]:
 
 
 def planned_artifact() -> str:
-    return story_text(EXECUTED["name"], story_id=PLANNED_ID)
+    """What the stub session writes: no mandate, because l5-plan confers it."""
+    return story_text(EXECUTED["name"], story_id=PLANNED_ID, mandate=False)
 
 
 def test_a_run_started_from_the_planning_offer_announces_its_workflow(
