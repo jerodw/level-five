@@ -216,6 +216,14 @@ def state_contract_problems(state: dict) -> list[str]:
         # rather than resolving the choice again against a story artifact that
         # may since have been amended to name another.
         "workflow": str,
+        # story-085's outstanding declared suite failure: the stage, attempt,
+        # try, recorded scope, exit code and retained paths of a red declared
+        # suite run no later green run has shadowed. Defaulted like the fields
+        # above, so a state file written before it existed reads as no failure
+        # outstanding. It is cleared only by a passing declared suite run whose
+        # recorded scope is a subset of the failure's, and a resume leaves it
+        # alone — it is evidence that a failure is unrepaired, not an allowance.
+        "unshadowed_suite_failure": dict,
     }
     declared = {f.name for f in dataclasses.fields(story_coordinator.RunState)}
     problems = []

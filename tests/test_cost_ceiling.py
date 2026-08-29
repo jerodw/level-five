@@ -920,6 +920,17 @@ def test_a_run_ceiling_of_zero_refuses_before_any_agent_is_invoked(environment):
 # --------------------------------------------------------------------------
 
 
+# A mapping on the state that is not a per-stage total, exempted by name.
+# `unshadowed_suite_failure` holds one failing suite run's record — its stage,
+# its scope, its exit code, its retained paths — keyed by what that record
+# names rather than by a stage, and it is one run's evidence rather than
+# anything accumulated. The exemption is held shut from both sides: it lapses
+# for a value keyed by a stage (below), and the test asserts the name is still
+# a field a run writes, so an exemption for a field that has gone away cannot
+# sit here unnoticed.
+NOT_A_PER_STAGE_TOTAL = ("unshadowed_suite_failure",)
+
+
 def cumulative_totals(state: dict, stage_names: list[str]) -> list[str]:
     """Every key of a state file that keeps a total per stage.
 
@@ -928,10 +939,22 @@ def cumulative_totals(state: dict, stage_names: list[str]) -> list[str]:
     keyed by one. Neither may appear — the run ceiling is the only cumulative comparison
     the harness makes, and a second accumulator is a second thing to keep in
     step with the record.
+
+    A name in `NOT_A_PER_STAGE_TOTAL` is passed over only while its value stays
+    what it was exempted for: a mapping keyed by a stage is a per-stage total
+    whatever it is called, so one under an exempted name is reported like any
+    other.
     """
-    return sorted(
-        key for key, value in state.items()
-        if any(name in key for name in stage_names) or isinstance(value, dict))
+    def keeps_a_total(key: str, value: object) -> bool:
+        if any(name in key for name in stage_names):
+            return True
+        if not isinstance(value, dict):
+            return False
+        if key in NOT_A_PER_STAGE_TOTAL:
+            return any(name in inner for inner in value for name in stage_names)
+        return True
+
+    return sorted(key for key, value in state.items() if keeps_a_total(key, value))
 
 
 def test_state_keeps_one_spend_and_no_per_stage_total(environment):
@@ -939,7 +962,9 @@ def test_state_keeps_one_spend_and_no_per_stage_total(environment):
 
     The control is the same scan over the same state with both shapes of
     per-stage total planted in it, which reports both — so the empty result
-    above is a scan that can see one.
+    above is a scan that can see one. The exempted name carries its own
+    control: a per-stage total planted under it is reported too, so the
+    exemption admits the record it was written for rather than the name.
     """
     target, harness = environment(CEILINGED)
     runner = drive_to_the_run_ceiling(target, harness)
@@ -947,12 +972,18 @@ def test_state_keeps_one_spend_and_no_per_stage_total(environment):
 
     assert state["entry_cost_usd"] == 3 * WRITER_COST + 2 * VERIFIER_COST
     assert cumulative_totals(state, STAGE_NAMES) == []
+    # The exemption is for a field a run actually writes, not a leftover name.
+    assert set(NOT_A_PER_STAGE_TOTAL) <= set(state)
 
     planted = {**state,
                f"{WRITING}_cost_usd": 13.5,
                "cost_by_stage": {WRITING: 13.5, VERIFYING: 5.0}}
     assert cumulative_totals(planted, STAGE_NAMES) == sorted(
         [f"{WRITING}_cost_usd", "cost_by_stage"])
+    for exempted in NOT_A_PER_STAGE_TOTAL:
+        assert cumulative_totals(
+            {**state, exempted: {WRITING: 13.5, VERIFYING: 5.0}},
+            STAGE_NAMES) == [exempted]
     assert runner.calls, "the shape was meant to invoke something"
 
 

@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -122,6 +122,18 @@ class RunState:
     #: loads and reads as no recorded workflow — which resolves exactly as a
     #: fresh run does.
     workflow: str = ""
+    #: The declared suite run that failed and has not been superseded: the
+    #: stage, the attempt, the try, the recorded scope, the exit code, and the
+    #: retained result and output paths of that run — everything a refusal has
+    #: to name, so the failure is reconstructable from state.json alone. Written
+    #: where a red declared suite run self-routes, so the failure is outstanding
+    #: from the moment it happens, and cleared *only* by a later green declared
+    #: suite run whose scope shadows it. A resume does not clear it: it is
+    #: evidence that a failure is unrepaired rather than a live allowance, so it
+    #: is restored with the rest of the state while the live counters beside it
+    #: are zeroed. Defaulted like every field above, so a state file written
+    #: before it existed loads and reads as no failure outstanding.
+    unshadowed_suite_failure: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1808,6 +1820,32 @@ class CleanCloneResult:
         }
         record.update({key: value for key, value in optional.items() if value is not None})
         return record
+
+
+def suite_run_shadows(
+    passing_scope: Iterable[str], failing_scope: Iterable[str]
+) -> bool:
+    """Whether a passing suite run supersedes an earlier failing one.
+
+    The rule: a later pass supersedes an earlier failure only when the pass
+    ran at least as much as the failure did, which is recorded scope by set
+    containment — the passing run's scope must be a subset of the failing
+    run's. A rerun narrowed by nothing shadows whatever failed; a rerun at the
+    same scope shadows, so an ordinary fix-and-rerun is unaffected; a rerun
+    carrying a selection the failure did not carry filtered *more* than the
+    failure did and establishes nothing about what it stopped running, so it
+    shadows nothing.
+
+    The limit, which is why this is a comparison and not an understanding: a
+    scope entry is compared as an opaque string. The harness does not parse,
+    normalise or interpret the target's selector syntax here or anywhere, so
+    two spellings of one selection are two strings, and a run made broader by
+    *rewriting* a selection rather than by dropping one is not recognised as
+    broader. Such a rerun is treated as narrowing and refused; the way out is
+    to rerun at a scope this comparison can see is no larger, not to teach
+    this function a syntax.
+    """
+    return set(passing_scope) <= set(failing_scope)
 
 
 def suite_output_file(artifact: str) -> str:
@@ -6668,6 +6706,21 @@ def run_story(
                     duration_seconds=elapsed(),
                 )
             if ran.exit_code != 0:
+                # The failure is outstanding from the moment it happens, and it
+                # is written here — where the failure is already being routed —
+                # rather than in a second place that could disagree with this
+                # one. Everything a later refusal has to name comes off the run
+                # just made and the retained paths already computed above, so
+                # the failure is reconstructable from state.json alone.
+                state.unshadowed_suite_failure = {
+                    "stage": name,
+                    "attempt": attempt,
+                    "try": state.self_route_count,
+                    "scope": list(ran.scope),
+                    "exit_code": ran.exit_code,
+                    "result_path": retained_suite,
+                    "output_path": ran.output_path or "",
+                }
                 # A red suite is a fact computed from what the stage produced,
                 # so it takes the route the other such facts take: the stage
                 # runs again in place on the budget it already declares,
@@ -6704,6 +6757,60 @@ def run_story(
                     harness_root=harness_root,
                     duration_seconds=elapsed(),
                 )
+            elif state.unshadowed_suite_failure:
+                # A green suite is the more recent result, which is not by
+                # itself a reason to supersede the failure before it: a rerun
+                # narrowed until the answer is convenient establishes nothing
+                # about what it stopped running. The pass supersedes the
+                # failure only when it ran at least as much, by the recorded
+                # scopes alone.
+                outstanding = state.unshadowed_suite_failure
+                if suite_run_shadows(ran.scope, outstanding.get("scope", [])):
+                    state.unshadowed_suite_failure = {}
+                    # Saved where the decision is made rather than at the next
+                    # stage's start, so a crash between the two cannot leave a
+                    # failure recorded that a shadowing pass has superseded.
+                    save_state(run_dir, state)
+                else:
+                    # What stands is the suite failure, so it takes the route a
+                    # suite failure already takes rather than a category of its
+                    # own, and the artifacts are the *original* failure's
+                    # retained pair rather than this rerun's — the re-running
+                    # stage is pointed at the failure that still stands.
+                    decision = self_route(
+                        run_dir,
+                        state,
+                        stage,
+                        failure=SUITE_FAILED,
+                        reason=(
+                            f"the suite the coordinator ran after "
+                            f"{outstanding.get('stage')} exited "
+                            f"{outstanding.get('exit_code')} and still stands: "
+                            "the rerun that passed ran a strict subset of what "
+                            "failed, so it established nothing about what it "
+                            "stopped running"
+                        ),
+                        artifacts=[
+                            path
+                            for path in (
+                                outstanding.get("result_path"),
+                                outstanding.get("output_path"),
+                            )
+                            if path
+                        ],
+                        attempt=attempt,
+                    )
+                    if decision.taken:
+                        self_routed = True
+                        continue
+                    return _escalate(
+                        run_dir,
+                        state,
+                        decision.reason,
+                        target_root=target_root,
+                        harness_root=harness_root,
+                        duration_seconds=elapsed(),
+                    )
 
         if name == "verifier":
             verdict = json.loads((run_dir / "verification-result.json").read_text(encoding="utf-8"))
@@ -7173,5 +7280,28 @@ def run_story(
             )
 
         index += 1
+
+    if state.unshadowed_suite_failure:
+        # A run must not reach completion carrying a declared suite failure
+        # nothing has superseded. Every route out of the suite-run block either
+        # clears the failure or refuses the advance, so arriving here with one
+        # outstanding is a state no route should have produced — it escalates
+        # naming the failure that still stands rather than completing. It costs
+        # no suite run: the verdict is read off state.json.
+        outstanding = state.unshadowed_suite_failure
+        return _escalate(
+            run_dir,
+            state,
+            (
+                f"the workflow ended with a suite failure still outstanding: the "
+                f"suite the coordinator ran after {outstanding.get('stage')} "
+                f"exited {outstanding.get('exit_code')} and no later run shadowed "
+                f"it; its record is {outstanding.get('result_path')} and its "
+                f"output is {outstanding.get('output_path')}"
+            ),
+            target_root=target_root,
+            harness_root=harness_root,
+            duration_seconds=elapsed(),
+        )
 
     return _complete(run_dir, state, reading.parsed, target_root)
