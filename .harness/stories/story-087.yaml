@@ -1,0 +1,169 @@
+story:
+  id: story-087
+  title: A story runs on a mandate it can resolve
+  description: |
+    A story artifact carries a mandate block naming what conferred the right to
+    run it, and the coordinator refuses to run a story whose mandate does not
+    resolve to a human.
+
+    Every story artifact in this repository today is the output of an
+    interactive l5-plan session, so a human approved every one of them and
+    nothing had to record it. An agent that writes story artifacts headlessly
+    breaks that: its artifacts are indistinguishable from approved ones, and the
+    harness would plan and execute work no person authorized.
+
+    The block is written by the harness process that observed the authorizing
+    act, never by an agent. At level 3 that process is l5-plan: the planner
+    agent writes the story body, the developer confirms in the interview, and
+    l5-plan — Python, not an agent — appends the block before the commit it
+    already makes. An artifact that arrives from a session already carrying a
+    mandate is refused rather than trusted, on the rule story-024 established:
+    a required output must be written by the attempt that ran.
+
+    Resolution is a walk: follow source until kind is human. An absent block, an
+    unresolvable id, a cycle, or a depth past the configured maximum each refuse
+    the run. The check names no level — it walks links until it finds a human —
+    so a later artifact kind is a schema entry rather than a condition in the
+    coordinator, which is where story-081 put history routing and story-069 and
+    story-072 put workflow selection. There is deliberately no digest of the
+    story's content: the approver and the editor are the same person, an agent
+    editing a story is closed by blocking the stories directory, and a forged
+    block is caught by the conferring record.
+
+    One constraint this story reports rather than works around. append_event
+    takes a run_dir as its first argument and l5-plan has no run, so writing a
+    harness-scoped record from outside a run is a seam that does not exist yet.
+    story-081 declared cross-run log routing to be a schema edit and nothing
+    else; that claim holds for the routing and not for the writer, and this
+    story is where the difference shows up. The answer is to factor the seam out
+    rather than to give l5-plan a second way of appending to a declared log.
+  workflow: story-workflow
+
+tasks:
+  - Declare the mandate block in schemas/story.schema.json — source with kind and id, conferred_at, conferred_by, recorded_by — and add mandate to the story's required list.
+  - Declare mandate_max_depth in schemas/harness-config.schema.json, so the bound on the resolution walk is configuration rather than a number written in harness source.
+  - Add the resolution walk to orchestration/story_coordinator.py — a function taking the mandate, a lookup for a non-human source, and the configured maximum, returning what it resolved or the problems that stopped it — and a refusal that reads like the other pre-flight refusals.
+  - Wire the resolution refusal into run_story's pre-flight, directly below the read_story refusal and above everything a run creates, and record what it resolved in the run's evidence once the run directory exists.
+  - Factor the per-log append inside _append_history_records into a function a caller outside a run can use with an explicit history directory, leaving the projection path itself unchanged, and declare mandate-log.jsonl in schemas/cross-run-history.schema.json.
+  - Add orchestration/plan_mandate.py — refuse an artifact that already carries a mandate, build the block from the git identity and the clock, append it to the artifact, and write the conferring record through the seam above.
+  - Wire plan_mandate into scripts/l5-plan between the snapshot and the plan-time validation, stamping only where stdin is a terminal, so a headless invocation stamps nothing and its artifact is refused for its absent mandate and left uncommitted in the working tree.
+  - Adapt the existing test modules the schema change breaks — the shared story fixture, which without a mandate refuses at pre-flight in every coordinator run test, and the two corpus modules — through the new mandate era constant defined once in tests/conftest.py.
+  - Write the regression module for the resolution walk, the pre-flight refusal, the stamping, the headless refusal, the conferring record, and the configurability of mandate_max_depth.
+  - Record the mandate in .harness/docs/ARCHITECTURE.md, including the seam this story had to open under orchestration/ and why it was reported rather than worked around.
+
+acceptance_criteria:
+  - schemas/story.schema.json declares a mandate object with a source object carrying kind and id, plus conferred_at, conferred_by and recorded_by, and mandate appears in the story's top-level required list.
+  - A story artifact whose mandate names kind human resolves in one hop, with no lookup consulted and no network reached.
+  - A story artifact with no mandate block refuses the run, and the refusal leaves no run directory, no state.json, no log, no new branch and invokes no agent.
+  - A mandate whose source names a kind other than human, with no lookup able to answer it, refuses the run and says the id did not resolve.
+  - A chain of mandates that returns to an id already visited refuses the run and says so as a cycle rather than exhausting the depth bound.
+  - A chain longer than mandate_max_depth refuses the run and names the configured bound.
+  - The refusal text names no level and no artifact kind that is not read out of the mandate it was given — the walk's vocabulary is source, kind, id and human.
+  - A run whose mandate resolved records what it resolved in the run's evidence, and the record names the source kind and the identity it terminated at.
+  - A resume re-runs the resolution against the story artifact as it is now, so a story edited between two entries of one run is judged by the edited artifact.
+  - schemas/harness-config.schema.json declares mandate_max_depth, and a target configuring a value the harness would never pick is observed obeying it.
+  - schemas/cross-run-history.schema.json declares mandate-log.jsonl with the fields a conferring record carries, and no condition in orchestration decides what reaches it.
+  - The per-log append is reachable from outside a run, with an explicit history directory, and the projection path that runs during a run still writes exactly the records it wrote before.
+  - l5-plan appends the mandate block to the artifact the session wrote, before the plan-time validation and before the commit, so the artifact that is committed is one the coordinator would run.
+  - An artifact that the session wrote already carrying a mandate block is refused: nothing is stamped, nothing is committed, and the artifact stays in the working tree with the reason printed.
+  - An l5-plan invocation whose stdin is not a terminal stamps no mandate, commits nothing, and prints a refusal naming the absent human rather than a schema fault alone.
+  - l5-plan writes one conferring record per story it stamped, naming the story, the identity and the time, into the declared log under the configured history directory.
+  - tests/conftest.py defines the mandate era constant once and both corpus modules import it; FIRST_SCHEMA_ERA_STORY keeps its two definitions, its value, and the test that asserts they agree.
+  - Committed artifacts predating the mandate era validate against every part of the story schema except the mandate requirement, so no artifact between story-007 and story-086 drops out of corpus validation.
+  - The mandate era corpus set is empty when this story runs, because this story's own artifact predates the code that stamps; the requirement is therefore proven to bite on constructed artifacts, and the test that covers the era set says in words that an empty set proves nothing.
+  - The full suite passes, including every existing test that runs a story through the coordinator.
+
+technical_plan:
+  implementation_steps:
+    - Add the mandate block to schemas/story.schema.json and to its required list. Describe in the schema what the walk does with each field, in the register the rest of that file uses, and say that id is what a non-human source is resolved through and is absent for a human one.
+    - Add mandate_max_depth to schemas/harness-config.schema.json, as a string like every other configured scalar, with the default written into the description and the reason a bound exists at all — a chain that cannot terminate is refused rather than followed.
+    - In orchestration/story_coordinator.py add the resolution walk. It takes the parsed mandate, a lookup that answers a non-human source or answers nothing, and the configured maximum. kind human terminates immediately. Every other kind is handed to the lookup; an answer that never arrives is an unresolvable id, an id already visited is a cycle, and a walk longer than the maximum is a depth failure. It returns what it resolved or the problems that stopped it, and it writes no message of its own.
+    - Add the refusal beside the other pre-flight refusals, through the refuse helper the rest of them use, and call it in run_story directly below the read_story refusal — above the run directory, the state file, the log, the branch and every agent invocation. The lookup the coordinator passes resolves nothing, because this harness has no artifact store; that is a fact about the deployment and not about the walk.
+    - Once the run directory exists, record what was resolved through append_event as a note, so a run's evidence carries the mandate it ran on.
+    - Factor the body of _append_history_records into a function taking the history directory, the entry, the story id and the run's history, so a caller outside a run can append a declared record. _append_history_records keeps its signature and its module-global directory and becomes a caller of it. Nothing about which records reach which log moves out of the schema.
+    - Declare mandate-log.jsonl in schemas/cross-run-history.schema.json beside the two logs already there, with an event enum naming the conferring kind and properties for the story id, the identity, the source kind and the timestamp. The reserved-log paragraph stays as it is.
+    - Add orchestration/plan_mandate.py. It reports whether an artifact already carries a mandate, builds the block from the target repository's git identity and the clock, appends it to the artifact text in the story dialect, and writes the conferring record through the seam. Every function returns what happened rather than printing it, as plan_commit does; scripts/l5-plan decides the wording.
+    - Wire it into scripts/l5-plan's report, between new_artifacts and plan_validation — refuse a session-written mandate first, then stamp, then validate. Stamping happens only where plan_run_offer.can_prompt says stdin is a terminal, so the headless path falls through to the validation refusal for an absent mandate, with a message naming the missing human rather than only the schema fault.
+    - Adapt the test modules the schema change breaks. The shared story fixture in tests/conftest.py gains a mandate, without which every coordinator run test refuses at pre-flight. Define MANDATE_ERA_STORY once in tests/conftest.py, set to the id after this story's own, and have both corpus modules import it and validate an artifact older than it against the schema with the mandate requirement dropped, so nothing else about those artifacts stops being checked.
+  likely_file_changes:
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: Declares the mandate block and requires it.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares mandate_max_depth, the bound on the resolution walk.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declares mandate-log.jsonl, where the conferring record goes.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The resolution walk, its refusal, the pre-flight call, the evidence record, and the history-append seam factored out of _append_history_records.
+    - file: orchestration/plan_mandate.py
+      stage: implementer
+      reason: New. Refuses a session-written mandate, builds and appends the block, and writes the conferring record.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Calls plan_mandate between the snapshot and the validation, and only where stdin is a terminal.
+    - file: tests/conftest.py
+      stage: implementer
+      reverting_breaks_the_suite: The shared STORY fixture is the artifact most coordinator tests run, and once the schema requires a mandate a fixture without one refuses at pre-flight — so reverting this edit leaves those tests failing on a story the coordinator will not run. The mandate era constant is defined here for the same reason: the corpus modules below cannot import what has not been added.
+      reason: The shared story fixture gains a mandate, and the mandate era constant is defined once here.
+    - file: tests/test_story_parser.py
+      stage: implementer
+      reverting_breaks_the_suite: The corpus test validates every committed artifact from story-007 on against the story schema; once that schema requires a mandate, the eighty artifacts written before this story fail it. Reverting this edit leaves the corpus test red against artifacts nobody may edit.
+      reason: Validates pre-mandate-era artifacts against the schema with the mandate requirement dropped, through the imported era constant.
+    - file: tests/test_schema_directed_parsing.py
+      stage: implementer
+      reverting_breaks_the_suite: It filters the same committed corpus with its own copy of the era boundary and validates it against the same schema, so it fails on the same eighty artifacts for the same reason, and reverting this edit leaves it red.
+      reason: The same era handling for the second corpus module.
+    - file: tests/test_story_mandate.py
+      stage: tester
+      reason: New. Covers the walk's four failure modes, the pre-flight refusal and where it sits, the evidence record, the resume re-check, the stamping, the session-written refusal, the headless refusal and the conferring record.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The proof that mandate_max_depth is obeyed — a target configuring a value the harness would never pick, observed refusing a chain the default would have allowed.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the mandate, the walk, where it is refused, the conferring record, and the seam this story opened under orchestration and why it was reported.
+
+scope:
+  modify:
+    - schemas/story.schema.json
+    - schemas/harness-config.schema.json
+    - schemas/cross-run-history.schema.json
+    - orchestration/story_coordinator.py
+    - orchestration/plan_mandate.py
+    - scripts/l5-plan
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/config.yaml
+    - workflows/
+    - prompts/
+    - schemas/execution-history.schema.json
+    - schemas/verification-result.schema.json
+    - orchestration/plan_commit.py
+    - orchestration/agent_runner.py
+
+verification_requirements:
+  - Confirm that a story artifact with no mandate is refused before any run directory, state file, log, branch or agent invocation exists, by observing what the target repository holds after the refusal rather than by reading the refusal text.
+  - Confirm that each of the four failure modes — absent, unresolvable, cyclic, too deep — produces its own message, and that a reader of the message can tell which one it was.
+  - Confirm that the walk terminates on kind human without consulting the lookup at all, by giving it a lookup that fails if it is called.
+  - Confirm the refusal and the walk name no level and no artifact kind that was not read out of the mandate under test, by search over the added source.
+  - Confirm that changing mandate_max_depth in a target's configuration changes which chains the harness refuses.
+  - Confirm that the projection of execution-history entries into the two existing logs is unchanged by the seam — the same records, in the same logs, from a run that takes a retry and completes.
+  - Confirm that l5-plan stamps a mandate the coordinator then resolves, end to end: an artifact written by a session, stamped, validated, committed, and accepted at pre-flight.
+  - Confirm that an artifact carrying a session-written mandate is refused with nothing stamped and nothing committed, and that the artifact is still in the working tree afterwards.
+  - Confirm that a headless l5-plan commits nothing and that its message names the absent human.
+  - Confirm that no committed artifact between story-007 and story-086 has dropped out of corpus validation for anything other than the mandate requirement.
+  - Confirm the suite passes, and confirm that the test covering the mandate era corpus set states that an empty set proves nothing, since that set is empty when this story runs.
+
+constraints:
+  - events.log and execution-history.json keep exactly the format and content they have; the seam adds no second write path and changes no record either of them carries.
+  - History is evidence, never state. Nothing added here is read back to make a routing decision.
+  - No digest of the story's content is added, and no second reader of story_digest or unchanged_since_escalation is introduced.
+  - No epic artifact, no bounds field, and nothing that names a level of the harness.
+  - FIRST_SCHEMA_ERA_STORY keeps its value, its two definitions and the test asserting they agree; the mandate era is a separate constant and this story does not take on the de-duplication of the older one.
+  - A story artifact that has already been committed is an execution record and is not edited to satisfy a contract written after it.
+  - The mandate is never written by an agent. Nothing added here lets a stage prompt, a stage output, or a planning session supply the block.
+  - Existing pre-flight refusals keep their order and their band: every refusal added here leaves no run directory, no state.json, no log, no new branch, and invokes no agent.
