@@ -1,0 +1,236 @@
+story:
+  id: story-090
+  title: The outbox is total over what it is handed
+  description: |
+    story-089 shipped a queue whose stated guarantee is that it never blocks a
+    run, and enqueue catches OSError and nothing else. Two inputs still raise
+    into the caller and stop the story that produced them: a payload that is
+    not JSON-serializable, which write_entry raises TypeError on and the
+    except clause does not catch; and an identity that is not
+    JSON-serializable, which identity_key raises on before the try begins at
+    all. This story closes both, before a producer exists to hit them.
+
+    The mistake is not hypothetical. This codebase passes Path objects through
+    nearly every seam, and Path is not JSON-serializable.
+    enqueue(queue, {"artifact": path}, ...) is a natural line for a producer
+    to write, and today it raises. datetime, set, an exception object and a
+    recursive structure are the same shape of mistake.
+
+    What totality means here is decided once and written down: the item is
+    refused and the run is kept. Nothing is written, nothing is raised, and
+    the caller is told nothing landed. The alternative considered was
+    serializing defensively — a default=str, or an explicit conversion — so
+    every call writes something. It is rejected, and what it would have cost
+    is the reason: a coerced entry says something the producer did not say,
+    and a transport delivers it later as though the producer had said it.
+    Refusing loses the item, which is the failure mode this module already
+    documents and accepts for a queue that cannot be written to.
+
+    A refused item is not a silent one. Every drop produces a message, on
+    stderr always and in the run's events.log when there is a run to write to,
+    so a later reader can see that something went wrong rather than inferring
+    it from an absence. That covers the OSError path too, which today is a
+    bare pass and leaves no trace anywhere. The rule the story adopts is that
+    an error is never swallowed whole, and the one remaining place in the
+    module that swallows one — a transport lookup that raises, which returns
+    an empty reference and records nothing — is brought under it in the same
+    change.
+
+    The key derivation moves inside the guard. A fix that only widens the
+    except clause leaves the identity path open, because identity_key is
+    called above the try. identity_key itself keeps raising and write_entry
+    keeps unlinking its temporary and re-raising: cleaning up is write_entry's
+    job and deriving a digest is identity_key's, and the totality belongs to
+    enqueue, which is the function making the promise. A story that made
+    either of them swallow would have moved the defect rather than fixed it.
+  workflow: story-workflow
+
+tasks:
+  - Make enqueue total over the payload and the identity it is handed. Bring
+    the key derivation inside the guard, and catch the failures a
+    non-serializable argument produces — TypeError from a value json cannot
+    render, ValueError from a recursive structure — beside the OSError the
+    guard already catches. Nothing is coerced and nothing is written when the
+    entry cannot be built.
+  - Have enqueue return the key only when an entry is on disk, and the empty
+    string on every path where nothing was written — an unwritable queue, a
+    payload that cannot be rendered, an identity that cannot be keyed. This
+    changes what the OSError path returns today, which is the key regardless.
+  - Report every drop through one helper rather than at each drop site, so the
+    three paths cannot disagree about what a drop looks like. The message names
+    what was dropped and why, and renders the identity through a total
+    rendering so reporting a drop cannot itself raise.
+  - Write the message to stderr on every drop, and additionally to the run's
+    events.log through the coordinator's shared append when enqueue is given a
+    run directory. The run directory is a new optional argument; a call that
+    omits it behaves exactly as a call made before this story except for the
+    stderr line.
+  - Import the shared append inside the reporting helper rather than at module
+    scope, so the producer story — which will have a module the coordinator
+    reaches importing the outbox — cannot close an import cycle, and so a call
+    that never drops anything pays nothing for the capability.
+  - Guard the reporting itself, so a sink that fails degrades to the next one
+    and a failure to report is never a failure to enqueue. Where no sink can be
+    reached the drop is unreported, which is the same case as a queue directory
+    that cannot be written to and is stated rather than hidden.
+  - Record the reason a transport lookup failed in the sync summary's notes,
+    rather than discarding it. The behaviour is unchanged — a lookup that
+    establishes nothing still falls through to filing — and what changes is
+    that the reason survives.
+  - Rewrite enqueue's docstring so its opening sentence states the guarantee
+    the function actually holds, and so what a drop costs and where a drop is
+    reported are both in it. The module docstring's account of the guarantee
+    gains the same correction where it makes the same claim.
+
+acceptance_criteria:
+  - enqueue called with a payload that is not JSON-serializable returns without
+    raising, and writes no file into the queue directory.
+  - enqueue called with an identity that is not JSON-serializable returns
+    without raising, and writes no file into the queue directory. This is the
+    path a widened except clause alone would leave open.
+  - enqueue called with a recursive structure as its payload returns without
+    raising and writes no file.
+  - enqueue returns the empty string on each of those paths, and on the path
+    where the queue directory cannot be written to.
+  - enqueue returns the key it wrote the entry under whenever an entry is on
+    disk, and that key is unchanged from what the same call produced before
+    this story.
+  - A serializable call writes exactly the entry it wrote before this story,
+    under the same name, with the same fields and the same values, and reading
+    it back through read_entry is unaffected.
+  - Each drop writes a message to stderr naming what was dropped and why, and
+    no successful enqueue writes anything to stderr.
+  - enqueue given a run directory appends the same message to that run's
+    events.log, in the one-line format the log already carries, and enqueue
+    given no run directory writes no events.log anywhere.
+  - A drop whose identity cannot be rendered by ordinary means still produces a
+    message rather than raising out of the reporting.
+  - enqueue does not raise when its reporting cannot be delivered — a run
+    directory that does not exist, or a sink that fails — and still writes no
+    entry and still returns the empty string.
+  - orchestration/outbox.py has no module-scope import of the coordinator, so
+    importing the outbox does not pull the coordinator in.
+  - A sync whose transport lookup raises still falls through to filing, and the
+    reason the lookup failed appears in the summary's notes.
+  - A sync whose transport offers no lookup at all is unchanged and adds no
+    note, because nothing failed.
+  - identity_key still raises on an identity it cannot render, and write_entry
+    still unlinks its temporary and re-raises. Neither is made to swallow.
+  - enqueue's docstring opens with the guarantee it actually holds, and says
+    that a refused item is reported rather than silent.
+
+technical_plan:
+  implementation_steps:
+    - Add the reporting helper to orchestration/outbox.py. It takes the run
+      directory, which may be absent, and the message, writes to stderr, and
+      when a run directory is given imports the coordinator's append inside the
+      function body and calls it. The whole helper is wrapped so nothing it
+      does can escape into enqueue, with a comment saying that an unreported
+      drop is the same case as an unwritable queue rather than a new one.
+    - Render the identity for the message through repr rather than through
+      json, since the identity in a drop message is by definition one json
+      could not render, and a message that raises while explaining a drop is
+      the failure the story exists to remove.
+    - Restructure enqueue so the key derivation and the write are inside one
+      try. Catch OSError, TypeError and ValueError, report through the helper,
+      and return the empty string. Return the key only after write_entry has
+      returned.
+    - Give enqueue its run directory argument as optional and keyword-only, so
+      every existing call renders as it did and the argument cannot be passed
+      positionally into the place `now` occupies.
+    - Have the transport lookup helper carry the reason a lookup failed back to
+      its caller rather than discarding it, and have the sync path put that
+      reason in the tally's notes. The filing behaviour on that path does not
+      change.
+    - Rewrite enqueue's docstring and correct the module docstring where it
+      states the guarantee, so the sentence a reader meets first is the one
+      that holds.
+    - Write the tests in tests/test_outbox.py: the two non-serializable paths
+      driven separately, the recursive payload, the empty-string return on
+      every drop path, the stderr message, the events.log message and its
+      absence without a run directory, the unreportable drop, the unchanged
+      ordinary path, and the lookup note. The module-scope import assertion is
+      a source check of the kind the module's existing scans already use.
+  likely_file_changes:
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: The whole behaviour change — the guard around the key derivation,
+        the drop report, the return value, the lookup note, and the docstrings
+        that state what the module now promises.
+    - file: tests/test_outbox.py
+      stage: tester
+      reason: The story's regression suite. The module's existing test file,
+        which gains the drop paths, the reporting assertions and the lookup
+        note, and whose existing assertions about the ordinary path are what
+        holds the unchanged behaviour unchanged.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The outbox's module line and the section stating its guarantee
+        both describe enqueue as it was before this story; the guarantee is now
+        total over the payload and the identity, and a drop is now reported.
+
+scope:
+  modify:
+    - orchestration/outbox.py
+    - tests/test_outbox.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/outbox-entry.schema.json
+    - schemas/manifest.json
+    - scripts/l5-sync
+    - orchestration/story_coordinator.py
+    - .gitignore
+    - workflows/
+    - prompts/
+    - hooks/
+    - templates/
+
+verification_requirements:
+  - Confirm a non-serializable payload and a non-serializable identity each
+    leave enqueue returning normally with nothing written to the queue, driven
+    as two separate cases rather than one, since a fix covering only the first
+    would leave the story half done.
+  - Confirm the empty string comes back on every path where nothing was
+    written, including the unwritable-queue path this story changes.
+  - Confirm the ordinary path is untouched: a serializable call writes the same
+    entry under the same key, and reading it back is unaffected.
+  - Confirm the drop message reaches stderr on every drop, that it reaches
+    events.log when a run directory is given, and that it reaches no
+    events.log when one is not.
+  - Confirm a drop whose reporting cannot be delivered still returns the empty
+    string without raising.
+  - Confirm the coordinator is not imported at module scope by the outbox.
+  - Confirm the sync behaviour around a failing lookup is unchanged and that
+    the reason now survives in the summary.
+  - Confirm identity_key and write_entry still raise as they did.
+  - Confirm the whole suite passes under the configured test command,
+    including the tests this story adds.
+
+constraints:
+  - No coercion. Nothing that cannot be rendered is rendered anyway, in the
+    payload or the identity, because an entry that says something the producer
+    did not say is delivered later as though the producer had said it.
+  - write_entry keeps unlinking its temporary and re-raising, and identity_key
+    keeps raising. The totality belongs to enqueue, and moving it into either
+    of them would move the defect rather than fix it.
+  - No third-party dependency, no network call, and no new configuration key.
+    Where the queue lives and what it writes stay exactly as they are.
+  - No new schema, no change to the entry shape, and no change to how the key
+    is derived from the identity. An entry written before this story and one
+    written after are the same bytes for the same call.
+  - No producer is added. This story makes enqueue safe for one; the story that
+    writes one is the next in the chain.
+  - The coordinator is not modified, and no sweep call site is added inside a
+    run.
+  - Reporting a drop must never become the thing that stops a story. Every sink
+    is guarded, and a drop that can be reported nowhere is still a drop rather
+    than an exception.
+  - Existing tests are not weakened or skipped. The assertions covering the
+    ordinary path stand as they are and are what proves it unchanged.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 11:39:12
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
