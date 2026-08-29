@@ -1,0 +1,174 @@
+story:
+  id: story-088
+  title: The approval is observed, not inferred
+  description: |
+    l5-plan asks the developer whether they approve the plan before it stamps,
+    commits or pushes anything, so the mandate it records is the record of an
+    act it observed rather than an inference from a terminal and a file.
+
+    story-087 made the authorizing act part of the artifact and closed the
+    forgery it was aimed at: a headless agent cannot produce a runnable
+    artifact, because nothing stamps one and the pre-flight refuses it. What it
+    did not close is the other half. The stamp is gated on exactly one
+    condition — plan_run_offer.can_prompt(sys.stdin) — and the artifacts it
+    stamps come from plan_commit.new_artifacts, whose own docstring says
+    "Appearance is the whole test". So the evidence behind conferred_by is that
+    a terminal was attached and the session created a file. A present human who
+    said no is indistinguishable from one who said yes, and what actually
+    enforces approval is a line in prompts/planner.md telling the agent not to
+    write the artifact before the developer approves.
+
+    The ordering is forced and it is not the obvious one. The stamp must
+    precede validation, because the schema declares mandate and a pre-stamp
+    artifact fails its own check. Approval must precede the stamp, because the
+    stamp is the record of the approval and recording an act before observing
+    it is the defect this story exists to fix. The cost is that the developer
+    approves before the schema check runs, so an approved artifact can still be
+    refused for a fault. That is accepted: the refusal leaves everything in the
+    tree and the developer re-runs, and the alternative is validating against a
+    second, relaxed spelling of the schema.
+
+    Two things arrive with it. prompts/planner.md injects the story schema,
+    which declares mandate, and a planner that dutifully writes the field it is
+    shown has its whole session's output refused for a reason it was given no
+    way to know — so the prompt gains a paragraph saying why the block is not
+    its to write. And the strip that removes a session-written block is the
+    fallback for when that paragraph fails, folded into the same approval
+    decision rather than performed silently, because an agent that ignored an
+    explicit instruction about the one field it must not write is an agent
+    whose remaining output deserves a closer read.
+
+    Nothing here forecloses a level-four harness deriving a story's mandate
+    from an approved epic. The prompt is how this process observes an act it
+    has no other record of; plan_mandate.confer stays prompt-free, and a
+    process holding a recorded epic approval confers through the same seam.
+  workflow: story-workflow
+
+tasks:
+  - Add prose to prompts/planner.md beside the injected story schema saying why the planner does not write the mandate block, without restating what the schema declares and without removing anything from what is injected.
+  - Add the approval read and the block strip to orchestration/plan_mandate.py, beside carries_a_mandate, reusing plan_run_offer.can_prompt for the terminal test.
+  - Move the session-written block detection in scripts/l5-plan above the terminal branch, so a block the session wrote is refused whether or not there is a terminal.
+  - Wire the approval prompt into scripts/l5-plan's report between the detection and the stamp, folding a found block into the same decision, and pass the approval time to confer as conferred_at.
+  - Write the rejection path — stamp nothing, commit nothing, push nothing, leave every artifact as the session wrote it, and say where they are, that they are unstamped and uncommitted, what leaving them costs, and the command that removes them.
+  - Declare in schemas/cross-run-history.schema.json the field a conferring record carries when the conferral discarded a session-written block.
+  - Adapt the shared terminal fixture in tests/conftest.py, whose single reply would now land on the approval prompt and reject.
+  - Write the regression module for the approval, the rejection, the strip's block-extent cases, the shipped prompt, and the headless and end-of-input paths.
+  - Record the change in .harness/docs/ARCHITECTURE.md and in the mandate description in schemas/story.schema.json, both of which say the block records an observed act without saying what observing it consists of.
+
+acceptance_criteria:
+  - scripts/l5-plan asks the developer whether they approve, after the planning session has ended and before anything is stamped, committed or pushed.
+  - A rejection stamps nothing, writes no conferring record, commits nothing and pushes nothing, and every artifact the session wrote is byte-for-byte what it was when the session ended.
+  - A rejection message names each artifact, says they are unstamped and uncommitted, gives the command that removes them, and says that leaving them in the tree is what the next run's clean-tree pre-flight refuses on.
+  - A rejection removes nothing itself, including a session-written mandate block; leave-and-warn leaves everything.
+  - An approval produces exactly what the script produces today — stamp, validate, base check, conferring-record commit, artifact commit, push, run offer — in that order and with the same wording.
+  - The mandate's conferred_at is the time the approval was observed, not the time the session ended.
+  - An artifact carrying a session-written mandate block is detected immediately after new_artifacts, before the developer is asked anything, and the approval prompt says the block is there and that approving discards it.
+  - Approving an artifact that carried a session-written block removes the block, appends exactly one block this process wrote, and commits one conferral for that story.
+  - The strip removes the block and nothing else, for a block at end of file, a block followed by another top-level key, a block containing a blank line, a block containing a comment line, and the nested source mapping; every other byte of the artifact is unchanged in each case.
+  - The strip never reconstructs the artifact from a parse, so nothing the session wrote is reformatted.
+  - A session-written block is refused with nothing stamped and nothing committed on an invocation with no terminal, closing the path by which a headless l5-plan commits a block no process observed.
+  - An invocation with no terminal and no session-written block behaves exactly as story-087 left it - nothing stamped, the artifact refused at validation, and the absent human named beside the schema fault.
+  - End of input at the approval prompt reads as a rejection, the same one-directional bias can_prompt already takes.
+  - The approval is all-or-nothing across the session's artifacts, for the same reason a partial commit would invent a split the session did not have.
+  - The conferring record says when a conferral discarded a session-written block, and schemas/cross-run-history.schema.json declares the field it says it in.
+  - prompts/planner.md tells the planner that the mandate block is written by the harness process that observed the authorizing act, that an artifact arriving with one is refused, and that its absence from the session's output is correct.
+  - prompts/planner.md still injects schemas/story.schema.json verbatim, and the added prose states nothing normative of its own - the injection-detector test that flags a sentence naming a schema property alongside a contract-membership word still returns nothing.
+  - orchestration/plan_mandate.py's confer neither prompts nor reads any stream, so a process that observed an authorizing act some other way confers through the same seam.
+  - scripts/l5-plan's report still writes nothing and removes nothing, so the scan that holds that guarantee still bites.
+  - The full suite passes, including every module that drives l5-plan through a terminal.
+
+technical_plan:
+  implementation_steps:
+    - Add the paragraph to prompts/planner.md beside the {{story_schema}} injection. Say why, not merely what - the block is written by the harness process that observed the authorizing act, an artifact arriving with one is refused, one session-written block loses the whole session's output, and the absence of the field from what the session writes is correct rather than an omission to repair. Do not solve this by removing the field from what is injected; the schema is injected so the prompt cannot hold a copy that drifts. Avoid the words required, optional and mandatory in any sentence naming a schema property, which is what tests/test_planner_injection.py's normative-sentence detector flags.
+    - Add approved(stream) to orchestration/plan_mandate.py. It answers whether the developer approved, reusing plan_run_offer.can_prompt for the terminal test rather than spelling a second one. A stream that is not a terminal answers no without reading; a read that reaches end of input answers no. The default is no, which is the opposite of the run offer's Enter-runs-it, so it is its own function rather than a second caller of should_run.
+    - Add strip_mandate to orchestration/plan_mandate.py. It removes the block from the artifact text by line extent - the MANDATE_KEY line and the indented region beneath it - and leaves every other byte in place. Handle a block at end of file, a block followed by another top-level key, blank and comment lines inside the indented region, and the nested source mapping. It never parses and re-serialises the artifact, because that would reformat everything the session wrote. It lives here rather than in the script because the scan over report forbids a write there.
+    - In scripts/l5-plan's report, call carries_a_mandate over every artifact immediately after new_artifacts and above the stamping branch, so the detection runs whether or not stdin is a terminal. On no terminal, refuse as stamp does today - nothing stamped, nothing committed, the artifact left in the tree with the reason printed.
+    - Ask for approval between the detection and the stamp. Where a block was found, the prompt says the session wrote one it was instructed not to, and that approving will discard it and stamp the mandate this process observed. Capture the time the approval was read and pass it to confer as now, so conferred_at is the time of the approval.
+    - On approval where a block was found, strip it through plan_mandate before conferring, so confer sees an artifact with no block and its own refusal is not triggered by the block the developer just authorized removing. Record in the conferring record that the conferral discarded one.
+    - On rejection, return before the stamp. Print each artifact's path, that nothing was stamped, committed or pushed, that a dirty tree is what the next run's clean-tree pre-flight refuses on and what a later completion commit's git add -A would absorb, and the rm command that removes them. Hand over the command rather than acting, following the PAUSE_UNDO_COMMAND idiom; a destructive default belongs behind an explicit flag and this story adds none.
+    - Declare the discarded-block field on mandate-log.jsonl in schemas/cross-run-history.schema.json, in the register the two logs beside it use, and carry it in the record plan_mandate builds. A rejection writes no record - nothing was conferred, and the log holds conferrals; say so in the declaration so a reader does not read the absence as a gap.
+    - Adapt tests/conftest.py's a_terminal_for_stdin. Its single reply now lands on the approval prompt, so the default becomes an approving reply followed by the declining one the run offer reads, and the docstring says why there are two.
+    - Extend the mandate description in schemas/story.schema.json to say that the observing process asks, so the declaration of what conferred the right names the act rather than only the writer.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The paragraph telling the planner why the mandate block is not its to write.
+    - file: orchestration/plan_mandate.py
+      stage: implementer
+      reason: approved(stream) and strip_mandate, and the discarded-block field on the conferring record.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: The detection above the terminal branch, the approval prompt, the strip on approval, and the rejection path.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declares the field a conferring record carries when it discarded a session-written block.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: The mandate description says the observing process asks.
+    - file: tests/conftest.py
+      stage: implementer
+      reverting_breaks_the_suite: a_terminal_for_stdin writes one reply, which the run offer reads. Once an approval prompt is asked first, that reply lands on it and rejects, so every module that drives l5-plan through a terminal - the commit, base, validation, assignment-refusal, workflow-selection and mandate modules - stops reaching its own subject. Reverting this edit leaves all of them red against the script the run executes.
+      reason: The shared terminal fixture answers the approval prompt before the run offer.
+    - file: tests/test_the_approval_is_observed.py
+      stage: tester
+      reason: New. The approval, the rejection and what it leaves, the strip's block-extent cases, the folded decision when a block was found, the shipped prompt, the headless paths and end of input.
+    - file: tests/test_planner_injection.py
+      stage: tester
+      reason: The shipped prompt carries the instruction, the schema is still injected verbatim, and the normative-sentence detector still returns nothing with the added prose in place.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records what the approval prompt closes, the forced ordering and what it costs, where the strip lives and why, and that the level-four seam is left open.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - orchestration/plan_mandate.py
+    - scripts/l5-plan
+    - schemas/cross-run-history.schema.json
+    - schemas/story.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/workflow-selector.md
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - orchestration/story_coordinator.py
+    - orchestration/agent_runner.py
+    - schemas/harness-config.schema.json
+    - workflows/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm a rejection stamps nothing, commits nothing and pushes nothing, and that every artifact is byte-for-byte what the session wrote, by comparing the bytes rather than by reading the message.
+  - Confirm a rejection leaves a session-written block in place, since leave-and-warn leaves everything.
+  - Confirm an approval produces what the script produced before this story - the same steps, in the same order, with the same wording - so the common path is not a new path.
+  - Confirm an artifact carrying a session-written block reaches the developer as a decision rather than as a silent repair or a bare refusal, and that approving it removes the block and stamps exactly one conferral.
+  - Drive the strip against each block-extent case - end of file, followed by another top-level key, a blank line inside, a comment line inside, and the nested source mapping - and assert the rest of the artifact is unchanged in every one. This is the assertion the story stands on.
+  - Confirm the strip does not reconstruct the artifact from a parse, so an artifact whose formatting the parser would normalise comes back with that formatting intact.
+  - Confirm the shipped prompts/planner.md carries the instruction, by reading the shipped file rather than a rendered copy, and that schemas/story.schema.json is still injected verbatim - so the fix cannot have been made by editing what the planner sees.
+  - Confirm the added prose states nothing normative of its own, by running the existing normative-sentence detector over the shipped template.
+  - Confirm a headless invocation with no session-written block behaves exactly as story-087 left it, and that a headless invocation whose artifact carries one commits nothing.
+  - Confirm end of input at the approval prompt is a rejection, and that a stream that is not a terminal is never read.
+  - Confirm scripts/l5-plan's report still contains no write or removal, by the scan that already holds that guarantee.
+  - Confirm plan_mandate.confer reads no stream and asks nothing, so it is reachable by a process that observed an authorizing act some other way.
+  - Confirm the conferring record for a conferral that discarded a session-written block says so, and that a rejection writes no record at all.
+  - Confirm the suite passes, including every module that drives l5-plan through a terminal.
+
+constraints:
+  - The story schema's requirement that a mandate be present is correct and is not relaxed; nothing here validates an artifact against a second spelling of the schema.
+  - The mandate is never written by an agent. Nothing added here lets a stage prompt, a stage output or a planning session supply the block, and the paragraph added to the planner prompt is prevention rather than enforcement.
+  - plan_mandate.confer neither prompts nor reads any stream, and block keeps its human source. The prompt is how l5-plan observes an act it has no other record of; a process holding a recorded epic approval confers through the same seam without prompting, and parameterising the source is left for the story that has such a caller.
+  - The resolution walk, resolves_nothing, mandate_max_depth, the mandate era constants and everything the coordinator does with a mandate once it has one are unchanged.
+  - The run offer that follows a successful commit is unchanged, and the approval prompt is a separate question with its own default - Enter runs the story at the offer, and approval is not given by Enter alone.
+  - scripts/l5-plan's report writes nothing and removes nothing; every write and removal this story adds lives in orchestration/plan_mandate.py.
+  - Nothing is removed from what prompts/planner.md injects, and no copy of any part of the story schema is written into the prompt.
+  - Rejection is not destructive. Nothing is deleted, moved or reverted on that path, and no flag is added that would make deletion the default.
+  - A story artifact that has already been committed is an execution record and is not edited to satisfy a contract written after it.
+  - No agent is invoked to detect, strip or judge a session-written block; it is a line scan over text on disk.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 07:20:34
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
