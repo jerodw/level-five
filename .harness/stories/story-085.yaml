@@ -1,0 +1,117 @@
+story:
+  id: story-085
+  title: A rerun only shadows a broader failure
+  description: |
+    A declared suite run fails, the stage self-routes, and the rerun after it
+    passes. The pass is the more recent result, so it becomes the current one
+    and the workflow advances. Nothing has asked whether the rerun ran as much
+    as the failure did. A sequence that repairs the failure and a sequence that
+    narrows the selector until the answer is convenient are, to the harness,
+    the same sequence.
+
+    Story-083 recorded what each suite run was narrowed by. This story compares
+    two of those records. A later pass supersedes an earlier failure only when
+    its recorded scope is a subset of the failure's - the rerun filtered at
+    least as little. A strictly narrower rerun leaves the failure standing,
+    which means the stage failed, and it is routed as that failure rather than
+    as a category of its own.
+
+    The comparison is of recorded strings by set containment. The harness does
+    not parse, normalize or understand the target's selector syntax and this
+    story does not teach it to: two spellings of one selection are two strings,
+    and a run made broader by rewriting a selection rather than by dropping one
+    is not recognized as broader. That limit is stated where the rule is
+    written rather than left for a reader to discover.
+
+    The rule governs the declared suite runs only - the fail, self-route, rerun
+    sequence. The clean-clone run and the revert check's selector runs neither
+    set nor clear an outstanding failure: the first always runs the configured
+    command unnarrowed and could only ever shadow, and the second is narrowed
+    by design and answers a different question.
+  workflow: story-workflow
+
+tasks:
+  - Add a module-level suite_run_shadows(passing_scope, failing_scope) to orchestration/story_coordinator.py returning whether the passing run's recorded scope is a subset of the failing run's, with a docstring stating the rule and the limit of a string comparison.
+  - Add a defaulted unshadowed_suite_failure field to RunState holding what a refusal must name - the stage, the attempt, the try, the recorded scope, the exit code, and the retained result and output paths of the declared suite run that failed.
+  - Write that field where a red declared suite run already self-routes, so the failure is outstanding from the moment it happens and is reconstructable from state.json.
+  - Clear the field where a green declared suite run shadows the outstanding failure, before the workflow advances.
+  - Refuse the advance where a green declared suite run does not shadow the outstanding failure - route it through the existing self_route on SUITE_FAILED, citing the original failure's retained record and output, with a reason saying the rerun ran a strict subset and established nothing about what it stopped running.
+  - Guard the final _complete - a run reaching completion with an outstanding failure escalates instead, naming the failure that still stands.
+  - Leave the clean-clone check and the revert check's selector runs outside the rule, neither writing nor reading the field.
+  - Write a standing test module for the rule - the comparison, the two places it fires, the routing a refusal takes, that an outstanding failure survives a resume, and that a run in which no declared suite run fails is routed exactly as it was before.
+  - Record the rule and its limit in .harness/docs/ARCHITECTURE.md, beside what story-083 recorded about the scope this reads.
+
+acceptance_criteria:
+  - suite_run_shadows returns True when the passing scope is empty, whatever the failing scope, and True when the two scopes are equal.
+  - suite_run_shadows returns True when the passing scope is a strict subset of the failing scope - a rerun broader than the failure shadows it.
+  - suite_run_shadows returns False when the passing scope holds a selection the failing scope does not, which is the narrowing rerun the rule exists to reject.
+  - suite_run_shadows compares the recorded strings and nothing else - given strings that are not selectors at all it returns the same answers, and no code path it reaches splits, strips, globs or otherwise interprets a scope entry.
+  - Its docstring states the rule and states the limit - that a scope entry is compared as an opaque string, so a run made broader by rewriting a selection rather than by dropping one is not recognized as broader.
+  - RunState.unshadowed_suite_failure is defaulted and empty by default, so a state file written before this story loads and reads as no failure outstanding.
+  - A red declared suite run leaves unshadowed_suite_failure carrying the stage, the attempt, the try, the recorded scope, the exit code, and the retained result and output paths of that run.
+  - A green declared suite run whose scope shadows the outstanding failure clears the field and the workflow advances, so an ordinary fix-and-rerun at the same scope completes exactly as it does today.
+  - A green declared suite run whose scope does not shadow the outstanding failure does not advance - the run self-routes on SUITE_FAILED, and no new failure kind is introduced.
+  - That self-route's artifacts are the original failure's retained result and output, not the passing rerun's, so the re-running stage is pointed at the failure that still stands.
+  - That self-route's reason names the original failure - its stage and exit code - and says the rerun ran a strict subset of what failed.
+  - An exhausted self-route budget on that refusal escalates with the reason the self_route decision already returns, through no escalation path written for this story.
+  - A run that reaches the end of its workflow with unshadowed_suite_failure non-empty escalates rather than completing, with a reason naming the failure that still stands, and writes no completion report.
+  - A resume does not clear unshadowed_suite_failure - it is evidence that a failure is unrepaired, not a live allowance, and it is restored with the rest of the state.
+  - The clean-clone check and the revert check's selector runs neither write nor read unshadowed_suite_failure, so a narrow selector run in the revert check cannot leave a failure outstanding and cannot be refused by this rule.
+  - A run in which no declared suite run fails takes exactly the routing it took before this story, and reaches completion by the path it reached it by.
+  - The suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the suite_run block at orchestration/story_coordinator.py:6640 and the self_route call it makes on a red suite, so the write of the outstanding failure lands where the failure is already being routed rather than in a second place that could disagree with it.
+    - Add suite_run_shadows near the CleanCloneResult definitions, as a pure function over two sequences of strings, with the rule and its limit in the docstring.
+    - Add unshadowed_suite_failure to RunState as a defaulted dict, with a field comment saying what it holds, that it is cleared only by a shadowing pass, and that a resume leaves it alone and why.
+    - In the suite_run block, on a non-zero exit, populate the field from the run just made and the retained paths already computed there, then self-route as it does now.
+    - In the same block, on a zero exit with a failure outstanding, compare the scopes - clear the field and fall through when it shadows, and self-route on SUITE_FAILED citing the outstanding failure's paths when it does not.
+    - Guard the final return _complete with a check of the field, escalating through _escalate with elapsed() as every other terminal path in that function does.
+    - Run the modules that exercise the suite-run block and the completion path, and repair any assertion the new field makes wrong.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: suite_run_shadows, the RunState field, the two places the rule fires - the suite_run block and the guard before the final _complete.
+    - file: tests/test_suite_run_shadow.py
+      stage: tester
+      reason: The standing module for the rule - the comparison and its limit, both firing points, the routing a refusal takes, survival across a resume, and that an unaffected run is routed as before.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section on the suite runs the coordinator makes gains what a pass now has to establish before it supersedes a failure, and the limit of comparing recorded strings.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_suite_run_shadow.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/suite-run-result.schema.json
+    - schemas/clean-clone-result.schema.json
+    - schemas/revert-check-result.schema.json
+    - The clean-clone check and the revert check in orchestration/story_coordinator.py
+    - .harness/config.yaml
+    - workflows/
+    - prompts/
+
+verification_requirements:
+  - Confirm a same-scope rerun shadows a prior failure and the workflow advances, so a legitimate fix-and-rerun is not turned into a wall by this rule.
+  - Confirm a strictly narrower rerun does not shadow, that the run does not advance, and that the original failure is named in what the re-running stage is given.
+  - Confirm an unfiltered rerun always shadows, and that a rerun broader than the failure shadows.
+  - Confirm the comparison reads the recorded scope and never parses selector syntax, by test rather than by inspection - opaque strings that are not selectors produce the same verdicts.
+  - Confirm the refusal routes through the existing suite-failure self-route and introduces no new failure kind, and that an exhausted budget escalates through the reason that decision already returns.
+  - Confirm the completion guard fires - a run carrying an outstanding failure escalates rather than completing - and that it costs no suite run.
+  - Confirm an outstanding failure survives a resume.
+  - Confirm the revert check's selector runs and the clean-clone run are untouched by the rule, by search over every read and write of the new field rather than by sampling.
+  - Confirm the new test module's assertions can fail - each carries a control showing it reports when the property it asserts is absent.
+
+constraints:
+  - Do not parse, normalize, classify or interpret the target's selector syntax. The comparison is set containment over the recorded strings.
+  - Do not require a full-scope green before completion. The rule rejects narrowing, not correction, and a rerun at the same scope shadows.
+  - Do not invent a failure category for a narrowing rerun. What stands is the suite failure, and it takes the route a suite failure already takes.
+  - Do not change what a red declared suite run does today beyond recording the failure - the self-route, its artifacts and its statement stay as they are.
+  - Do not let the clean-clone check or the revert check set or clear the outstanding failure.
+  - Do not clear the field on a resume, and do not let any path clear it other than a shadowing pass.
+  - Keep RunState loadable from a state file written before this story - the new field is defaulted, and empty reads as no failure outstanding.
+  - Standard library only, and no existing field is renamed or removed.
+  - Do not weaken or delete an existing assertion to make it pass.
