@@ -1,0 +1,130 @@
+story:
+  id: story-086
+  title: A stage cannot edit the story that governs it
+  description: |
+    blocked_paths in rules/execution-rules.json today names .git/, the run
+    directory, the cross-run history and rules/ itself. The run directory is
+    blocked because a stage must not rewrite the record of its own execution,
+    and story-081 added the history directory on the same argument. The story
+    artifact is the other half of that argument and is absent: an implementer
+    that cannot satisfy an acceptance criterion can edit the criterion, and a
+    tester that cannot make an assertion pass can narrow what the story asked
+    for. Nothing in the harness refuses either.
+
+    This is the failure the whole check layer exists to prevent, pointed at
+    the one input every stage reads. story-013 and story-015 established that
+    an assertion has to be shown to fail; story-017's revert check decides an
+    implementer's test edits by reverting them rather than by trusting prose;
+    story-073 moved the suite prohibition out of a prompt paragraph and into a
+    guard because the paragraph said the same thing and did not hold. Editing
+    the story is the same class of move and has no guard at all.
+
+    The enforcement already exists and is already tested in both directions,
+    so this story adds a prefix and the proofs that it behaves like its
+    siblings. The blocked_paths entry is added by hand and committed before
+    this run starts, because rules/ is blocked for every stage of every story
+    and no stage exception can lift a blocked path. This story therefore
+    asserts the entry rather than making it, exactly as story-081 did.
+
+    The prefix ships as the literal .harness/stories/, matching the two
+    directory entries already there. stories_dir, runs_dir and history_dir are
+    all configurable and all three literals assume the default layout, so a
+    target that relocates any of them is unprotected. That gap is recorded
+    rather than closed here: closing it means teaching the blocked-path check
+    to substitute configured values, which is a change to how prefixes are
+    matched and a different story from this one.
+
+    Committing the entry turns the suite red at once, because
+    tests/test_planner_injection.py pins the blocked_paths list in two places.
+    The run repairs both. The first is a deliberate literal anchor and stays
+    one, so an emptied rule set cannot vacuously pass the coverage assertions
+    beneath it; the second restates the rendered block as a string literal
+    while asserting only that two renderings agree, and is rewritten to derive
+    its expectation from the same rules the render consumed. That leaves one
+    maintenance site instead of two the next time a path is blocked.
+
+  workflow: story-workflow
+
+tasks:
+  - Repair the literal anchor in tests/test_planner_injection.py so it names the blocked_paths list the shipped rule set now carries. It stays a literal: it is the anchor the data-driven coverage assertions below it rest on, and a derived anchor would pass against an emptied rule set.
+  - Rewrite the second pin in tests/test_planner_injection.py, which restates the rendered blocked-path block as a string literal, to derive its expectation from the same rules the render consumed. The assertion it exists to make is that build_context and workflow_context render identically, and restating the list is a second maintenance site rather than part of that claim.
+  - Write tests/test_a_stage_cannot_edit_its_own_story.py, following the shape story-081 established for the history directory in tests/test_cross_run_history.py - the behaviour held against a fixture rule set, the deployment fact read out of the shipped one.
+  - In that module, assert that a stage whose changed-files record names a path beneath a blocked stories prefix escalates the run, with a reason naming the blocked path, against a fixture rule set the test declares rather than the shipped one.
+  - Give that escalation its control - the same stage, the same record shape, the same rules, a path outside the prefix - and show the run completes, so the escalation is the prefix deciding rather than the record being rejected for some other reason.
+  - Exercise the prefix predicate in both directions against the fixture's own declaration, so the assertion above rests on something shown to discriminate.
+  - Hold the escalation for every stage that declares a changed-files record rather than for one of them, because the two failure modes this story exists to refuse belong to different stages - a criterion edited by the stage that cannot satisfy it, an assertion narrowed by the stage that cannot make it pass.
+  - Assert the deployment fact - that this repository's shipped rules/execution-rules.json carries .harness/stories/ in blocked_paths - as a positive assertion about the shipped file, so dropping the entry fails here.
+  - Assert that the path the coordinator resolves a running story from lies beneath the blocked prefix, so the rule is shown to cover the artifact that actually governs the run rather than a directory that merely shares its name.
+  - Record the rule in .harness/docs/ARCHITECTURE.md - the story artifact joining the run directory and the history as records a stage may not rewrite, the reason, and the limit that all three directory entries are literal prefixes assuming the default layout.
+
+acceptance_criteria:
+  - .harness/stories/ appears in blocked_paths in rules/execution-rules.json, alongside .git/, .harness/runs/, .harness/history/ and rules/.
+  - A stage whose changed-files record names a path beneath a blocked stories prefix escalates the run, and the escalation summary names the blocked path.
+  - The same stage, with the same record shape and the same rule set, naming a path outside the prefix, completes the run - so the escalation above is the prefix deciding.
+  - The escalation holds for every stage of the workflow that declares a changed-files record, not for one stage only.
+  - The prefix predicate is exercised in both directions against the declaration the test itself carries: a path beneath the prefix matches, a path outside it does not.
+  - The behavioural assertions run against a fixture rule set the test declares, not against the shipped one, so what they hold is that a blocked stories prefix works rather than that this repository happens to declare one.
+  - A test asserts the shipped rules/execution-rules.json carries the entry, and fails if the entry is removed.
+  - A test asserts that the story path the coordinator resolves for a run lies beneath the blocked prefix, so the artifact that governs the run is the artifact the rule covers.
+  - tests/test_planner_injection.py passes against the shipped rule set, and its literal anchor names the blocked_paths list that rule set now carries.
+  - The second pin in tests/test_planner_injection.py derives its expected render from the rules the assertion loaded, and still asserts that build_context and workflow_context produce the same blocked-path block.
+  - The negative control in tests/test_planner_injection.py still fails when the workflow placeholders are stripped, so the derived expectation has not made the coverage assertions vacuous.
+  - .harness/docs/ARCHITECTURE.md records that a stage may not edit the story artifact, why, and that the three directory prefixes in blocked_paths are literals which assume the default layout.
+  - Nothing about how blocked prefixes are matched, what escalation a violation produces, or what configuration the harness declares has changed. The story adds a prefix and the proofs that it behaves like its siblings.
+
+technical_plan:
+  implementation_steps:
+    - Before the run, by hand and committed - add ".harness/stories/" to blocked_paths in rules/execution-rules.json, between the history entry and "rules/". No stage may make this edit, and the suite goes red on the two pins the moment it lands.
+    - Repair the literal anchor in tests/test_planner_injection.py to name the new list. Leave it a literal.
+    - Replace the restated render string in the same module with one derived from the rules object the surrounding assertion already loads, keeping the comparison between build_context and workflow_context intact.
+    - Write the proof module against a fixture rule set carrying a blocked stories prefix - the escalation, its control, the predicate in both directions, and the same escalation across the stages that declare a changed-files record.
+    - Add the two assertions about the deployment - the shipped rule set carries the entry, and the story path the coordinator resolves lies beneath it.
+    - Record the rule and its limit in ARCHITECTURE.md.
+  likely_file_changes:
+    - file: tests/test_planner_injection.py
+      stage: implementer
+      reason: The literal anchor gains the new entry, and the second pin's restated render becomes a derived one. Both are forced by the blocked_paths edit committed before the run.
+      reverting_breaks_the_suite: The anchor asserts the blocked_paths list as a literal against the shipped rule set, so it goes red the moment the entry is committed and can only be made green by naming the new list here. Reverting either edit leaves the suite red against the rule set the run executes under.
+    - file: tests/test_a_stage_cannot_edit_its_own_story.py
+      stage: tester
+      reason: The proofs - the escalation against a fixture rule set, its control, the predicate in both directions, the escalation across every stage that declares a record, the shipped entry, and the coordinator's resolved story path lying beneath the prefix.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The story artifact joins the run directory and the cross-run history as records a stage may not rewrite, with the reason and the literal-prefix limit shared by all three directory entries.
+
+scope:
+  modify:
+    - tests/test_planner_injection.py
+    - tests/test_a_stage_cannot_edit_its_own_story.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - rules/execution-rules.json
+    - orchestration/
+    - schemas/
+    - prompts/
+    - workflows/
+    - .harness/config.yaml
+    - templates/
+    - .harness/runs-archive/
+    - scripts/l5-plan
+
+verification_requirements:
+  - Confirm rules/execution-rules.json carries .harness/stories/ in blocked_paths, and that a test fails if the entry is removed.
+  - Confirm the escalation and its control from the run's own artifacts - a record naming a path beneath the prefix escalates with the path named, the same record without the prefix completes.
+  - Confirm the behavioural assertions execute against a fixture rule set rather than the shipped one, so removing the shipped entry would fail exactly one test rather than silently weakening the rest.
+  - Confirm the escalation is asserted for every stage of the workflow that declares a changed-files record, and report as unverified any stage it does not cover.
+  - Confirm the assertion that the coordinator's resolved story path lies beneath the blocked prefix reads the coordinator's own resolution rather than restating the path.
+  - Confirm every new assertion can fail - for each, that some change to the repository or the fixture turns it red - and that none is a tautology over a value the test itself supplied.
+  - Confirm the derived render in tests/test_planner_injection.py still holds the claim the literal held, and that the module's negative control still fails when the placeholders are stripped.
+  - Confirm the literal anchor is still a literal, so an emptied rule set cannot vacuously pass the coverage assertions that rest on it.
+  - Confirm nothing outside tests and documentation changed - no change to the blocked-path check, to prefix matching, to escalation behaviour, or to declared configuration.
+  - Confirm every behavioural claim the ARCHITECTURE.md addition makes is one something in the repository can be seen to check, and report as unverified anything it asserts that nothing can.
+
+constraints:
+  - The blocked-path check is unchanged. This story adds a prefix to a rule set and the proofs that the existing mechanism honours it.
+  - No new configuration key, and no substitution of configured directory values into blocked_paths. The prefix ships as a literal, and the limit that follows is documented rather than closed.
+  - The harness stays target-agnostic. Nothing added here names this repository's test framework, layout or stack beyond what the existing modules already do.
+  - .harness/runs-archive/ is untouched. It holds preserved runs a developer curates by hand, which is a separate question from this one.
+  - Nothing about l5-plan changes. Planning writes the story artifact before any run exists, and this rule binds stage invocations inside a run.
+  - The literal anchor in tests/test_planner_injection.py stays a literal. It is the control the data-driven coverage assertions rest on, and deriving it would let an emptied rule set pass them.
+  - The existing blocked_paths entries keep their meaning and their order relative to one another.
