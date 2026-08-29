@@ -336,11 +336,17 @@ def test_a_non_empty_reply_skips_and_starts_nothing(harness: Harness,
 
 def test_the_printed_command_taken_verbatim_starts_the_story_unmodified(
         harness: Harness, planning: Planning):
-    """What is printed is pasted back into a shell and run, from the same cwd."""
-    result = plan_without_a_terminal(harness, planning, "add a thing",
-                                     L5_STUB_WRITE=wrote())
+    """What is printed is pasted back into a shell and run, from the same cwd.
+
+    Declined on a terminal rather than run without one: since story-087 an
+    invocation with no terminal commits nothing at all, so the skip path — the
+    path that prints the command — is reached by answering the offer rather
+    than by having no offer made.
+    """
+    _, output = plan_on_a_terminal(harness, planning, "add a thing",
+                                   reply=b"n\n", L5_STUB_WRITE=wrote())
     command = command_for(harness, planning, "story-900")
-    assert command in result.stdout
+    assert command in output
 
     subprocess.run(command, shell=True, cwd=planning.root,
                    env=harness.env(planning), check=True, capture_output=True)
@@ -419,7 +425,14 @@ def test_the_reply_is_read_once_and_never_re_asked():
 
 def test_stdin_that_is_not_a_terminal_is_never_prompted_and_exits(
         harness: Harness, planning: Planning):
-    """The report is exactly what it would be with the offer's command appended.
+    """Nothing is asked, nothing is read, nothing blocks — and nothing is run.
+
+    The subject is unchanged and the observation is stronger. Before
+    story-087 an invocation with no terminal committed and then printed the
+    command instead of asking; now it stamps no mandate, commits nothing, and
+    says so — so the offer is not reached at all. What still holds, and is
+    what this test is here for, is that no prompt was written and the process
+    exited rather than waiting for an answer nobody could give.
 
     Asserted as the whole of stdout rather than as a substring, because "no
     prompt was written" is a claim about everything that was written, and a
@@ -428,17 +441,22 @@ def test_stdin_that_is_not_a_terminal_is_never_prompted_and_exits(
     result = plan_without_a_terminal(harness, planning, "add a thing",
                                      L5_STUB_WRITE=wrote())
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 1
     assert not harness.log.exists()
-    assert result.stdout.splitlines() == [
-        "stub session",
-        "l5-plan: committed .harness/stories/story-900.yaml as "
-        "Plan story-900: Stub planned story",
-        "l5-plan: pushed main to origin",
-        f"l5-plan: run story-900 with: "
-        f"{command_for(harness, planning, 'story-900')}",
-    ]
+    lines = result.stdout.splitlines()
+    assert len(lines) == 3, result.stdout
+    assert lines[0] == "stub session"
+    # The middle line's wording belongs to the story that added it; what this
+    # module holds is that it is one line and that it is the reason.
+    assert "no mandate" in lines[1]
+    # The path is the one the script resolved from the directory it ran in, so
+    # it is matched at both ends rather than rebuilt here.
+    assert lines[2].startswith("l5-plan: committed nothing;")
+    assert lines[2].endswith(
+        "story-900.yaml remain in the working tree.")
     assert result.stdout.endswith("\n")
+    assert command_for(harness, planning, "story-900") not in result.stdout
+    assert "story-900 now?" not in result.stdout
 
 
 def test_a_bounded_wait_reports_an_offer_that_asks_anyway(tmp_path: Path,
@@ -486,20 +504,23 @@ def test_base_reaches_the_launched_run(harness: Harness, planning: Planning):
 
 
 def test_base_reaches_the_printed_command(harness: Harness, planning: Planning):
-    result = plan_without_a_terminal(harness, planning, "--base", "main",
-                                     "add a thing", L5_STUB_WRITE=wrote())
+    """Declined on a terminal, for the reason the skip-path test above is."""
+    _, output = plan_on_a_terminal(harness, planning, "--base", "main",
+                                   "add a thing", reply=b"n\n",
+                                   L5_STUB_WRITE=wrote())
 
     with_base = command_for(harness, planning, "story-900", "main")
     assert with_base.endswith("story-900 --base main")
-    printed = [line for line in result.stdout.splitlines()
-               if line.endswith(with_base)]
-    assert len(printed) == 1, result.stdout
+    # The pty carries a carriage return before each newline; the comparison is
+    # about the line's content, so they are dropped before it is split.
+    lines = output.replace("\r", "").splitlines()
+    printed = [line for line in lines if line.endswith(with_base)]
+    assert len(printed) == 1, output
     # Compared as a whole line rather than as a substring: the rendering
     # without a base is a prefix of this one, so a substring search would pass
     # on either and say nothing about which was printed.
     without_base = command_for(harness, planning, "story-900")
-    assert [line for line in result.stdout.splitlines()
-            if line.endswith(without_base)] == []
+    assert [line for line in lines if line.endswith(without_base)] == []
 
 
 # --------------------------------------------------------------------------

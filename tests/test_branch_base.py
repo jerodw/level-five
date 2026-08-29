@@ -214,7 +214,17 @@ def history(target_root: Path) -> list[dict]:
 
 
 def notes(target_root: Path) -> list[dict]:
-    return [entry for entry in history(target_root) if entry["event"] == "note"]
+    """The run's notes other than the one every run writes about its mandate.
+
+    Since story-087 a run records what its pre-flight mandate walk resolved,
+    as a note, on every entry. This module is about the note a *stale branch*
+    produces, so the mandate's is dropped — by exact equality with the message
+    conftest's shared mandate produces, so a change to either wording brings
+    the dropped note back rather than silently widening the filter.
+    """
+    return [entry for entry in history(target_root)
+            if entry["event"] == "note"
+            and entry["message"] != conftest.MANDATE_NOTE]
 
 
 # --------------------------------------------------------------------------
@@ -705,11 +715,19 @@ PLANNED_WORKFLOW = "story-workflow"
 
 
 def run_plan(planning: Planning, *argv: str, **stub) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, *argv],
-        cwd=planning.root, env=planning.env(**stub),
-        capture_output=True, text=True,
-    )
+    """Run l5-plan with a terminal for stdin and a declining reply in it.
+
+    Since story-087 the script stamps the mandate only where stdin is a
+    terminal, and an artifact carrying none is refused before it is committed.
+    This module's subject is where a plan commit lands, so its sessions need to
+    reach the commit at all.
+    """
+    with conftest.a_terminal_for_stdin() as stdin:
+        return subprocess.run(
+            [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, *argv],
+            cwd=planning.root, env=planning.env(**stub),
+            stdin=stdin, capture_output=True, text=True,
+        )
 
 
 PLANNED = ".harness/stories/story-900.yaml"

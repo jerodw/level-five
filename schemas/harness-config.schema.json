@@ -39,6 +39,10 @@
       "type": "string",
       "description": "Directory, relative to the target root, holding raw agent output logs. Defaults to .harness/logs."
     },
+    "mandate_max_depth": {
+      "type": "string",
+      "description": "How many links the resolution of a story's mandate may follow before it gives up, as a count of hops. A string like every other configured scalar, because the config parser coerces nothing; it is parsed to a non-negative integer and a value that is not one is not obeyed. Unset, the bound is 8. A bound exists at all because a chain that cannot terminate must be refused rather than followed: a walk that has not reached a human within it is refused naming this bound, which is a different refusal from one that found no link to follow and from one that came back to somewhere it had already been. Raising it does not make an unresolvable chain resolvable; it only decides how long the harness spends discovering that."
+    },
     "max_pause_wait_seconds": {
       "type": "string",
       "description": "How long a run paused on capacity exhaustion may wait in place before the process exits, in seconds. A ceiling on a wait whose length the harness has been told, never a duration it sleeps in the absence of one: a capacity signal carrying a reset time within this bound is slept to and the stage re-entered, one carrying a reset time beyond it exits, and one carrying no reset time at all exits without sleeping. A string like every other configured scalar, because the config parser coerces nothing; it is parsed to a non-negative number and a value that is not one refuses the run at pre-flight, naming the key and the value. Unset, it is zero — never wait, always exit paused — so the only duration written in harness source is the one that means do not wait, and every wait the harness takes comes from here."

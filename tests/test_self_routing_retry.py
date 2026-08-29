@@ -309,6 +309,13 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: A Developer <developer@example.com>
+  recorded_by: l5-plan
 """
 
 CONFIG = """\
@@ -586,6 +593,24 @@ def prompt_names(target_root: Path) -> list[str]:
 def attempt_dirs(target_root: Path) -> list[str]:
     archive = run_dir_of(target_root) / "attempts"
     return sorted(p.name for p in archive.glob("*")) if archive.is_dir() else []
+
+
+def amend_the_story(target_root: Path) -> None:
+    """Give the resume guard something to see, and leave the artifact runnable.
+
+    The extra constraint goes into the last array rather than onto the end of
+    the text: since story-087 an artifact ends with its mandate block, and a
+    sequence item written after that lands inside the block and makes the story
+    unparseable — so the resume would be refused at pre-flight for a reason
+    none of these tests is about.
+    """
+    path = target_root / ".harness" / "stories" / f"{STORY_ID}.yaml"
+    path.write_text(
+        conftest.with_one_more_constraint(
+            path.read_text(encoding="utf-8"),
+            "  - and one more constraint\n"),
+        encoding="utf-8")
+    conftest.commit_setup(target_root, "the story artifact this test runs")
 
 
 def retry_history_of(target_root: Path):
@@ -1286,7 +1311,7 @@ def test_a_resumed_run_starts_the_resumed_stage_with_a_count_of_zero(
 
     # The story is amended, so the resume guard — which refuses a resume that
     # would reach the same point the same way — has something to see.
-    append_to_story(target_root, "\n  - and one more constraint\n")
+    amend_the_story(target_root)
 
     code, runner = drive(target_root, harness_root, {BUDGETED: [CRASH]},
                          start_stage=BUDGETED)
@@ -2440,7 +2465,7 @@ def interrupted_then_resumed(coordinator, target_root: Path, harness: Path):
 
     # The resume guard refuses a resume that would reach the same point the
     # same way, so the story is amended first.
-    append_to_story(target_root, "\n  - and one more constraint\n")
+    amend_the_story(target_root)
     code, runner = drive_with(coordinator, target_root, harness,
                               {BUDGETED: [skip(first_output_of(BUDGETED))]},
                               start_stage=BUDGETED)

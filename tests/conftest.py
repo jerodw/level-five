@@ -1,7 +1,10 @@
 import ast
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
+import os
+import pty
 import shutil
 import subprocess
 import sys
@@ -582,6 +585,136 @@ def _relative_to(path: Path, repo: Path) -> str:
 def _committed(repo: Path, relative: str) -> bool:
     return _git(repo, "cat-file", "-e", f"HEAD:{relative}").returncode == 0
 
+#: The first story whose own artifact was written by an l5-plan that stamps a
+#: mandate, and therefore the first whose artifact the mandate requirement can
+#: be applied to. It is the id after story-087's, because story-087's own
+#: artifact was written by the l5-plan that predates the stamping it adds — the
+#: same shape as every story that lands an enforcement rule and is the last one
+#: that rule does not cover.
+#:
+#: Defined once here and imported by both corpus modules, which validate an
+#: artifact older than it against the story schema with the mandate
+#: requirement dropped and nothing else about the schema relaxed. Committed
+#: artifacts are execution records and are never edited to satisfy a contract
+#: written after them, which is why the boundary is a constant rather than a
+#: sweep over the corpus.
+#:
+#: FIRST_SCHEMA_ERA_STORY keeps its own two definitions and the test asserting
+#: they agree: this is a separate era with a separate boundary, and folding the
+#: older one is not this constant's business.
+MANDATE_ERA_STORY = "story-088"
+
+#: What a pre-loaded reply says when the only question it may be asked is
+#: whether to run the story that was just committed. Anything that is not an
+#: empty line declines, which is the answer a headless invocation was already
+#: getting before a terminal was needed here.
+DECLINES = "no\n"
+
+
+@contextlib.contextmanager
+def a_terminal_for_stdin(reply: str = DECLINES):
+    """A pty to hand a child as stdin, with one reply already waiting in it.
+
+    l5-plan stamps a mandate only where stdin is a terminal, because a terminal
+    is where the developer who approved the plan was. A module whose subject is
+    something else — what a session commits, where it commits it, what it
+    refuses, what it prints afterwards — therefore needs its invocation to have
+    one, or the artifact is refused for the block nobody conferred and the
+    module's own subject is never reached.
+
+    The reply is written before the child starts because the script may also
+    ask whether to run the story it committed, and a question nothing answers
+    is a test that hangs rather than one that fails. Nothing else about the
+    invocation changes: stdout and stderr stay the caller's, so a module that
+    captures them still captures them.
+    """
+    master, slave = pty.openpty()
+    try:
+        os.write(master, reply.encode())
+        yield slave
+    finally:
+        os.close(slave)
+        os.close(master)
+
+
+def schema_without_the_mandate_requirement(schema: dict) -> dict:
+    """The story schema with `mandate` dropped from its top-level required list.
+
+    Only the requirement is dropped. Every property, every nested required list
+    and every type constraint is the shipped schema's own, so an artifact
+    predating the mandate era is still held to the whole of the contract that
+    existed when it was written.
+    """
+    relaxed = dict(schema)
+    relaxed["required"] = [
+        name for name in schema["required"] if name != "mandate"
+    ]
+    return relaxed
+
+
+#: The mandate a fixture story carries, written once here and appended to every
+#: story artifact the suite builds. Since story-087 the coordinator refuses at
+#: pre-flight to run work whose mandate does not resolve to a human, so a
+#: fixture story without one is refused before any module's own subject is
+#: reached — which is why this is a shared constant rather than a line in each
+#: module's own story text: what a fixture carries to get past a pre-flight is
+#: not the subject of any of them.
+#:
+#: A source of kind human and no id, so the walk terminates in one hop with no
+#: lookup consulted, which is what every artifact a real l5-plan stamps carries.
+MANDATE_SOURCE_KIND = "human"
+MANDATE_IDENTITY = "A Developer <developer@example.com>"
+
+#: The same mandate as a structure, for a check driven at the validator against
+#: a story it builds rather than at a document it writes. The block below is
+#: composed from it, so the two cannot drift apart.
+MANDATE_VALUE = {
+    "source": {"kind": MANDATE_SOURCE_KIND},
+    "conferred_at": "2026-08-28 09:00:00",
+    "conferred_by": MANDATE_IDENTITY,
+    "recorded_by": "l5-plan",
+}
+
+#: The line the block opens with, which is also how a text is split into what
+#: precedes the mandate and the mandate itself.
+MANDATE_OPENING = "\nmandate:\n"
+
+MANDATE_BLOCK = (
+    MANDATE_OPENING +
+    "  source:\n"
+    f"    kind: {MANDATE_VALUE['source']['kind']}\n"
+    f"  conferred_at: {MANDATE_VALUE['conferred_at']}\n"
+    f"  conferred_by: {MANDATE_VALUE['conferred_by']}\n"
+    f"  recorded_by: {MANDATE_VALUE['recorded_by']}\n"
+)
+
+def with_one_more_constraint(story: str, line: str) -> str:
+    """`story` with `line` added to the array that precedes its mandate block.
+
+    A module that amends a story so it differs from what a run recorded used to
+    append the line to the whole text. Since story-087 an artifact ends with its
+    mandate, and a line appended after that lands inside the block and makes the
+    artifact unparseable — so the line goes where it went before the block
+    existed, at the end of the last array, and the mandate stays last.
+    """
+    head, marker, mandate = story.partition(MANDATE_OPENING)
+    assert marker, f"this story carries no mandate to amend around: {story!r}"
+    return head + line + marker + mandate
+
+
+#: The note a run writes about the mandate above, once the run directory exists
+#: to record it in. Spelled once here because several modules pin a clean run's
+#: whole event stream as an exact equality and would otherwise each carry their
+#: own copy of a message none of them is about; a module that *is* about the
+#: note reads the coordinator's own composition rather than this.
+#:
+#: Zero hops because the source is a human, which the walk terminates on without
+#: consulting any lookup.
+MANDATE_NOTE = (
+    f"mandate resolved in 0 hop(s): source kind '{MANDATE_SOURCE_KIND}', "
+    f"conferred by {MANDATE_IDENTITY}"
+)
+
 STORY = """\
 story:
   id: story-001
@@ -607,7 +740,8 @@ verification_requirements:
 
 constraints:
   - preserve existing behavior
-"""
+""" + MANDATE_BLOCK
+
 
 CONFIG = """\
 workflow: {workflow}

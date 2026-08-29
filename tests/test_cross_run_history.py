@@ -86,6 +86,13 @@ OUTCOME_LOG = next(name for name, shape in DECLARATIONS.items()
 ROUTING_LOG = next(name for name, shape in DECLARATIONS.items()
                    if "retry_decision" in shape["properties"])
 
+#: The third log, told apart the same way: it is the one declaring the identity
+#: an authorizing act was observed from. Derived, so this module writes no
+#: filename here either.
+CONFERRAL_LOG = next(name for name, shape in DECLARATIONS.items()
+                     if "conferred_by" in shape["properties"])
+
+
 
 def projected(log: str) -> set[str]:
     """The fields a record in `log` carries: everything declared but the
@@ -95,6 +102,26 @@ def projected(log: str) -> set[str]:
 
 def kinds_routed_to(log: str) -> list[str]:
     return DECLARATIONS[log]["properties"][EVENT]["enum"]
+
+#: The kinds a run can put through the projection at all: the event kinds the
+#: run's own structured history declares. Read off that schema rather than
+#: listed here, so a kind added there is covered without this module being
+#: edited.
+RUN_KINDS = set(
+    schema_validator.load_schema("execution-history")["items"]["properties"]
+    [EVENT]["enum"]
+)
+
+#: The declared logs a *run* can reach, and the declared logs it cannot. A log
+#: whose enum names no kind the run's own history declares has no producer
+#: inside a run: what reaches it is a caller outside one, using the same
+#: per-log append with an explicit history directory. Derived from the two
+#: declarations rather than written down, so neither set is this module's
+#: opinion about which log is which.
+RUN_PRODUCED_LOGS = {
+    log for log in DECLARATIONS if set(kinds_routed_to(log)) & RUN_KINDS
+}
+RUNLESS_LOGS = set(DECLARATIONS) - RUN_PRODUCED_LOGS
 
 
 # --------------------------------------------------------------------------
@@ -320,8 +347,8 @@ def test_the_schema_is_shipped_valid_and_named_in_the_manifest():
 
 
 def test_each_declared_log_names_the_kinds_it_records_and_the_fields_it_carries():
-    assert set(DECLARATIONS) == {OUTCOME_LOG, ROUTING_LOG}
-    assert OUTCOME_LOG != ROUTING_LOG
+    assert set(DECLARATIONS) == {OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG}
+    assert len({OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG}) == 3
     for log, shape in DECLARATIONS.items():
         assert log.endswith(".jsonl"), log
         assert shape["type"] == "object"
@@ -330,10 +357,13 @@ def test_each_declared_log_names_the_kinds_it_records_and_the_fields_it_carries(
         # Every required field is one the record carries, so a log cannot
         # require the property that only selects into it.
         assert set(shape["required"]) <= projected(log), log
-    # The two enums are disjoint, so no entry is a record in both logs by
+    # The enums are pairwise disjoint, so no entry is a record in two logs by
     # declaration — which is what makes "exactly one record" a statement about
     # the run rather than about which log was looked at first.
-    assert not set(kinds_routed_to(OUTCOME_LOG)) & set(kinds_routed_to(ROUTING_LOG))
+    for one in DECLARATIONS:
+        for other in DECLARATIONS:
+            if one != other:
+                assert not set(kinds_routed_to(one)) & set(kinds_routed_to(other))
 
 
 def test_the_reader_returns_exactly_what_the_schema_declares():
@@ -369,13 +399,22 @@ def test_the_harness_creates_no_log_the_declaration_does_not_name(retried_twice)
 
     A directory listing that found nothing would satisfy "no reserved log was
     created" just as happily as one looking in the right place, so the listing
-    is required to equal the declared set exactly — which it can only do by
+    is required to equal the run-produced set exactly — which it can only do by
     having seen the files that are there. The run shape is the one that reaches
-    both declared logs, so neither is absent for want of anything to record.
+    every log a run can reach, so none is absent for want of anything to record.
+
+    Run-produced rather than declared, because since story-087 a declared log
+    can have no producer inside a run: a conferring record is written by the
+    process that observes an authorizing act, which has no run directory to
+    resolve a history directory from. The distinction is derived from the two
+    declarations rather than named here, and is asserted to be a real one — a
+    listing equal to the whole declared set would mean a run had produced
+    something no run can produce.
     """
     target_root, _ = retried_twice
     present = {path.name for path in history_dir_of(target_root).iterdir()}
-    assert present == set(DECLARATIONS)
+    assert RUN_PRODUCED_LOGS and RUNLESS_LOGS
+    assert present == RUN_PRODUCED_LOGS
     for name in RESERVED:
         assert name not in present
 
@@ -591,13 +630,20 @@ def test_the_records_survive_deletion_of_the_run_directory(retried_twice):
     run's records.
     """
     target_root, run_dir = retried_twice
-    before = {log: records(target_root, log) for log in DECLARATIONS}
+    # Over the logs a run can reach, for the reason
+    # `test_the_harness_creates_no_log_the_declaration_does_not_name` gives: a
+    # log with no producer inside a run holds nothing after one, so requiring
+    # every declared log to be non-empty here would be requiring a run to write
+    # what no run writes. The set is derived, and asserted non-empty, so this
+    # is still every log a run touches.
+    assert RUN_PRODUCED_LOGS
+    before = {log: records(target_root, log) for log in RUN_PRODUCED_LOGS}
     assert all(before.values()), before
 
     shutil.rmtree(run_dir)
     assert not run_dir.exists()
 
-    after = {log: records(target_root, log) for log in DECLARATIONS}
+    after = {log: records(target_root, log) for log in RUN_PRODUCED_LOGS}
     assert after == before
     assert all(record["story_id"] == run_dir.name
                for written in after.values() for record in written)
@@ -695,13 +741,19 @@ def test_a_later_run_appends_to_the_logs_rather_than_rewriting_them(
     first = Runner(target_root, [failing_verdict(1), PASS])
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, first) == 0
-    after_first = {log: log_text(target_root, log) for log in DECLARATIONS}
+    # The logs a run can reach, for the reason the listing assertion above
+    # gives: a log with no producer inside a run is empty after one, and
+    # requiring it to hold bytes would require a run to write what no run
+    # writes. The set is derived and asserted non-empty.
+    assert RUN_PRODUCED_LOGS
+    after_first = {log: log_text(target_root, log) for log in RUN_PRODUCED_LOGS}
     assert all(after_first.values()), after_first
 
     land(target_root, "story-001", base)
     # The landing carried the first run's records onto the base, so what the
     # second run appends to is the file the first run left.
-    assert {log: log_text(target_root, log) for log in DECLARATIONS} == after_first
+    assert {log: log_text(target_root, log)
+            for log in RUN_PRODUCED_LOGS} == after_first
 
     story = (target_root / ".harness" / "stories" / "story-001.yaml").read_text(
         encoding="utf-8")
@@ -714,7 +766,7 @@ def test_a_later_run_appends_to_the_logs_rather_than_rewriting_them(
     assert story_coordinator.run_story(
         SECOND_STORY_ID, harness_root, target_root, second) == 0
 
-    for log in DECLARATIONS:
+    for log in RUN_PRODUCED_LOGS:
         after_second = log_text(target_root, log)
         assert after_second.startswith(after_first[log]), log
         assert len(after_second) > len(after_first[log]), log
@@ -757,12 +809,23 @@ def test_the_append_path_opens_every_log_for_appending_and_never_for_writing():
     and satisfy "no write mode" just as happily. So the same reader is run over
     the same source with the mode changed, and must report the write.
     """
-    source = coordinator_function("_append_history_records")
-    assert opened_modes(source) == {"a"}
-    assert opened_modes(source.replace('"a"', '"w"')) == {"w"}
-    # And it rewrites nothing by another route: `write_text` replaces a file
+    # Since story-087 the open lives in the per-log append that was factored
+    # out so a caller outside a run can reach it, and the projection above it
+    # is one of its callers. Both are read here, so neither can start opening
+    # a log for writing without this failing.
+    seam = coordinator_function("append_history_records")
+    projection = coordinator_function("_append_history_records")
+    assert opened_modes(seam) == {"a"}
+    assert opened_modes(seam.replace('"a"', '"w"')) == {"w"}
+    assert opened_modes(projection) == set()
+    # The control for that emptiness: the same reader over the same text with
+    # an open planted in it reports the mode, so the empty set above is the
+    # function opening nothing rather than the reader seeing nothing.
+    assert opened_modes(projection + '\nopen(path, "w")\n') == {"w"}
+    # And neither rewrites by another route: `write_text` replaces a file
     # whole, which is the prune's job and only the prune's.
-    assert "write_text" not in source
+    for source in (seam, projection):
+        assert "write_text" not in source
     assert "write_text" in coordinator_function("prune_history")
 
 

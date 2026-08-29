@@ -34,6 +34,14 @@ invocation that proposed nothing leaves behind the reason it did not.
 That confirmation needs a terminal, so an invocation with neither a terminal
 nor --workflow is refused before anything is invoked, written or committed. A
 call site that plans without a terminal names its workflow.
+
+When the session ends, the artifact it wrote is stamped with the mandate the
+coordinator resolves before it will run anything: this process observed the
+developer approve the plan, so this process records it, and no agent is ever
+asked to. An artifact that came back from the session already carrying a block
+is refused with nothing stamped and nothing committed, and an invocation with
+no terminal stamps nothing at all — its artifact is then refused for the block
+it does not carry, which is the correct outcome rather than a gap.
 """
 import os
 import subprocess
@@ -47,6 +55,7 @@ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 import context_assembler  # noqa: E402
 import harness_config  # noqa: E402
 import plan_commit  # noqa: E402
+import plan_mandate  # noqa: E402
 import plan_run_offer  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
@@ -363,6 +372,25 @@ def report(
     if not artifacts:
         print("l5-plan: the session added no story artifact; committed nothing.")
         return 0
+    # The mandate is stamped between the snapshot and the validation, so the
+    # artifact the validation is handed is the artifact the coordinator would
+    # run: a block appended afterwards would be a block the plan-time check
+    # never saw, and one appended after the commit would not be in it.
+    #
+    # It is stamped only where there is a terminal, because a terminal is where
+    # the developer who confirmed the plan was. A headless invocation therefore
+    # stamps nothing and falls through to the validation below, which refuses
+    # the artifact for the block it does not carry — and is told, beside the
+    # schema fault, that what is missing is the human.
+    stamping = plan_run_offer.can_prompt(sys.stdin)
+    conferred: list = []
+    if stamping and not stamp(target_root, config or {}, artifacts, conferred):
+        print(
+            "l5-plan: stamped nothing and committed nothing; "
+            f"{', '.join(str(path) for path in artifacts)} "
+            "remain in the working tree."
+        )
+        return 1
     # Validation sits between the snapshot and the commit, so an artifact that
     # would be refused at pre-flight is never committed. It refuses rather
     # than warning — a warning here is a warning nobody sees, because the
@@ -389,6 +417,17 @@ def report(
             # The coordinator's own refusal helper, so the text a developer
             # reads here is the text l5-run's pre-flight would print.
             story_coordinator.refuse_bad_story(path, found)
+        if not stamping:
+            # A headless invocation's artifact fails its schema for a reason
+            # the schema fault alone does not explain, so the reason is said
+            # here: nobody was present, so nothing conferred the right to run
+            # this work and no block was written.
+            print(
+                "l5-plan: no mandate was stamped, because there was no "
+                "terminal here and therefore no human present to confer one. "
+                "Plan from a terminal, or have the authorizing act observed "
+                "some other way; nothing writes the block on an agent's word."
+            )
         print(
             "l5-plan: committed nothing; "
             f"{', '.join(str(path) for path in artifacts)} "
@@ -415,6 +454,23 @@ def report(
             "remain in the working tree."
         )
         return 1
+    # The conferring records go in first, so the artifact commit is still the
+    # branch tip and still says what it always said, and so the versioned
+    # history this process wrote is not left in the tree for the run this
+    # session is about to offer to be refused for.
+    if conferred:
+        recorded = plan_mandate.commit_records(
+            target_root,
+            harness_config.history_dir(target_root, config or {}),
+            conferred,
+        )
+        if not recorded.committed:
+            print(
+                f"l5-plan: could not commit {', '.join(recorded.paths)}: "
+                f"{recorded.detail}"
+            )
+            return 1
+        print(f"l5-plan: committed {', '.join(recorded.paths)} as {recorded.subject}")
     commit = plan_commit.commit_artifacts(target_root, artifacts, HARNESS_ROOT)
     if not commit.committed:
         print(f"l5-plan: could not commit {', '.join(commit.paths)}: {commit.detail}")
@@ -430,6 +486,54 @@ def report(
         return 1
     print(f"l5-plan: pushed {push.branch} to {push.remote}")
     return offer(artifacts, base)
+
+
+def stamp(
+    target_root: Path,
+    config: dict,
+    artifacts: Sequence[Path],
+    conferred: list,
+) -> bool:
+    """Confer a mandate on each artifact the session wrote, and record it.
+
+    Every artifact is examined before any is stamped, so a session that wrote a
+    block of its own is refused with nothing stamped at all — the same reason
+    one failing artifact commits none of them: a partial stamp would invent a
+    split the session did not have. Nothing is deleted and nothing is repaired;
+    a refused artifact stays exactly as the session wrote it.
+
+    Returns whether every artifact was stamped, and appends what was conferred
+    to `conferred`, which is what the caller commits the records of once the
+    artifacts have passed everything that could refuse them. `plan_mandate`
+    decides what happens and this decides how it is said, which is the division
+    `report` already keeps with `plan_commit` and `plan_validation`.
+    """
+    written = [path for path in artifacts if plan_mandate.carries_a_mandate(
+        path.read_text(encoding="utf-8"))]
+    if written:
+        for path in written:
+            story_coordinator.refuse_bad_story(
+                path,
+                [
+                    f"it already carries a {plan_mandate.MANDATE_KEY} block, "
+                    f"and a block this process did not write is a block "
+                    f"nothing observed"
+                ],
+            )
+        return False
+    for path in artifacts:
+        one = plan_mandate.confer(path, target_root)
+        if not one.stamped:
+            story_coordinator.refuse_bad_story(path, [one.detail])
+            return False
+        directory = plan_mandate.record(target_root, config, one)
+        conferred.append(one)
+        print(
+            f"l5-plan: {one.story_id} runs on a mandate conferred by "
+            f"{one.conferred_by} at {one.conferred_at}; recorded under "
+            f"{directory}"
+        )
+    return True
 
 
 def offer(artifacts: Sequence[Path], base: str | None = None) -> int:

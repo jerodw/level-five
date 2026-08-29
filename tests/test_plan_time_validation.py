@@ -63,12 +63,15 @@ from test_plan_commit import (
     ARTIFACT,
     Planning,
     artifact,
+    as_the_session_left_it,
     bare_remote,
     committed_paths,
+    conferring_paths,
     make_planning,
     python_code,
     remote_refs,
     run_plan,
+    stamped,
     writes,
 )
 
@@ -166,7 +169,11 @@ def test_every_defect_this_file_uses_is_actually_defective():
             found += story_coordinator.stage_exception_problems(reading.parsed, STAGES)
             found += plan_validation.strictness_problems(reading.parsed, STAGES)
         assert found, f"the {name} artifact has nothing wrong with it"
-    valid = story_coordinator.read_story(artifact())
+    # Stamped, because this is the one artifact here that must have nothing
+    # wrong with it, and an artifact with no mandate has something wrong with
+    # it since story-087. The defects above are what a *session* writes, which
+    # is before the stamp, so they carry none.
+    valid = story_coordinator.read_story(stamped(artifact()))
     assert valid.problems == []
     assert story_coordinator.stage_exception_problems(valid.parsed, STAGES) == []
     assert plan_validation.strictness_problems(valid.parsed, STAGES) == []
@@ -249,11 +256,17 @@ def pre_story_harness(tmp_path: Path) -> Path:
 
 def run_script(script: Path, planning: Planning, *args: str,
                **stub) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(script), *args],
-        cwd=planning.root, env=planning.env(**stub),
-        capture_output=True, text=True,
-    )
+    # Stdin is a terminal with a declining reply already in it: since
+    # story-087 l5-plan stamps the mandate a run resolves only where there is
+    # one, and an artifact carrying none is refused before it is committed.
+    # This module's subject is what the plan-time checks do, so its sessions
+    # need the terminal that lets them reach those checks at all.
+    with conftest.a_terminal_for_stdin() as stdin:
+        return subprocess.run(
+            [sys.executable, str(script), *args],
+            cwd=planning.root, env=planning.env(**stub),
+            stdin=stdin, capture_output=True, text=True,
+        )
 
 
 def install(planning: Planning, story_id: str, text: str) -> Path:
@@ -319,7 +332,7 @@ def test_an_artifact_read_story_rejects_is_not_carried_into_the_later_checks(
 
     # Control: a well-formed artifact does reach both, so the emptiness above
     # is the guard rather than the recorder never being wired up.
-    path.write_text(artifact(), encoding="utf-8")
+    path.write_text(stamped(artifact()), encoding="utf-8")
     assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT,
         HARNESS_ROOT, WORKFLOW['name']) == {}
     assert seen == ["exceptions", "strictness"]
@@ -327,7 +340,7 @@ def test_an_artifact_read_story_rejects_is_not_carried_into_the_later_checks(
 
 def test_artifact_problems_holds_only_the_artifacts_with_problems(tmp_path: Path):
     good, bad = tmp_path / "story-900.yaml", tmp_path / "story-901.yaml"
-    good.write_text(artifact("story-900"), encoding="utf-8")
+    good.write_text(stamped(artifact("story-900")), encoding="utf-8")
     bad.write_text(DEFECTS["schema"], encoding="utf-8")
 
     problems = plan_validation.artifact_problems([good, bad], STAGES, HARNESS_ROOT,
@@ -565,7 +578,12 @@ def test_a_failing_artifact_is_reported_and_never_committed(defect: str,
     assert remote_refs(planning.remote) == refs_before
     written = planning.stories_dir / "story-900.yaml"
     assert written.is_file()
-    assert written.read_text(encoding="utf-8") == text
+    # story-087: the mandate is conferred between the snapshot and the
+    # validation, so what a refusal leaves is the session's bytes plus the
+    # block this process appended. Every byte the session wrote is still
+    # compared exactly; the reader asserts the rest is a mandate and nothing
+    # else.
+    assert as_the_session_left_it(written) == text
     assert "?? .harness/stories/story-900.yaml" in planning.status()
     assert "story-900.yaml" in result.stderr
     assert "committed nothing" in result.stdout
@@ -602,7 +620,7 @@ def test_when_one_of_several_artifacts_fails_none_of_them_is_committed(
     assert remote_refs(planning.remote) == refs_before
     for name, text in (("story-903", good), ("story-904", bad)):
         written = planning.stories_dir / f"{name}.yaml"
-        assert written.read_text(encoding="utf-8") == text
+        assert as_the_session_left_it(written) == text
         assert f"?? .harness/stories/{name}.yaml" in planning.status()
     assert "story-904.yaml" in result.stderr
 
@@ -640,11 +658,24 @@ def test_a_refusal_deletes_no_artifact_and_rewrites_none(planning: Planning):
     assert existing.is_file()
     written = planning.stories_dir / "story-900.yaml"
     tree_after = planning.tree()
-    assert tree_after.pop(".harness/stories/story-900.yaml") == text.encode()
+    # story-087: the session's bytes are still every byte of the artifact but
+    # the mandate this process conferred on it before the validation refused
+    # it, and the record of that conferral is in the tree as well. Both are
+    # named, so a third addition still fails the comparison below.
+    assert as_the_session_left_it(written) == text
+    tree_after.pop(".harness/stories/story-900.yaml")
+    for log in conferring_paths(planning):
+        assert tree_after.pop(log), f"{log} holds no conferring record"
     assert tree_after == tree_before
 
-    written.write_text(text + "# edited\n", encoding="utf-8")
-    assert planning.tree()[".harness/stories/story-900.yaml"] != text.encode()
+    # The control: the same byte comparison against the same file reports a
+    # one-line edit. It is compared against the bytes the refusal left rather
+    # than against the session's text, which the stamp above already differs
+    # from — a control that could not tell the two apart would prove nothing.
+    left = written.read_bytes()
+    written.write_text(
+        written.read_text(encoding="utf-8") + "# edited\n", encoding="utf-8")
+    assert planning.tree()[".harness/stories/story-900.yaml"] != left
 
 
 def test_a_refused_artifact_is_the_developers_and_no_later_session_commits_it(
@@ -666,7 +697,7 @@ def test_a_refused_artifact_is_the_developers_and_no_later_session_commits_it(
 
     assert later.returncode == 0, later.stderr
     assert committed_paths(planning.root) == [".harness/stories/story-901.yaml"]
-    assert refused.read_text(encoding="utf-8") == DEFECTS["schema"]
+    assert as_the_session_left_it(refused) == DEFECTS["schema"]
     assert "?? .harness/stories/story-900.yaml" in planning.status()
 
 
@@ -736,8 +767,10 @@ def test_both_paths_print_through_the_one_refusal_function(monkeypatch,
     assert [path.name for path, _ in calls] == ["story-900.yaml", "story-001.yaml"]
     assert calls[0][1] == calls[1][1]
 
-    # Control: a valid artifact reaches the recorder from neither path.
-    (stories / "story-900.yaml").write_text(artifact(), encoding="utf-8")
+    # Control: a valid artifact reaches the recorder from neither path. It
+    # carries the mandate a stamped artifact carries, because this call is made
+    # in-process where there is no terminal and therefore nothing to confer one.
+    (stories / "story-900.yaml").write_text(stamped(artifact()), encoding="utf-8")
     l5_plan.report(tmp_path, stories, before, STAGES)
     assert len(calls) == 2
 
@@ -803,20 +836,26 @@ def test_a_valid_session_commits_and_pushes_exactly_as_it_did_before(
                      old_repo, "add a thing", L5_STUB_WRITE=written)
     new = run_plan(new_repo, "add a thing", L5_STUB_WRITE=written)
 
-    # story-059 ends a successful push by offering to run what was committed;
-    # neither of these runs is on a terminal, so the offer is not made and the
-    # skip path's command is printed instead. That one line is subtracted here
-    # and everything else — the status, the stderr and every other byte of the
-    # commit-and-push report — is still compared exactly.
-    offered = [line for line in new.stdout.splitlines(keepends=True)
-               if line.startswith("l5-plan: run story-900 with: ")]
-    assert len(offered) == 1, new.stdout
-    without_offer = "".join(
-        line for line in new.stdout.splitlines(keepends=True)
-        if line not in offered
+    # Three things the new script says and the old one had no notion of:
+    # story-059 ends a successful push by offering to run what was committed,
+    # and story-087 says which mandate it conferred and that it committed the
+    # record of it. Each is subtracted by what it says, each must appear on
+    # exactly one line, and everything else — the status, the stderr and every
+    # other byte of the commit-and-push report — is still compared exactly.
+    SAID_SINCE = (
+        "runs on a mandate conferred by",
+        "Record the mandate conferred for",
+        "run story-900",
+    )
+    lines = new.stdout.splitlines(keepends=True)
+    for marker in SAID_SINCE:
+        assert sum(marker in line for line in lines) == 1, (marker, new.stdout)
+    without_them = "".join(
+        line for line in lines
+        if not any(marker in line for marker in SAID_SINCE)
     )
     assert new.stdout != old.stdout
-    assert (new.returncode, without_offer, new.stderr) == \
+    assert (new.returncode, without_them, new.stderr) == \
         (old.returncode, old.stdout, old.stderr)
     assert new.returncode == 0, new.stderr
     assert committed_paths(new_repo.root) == committed_paths(old_repo.root)
@@ -901,7 +940,10 @@ def test_pre_flight_does_not_start_refusing_the_strictness_class(
     Asserted by pre-flight getting past the story checks — it reaches the
     clean-tree refusal, which names the dirty path rather than the artifact.
     """
-    install(planning, "story-900", strict_artifact())
+    # Stamped: a committed artifact is one l5-plan has already conferred a
+    # mandate on, and pre-flight refuses one without a mandate above the
+    # clean-tree check this test is about reaching.
+    install(planning, "story-900", stamped(strict_artifact()))
     (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
 
     result = run_script(L5_RUN, planning, "story-900")

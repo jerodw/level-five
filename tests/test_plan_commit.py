@@ -66,6 +66,8 @@ import conftest
 
 import context_assembler
 import harness_config
+import plan_mandate
+import story_coordinator
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
@@ -201,6 +203,27 @@ class Planning:
         return json.loads(self.log.read_text(encoding="utf-8"))
 
 
+def conferring_paths(planning: "Planning") -> list[str]:
+    """Where a conferring record lands, as paths relative to the target root.
+
+    Since story-087 an l5-plan session that stamps a mandate writes a record of
+    the conferral and commits it beneath the artifact commit. Which logs it
+    reaches is read off the same declaration the append reads, so a schema that
+    stops naming the conferring kind for a log stops it being expected here
+    with no change to this helper; the directory is resolved through the
+    target's own configuration exactly as the script resolves it.
+    """
+    config = harness_config.load_config(planning.root)
+    directory = harness_config.history_dir(planning.root, config)
+    event = story_coordinator.HISTORY_EVENT_PROPERTY
+    return sorted(
+        str((directory / name).relative_to(planning.root))
+        for name, declaration in
+        story_coordinator.history_log_declarations().items()
+        if plan_mandate.CONFERRED_EVENT in declaration["properties"][event]["enum"]
+    )
+
+
 def committed_paths(repo: Path, revision: str = "HEAD") -> list[str]:
     """The paths one commit touched.
 
@@ -256,6 +279,45 @@ def artifact(story_id: str = "story-900", title: str = "Stub planned story") -> 
     return ARTIFACT.format(story_id=story_id, title=title)
 
 
+def stamped(text: str) -> str:
+    """One artifact as it stands once l5-plan has conferred a mandate on it.
+
+    `artifact` above is what a *session* writes, and a session writes no
+    mandate: since story-087 the block is conferred by l5-plan after the
+    session ends, and an artifact that arrives from a session already carrying
+    one is refused rather than trusted. So a check driven at `read_story`, at
+    `plan_validation.artifact_problems` or at the coordinator — none of which
+    ever sees an artifact before the stamp — is handed this, while a check
+    driven at l5-plan through the stub session is handed `artifact`.
+    """
+    return text + conftest.MANDATE_BLOCK
+
+
+def as_the_session_left_it(path: Path) -> str:
+    """What the session wrote, recovered from the artifact l5-plan stamped.
+
+    Since story-087 the stamp happens between the snapshot and the validation,
+    so an artifact a later check refuses is on disk as the session's own bytes
+    plus the block this process conferred. A byte comparison against the
+    session's text therefore compares against this rather than against the file.
+
+    The stamp is asserted rather than discarded: what is removed must be
+    exactly the block `plan_mandate.block` composes from the values that block
+    itself carries, so nothing but a mandate can be dropped and the caller's
+    comparison stays exact in both halves.
+    """
+    text = path.read_text(encoding="utf-8")
+    session, marker, tail = text.partition(f"\n{plan_mandate.MANDATE_KEY}:\n")
+    assert marker, f"{path} carries no mandate: {text!r}"
+    fields = dict(
+        line.strip().split(": ", 1) for line in tail.splitlines() if ": " in line
+    )
+    assert marker + tail == plan_mandate.block(
+        fields["conferred_by"], fields["conferred_at"]
+    )
+    return session
+
+
 def writes(*artifacts: tuple[str, str]) -> str:
     return json.dumps([list(pair) for pair in artifacts])
 
@@ -271,14 +333,25 @@ PLANNED_WORKFLOW = "story-workflow"
 
 def run_plan(planning: Planning, request: str = "add a thing",
              **stub) -> subprocess.CompletedProcess:
-    """Run the real scripts/l5-plan against the throwaway repository."""
-    return subprocess.run(
-        [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, request],
-        cwd=planning.root,
-        env=planning.env(**stub),
-        capture_output=True,
-        text=True,
-    )
+    """Run the real scripts/l5-plan against the throwaway repository.
+
+    Stdin is a terminal with a declining reply already in it. Since story-087
+    the script stamps the mandate a run resolves only where there is a terminal,
+    because a terminal is where the developer who approved the plan was, and an
+    artifact carrying no mandate is refused before it is committed. This
+    module's subject is what a session commits and where, so its sessions need
+    the terminal that lets them get that far; the reply declines the offer to
+    run the story, which is the path a headless invocation already took.
+    """
+    with conftest.a_terminal_for_stdin() as stdin:
+        return subprocess.run(
+            [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW, request],
+            cwd=planning.root,
+            env=planning.env(**stub),
+            stdin=stdin,
+            capture_output=True,
+            text=True,
+        )
 
 
 def bare_remote(tmp_path: Path, planning: Planning, name: str = "origin",
@@ -591,7 +664,12 @@ def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning
         ".harness/stories/story-903.yaml",
         ".harness/stories/story-904.yaml",
     ]
-    assert planning.git("rev-list", "--count", f"{before}..HEAD").stdout.strip() == "1"
+    # story-087: the session's artifacts are still one commit naming each, and
+    # what stands beneath them is the record of the mandates l5-plan conferred
+    # on them. Both commits are named rather than the count being loosened, so
+    # a third commit appearing here still fails.
+    assert planning.git("rev-list", "--count", f"{before}..HEAD").stdout.strip() == "2"
+    assert committed_paths(planning.root, "HEAD~1") == conferring_paths(planning)
     assert "story-903" in planning.subject()
     assert "story-904" in planning.subject()
 

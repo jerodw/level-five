@@ -111,6 +111,11 @@ TOKEN_EXEMPT: dict[str, str] = {
         "number and refused at the prune when it is not one, so it cannot "
         "carry a word"
     ),
+    "mandate_max_depth": (
+        "the value is a count of hops, parsed to a non-negative integer and "
+        "fallen back to the default when it is not one, so a value carrying a "
+        "word would be the default under another name and would prove nothing"
+    ),
 }
 
 #: How long the pause wait fixture is configured to allow. A duration no
@@ -131,6 +136,18 @@ RETENTION_DAYS = 4363
 DROPPED_AT_THE_BOUND = RETENTION_DAYS + 11
 KEPT_AT_THE_BOUND = RETENTION_DAYS - 11
 
+#: How many links of a mandate's source chain the fixture allows. Zero, and
+#: the choice is forced rather than made: this deployment's lookup answers for
+#: nothing, so a chain that is not a human is unresolvable at its first link
+#: under every bound above zero, and zero is therefore the only bound whose
+#: effect a *run* can be observed taking. It is a bound no harness would pick —
+#: the default is eight and this repository configures none — and it is pinned
+#: from both sides by the proof, which observes the same artifact refused for
+#: the bound under it and refused for something else without it. A story whose
+#: mandate names a human is unaffected by it, which is why every other fixture
+#: in this module still completes with it configured.
+MANDATE_DEPTH = 0
+
 VARYING: dict[str, object] = {
     "allowed_tools": ["Bash(xyzzy:*)"],
     "architecture_docs": ["docs/xyzzy-architecture.md"],
@@ -140,6 +157,7 @@ VARYING: dict[str, object] = {
     "history_dir": ".harness/xyzzy-history",
     "history_retention_days": str(RETENTION_DAYS),
     "logs_dir": ".harness/xyzzy-logs",
+    "mandate_max_depth": str(MANDATE_DEPTH),
     "max_pause_wait_seconds": str(PAUSE_WAIT),
     "model": "xyzzy-model",
     "permission_mode": "xyzzyPrompt",
@@ -168,6 +186,7 @@ FALLBACKS: dict[str, object] = {
     "history_dir": harness_config.DEFAULT_HISTORY_DIR,
     "history_retention_days": None,
     "logs_dir": ".harness/logs",
+    "mandate_max_depth": story_coordinator.DEFAULT_MANDATE_MAX_DEPTH,
     "max_pause_wait_seconds": story_coordinator.NO_PAUSE_WAIT,
     "model": None,
     "permission_mode": "acceptEdits",
@@ -230,6 +249,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
+        BEHAVIOURAL),
+    "mandate_max_depth": Proof(
+        "test_mandate_max_depth_is_the_bound_the_resolution_walk_is_held_to",
         BEHAVIOURAL),
     "max_pause_wait_seconds": Proof(
         "test_max_pause_wait_seconds_is_the_only_bound_on_an_in_place_wait",
@@ -323,6 +345,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("logs_dir", ".harness/logs")',
          '".harness/logs"'),
+    ),
+    "mandate_max_depth": (
+        ("orchestration/story_coordinator.py",
+         "config.get(MANDATE_MAX_DEPTH_KEY, DEFAULT_MANDATE_MAX_DEPTH)",
+         "DEFAULT_MANDATE_MAX_DEPTH"),
     ),
     "max_pause_wait_seconds": (
         ("orchestration/story_coordinator.py",
@@ -668,7 +695,7 @@ def clean_clone_record(run: Run) -> dict:
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
     "census_command", "history_dir", "history_retention_days",
-    "logs_dir", "max_pause_wait_seconds",
+    "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "standards_dir",
     "stories_dir", "test_command", "test_selection_command", "tests_dir",
     "verification_runner", "workflow",
@@ -1146,6 +1173,72 @@ def test_logs_dir_is_where_the_stage_log_is_written(tmp_path):
     assert expected.is_file()
     assert not (run.target / ".harness" / "logs").exists()
     assert run.argument("log_path") == [expected] * len(run.stages)
+
+
+#: A story whose mandate is not a human, so the run's resolution walk has a
+#: link to follow and the bound has something to bound. The kind carries the
+#: token for the same reason every other varying value does: nothing the
+#: harness recognises may be what makes this resolve or fail to.
+UNRESOLVED_MANDATE = """
+mandate:
+  source:
+    kind: xyzzy-record
+    id: xyzzy-source-1
+  conferred_at: 2026-08-28 09:00:00
+  conferred_by: ''
+  recorded_by: l5-plan
+"""
+
+
+def refused_for_its_mandate(tmp_path: Path, **overrides: object) -> None:
+    """One fixture run whose story's mandate does not resolve, and its refusal.
+
+    The story the fixture installs is rewritten before the run and committed,
+    so what the run reads is the artifact this proof is about and the tree it
+    starts from is one it can account for.
+    """
+    values = fixture_config(**overrides)
+    harness = build_harness(tmp_path)
+    target = build_target(tmp_path, values)
+    story = target / str(values["stories_dir"]) / f"{STORY_ID}.yaml"
+    stripped = conftest.STORY.replace(conftest.MANDATE_BLOCK, "")
+    assert stripped != conftest.STORY, "the fixture story carried no mandate"
+    story.write_text(stripped + UNRESOLVED_MANDATE, encoding="utf-8")
+    _git(target, "add", "-A")
+    _git(target, "commit", "-q", "-m", "a mandate that does not resolve")
+    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    runner = RecordingRunner(run_dir)
+    code = story_coordinator.run_story(STORY_ID, harness, target, runner)
+    assert code == 1
+    assert runner.calls == []
+    assert not run_dir.exists()
+
+
+def test_mandate_max_depth_is_the_bound_the_resolution_walk_is_held_to(
+        tmp_path, capsys):
+    """The configured bound decides which refusal the same artifact gets.
+
+    Under the fixture's bound the chain is refused before its first link is
+    followed, and the refusal names the key and the number. Under a bound that
+    accommodates it the same chain is followed and refused for the id nothing
+    answered for instead — so the number in the configuration is the whole of
+    what separates them. A harness that had stopped reading the key would give
+    the second refusal both times.
+    """
+    refused_for_its_mandate(tmp_path / "at-the-bound")
+    at_the_bound = capsys.readouterr().err
+    assert story_coordinator.MANDATE_MAX_DEPTH_KEY in at_the_bound
+    assert f"({MANDATE_DEPTH})" in at_the_bound
+
+    refused_for_its_mandate(tmp_path / "beyond-the-bound",
+                            mandate_max_depth=str(MANDATE_DEPTH + 8))
+    beyond = capsys.readouterr().err
+    assert story_coordinator.MANDATE_MAX_DEPTH_KEY not in beyond
+    assert "did not resolve" in beyond
+
+    assert story_coordinator.mandate_max_depth(
+        {story_coordinator.MANDATE_MAX_DEPTH_KEY:
+            VARYING["mandate_max_depth"]}) == MANDATE_DEPTH
 
 
 #: The logs the cross-run history declares, read off the declaration rather

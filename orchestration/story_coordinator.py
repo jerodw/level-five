@@ -177,6 +177,159 @@ def story_digest(story_text: str) -> str:
     return hashlib.sha256(story_text.encode("utf-8")).hexdigest()
 
 
+#: The one kind the resolution walk recognises, and the one it stops at.
+#: Everything else is a link to follow, and what any other kind means is
+#: settled by the schema that declares it and by what a lookup can answer for
+#: it, never here.
+HUMAN = "human"
+
+MANDATE_MAX_DEPTH_KEY = "mandate_max_depth"
+
+#: How many links the walk follows when the target configures no bound. A
+#: count of hops rather than a duration: the bound exists because a chain that
+#: cannot terminate is refused rather than followed, and raising it only
+#: decides how long the harness spends discovering that.
+DEFAULT_MANDATE_MAX_DEPTH = "8"
+
+
+def mandate_max_depth(config: dict) -> int:
+    """The configured bound on the resolution walk, as a count of hops.
+
+    Read as the string `load_config` produces, because the config parser
+    coerces nothing, and parsed here. A value that is not a non-negative
+    integer falls back to the default rather than bounding the walk by
+    something that is not a count: the bound decides only how long a walk that
+    is not going to terminate is followed, so a bad value must not be able to
+    make an unresolvable chain resolve.
+    """
+    configured = config.get(MANDATE_MAX_DEPTH_KEY, DEFAULT_MANDATE_MAX_DEPTH)
+    try:
+        bound = int(str(configured))
+    except (TypeError, ValueError):
+        return int(DEFAULT_MANDATE_MAX_DEPTH)
+    return bound if bound >= 0 else int(DEFAULT_MANDATE_MAX_DEPTH)
+
+
+@dataclass(frozen=True)
+class MandateResolution:
+    """What a resolution walk reached, or the problems that stopped it.
+
+    `kind` and `identity` describe the terminating source and are empty when
+    the walk did not terminate; `problems` is empty exactly when it did. The
+    walk composes no message about itself beyond the problems, so the caller
+    decides the wording around them.
+    """
+
+    kind: str
+    identity: str
+    hops: int
+    problems: list[str]
+
+    @property
+    def resolved(self) -> bool:
+        return not self.problems
+
+
+def resolve_mandate(mandate, lookup, maximum: int) -> MandateResolution:
+    """Follow a mandate's source until a kind of human is reached.
+
+    `lookup` is handed a source the walk cannot terminate on and answers with
+    the mandate that source carries, or answers nothing at all. Answering
+    nothing is an id that did not resolve rather than a permission, which is
+    the whole of the bias here: the walk refuses on anything it cannot
+    establish and permits only on positive evidence of a human.
+
+    Four things stop it, and each is its own problem so a reader of the
+    message can tell which happened: there is no block to resolve, an id that
+    nothing answered for, a return to an id already visited, and a chain
+    longer than `maximum`. A repeat visit is recognised before the bound is
+    compared, so a chain that comes back to itself says it is a cycle rather
+    than reporting whichever of the two a small bound happened to reach first.
+
+    A kind of human terminates in one hop with the lookup never called, so a
+    mandate conferred directly by a person reaches nothing at all.
+    """
+    if not isinstance(mandate, dict):
+        return MandateResolution(
+            "",
+            "",
+            0,
+            [
+                "there is no mandate to resolve: nothing recorded what "
+                "conferred the right to run this work"
+            ],
+        )
+    visited: list[str] = []
+    current = mandate
+    hops = 0
+    while True:
+        source = current.get("source")
+        source = source if isinstance(source, dict) else {}
+        kind = source.get("kind", "")
+        if kind == HUMAN:
+            return MandateResolution(kind, current.get("conferred_by", ""), hops, [])
+        hops += 1
+        identifier = source.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            return MandateResolution(
+                "",
+                "",
+                hops,
+                [
+                    f"the source of kind '{kind}' carries no id, so there is "
+                    f"nothing to resolve it through and no way to reach a "
+                    f"source whose kind is '{HUMAN}'"
+                ],
+            )
+        if identifier in visited:
+            return MandateResolution(
+                "",
+                "",
+                hops,
+                [
+                    f"the chain of sources returns to id '{identifier}', which "
+                    f"it has already visited: it is a cycle, and following it "
+                    f"further cannot reach a source whose kind is '{HUMAN}'"
+                ],
+            )
+        visited.append(identifier)
+        if hops > maximum:
+            return MandateResolution(
+                "",
+                "",
+                hops,
+                [
+                    f"the chain of sources is longer than "
+                    f"{MANDATE_MAX_DEPTH_KEY} ({maximum}) and has not reached "
+                    f"a source whose kind is '{HUMAN}'"
+                ],
+            )
+        answered = lookup(source)
+        if not isinstance(answered, dict):
+            return MandateResolution(
+                "",
+                "",
+                hops,
+                [
+                    f"the id '{identifier}' named by the source of kind "
+                    f"'{kind}' did not resolve: nothing answered for it"
+                ],
+            )
+        current = answered
+
+
+def resolves_nothing(source: dict) -> dict | None:
+    """The lookup this deployment hands the walk: it answers for nothing.
+
+    A fact about the deployment rather than about the walk. This harness has
+    no store a non-human source could be fetched from, so every source the
+    walk cannot terminate on is an id that did not resolve. A deployment that
+    acquires such a store passes a lookup that answers, and the walk is
+    unchanged by it.
+    """
+    return None
+
+
 def stage_restrictions(stages: list[dict]) -> list[tuple[str, str]]:
     """The workflow's (stage, prefix) create-restriction pairs, in declared order.
 
@@ -643,22 +796,41 @@ def history_record(
     }
 
 
-def _append_history_records(run_dir: Path, entry: dict, history: list[dict]) -> None:
+def append_history_records(
+    history_directory: Path, entry: dict, story_id: str, history: list[dict]
+) -> None:
     """Project one entry into every log whose declaration names its kind.
+
+    The history directory is explicit, so a caller outside a run — a process
+    that observes something the harness records and has no run directory to
+    resolve one from — appends a declared record through exactly this path
+    rather than through a second way of writing a declared log. Nothing about
+    which records reach which log lives here: the declaration decides it, and
+    an entry whose kind appears in no log's enum writes nothing at all.
 
     Opened for appending and never for writing: a record already written is
     never rewritten by an append, and the single point at which a log is
     rewritten is the prune below, which announces itself.
     """
-    if _history_dir is None:
-        return
     for log, declaration in history_log_declarations().items():
-        record = history_record(entry, history, run_dir.name, declaration)
+        record = history_record(entry, history, story_id, declaration)
         if record is None:
             continue
-        _history_dir.mkdir(parents=True, exist_ok=True)
-        with open(_history_dir / log, "a", encoding="utf-8") as handle:
+        history_directory.mkdir(parents=True, exist_ok=True)
+        with open(history_directory / log, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
+
+
+def _append_history_records(run_dir: Path, entry: dict, history: list[dict]) -> None:
+    """The projection a run takes, through the module-global directory.
+
+    Unchanged in what it writes and where: it keeps its signature and its
+    resolution of the directory, and is now a caller of the function above
+    rather than a second copy of it.
+    """
+    if _history_dir is None:
+        return
+    append_history_records(_history_dir, entry, run_dir.name, history)
 
 
 @dataclass(frozen=True)
@@ -5042,6 +5214,24 @@ def refuse_bad_story(story_path: Path, problems: list[str]) -> int:
     )
 
 
+def _refuse_unresolved_mandate(problems: list[str]) -> int:
+    """Refuse work whose mandate does not resolve to a human.
+
+    One more thin caller of the shared refusal, so this reads like every other
+    refusal the harness prints. What it adds around the walk's own problems is
+    the one thing the walk deliberately does not say: where a mandate comes
+    from, and therefore what the repair is. It names no kind it was not given.
+    """
+    return refuse(
+        "This work has no mandate that resolves to a human:",
+        problems,
+        "A mandate is written by the harness process that observed the "
+        "authorizing act and never by an agent, so the repair is to have the "
+        "act observed again rather than to write the block by hand. Nothing "
+        "was created and no agent was invoked.",
+    )
+
+
 def _refuse_bad_routing(workflow: dict, problems: list[str]) -> int:
     """Refuse a workflow whose retry routing cannot be followed.
 
@@ -5635,6 +5825,25 @@ def run_story(
     if reading.problems:
         return refuse_bad_story(story_path, reading.problems)
 
+    # Pre-flight: what conferred the right to run this work has to resolve to
+    # a human before anything is spent on it. Directly below the reading that
+    # produced the block, because the walk needs a parse and has nothing to say
+    # about an artifact that has none, and above everything a run creates: a
+    # refusal here leaves no run directory, no state.json, no log, no new
+    # branch, and invokes no agent.
+    #
+    # It is re-run on every entry, against the artifact as it is now, so a
+    # resume is judged by the artifact it is resuming under rather than by what
+    # the first entry read. The lookup this deployment passes answers for
+    # nothing, which is a fact about the deployment and not about the walk.
+    resolution = resolve_mandate(
+        (reading.parsed or {}).get("mandate"),
+        resolves_nothing,
+        mandate_max_depth(config),
+    )
+    if not resolution.resolved:
+        return _refuse_unresolved_mandate(resolution.problems)
+
     run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
     state = load_state(run_dir)
 
@@ -6069,6 +6278,25 @@ def run_story(
             f"workflow {workflow_name} started for {story_id}",
             kind="workflow-started",
         )
+
+    # What the pre-flight walk resolved, recorded now that there is a run
+    # directory to record it in. Evidence rather than state: nothing reads it
+    # back, and the run was permitted above rather than here. It names the
+    # source kind the walk terminated at and the identity it terminated on, so
+    # a reader of the run's own record can say what this execution ran on
+    # without opening the artifact it came from.
+    #
+    # Below the announcement rather than above it, because the first thing a
+    # run says is still which workflow is executing for which story: this is
+    # the second thing it says, on every entry, since the walk is re-run on
+    # every entry against the artifact as it is now.
+    append_event(
+        run_dir,
+        f"mandate resolved in {resolution.hops} hop(s): source kind "
+        f"'{resolution.kind}', conferred by "
+        f"{resolution.identity or 'an identity the mandate does not name'}",
+        kind="note",
+    )
 
     # A declared base is where the new branch is cut from. Undeclared, the
     # start point stays HEAD exactly as it was, and the pre-flight above is

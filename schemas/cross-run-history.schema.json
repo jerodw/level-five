@@ -53,6 +53,41 @@
         }
       }
     },
+    "mandate-log.jsonl": {
+      "type": "array",
+      "description": "One record per mandate conferred: the harness-scoped record of an authorizing act, written by the process that observed it rather than by a run. Written to .harness/history/mandate-log.jsonl, one JSON object per line, appended as the act is observed. It is the only declared log with no producer inside a run — no execution-history entry the coordinator appends carries this kind, so nothing a run does reaches it, and what does reach it is a caller outside a run using the same per-log append with an explicit history directory. That is the whole of what makes the conferring record a schema entry rather than a condition in orchestration: adding the kind here is what routes it, exactly as it is for the two logs beside this one. A record is a summary and never a copy: the block it records lives in the artifact it was appended to, and this line is what outlives the working tree that artifact was written in.",
+      "items": {
+        "type": "object",
+        "required": ["story_id", "timestamp"],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The event kinds routed to this log, on the terms the execution log's own event property states: this enum is the selection, and the property is not projected into a record.",
+            "enum": ["mandate-conferred"]
+          },
+          "story_id": {
+            "type": "string",
+            "description": "The work item the mandate was conferred on."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "When the authorizing act was observed, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what history_retention_days is compared against, and it is the conferred_at the block itself carries."
+          },
+          "conferred_by": {
+            "type": "string",
+            "description": "The identity the act was observed from, as the block records it."
+          },
+          "source_kind": {
+            "type": "string",
+            "description": "The kind of source the block names, so a reader can tell what a run's resolution would have terminated at without opening the artifact."
+          },
+          "recorded_by": {
+            "type": "string",
+            "description": "The harness process that observed the act and wrote the block. Absent when the entry carried none."
+          }
+        }
+      }
+    },
     "retry-log.jsonl": {
       "type": "array",
       "description": "One record per retry a story's execution took. Written to .harness/history/retry-log.jsonl, one JSON object per line, appended as the retry is routed.",
