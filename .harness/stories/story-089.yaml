@@ -1,0 +1,291 @@
+story:
+  id: story-089
+  title: The outbox never blocks a run
+  description: |
+    A durable local queue for work the harness wants to file externally, and
+    one guarantee about it: a failure to file never blocks a story, never
+    delays a commit, and never refuses a run. Plus l5-sync, the explicit
+    entry point that drains it.
+
+    No provider, no network, no GitHub. The transport is injected, the way
+    runner and sleep already are, so every state the queue can be in is
+    proven against a fake and the whole story runs with nothing reachable.
+
+    The failure that decides the design is the ambiguous write: the request
+    arrived, the item was created, and the response never came back. The
+    existence of a local file cannot distinguish that from a clean failure,
+    so a naive sweep re-files it and leaves a human reconciling duplicates —
+    worse than losing one. Every entry therefore carries a client-generated
+    idempotency key, and an ambiguous outcome is resolved by asking the
+    provider about the key rather than by trusting local state.
+
+    The queue is gitignored rather than merely untracked. Every clean-tree
+    pre-flight reads git status --porcelain, which reports untracked files, so
+    a pending entry that is only untracked dirties the tree and refuses the
+    next run — the mechanism whose whole purpose is to never block would be
+    the thing blocking. Durability is unconditional; the network is
+    opportunistic; the provider is authoritative for what was filed.
+
+    l5-sync is the only drain site this story ships, which is what the request
+    scopes. Nothing enqueues anything yet — the producer is a later story, and
+    this story's tests write their own entries — so there is no queue
+    accumulating unattended for a forgotten sweep to strand. The story that
+    adds a producer is the first point at which an automatic sweep earns its
+    call site, and it can add one without touching this module's contract,
+    because sync never raises into its caller.
+  workflow: story-workflow
+
+tasks:
+  - Add an outbox module under orchestration/ holding the queue: enqueue writes
+    one entry, sync drains the queue through an injected transport, and neither
+    raises into its caller.
+  - Derive each entry's idempotency key as a sha256 digest over the canonical
+    JSON of a caller-declared identity mapping, separate from the payload, so a
+    payload that gains fields later keeps the key it was filed under. The digest
+    follows the shape story_digest already uses.
+  - Write each entry atomically — a temporary file replaced into place — so a
+    process killed mid-write leaves either the previous entry or the new one and
+    never a half of either.
+  - Declare the three entry states and what each one does. pending is written
+    but not filed; landed is confirmed by the provider, records the reference,
+    and drops the payload it no longer needs; failed is terminal and is not
+    retried unattended.
+  - Define the transport contract this story is proven against: an operation
+    that files an entry and an operation that looks a key up. Filing answers
+    with a reference, with a terminal error, or with a transient error, and the
+    outbox maps those three answers onto the three states. A transport that
+    raises is treated as a transient failure and the exception does not escape
+    sync.
+  - Resolve the ambiguous write by asking before re-filing: an entry whose
+    attempt count is not zero is looked up by its key first, and a reference
+    coming back lands it without filing it a second time.
+  - Record what a failure leaves behind — the attempt count and the last error
+    on the entry itself — so a later sweep and a human read the same record.
+  - Define a poisoned entry as one that is not valid JSON or does not satisfy
+    the entry schema, and leave it exactly as it is: named in the report,
+    counted, never repaired, never deleted.
+  - Add schemas/outbox-entry.schema.json and its manifest line, so the shape the
+    outbox writes and the shape it validates on read are one file.
+  - Add scripts/l5-sync, the explicit drain, resolving its target repository
+    through the shared walk-up lookup and failing identically to the other entry
+    points when there is no config above it.
+  - Have l5-sync exit zero when it drained cleanly or left only pending entries
+    a later sweep will retry, and non-zero when the queue holds a failed or
+    poisoned entry, naming each one.
+  - Have l5-sync say plainly that no transport is configured when none is, still
+    report the queue, and still apply the same exit rule — this story ships no
+    provider.
+  - Add the queue directory to .gitignore, so a pending entry is ignored rather
+    than untracked and cannot dirty the tree the next run's pre-flight reads.
+  - Cover every state and transition with tests driven by a fake transport, and
+    cover the guarantee end to end: a full run whose queue is seeded pending and
+    whose every transport call fails still passes pre-flight, still commits its
+    work, and still completes.
+  - Extend the entry-point coverage in tests/test_planner_injection.py to the
+    new script, and rename the test that names a count of scripts, which that
+    count no longer describes.
+  - Record the outbox and its guarantee in the architecture document, and the
+    new script in the README's script table and layout section.
+
+acceptance_criteria:
+  - A full run completes normally and commits its work with the queue holding
+    pending entries throughout and every transport call failing. This is the
+    guarantee; everything else in the story is the plumbing under it.
+  - The queue directory is listed in .gitignore, and a test demonstrates that a
+    pending entry present in the target repository leaves dirty_paths reporting
+    nothing and does not refuse a run.
+  - enqueue returns the key it wrote the entry under, and the key is a sha256
+    digest over the canonical JSON of the identity it was given.
+  - Two enqueue calls carrying the same identity and different payload bodies
+    produce the same key, so an entry already filed is not re-filed because its
+    payload gained a field.
+  - Two enqueue calls carrying different identities produce different keys.
+  - A transport that answers a filing with a reference leaves the entry in the
+    landed state, carrying that reference, no longer carrying the payload.
+  - A transport that answers with a transient error leaves the entry pending
+    with its attempt count incremented and the error recorded, and a later sync
+    against a transport that succeeds lands it.
+  - A transport that answers with a terminal error leaves the entry failed, and
+    a subsequent sync does not file it again.
+  - A transport that raises leaves sync returning normally, the exception
+    unpropagated, and the entry pending with the failure recorded.
+  - An entry whose attempt count is not zero is looked up by key before it is
+    filed, and a lookup answering with a reference lands the entry with the
+    transport's filing operation never called a second time.
+  - A file in the queue directory that is not valid JSON, and one that is valid
+    JSON but does not satisfy the entry schema, are both left byte-for-byte
+    unchanged by a sync, and both are named in what sync reports.
+  - l5-sync exits zero for a queue it drained and for a queue left holding only
+    pending entries.
+  - l5-sync exits non-zero for a queue holding a failed entry and for a queue
+    holding a poisoned one, and its output names the entries responsible.
+  - l5-sync run where no transport is configured says so, reports the queue, and
+    exits by the same rule.
+  - l5-sync run in a directory with no .harness/config.yaml above it exits 1
+    with the same message on stderr as the other entry points, byte for byte.
+  - schemas/outbox-entry.schema.json is declared in schemas/manifest.json, and
+    the entries the outbox writes validate against it.
+  - orchestration/story_coordinator.py is unchanged by this story: no sweep call
+    site exists inside a run.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/outbox-entry.schema.json declaring the entry — key,
+      identity, state, payload, attempts, last error, reference and timestamps —
+      and add its name to schemas/manifest.json in sorted position. The schema
+      is what makes poisoned a decidable condition rather than a judgement.
+    - Write orchestration/outbox.py. Keep it small and total. enqueue takes a
+      payload and an identity, computes the key, and writes the entry through a
+      temporary file replaced into place. sync takes the queue directory and a
+      transport, reads each entry, validates it against the schema, and acts on
+      the three answers a filing can give. Every path through sync returns a
+      summary; no path raises.
+    - Have sync collect what it did rather than print it — counts of landed,
+      pending, failed and poisoned, plus the keys and paths behind the last two
+      — so the script decides presentation and the module decides nothing about
+      a terminal.
+    - Write scripts/l5-sync as a thin entry point in the shape of l5-status: it
+      resolves the target root through harness_config.find_target_root, calls
+      into the module, prints the summary, and returns the exit code the summary
+      implies.
+    - Add the queue directory to .gitignore next to the other ignored harness
+      directories, with a line saying why this one is ignored rather than merely
+      untracked.
+    - Add the PERMANENT_MENTIONS entry for the new script's interpreter line.
+      Without it the target-stack scan reports the new script as an unexpected
+      mention and the suite is red the moment the script exists.
+    - Write tests/test_outbox.py against a fake transport that can be told to
+      succeed, to fail transiently, to fail terminally, to raise, and to answer
+      a lookup — one fake driving every state the module can reach, and a
+      recorder of which operations were called so the ambiguous-write case can
+      assert that filing did not happen twice.
+    - Write the end-to-end guarantee test in the same module: a full run with a
+      fake runner, the queue seeded with pending entries, and a transport that
+      fails whatever it is asked, asserting the pre-flight passed, the run
+      completed, and the run's commit carries no queue file.
+    - Extend tests/test_planner_injection.py to cover the new entry point in the
+      shared-lookup and no-config assertions, and rename the test whose name
+      counts the scripts it iterates.
+    - Record the component and its guarantee in the architecture document, and
+      add the script to the README's table and layout.
+  likely_file_changes:
+    - file: schemas/outbox-entry.schema.json
+      stage: implementer
+      reason: The entry shape, defined once and read both when the outbox writes
+        an entry and when it decides whether one is poisoned.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: The declared inventory of shipped schemas; a schema file with no
+        manifest line is a failure the inventory tests catch.
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: The queue itself — enqueue, sync, the states, the key, and the
+        rule that no failure escapes into a caller.
+    - file: scripts/l5-sync
+      stage: implementer
+      reason: The explicit drain, and the only one this story ships.
+    - file: .gitignore
+      stage: implementer
+      reason: The queue must be ignored rather than untracked, or a pending
+        entry dirties the tree and refuses the next run.
+    - file: tests/test_no_target_stack_in_harness_source.py
+      stage: implementer
+      reason: The new script's interpreter line is a target-stack mention the
+        scan reports, so the list of permanent mentions gains the entry naming
+        it. The list is a burn-down of known ties and this is one.
+      reverting_breaks_the_suite: Reverting this entry while scripts/l5-sync
+        remains leaves the scan reporting an unexpected mention, and the
+        target-stack test fails. It is an adaptation forced by the script this
+        same story adds, not a change to what the test checks — the list gains
+        one line and no assertion is weakened.
+    - file: tests/test_outbox.py
+      stage: tester
+      reason: The story's regression suite — every state, every transition, the
+        ambiguous write, the poisoned entry, the exit codes, and the end-to-end
+        guarantee that a run completes with every sync attempt failing.
+    - file: tests/test_planner_injection.py
+      stage: tester
+      reason: The entry-point assertions gain the new script, and the test whose
+        name counts the scripts it iterates is renamed for what it checks.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The outbox is a new component with a guarantee later work will
+        inherit; the document is where a planning agent finds it.
+    - file: README.md
+      stage: documenter
+      reason: The script table lists every l5- entry point, and the layout
+        section describes what each directory holds.
+
+scope:
+  modify:
+    - orchestration/outbox.py
+    - scripts/l5-sync
+    - schemas/outbox-entry.schema.json
+    - schemas/manifest.json
+    - .gitignore
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - .harness/config.yaml
+    - schemas/harness-config.schema.json
+    - orchestration/harness_config.py
+    - workflows/
+    - prompts/
+    - hooks/
+    - templates/
+
+verification_requirements:
+  - Confirm a full run completes and commits with the queue seeded pending and
+    every transport call failing, and that the run's commit carries no file from
+    the queue directory.
+  - Confirm the queue directory is ignored by git, and that a pending entry in
+    the target repository leaves the clean-tree pre-flight reporting nothing
+    dirty.
+  - Confirm the key is a digest of the identity alone: the same identity with
+    different payload bodies yields one key, and different identities yield
+    different keys.
+  - Confirm each of the three transport answers moves an entry to the state the
+    story names, and that a raising transport is treated as a transient failure
+    with the exception unpropagated.
+  - Confirm an entry with a non-zero attempt count is looked up before it is
+    filed, and that a lookup answering with a reference lands it without a
+    second filing call.
+  - Confirm a malformed entry and a schema-violating entry are both left
+    byte-for-byte unchanged and both named by sync.
+  - Confirm l5-sync's exit code follows the rule in every case the criteria
+    name, including the case where no transport is configured.
+  - Confirm l5-sync fails identically to the other entry points when no
+    .harness/config.yaml is found above the working directory.
+  - Confirm orchestration/story_coordinator.py is unchanged by this story.
+  - Confirm the whole suite passes under the configured test command, including
+    the tests this story adds.
+
+constraints:
+  - No third-party runtime dependency, and no network call anywhere in the
+    shipped code or the tests. The transport is a seam, and the only transport
+    this story ships is the one its tests write.
+  - sync must not raise into its caller for any transport behaviour, including a
+    transport that raises, one that returns nonsense, and one that is absent.
+    Every other guarantee in this story rests on that one.
+  - No agent writes to the queue's transport. The coordinator syncs; a stage at
+    most produces a payload, which keeps credentials out of stage invocations
+    entirely.
+  - A poisoned entry is left as it is. The harness cannot know what a human
+    meant, and destroying the evidence is the one unrecoverable move.
+  - The queue, the entry state and the payload are local and ignored, and the
+    provider is authoritative for what was filed. Nothing this story writes is
+    committed by a sweep.
+  - No sweep call site is added inside a run, and story_coordinator.py is not
+    touched. The provider and the automatic sweep are the stories after this
+    one.
+  - Existing tests are not weakened or skipped. The one existing assertion this
+    story touches gains a line naming the script it adds; nothing is removed.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 10:02:45
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
