@@ -1,0 +1,308 @@
+story:
+  id: story-095
+  title: The queue is its own dedupe index
+  description: |
+    The Inspector's dedupe is the filed query and nothing else. story-094
+    shipped tier two - ask the tracker what is already filed against this
+    scope's paths, drop a finding whose key matches - and did not ship the tier
+    the design specified beside it: the local outbox queue read as an index of
+    what this harness has already filed, consulted with no network and no
+    configuration.
+
+    The consequence is visible in this repository today. filed_query_command is
+    not configured in .harness/config.yaml, so the query cannot answer, the
+    inspection correctly reports that dedupe did not run, and then it refiles
+    everything it found last time. An inspection that reports the same finding
+    forever is one a developer learns to ignore, which is the failure the
+    dedupe exists to prevent.
+
+    The mechanism is already there and nothing new is invented here. An entry
+    carries key and identity among its required properties, and _land drops
+    payload and nothing else, so a landed entry is a durable local record of an
+    identity that reached a tracker, keyed by exactly the digest the Inspector
+    already computes. There is no hashing code in this story, no matching
+    heuristic and no new concept - the keys collide by construction or they do
+    not.
+
+    Tier one runs always, not only when the query fails. A fallback would make
+    the answer depend on which source responded, and story-093 went out of its
+    way to make nothing known distinguishable from nothing filed precisely so a
+    caller can say dedupe did not run. Consulting the queue every time is not a
+    substitute for the query and does not weaken it: it is a second, cheaper
+    source answering the same question about what this harness filed, and it is
+    right whether or not the network is.
+
+    Which state an entry is in decides what it is evidence of, and this is the
+    load-bearing decision. A landed entry means the provider named what it
+    holds, so it suppresses. A pending entry is in the queue and not yet on the
+    tracker, so treating it as filed would let the report claim it filed
+    something new when nothing external has seen it; it is recognised and
+    reported as already queued instead, distinct from already filed. A failed
+    entry is terminal and no later sync will file it, so it must not suppress -
+    a failed entry is a finding that reached nobody, and suppressing on it
+    would lose the finding permanently with no signal. "It is in the queue" is
+    the tempting wrong rule and this story says so in source.
+
+    The local index is a subset and the story says so. It knows only what this
+    machine filed; another machine's filings and anything filed by hand are
+    invisible to it. So tier one can miss a duplicate the query would catch,
+    which is why it is an addition rather than a replacement, and why a run
+    whose query could not answer must still report that dedupe was partial
+    rather than complete. dedupe_ran therefore remains a statement about the
+    filed query alone.
+
+    The obvious alternative - deduping against the hand-written briefs in
+    .harness/requests/ - is recorded as considered and rejected. That directory
+    is gitignored and local, so a dedupe resting on it would be a property of
+    this machine rather than of the harness; the briefs in it carry no
+    identity, category or slug, so matching them means fuzzy text comparison or
+    another model call; and it answers a different question, since that
+    directory holds things nobody has planned while the tracker holds things
+    already filed. Whether a human-written brief should suppress a finding is a
+    real question and it is filed separately, after there is real output to
+    judge. This story does not take it on and reads, writes, moves and renames
+    nothing under that directory.
+  workflow: story-workflow
+
+tasks:
+  - Read the outbox queue as data in orchestration/inspection.py, through
+    outbox.entry_files and outbox.read_entry alone - no transport, no
+    subprocess, nothing that can fail slowly - and derive from it the set of
+    keys held by landed entries, the set held by pending entries, and whether
+    the queue could be read at all. Read it once for the whole inspection
+    rather than once per scope, because the queue is not scoped, and hand it to
+    the per-scope function as a parameter.
+  - Make the set a finding's key is checked against a union of the filed
+    query's keys and the local landed keys, so a finding either source knows is
+    dropped and neither source's answer depends on the other having answered.
+  - Give the local queue its own drop reason, distinct from the one the filed
+    query's drops carry, so a reader is told which source knew and a caller
+    counting the ways an inspection dropped things can count the two
+    separately.
+  - Give a finding matching a pending entry a drop reason of its own - already
+    queued rather than already filed - and state in source why the two are not
+    the same evidence.
+  - Leave a finding matching a failed entry unsuppressed, and state in source
+    why: the entry is terminal, no later sync will file it, and suppressing on
+    it would lose the finding permanently with no signal. State the consequence
+    too - the finding is enqueued again and replaces the failed entry at the
+    same key with a pending one, which is the finding getting another chance
+    rather than a duplicate.
+  - Carry what the local index held on the inspection's report - whether it
+    could be read, how many landed identities and how many queued ones it held,
+    and the reason where it could not - and leave dedupe_ran a statement about
+    the filed query alone, because the local index is a subset and knowing it
+    does not make dedupe complete.
+  - Say all of that in scripts/l5-inspect, which is where every word a
+    developer reads lives.
+  - Write the story's regression suite, driving the queue with entries in each
+    of the three states and a fake runner, so nothing in it invokes a model,
+    reaches a network or touches a tracker.
+
+acceptance_criteria:
+  - A finding whose identity matches a landed entry in the local queue is
+    dropped, and the drop reason names the local queue rather than the filed
+    query. A test asserts this holds with filed_query_command unset entirely,
+    which is the configuration this repository is in.
+  - A finding whose identity matches a failed entry is not dropped. It is
+    filed, and a test asserts it reaches the queue, because a failed entry is a
+    finding that reached nobody and suppressing on it would lose it with no
+    signal.
+  - A finding whose identity matches a pending entry is dropped under a reason
+    distinct from the one a landed match produces - already queued rather than
+    already filed - and a test asserts the two reasons differ and that the
+    report does not count the finding as newly filed.
+  - The two sources are a union. A finding the filed query reported and the
+    local queue did not is dropped, a finding the local queue holds as landed
+    and the query did not report is dropped, and each drop names the source
+    that knew it. A test drives both directions in one inspection.
+  - The two drop reasons are separately countable. Report.dropped_for returns
+    the local queue's drops without the filed query's and the filed query's
+    without the local queue's, and scripts/l5-inspect prints them as distinct
+    lines rather than merging them.
+  - A queue directory that cannot be listed costs tier one and costs nothing
+    else. The inspection still runs, still invokes, still files what it found,
+    and the report says the local index could not be read and why. Nothing is
+    raised out of the module.
+  - A poisoned entry in the queue contributes no key and stops nothing. The
+    entries beside it in the same queue are read and indexed exactly as they
+    would have been, and the report says how many files it could not read.
+  - The report says what the local index held - whether it was read, how many
+    landed identities and how many queued ones - on every inspection, including
+    one where it held nothing, because a source that is silent when it found
+    nothing is indistinguishable from one that did not run.
+  - Report.dedupe_ran remains a statement about the filed query alone. An
+    inspection whose query could not answer reports that dedupe did not run
+    even where the local index was read successfully, because the local index
+    knows only what this machine filed and a duplicate filed elsewhere is
+    invisible to it.
+  - Nothing in this story builds a transport, spawns a subprocess, or reads
+    filed_query_command. The queue is reached through outbox.entry_files and
+    outbox.read_entry and through nothing else, and a test asserts the module's
+    outbox calls are those two plus the enqueue and identity_key calls
+    story-094 shipped.
+  - The identity a brief is filed under is unchanged - kind, category, sorted
+    bare paths and slug, exactly as story-094 shipped it. orchestration/
+    inspection.py still hashes nothing and still derives no digest of its own.
+    A change to the identity would invalidate every key already on disk, and a
+    test asserts the identity of a fixed finding is what it was.
+  - orchestration/outbox.py, orchestration/filed_query.py, orchestration/
+    command_transport.py, orchestration/outbox_sweep.py and orchestration/
+    story_coordinator.py are unchanged. This story is a reader of the first two
+    and widens neither.
+  - schemas/outbox-entry.schema.json and schemas/harness-config.schema.json are
+    unchanged. Tier one needs no new configuration key and no new entry field -
+    that it requires no configuration at all is the property this story is for.
+  - Nothing under .harness/requests/ is read, written, moved or renamed by this
+    story, and nothing in it matches a finding against a hand-written brief.
+  - The whole suite passes under the configured test command, including the
+    tests this story adds, and no test in it invokes a model, reaches a network
+    or touches a tracker.
+
+technical_plan:
+  implementation_steps:
+    - Add a frozen dataclass to orchestration/inspection.py holding what the
+      local index is: whether the queue could be read, the frozenset of keys
+      held by landed entries, the frozenset held by pending entries, how many
+      files could not be read, and the reason where the listing itself failed.
+      Its docstring states the tier - free, no network, no configuration - and
+      states that it is a subset of what the filed query answers, so a reader
+      does not mistake it for a complete answer.
+    - Add the function that builds it. Call outbox.entry_files inside a guard,
+      because a directory that cannot be listed raises OSError there and this
+      module may not raise; a directory that does not exist already answers
+      with no entries rather than an error and needs no special case. Read each
+      file with outbox.read_entry, count the ones it reports poisoned, and sort
+      the rest into landed and pending by their state. Skip failed entries and
+      say in a comment why, in the terms the story states.
+    - Read the index once in inspect() and pass it to inspect_scope as a
+      parameter with an empty index as its default, so the queue is read once
+      per inspection rather than once per scope and an existing caller of
+      inspect_scope keeps working.
+    - In inspect_scope, build the checked set as the union of the query's keys
+      and the index's landed keys, and keep the query's keys separately so the
+      drop can name which source knew. Check the query first, then the local
+      landed set, then the local pending set, and file the finding otherwise.
+    - Add the two drop reason constants beside the existing ones, each stating
+      in its comment what it excluded, in the shape the module's other reasons
+      already have.
+    - Carry the index on the Report as a field with a default, so the dataclass
+      stays constructible as the module's error paths already construct it.
+      Leave dedupe_ran computing over the per-scope query answers alone.
+    - In scripts/l5-inspect, print one line for the local index beside the
+      per-scope dedupe lines - what it held, or that it could not be read and
+      why - and print the poisoned count where there is one. Print the two
+      already-filed reasons as the distinct reasons they are, which the
+      existing per-drop loop does without change once the reasons differ.
+    - Update the module docstring: the dedupe is two sources rather than one,
+      what each is evidence of, why a failed entry does not suppress, and why
+      the local index does not make dedupe complete.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: The local index, the union, the three states and what each is
+        evidence of, and the report field that carries what the index held.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: What a developer reads about the local index, and the two
+        already-filed reasons printed as the distinct reasons they are.
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: The story's regression suite - a landed match dropped naming the
+        local queue with no query configured, a failed match filed, a pending
+        match dropped distinctly, the union in both directions, an unreadable
+        queue and a poisoned entry costing tier one and nothing else.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The Inspector's dedupe is two tiers rather than one - what each
+        knows, why the local one is a subset that does not complete dedupe, and
+        why a failed entry is the state that must not suppress.
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - scripts/l5-inspect
+    - tests/test_inspection.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - orchestration/story_coordinator.py
+    - orchestration/agent_runner.py
+    - prompts/inspector.md
+    - prompts/assist.md
+    - schemas/outbox-entry.schema.json
+    - schemas/story-brief.schema.json
+    - schemas/inspection-findings.schema.json
+    - schemas/harness-config.schema.json
+    - schemas/story.schema.json
+    - templates/config.yaml
+    - templates/sync/
+    - templates/query/
+    - workflows/
+    - hooks/
+    - .harness/config.yaml
+    - .harness/requests/
+
+verification_requirements:
+  - Confirm a finding whose identity matches a landed entry is dropped with a
+    reason naming the local queue rather than the filed query, and that this
+    holds with filed_query_command unset entirely.
+  - Confirm a finding matching a failed entry is not dropped and reaches the
+    queue, which is the case a tempting simpler rule gets wrong.
+  - Confirm a finding matching a pending entry is dropped under a reason
+    distinct from a landed match's, and that the report does not report it as
+    newly filed.
+  - Confirm the union in both directions - a finding the query reported and the
+    queue did not is dropped, one the queue holds and the query did not report
+    is dropped - and that each drop names its source.
+  - Confirm an unreadable queue costs tier one and nothing else: the inspection
+    still runs, still files, and reports that the local index could not be read.
+  - Confirm a poisoned entry contributes no key, stops nothing, and is counted
+    in what the report says the index could not read.
+  - Confirm the report says what the local index held on an inspection where it
+    held nothing, so a silent source is not mistaken for one that did not run.
+  - Confirm dedupe_ran is false for an inspection whose query could not answer
+    even where the local index was read, because the local index is a subset.
+  - Confirm nothing in this story builds a transport, spawns a subprocess, or
+    reads filed_query_command, and that the queue is reached only through
+    outbox.entry_files and outbox.read_entry.
+  - Confirm the identity a brief is filed under is byte-for-byte what
+    story-094 shipped, so every key already on disk stays valid.
+  - Confirm the whole suite passes under the configured test command and that
+    no test added by this story invokes a model, reaches a network or touches a
+    tracker.
+
+constraints:
+  - The local index is consulted on every inspection and is not a fallback. It
+    is not consulted only when the query fails, and the query is not consulted
+    only when the index is empty; both answer the same question and both are
+    asked.
+  - A failed entry never suppresses a finding. This is the rule the story
+    exists to get right, and a change that makes "it is in the queue" the test
+    loses findings permanently with no signal.
+  - Reading the queue must never become a way for the Inspector to block. No
+    transport, no subprocess, no network, and nothing that can fail slowly - the
+    same read l5-status already makes.
+  - A queue that cannot be read is nothing known rather than an error, in the
+    one-directional bias every other total path in this module takes. It costs
+    tier one, it is reported, and it is not raised.
+  - The identity a brief is filed under does not change. Kind, category, sorted
+    bare paths and slug, exactly as shipped - a story that changed it would
+    invalidate every key already on disk.
+  - Tier one requires no configuration. No new key is declared, no existing key
+    is read for it, and an inspection with nothing configured gets it.
+  - The filed query, its command contract, its bounds and its answered flag are
+    unchanged. Losing the query still costs dedupe and still costs nothing else.
+  - Queue eviction and size bounds are separate work. An evicted landed entry
+    falls out of the local index and falls through to the filed query, and
+    nothing here has to change when that lands.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 23:53:56
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
