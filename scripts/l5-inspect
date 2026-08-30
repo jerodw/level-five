@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Inspect a target's own code and file a story brief for each defect found.
+
+Usage: l5-inspect [--dry-run] [<path> ...]
+The target repository is found by walking up from the current directory
+to the nearest .harness/config.yaml.
+
+Each path named is one scope and one agent invocation, so naming two paths
+makes two invocations. With no path named, the scopes are the ones the
+target's source_dirs declares plus one for its tests_dir; with neither key
+declared, the scope is everything the repository tracks minus the blocked
+paths.
+
+A brief is a pre-planning artifact. It carries intent, evidence and a
+severity, it is not an approved plan, and it never becomes one on its own:
+a human plans it into a story through l5-plan's interview, and that
+interview is where the mandate is conferred. Nothing in a run, a resume or
+a sweep invokes an inspection — this command is the only thing that does.
+
+--dry-run reports exactly what an ordinary invocation would file and
+enqueues nothing. It still makes the invocations, because what would be
+filed is not knowable without them.
+
+Filing a brief means putting it in the outbox, the harness's durable local
+queue. Nothing reaches a tracker here: the queue is drained by l5-sync, or
+opportunistically by the sweeps a run makes around itself.
+"""
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import harness_config  # noqa: E402
+import inspection  # noqa: E402
+
+
+def parse(argv):
+    """The scopes and the dry-run flag, or None where the usage was wrong.
+
+    Returns `(paths, dry_run)`. The only flag is --dry-run; everything else
+    is a scope, so a path beginning with a dash is a usage error rather than
+    a scope nobody meant.
+    """
+    paths = []
+    dry_run = False
+    for argument in argv:
+        if argument == "--dry-run":
+            dry_run = True
+        elif argument.startswith("-"):
+            return None
+        else:
+            paths.append(argument)
+    return paths, dry_run
+
+
+def report(found, dry_run: bool) -> int:
+    """Say what the inspection inspected, filed and dropped.
+
+    The module decides all of it and prints none of it; every word a
+    developer reads is here. It returns zero for an inspection that ran,
+    whatever it found: finding nothing is an answer, and so is finding
+    something the cap or the queue excluded, which is reported rather than
+    treated as a failure of the command.
+    """
+    print(
+        f"inspected {len(found.scopes)} scope(s) in "
+        f"{found.invocations} invocation(s):"
+    )
+    for scope in found.scopes:
+        print(f"  {scope.kind}: {scope.label}")
+
+    # Said plainly, and per scope, because a scope whose query did not answer
+    # was inspected without dedupe and may have refiled what is already there.
+    for one in found.dedupe:
+        if one.ran:
+            print(f"  dedupe ran for {one.scope}: "
+                  f"{one.known} item(s) already filed")
+            for excluded in one.excluded:
+                print(f"      note: {excluded}")
+        else:
+            print(f"  dedupe did NOT run for {one.scope}: {one.reason}")
+
+    verb = "would file" if dry_run else "filed"
+    print(f"{verb} {len(found.filed)} brief(s):")
+    for brief in found.filed:
+        print(f"  severity {brief.severity}  {brief.slug}  {brief.title}")
+        if brief.key:
+            print(f"      key: {brief.key}")
+
+    if found.dropped:
+        print(f"dropped {len(found.dropped)}:")
+        for drop in found.dropped:
+            print(f"  {drop.reason}: {drop.detail}")
+
+    if dry_run:
+        print("this was a dry run, so nothing was enqueued")
+    elif found.filed:
+        print(
+            "nothing has reached a tracker: a brief is filed into the outbox, "
+            "which is drained by l5-sync or by the sweeps a run makes"
+        )
+    return 0
+
+
+def main() -> int:
+    parsed = parse(sys.argv[1:])
+    if parsed is None:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+    paths, dry_run = parsed
+
+    target_root = harness_config.find_target_root(Path.cwd())
+    config = harness_config.load_config(target_root)
+
+    # Both bounds are refused before anything is invoked and before anything
+    # is enqueued: a bound the harness cannot read is a bound the target did
+    # not declare, and spending an invocation to discover that costs money.
+    # This is the refusable half; the module's own half obeys what it is given.
+    _, problem = inspection.bounds(config)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 1
+
+    return report(
+        inspection.inspect(
+            target_root, config, HARNESS_ROOT, arguments=paths, dry_run=dry_run
+        ),
+        dry_run,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

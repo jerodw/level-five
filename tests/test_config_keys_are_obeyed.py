@@ -70,6 +70,7 @@ import command_transport
 import conftest
 import filed_query
 import harness_config
+import inspection
 import outbox
 import outbox_sweep
 import run_status
@@ -137,6 +138,16 @@ TOKEN_EXEMPT: dict[str, str] = {
         "the value is a count of items one answer may carry, parsed to a "
         "positive integer and reported as a problem by the query's settings "
         "resolution when it is not one, so it cannot carry a word"
+    ),
+    "inspect_max_findings": (
+        "the value is a count of briefs one inspection may file, parsed to a "
+        "positive integer and refused by l5-inspect when it is not one, so it "
+        "cannot carry a word"
+    ),
+    "inspect_max_cost_usd": (
+        "the value is an allowance in US dollars, parsed to a positive number "
+        "and refused by l5-inspect when it is not one, so it cannot carry a "
+        "word"
     ),
 }
 
@@ -242,6 +253,35 @@ ITEMS_THE_COMMAND_ANSWERS_WITH = FILED_QUERY_MAX_ITEMS + 2
 DEFAULT_FILED_QUERY_TIMEOUT = filed_query.DEFAULT_TIMEOUT_SECONDS
 DEFAULT_FILED_QUERY_MAX_ITEMS = filed_query.DEFAULT_MAX_ITEMS
 
+#: How many briefs the fixture allows one inspection to file. A bound no
+#: harness would pick: the default written in harness source is ten and this
+#: repository configures none. It stands in for the token the value cannot
+#: carry, and its proof pins it from both sides — an inspection that found
+#: more findings than the bound files exactly the bound and names the rest as
+#: excluded — and what makes both sides decisive is that the number found sits
+#: between the configured bound and the default, so a harness that had fallen
+#: back to that default would file every one of them and name nothing.
+INSPECT_MAX_FINDINGS = 2
+FINDINGS_THE_INVOCATION_WRITES = INSPECT_MAX_FINDINGS + 2
+
+#: What the fixture allows one Inspector invocation to spend. Not a whole
+#: number of dollars, which no harness would pick: the default written in
+#: harness source is five and this repository configures none. It is handed to
+#: the invocation rather than checked after it, so its proof observes the
+#: allowance the invocation was given.
+INSPECT_MAX_COST = 0.29
+
+#: The defaults the fallback comparison and the ordering above are stated
+#: against, read off the inspection module rather than written here.
+DEFAULT_INSPECT_MAX_FINDINGS = inspection.DEFAULT_MAX_FINDINGS
+DEFAULT_INSPECT_MAX_COST = inspection.DEFAULT_MAX_COST_USD
+
+#: The part of the fixture target an inspection covers, and the file under it.
+#: The prefix carries the token, so a scope named after it can only have come
+#: from the harness reading the configured key.
+INSPECT_SOURCE_DIR = "xyzzy-source/"
+INSPECT_SOURCE_FILE = f"{INSPECT_SOURCE_DIR}inspected.py"
+
 #: Where the fixture's filed-query command lives inside the target, what it
 #: says when it answers, and what it is asked about. The path and the item key
 #: carry the token, so an answer naming this key can only have come from the
@@ -267,12 +307,15 @@ VARYING: dict[str, object] = {
     "filed_query_timeout_seconds": str(FILED_QUERY_TIMEOUT),
     "history_dir": ".harness/xyzzy-history",
     "history_retention_days": str(RETENTION_DAYS),
+    "inspect_max_cost_usd": str(INSPECT_MAX_COST),
+    "inspect_max_findings": str(INSPECT_MAX_FINDINGS),
     "logs_dir": ".harness/xyzzy-logs",
     "mandate_max_depth": str(MANDATE_DEPTH),
     "max_pause_wait_seconds": str(PAUSE_WAIT),
     "model": "xyzzy-model",
     "permission_mode": "xyzzyPrompt",
     "runs_dir": ".harness/xyzzy-runs",
+    "source_dirs": [INSPECT_SOURCE_DIR],
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
     "sweep_max_entries": str(SWEEP_MAX_ENTRIES),
@@ -302,12 +345,15 @@ FALLBACKS: dict[str, object] = {
     "filed_query_timeout_seconds": DEFAULT_FILED_QUERY_TIMEOUT,
     "history_dir": harness_config.DEFAULT_HISTORY_DIR,
     "history_retention_days": None,
+    "inspect_max_cost_usd": DEFAULT_INSPECT_MAX_COST,
+    "inspect_max_findings": DEFAULT_INSPECT_MAX_FINDINGS,
     "logs_dir": ".harness/logs",
     "mandate_max_depth": story_coordinator.DEFAULT_MANDATE_MAX_DEPTH,
     "max_pause_wait_seconds": story_coordinator.NO_PAUSE_WAIT,
     "model": None,
     "permission_mode": "acceptEdits",
     "runs_dir": ".harness/runs",
+    "source_dirs": None,
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
     "sweep_max_entries": DEFAULT_SWEEP_MAX_ENTRIES,
@@ -376,6 +422,12 @@ KEY_PROOFS: dict[str, Proof] = {
     "history_retention_days": Proof(
         "test_history_retention_days_is_the_bound_the_prune_applies",
         BEHAVIOURAL),
+    "inspect_max_cost_usd": Proof(
+        "test_inspect_max_cost_usd_is_the_allowance_each_invocation_is_given",
+        BEHAVIOURAL),
+    "inspect_max_findings": Proof(
+        "test_inspect_max_findings_is_the_bound_on_what_one_inspection_files",
+        BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
         BEHAVIOURAL),
@@ -393,6 +445,9 @@ KEY_PROOFS: dict[str, Proof] = {
         ARGUMENT_LIST),
     "runs_dir": Proof(
         "test_runs_dir_is_where_the_run_state_is_written_and_read_back",
+        BEHAVIOURAL),
+    "source_dirs": Proof(
+        "test_source_dirs_names_the_scopes_an_inspection_covers",
         BEHAVIOURAL),
     "standards_dir": Proof(
         "test_standards_dir_is_where_the_injected_standards_are_read_from",
@@ -496,6 +551,19 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
          "configured = config.get(HISTORY_RETENTION_KEY)",
          "configured = None"),
     ),
+    # The three inspection keys are read in the module that holds every
+    # deterministic decision an inspection makes, which is the only module
+    # that resolves a scope or bounds an invocation.
+    "inspect_max_cost_usd": (
+        ("orchestration/inspection.py",
+         "declared = config.get(MAX_COST_KEY)",
+         "declared = None"),
+    ),
+    "inspect_max_findings": (
+        ("orchestration/inspection.py",
+         "declared = config.get(MAX_FINDINGS_KEY)",
+         "declared = None"),
+    ),
     "logs_dir": (
         ("orchestration/story_coordinator.py",
          'config.get("logs_dir", ".harness/logs")',
@@ -528,6 +596,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/run_status.py",
          'config.get("runs_dir", ".harness/runs")',
          '".harness/runs"'),
+    ),
+    "source_dirs": (
+        ("orchestration/inspection.py",
+         "declared = config.get(SOURCE_DIRS_KEY) or []",
+         "declared = []"),
     ),
     "standards_dir": (
         ("orchestration/context_assembler.py",
@@ -871,8 +944,9 @@ EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
     "census_command", "filed_query_command", "filed_query_max_items",
     "filed_query_timeout_seconds", "history_dir", "history_retention_days",
+    "inspect_max_cost_usd", "inspect_max_findings",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
-    "model", "permission_mode", "runs_dir", "standards_dir",
+    "model", "permission_mode", "runs_dir", "source_dirs", "standards_dir",
     "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
     "test_command",
     "test_selection_command", "tests_dir", "verification_runner", "workflow",
@@ -1273,6 +1347,15 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
         < DEFAULT_FILED_QUERY_TIMEOUT
     assert 0 < FILED_QUERY_MAX_ITEMS < ITEMS_THE_COMMAND_ANSWERS_WITH \
         < DEFAULT_FILED_QUERY_MAX_ITEMS
+    # And the inspection cap, pinned the same way: what the invocation writes
+    # sits between the configured bound and the default, so the configured
+    # value excludes findings where the default would file every one of them.
+    assert 0 < INSPECT_MAX_FINDINGS < FINDINGS_THE_INVOCATION_WRITES \
+        < DEFAULT_INSPECT_MAX_FINDINGS
+    # The cost allowance is handed to the invocation rather than pinning
+    # anything the harness later decides, so what makes it a number no harness
+    # would pick is that it is neither the default nor a whole dollar.
+    assert 0 < INSPECT_MAX_COST < DEFAULT_INSPECT_MAX_COST
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -1597,6 +1680,159 @@ def test_filed_query_max_items_is_the_bound_on_what_one_answer_carries(tmp_path)
     stated = " ".join(answer.excluded)
     assert str(FILED_QUERY_MAX_ITEMS) in stated, stated
     assert str(dropped) in stated, stated
+
+
+#: The shape a finding the fixture writes must satisfy, loaded as it ships so
+#: this module spells no enum member of its own.
+INSPECT_BRIEF = schema_validator.load_schema(inspection.BRIEF_SCHEMA)
+
+
+def inspection_finding(ordinal: int) -> dict:
+    """One conforming finding, distinguishable from the ones beside it.
+
+    It names the fixture's own workflow, because the workflows a finding may
+    name are the definitions the harness root holds and this fixture's harness
+    holds exactly one.
+    """
+    return {
+        "title": f"xyzzy: the {ordinal}th defect this inspection found",
+        "slug": f"xyzzy-defect-{ordinal}",
+        "body": f"{INSPECT_SOURCE_FILE}:1 is where it is",
+        "category": INSPECT_BRIEF["properties"]["category"]["enum"][0],
+        "severity": min(INSPECT_BRIEF["properties"]["severity"]["enum"]),
+        "confidence": INSPECT_BRIEF["properties"]["confidence"]["enum"][0],
+        "effort": INSPECT_BRIEF["properties"]["effort"]["enum"][0],
+        "workflow": FIXTURE_WORKFLOW,
+        "paths": [INSPECT_SOURCE_FILE],
+    }
+
+
+class InspectingRunner:
+    """Stands in for `agent_runner.run_agent` for one inspection.
+
+    It reaches no model: it records what each invocation was handed and writes
+    the findings artifact the invocation was asked for. Only the *first*
+    invocation writes findings, so the count the cap is applied to is the one
+    this fixture chose rather than that count multiplied by however many
+    scopes the configuration happens to produce.
+    """
+
+    def __init__(self, artifact: Path, findings: list):
+        self.artifact = Path(artifact)
+        self.findings = list(findings)
+        self.calls: list[dict] = []
+
+    def __call__(self, prompt, *, stage, cwd, log_path, permission_mode,
+                 model, allowed_tools=None, max_budget_usd=None,
+                 suite_command=None):
+        first = not self.calls
+        self.calls.append({"stage": stage, "prompt": prompt,
+                           "max_budget_usd": max_budget_usd})
+        if first:
+            self.artifact.write_text(json.dumps({"findings": self.findings}),
+                                     encoding="utf-8")
+        return AgentResult(ok=True, result_text="inspected")
+
+
+@dataclass
+class Inspection:
+    """One inspection of a fixture target, and what a proof reads off it."""
+
+    report: object
+    runner: InspectingRunner
+    target: Path
+
+    @property
+    def scopes(self) -> list[str]:
+        return [scope.path for scope in self.report.scopes]
+
+    @property
+    def entries(self) -> list[Path]:
+        return outbox.entry_files(outbox.queue_dir(self.target))
+
+
+def inspected(tmp_path: Path, *, findings: int = 1, **overrides) -> Inspection:
+    """Build the fixture and inspect it through a fake runner.
+
+    The three inspection keys are read in `orchestration/inspection.py`, which
+    is the only module that resolves a scope or bounds an invocation, so their
+    proofs are driven at that seam rather than through `run_story`: nothing in
+    a run, a resume or a sweep invokes an inspection.
+    """
+    values = fixture_config(**overrides)
+    harness = build_harness(tmp_path)
+    target = build_target(tmp_path, values)
+    source = target / INSPECT_SOURCE_FILE
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("def inspected():\n    return True\n", encoding="utf-8")
+    _git(target, "add", "-A")
+    _git(target, "commit", "-q", "-m", "the tree to be inspected")
+
+    config = harness_config.load_config(target)
+    artifact, _ = inspection.findings_paths(target, config)
+    runner = InspectingRunner(
+        artifact, [inspection_finding(ordinal) for ordinal in range(findings)])
+    report = inspection.inspect(target, config, harness, runner=runner)
+    return Inspection(report=report, runner=runner, target=target)
+
+
+def test_source_dirs_names_the_scopes_an_inspection_covers(tmp_path):
+    """The configured prefixes are the scopes, one invocation each.
+
+    Observed at the runner rather than inferred from the configuration: the
+    invocation is handed the file under the configured prefix, and the scopes
+    the inspection covered are that prefix and the configured tests directory
+    beside it. A harness that had stopped reading the key would inspect the
+    whole tracked tree as one scope instead, which is a different first scope
+    and a different prompt.
+    """
+    found = inspected(tmp_path)
+
+    assert found.scopes == [INSPECT_SOURCE_DIR, str(VARYING["tests_dir"])]
+    assert len(found.runner.calls) == 2
+    assert INSPECT_SOURCE_FILE in found.runner.calls[0]["prompt"]
+    assert inspection.scopes((), dict(VARYING))[0].path == INSPECT_SOURCE_DIR
+
+
+def test_inspect_max_findings_is_the_bound_on_what_one_inspection_files(
+        tmp_path):
+    """The configured bound decides how many briefs reach the queue.
+
+    An inspection that found more than the bound files exactly the bound and
+    names each excluded finding with its severity, observed at the queue
+    rather than inferred from the report alone. Both numbers are pinned: what
+    the invocation wrote sits between the configured bound and the default
+    written in harness source, so a harness that had fallen back to that
+    default would file every one of them and exclude nothing.
+    """
+    found = inspected(tmp_path, findings=FINDINGS_THE_INVOCATION_WRITES)
+
+    assert len(found.report.filed) == INSPECT_MAX_FINDINGS
+    assert len(found.entries) == INSPECT_MAX_FINDINGS
+
+    excluded = found.report.dropped_for(inspection.PAST_THE_CAP)
+    assert len(excluded) == FINDINGS_THE_INVOCATION_WRITES - INSPECT_MAX_FINDINGS
+    # Named rather than truncated silently: each carries what it was.
+    for drop in excluded:
+        assert drop.severity is not None
+        assert "xyzzy-defect-" in drop.detail
+
+
+def test_inspect_max_cost_usd_is_the_allowance_each_invocation_is_given(
+        tmp_path):
+    """The configured allowance is handed to the invocation, per scope.
+
+    Observed at the runner, which is the only place it is observable: it is
+    given to the invocation so the invocation stops itself rather than being
+    stopped after the fact. Every invocation carries it, and the report says
+    how many invocations were made, so a reader can see that the ceiling
+    multiplies with the scopes.
+    """
+    found = inspected(tmp_path)
+
+    assert [call["max_budget_usd"] for call in found.runner.calls] == \
+        [INSPECT_MAX_COST] * len(found.runner.calls)
+    assert found.report.invocations == len(found.runner.calls)
 
 
 def test_runs_dir_is_where_the_run_state_is_written_and_read_back(tmp_path):

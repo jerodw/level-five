@@ -64,6 +64,27 @@ test_command: {test_command}
 # keeping the command's own order, and what was dropped is named in the answer
 # rather than truncated silently. Delete the key and the bound is 50.
 # filed_query_max_items: 50
+# The parts of this repository's own source l5-inspect covers when you name no
+# scope on the command line. One agent invocation is made per entry, so
+# declaring them is what turns an inspection into several coherent invocations
+# instead of one agent handed the whole tree. Delete the key and the scope is
+# everything git tracks minus the blocked paths and minus tests_dir. Tests are
+# inspected either way, as a scope of their own beside these: source and tests
+# are a union and not a merge, and setting this decides nothing about the
+# create restriction tests_dir governs.
+# source_dirs:
+#   - src/
+# How many briefs one whole inspection may file, across every scope it covered.
+# What the cap excludes is reported with how many were dropped and the severity
+# of each, and the ones kept are the highest-severity rather than the first
+# written. Delete the key and the bound is 10.
+# inspect_max_findings: 10
+# What one Inspector invocation may spend, in US dollars. It is handed to the
+# invocation so the invocation stops itself rather than being stopped after the
+# fact, and it is per scope rather than per inspection — an inspection over
+# four scopes may spend four of these, and the report says how many invocations
+# it made. Delete the key and the allowance is 5.0.
+# inspect_max_cost_usd: 5.0
 # Where this repository's tests live, as a path prefix ending in a slash. It is
 # what the workflow's {{tests_dir}} token resolves to: the stage restricted from
 # creating tests is restricted here, and the stage that writes them is told to

@@ -670,6 +670,10 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
 #:
 #:   command_transport.py  answers in the `Filing` values the queue defines,
 #:                         so it must name the queue to import them.
+#:   inspection.py         the queue's first producer, reached from
+#:                         scripts/l5-inspect and from the suite and from
+#:                         nothing a run executes, so it enqueues and never
+#:                         drains.
 #:   outbox_sweep.py       the seam itself: the one module that calls the
 #:                         queue's drain, and the only route a run has to it.
 #:   run_status.py         reads the queue as data for the l5-status listing,
@@ -682,6 +686,7 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
 #: queue is a stale exemption nobody would otherwise notice.
 MODULES_THAT_MAY_NAME_THE_QUEUE = (
     "command_transport.py",
+    "inspection.py",
     f"{outbox_sweep.__name__}.py",
     "run_status.py",
     "story_coordinator.py",

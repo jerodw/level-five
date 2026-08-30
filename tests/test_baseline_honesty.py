@@ -2335,6 +2335,23 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "under test rather than inputs to it; the planner half drives the real "
         "scripts/l5-plan, which resolves this repository as its own harness "
         "root and so can only be compared against what is deployed",
+    "test_inspection.py":
+        "the workflows, the execution rules and the prompt template it renders "
+        "against are built into a harness root it owns, because an assertion "
+        "about how a finding naming an undefined workflow is dropped needs *a* "
+        "set of definitions rather than the ones this repository deploys. What "
+        "it resolves live are the artifacts that are its subject: "
+        "schemas/story-brief.schema.json and "
+        "schemas/inspection-findings.schema.json, because the shape a finding "
+        "is held to is what the assertions are about and a fixture schema "
+        "would say only what the test had just written into it; "
+        "prompts/inspector.md and prompts/assist.md, because the criteria are "
+        "that this repository's own two producers of briefs state the "
+        "categories, the two mechanical rules and the slug rule, and that the "
+        "shipped template enumerates no workflow of its own; and "
+        "scripts/l5-inspect and orchestration/inspection.py, whose source is "
+        "read to show that the entry point holds no decision and that the "
+        "module reaches the queue one way",
     "test_outbox.py":
         "one assertion, and what it claims is a deployment fact: that "
         "schemas/outbox-entry.schema.json is a file this repository ships and "

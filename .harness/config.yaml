@@ -20,6 +20,21 @@ stories_dir: .harness/stories
 runs_dir: .harness/runs
 logs_dir: .harness/logs
 standards_dir: .harness/standards
+# The parts of this repository's own source an inspection covers when the
+# developer names no scope. One agent invocation is made per entry, so
+# declaring them is what makes an inspection of this harness several coherent
+# invocations rather than one agent handed the whole tree. Tests are inspected
+# too, as a scope of their own from tests_dir below: source and tests are a
+# union and not a merge, and nothing about the implementer's create
+# restriction is decided here.
+source_dirs:
+  - orchestration/
+  - scripts/
+  - prompts/
+  - schemas/
+  - workflows/
+  - hooks/
+  - templates/
 # The cross-run history — the append-only logs that outlive the run
 # directories they describe — is left at its default of .harness/history, and
 # unlike runs_dir and logs_dir above it is versioned and blocked to every

@@ -1,0 +1,813 @@
+"""Reading a target's own code and writing story briefs for what is wrong with it.
+
+The harness has never had a mechanism that looks at a target's code and says
+what is wrong with it: every story it has run began with a human noticing
+something. This module is the deterministic half of the one that does — scope
+resolution, the filed query and what is dropped by it, the identity a brief is
+filed under, the cap, the drop report, and the one enqueue call. The judgement
+half is `prompts/inspector.md`, and the model is reached only through
+`orchestration/agent_runner.py`, which is injected here so the suite drives a
+fake one.
+
+**A brief is not a story artifact and nothing executes one.** It is a
+pre-planning artifact carrying intent, evidence and a severity; it is not an
+approved plan and never becomes one on its own. A human plans it into a story
+artifact through l5-plan's interview, and that interview is where the mandate is
+conferred. There is nothing here to refuse, because the coordinator has no path
+that runs a brief, and nothing in this module confers a mandate or writes
+anything under the stories directory.
+
+**This is the outbox's first producer**, and being one carries an obligation
+`enqueue` states: it is total over what it is handed and answers with the empty
+string when nothing landed. An empty answer is the item having been lost, not a
+key — so nothing here is named after one, nothing is reported as filed on one,
+and the report says an item was dropped. That is the whole of what a producer
+owes the queue, and this module owes it because it is the first one.
+
+**The identity carries the mechanically stable parts of a finding and never its
+prose.** Kind, category, sorted bare paths and slug; not the title, not the
+body, not the severity, not the confidence. Those are the parts a model
+rephrases between runs, and an identity that drifts is a duplicate filed on
+every inspection — which, since a landed entry drops its payload, is a
+duplicate nothing local can even notice. The outbox computes the key from that
+identity: this module hashes nothing, derives no digest of its own, and reaches
+the queue only through `outbox.enqueue`.
+
+**The paths a brief carries are bare repository-relative paths.** The sync
+command writes one searchable marker per entry of the payload's paths and the
+query command searches for the marker of a bare path, so a path carrying a line
+number would be filed under a marker no scoped query ever asks for, and the
+dedupe this module exists to make possible would silently never match. Line
+numbers are the evidentiary standard and they live in the body.
+
+**No silent bound.** Every way of dropping a finding is named in the report with
+what it excluded: already filed, malformed, an unknown workflow, past the cap,
+lost by the queue. A scope whose filed query could not answer is reported as
+dedupe not having run, in those terms, and its findings are filed anyway —
+losing dedupe is not a reason to lose the findings.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import agent_runner
+import context_assembler
+import filed_query
+import harness_config
+import outbox
+import schema_validator
+import workflow_selection
+
+#: What this producer files. Part of every identity, so an entry this module
+#: wrote is distinguishable from any other producer's without reading its
+#: payload — which a landed entry no longer has.
+KIND = "story-brief"
+
+#: The parts of a target's own source an inspection covers when no scope is
+#: named on the command line.
+SOURCE_DIRS_KEY = "source_dirs"
+
+#: How many briefs one whole inspection may file.
+MAX_FINDINGS_KEY = "inspect_max_findings"
+
+#: The allowance one invocation may spend, handed to the invocation.
+MAX_COST_KEY = "inspect_max_cost_usd"
+
+#: Where a target's tests live, which is a scope of its own beside the source
+#: dirs rather than one of them.
+TESTS_DIR_KEY = "tests_dir"
+
+DEFAULT_MAX_FINDINGS = 10
+DEFAULT_MAX_COST_USD = 5.0
+DEFAULT_LOGS_DIR = ".harness/logs"
+
+#: The prompt the Inspector carries, and the two schemas its answer is held to.
+INSPECTOR_PROMPT = "inspector.md"
+FINDINGS_SCHEMA = "inspection-findings"
+BRIEF_SCHEMA = "story-brief"
+
+#: Where an invocation is asked to write its findings, and where its own output
+#: is kept. Inside the workspace, under the configured logs directory, for the
+#: reason `workflow_selection.selection_paths` gives: a turn asked to write
+#: outside the workspace the permission mode accepts edits within reasons
+#: correctly and then cannot deliver.
+FINDINGS_ARTIFACT = "inspection-findings.json"
+INSPECTION_LOG = "inspection.log"
+
+#: The one tool a turn whose whole output is a file needs, granted on top of
+#: whatever the target already grants a stage, so an inspector can search the
+#: way a stage can and can also deliver.
+DELIVERY_TOOL = "Write"
+
+#: Which of the two scopes an invocation is looking at. Source and tests are a
+#: union rather than a merge, and the Inspector is told which it has.
+SOURCE = "source"
+TESTS = "tests"
+
+#: The ways a finding can be dropped. Each is named in the report with what it
+#: excluded, because a bound whose effect is not stated reads as a scope with
+#: nothing wrong in it.
+ALREADY_FILED = "already filed"
+MALFORMED = "malformed"
+UNKNOWN_WORKFLOW = "names a workflow the harness does not define"
+PAST_THE_CAP = "past the cap"
+LOST_BY_THE_QUEUE = "lost by the queue"
+NO_ARTIFACT = "no findings artifact"
+
+
+# --------------------------------------------------------------------------
+# What a scope is
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Scope:
+    """One unit of invocation: a part of the tree, and which half of it it is.
+
+    `path` is a repository-relative prefix, or "" for everything the
+    repository tracks. `kind` is SOURCE or TESTS and is what the Inspector is
+    told it is looking at — the two are a union and not a merge, so a tests
+    scope is never folded into a source one. `excluded` is what this scope
+    leaves to another scope, which is how the everything-scope keeps a
+    declared tests directory out of itself without becoming a merge of the two.
+    """
+
+    path: str
+    kind: str
+    excluded: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str:
+        """What this scope is called in a report and in a prompt."""
+        return self.path or "the whole tracked tree"
+
+
+def _prefix(path: str) -> str:
+    """A scope written as a prefix, so a path is under it or is not.
+
+    A trailing slash is added where the value does not already carry one, so
+    `orchestration` and `orchestration/` name the same scope and neither of
+    them matches `orchestration-notes.py`.
+    """
+    path = path.strip()
+    if not path or path.endswith("/"):
+        return path
+    return path + "/"
+
+
+def scopes(arguments, config: dict) -> tuple[Scope, ...]:
+    """The scopes an invocation covers, one per agent invocation.
+
+    Named paths win: two paths on the command line are two scopes and
+    therefore two invocations. A named scope at or beneath the configured
+    tests directory is a tests scope, so what the Inspector is told about the
+    code it is reading does not depend on how the developer reached it.
+
+    With nothing named, the scopes are one per `source_dirs` entry plus one for
+    `tests_dir`. With no `source_dirs`, the source scope is the whole tracked
+    tree with the tests directory left to its own scope — a target that
+    declares neither key is inspected over its tracked tree rather than
+    refused. In every arrangement tests_dir is a scope beside the source ones
+    rather than one of them, and setting `source_dirs` decides nothing about
+    the create restriction tests_dir governs.
+    """
+    tests_dir = config.get(TESTS_DIR_KEY)
+    tests_prefix = _prefix(tests_dir) if tests_dir else ""
+
+    named = [one for one in (argument.strip() for argument in arguments) if one]
+    if named:
+        return tuple(
+            Scope(
+                path=one,
+                kind=TESTS
+                if tests_prefix and _prefix(one).startswith(tests_prefix)
+                else SOURCE,
+            )
+            for one in named
+        )
+
+    declared = config.get(SOURCE_DIRS_KEY) or []
+    found = [Scope(path=one, kind=SOURCE) for one in declared if one.strip()]
+    if not found:
+        # Nothing declared: everything the repository tracks, with the tests
+        # directory left to the scope below rather than merged into this one.
+        found = [
+            Scope(
+                path="",
+                kind=SOURCE,
+                excluded=(tests_prefix,) if tests_prefix else (),
+            )
+        ]
+    if tests_prefix:
+        found.append(Scope(path=tests_dir, kind=TESTS))
+    return tuple(found)
+
+
+def blocked_prefixes(harness_root: Path) -> tuple[str, ...]:
+    """The paths no inspection reads, read off the execution rules.
+
+    Read rather than restated, so a rule added there is excluded here with no
+    edit to this module. A rules file that cannot be read excludes nothing
+    rather than raising — but nothing here reaches that state in a working
+    installation, and an inspection is not the place to discover it.
+    """
+    try:
+        rules = harness_config.load_rules(harness_root)
+    except (OSError, ValueError):
+        return ()
+    declared = rules.get("blocked_paths") or []
+    return tuple(one for one in declared if isinstance(one, str) and one.strip())
+
+
+def _tracked(target_root: Path, under: Scope) -> list[str]:
+    """What git tracks beneath a scope, as repository-relative paths.
+
+    The parameter is `under` rather than `scope` because a standing rule in
+    the suite reports any decision under `orchestration/` whose subject reads
+    a name called `scope` — that rule is about a suite run's recorded scope,
+    which is a different thing entirely, and its matcher is deliberately blunt.
+    Renaming one parameter is cheaper than exempting this module from a rule
+    that is right about every other one.
+    """
+    argv = ["git", "-C", str(target_root), "ls-files", "-z", "--"]
+    if under.path:
+        argv.append(under.path)
+    try:
+        completed = subprocess.run(  # noqa: S603 - a fixed argument list
+            argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        )
+    except OSError:
+        return []
+    if completed.returncode != 0:
+        return []
+    return [one for one in completed.stdout.split("\0") if one]
+
+
+def scope_paths(target_root: Path, scope: Scope,
+                blocked: tuple[str, ...]) -> tuple[str, ...]:
+    """The repository-relative paths beneath a scope that git tracks.
+
+    Every path under a blocked path is excluded, and the blocked set comes
+    from the execution rules rather than from anything written here. What the
+    scope itself excludes — the tests directory, for the everything-scope — is
+    excluded on the same terms, which is what keeps source and tests a union
+    of two scopes rather than one scope that happens to contain both.
+    """
+    excluded = tuple(_prefix(one) for one in (*blocked, *scope.excluded) if one)
+    return tuple(
+        path for path in _tracked(target_root, scope)
+        if not any(path.startswith(one) for one in excluded)
+    )
+
+
+# --------------------------------------------------------------------------
+# What a brief is filed under
+# --------------------------------------------------------------------------
+
+
+def bare_path(path: str) -> str:
+    """One path with any line-level suffix taken off it.
+
+    `orchestration/inspection.py:42` and `…:42:7` both become the file. The
+    reason is mechanical: the reference sync command writes one searchable
+    marker per path a payload carries and the reference query command searches
+    for the marker of a bare path, so a path filed with a line number is
+    invisible to every scoped query that follows and the dedupe this module
+    exists for would silently never match. The line is not lost — the body is
+    where file:line evidence belongs and where a reader looks for it.
+    """
+    head = path.strip()
+    while True:
+        stem, separator, tail = head.rpartition(":")
+        if not separator or not tail.isdigit() or not stem:
+            return head
+        head = stem
+
+
+def bare_paths(finding: dict) -> tuple[str, ...]:
+    """The paths a finding is about: bare, deduplicated and sorted.
+
+    Sorted and deduplicated because they are part of the identity, and an
+    identity that depended on the order a model happened to write two paths in
+    would file one defect twice.
+    """
+    declared = finding.get("paths") or []
+    return tuple(sorted({
+        bare_path(one) for one in declared
+        if isinstance(one, str) and one.strip()
+    }))
+
+
+def identity(finding: dict) -> dict:
+    """What a brief is filed under, and nothing else.
+
+    The kind, the category, the sorted bare paths and the slug. No title, no
+    body, no severity, no confidence and no line number: those are what a
+    model rephrases and re-rates between runs, and an identity carrying them
+    is an identity that drifts, which is a duplicate filed on every
+    inspection. Nothing is hashed here — `outbox.identity_key` is the only
+    derivation and `outbox.enqueue` is the only way this module reaches the
+    queue.
+    """
+    return {
+        "kind": KIND,
+        "category": finding["category"],
+        "paths": list(bare_paths(finding)),
+        "slug": finding["slug"],
+    }
+
+
+def payload(finding: dict, scope: Scope) -> dict:
+    """What is filed with a brief: the finding, with its paths made bare.
+
+    Everything here is JSON-serializable by construction — it came out of a
+    JSON document, and the two fields added to it are strings — because the
+    outbox coerces nothing and a value it cannot render is an item it drops.
+    """
+    return {
+        **finding,
+        "kind": KIND,
+        "scope": scope.path,
+        "paths": list(bare_paths(finding)),
+    }
+
+
+# --------------------------------------------------------------------------
+# What an inspection did
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Drop:
+    """One finding that was not filed, and which way it was not filed.
+
+    `severity` is carried where the finding had a readable one, so the cap can
+    report the severity of each thing it excluded rather than only how many.
+    """
+
+    reason: str
+    detail: str
+    severity: int | None = None
+
+
+@dataclass(frozen=True)
+class Filed:
+    """One brief that reached the queue, and the key it was filed under."""
+
+    key: str
+    slug: str
+    title: str
+    severity: int
+    scope: str
+
+
+@dataclass(frozen=True)
+class Dedupe:
+    """Whether the filed query answered for one scope, and what it said.
+
+    `ran` false is dedupe not having run for that scope. The inspection files
+    what it found anyway: a query that could not answer costs dedupe and costs
+    nothing else, which is the same bias the query module itself takes.
+    """
+
+    scope: str
+    ran: bool
+    known: int = 0
+    reason: str = ""
+    excluded: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Report:
+    """What one inspection inspected, filed and dropped.
+
+    Returned rather than printed, in the shape `plan_commit` and
+    `workflow_selection` already have: every decision is here and every word a
+    developer reads is `scripts/l5-inspect`'s.
+    """
+
+    scopes: tuple[Scope, ...] = ()
+    invocations: int = 0
+    filed: tuple[Filed, ...] = ()
+    dropped: tuple[Drop, ...] = ()
+    dedupe: tuple[Dedupe, ...] = ()
+    dry_run: bool = False
+
+    def dropped_for(self, reason: str) -> tuple[Drop, ...]:
+        """Everything dropped one way, so a caller can say each way once."""
+        return tuple(drop for drop in self.dropped if drop.reason == reason)
+
+    @property
+    def dedupe_ran(self) -> bool:
+        """Whether every scope's filed query answered."""
+        return all(one.ran for one in self.dedupe)
+
+
+@dataclass
+class _Found:
+    """One accepted finding on its way to the queue, with where it came from."""
+
+    finding: dict
+    scope: Scope
+
+
+@dataclass
+class _ScopeResult:
+    """What one invocation produced: what it found and what it dropped."""
+
+    found: list = field(default_factory=list)
+    dropped: list = field(default_factory=list)
+    dedupe: Dedupe = None
+
+
+# --------------------------------------------------------------------------
+# The bounds
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Bounds:
+    """The two bounds an inspection runs under, already resolved."""
+
+    max_findings: int
+    max_cost_usd: float
+
+
+def bounds(config: dict):
+    """The bounds, or the reason they are refused.
+
+    Returns `(bounds, problem)`, in the shape `filed_query.resolve_settings`
+    and the sweep's transport build already take: a terminal caller refuses a
+    configuration it cannot obey. Neither falls back to its default when it is
+    declared and unreadable — a bound that cannot be read is a bound the target
+    did not declare, and obeying the default in its place would obey a number
+    nobody wrote. Both problems are reported together, so a target that got
+    both wrong is told both.
+    """
+    problems: list[str] = []
+
+    max_findings = DEFAULT_MAX_FINDINGS
+    declared = config.get(MAX_FINDINGS_KEY)
+    if declared is not None:
+        try:
+            max_findings = int(str(declared))
+        except (TypeError, ValueError):
+            max_findings = 0
+        if max_findings <= 0:
+            problems.append(
+                f"{MAX_FINDINGS_KEY}: {declared!r} is not a positive integer, "
+                "and an inspection must be bounded in how many briefs it files"
+            )
+
+    max_cost = DEFAULT_MAX_COST_USD
+    declared = config.get(MAX_COST_KEY)
+    if declared is not None:
+        try:
+            max_cost = float(declared)
+        except (TypeError, ValueError):
+            max_cost = 0.0
+        if max_cost <= 0:
+            problems.append(
+                f"{MAX_COST_KEY}: {declared!r} is not a positive number of US "
+                "dollars, and every invocation must be bounded in cost"
+            )
+
+    if problems:
+        return None, "; ".join(problems)
+    return Bounds(max_findings=max_findings, max_cost_usd=max_cost), ""
+
+
+# --------------------------------------------------------------------------
+# One scope
+# --------------------------------------------------------------------------
+
+
+def findings_paths(target_root: Path, config: dict):
+    """Where an invocation writes its findings, and where its output is kept.
+
+    Both inside the workspace, under the configured logs directory, and both
+    derived here so neither name is written at a call site.
+    """
+    logs = target_root / config.get("logs_dir", DEFAULT_LOGS_DIR)
+    return logs / FINDINGS_ARTIFACT, logs / INSPECTION_LOG
+
+
+def _standards(target_root: Path, config: dict) -> str:
+    """Whatever the target declares as standards, as one undifferentiated body.
+
+    Globbed, never looked for by name: the harness declares no required
+    document set, so a target with one standards file and a target with twelve
+    are read identically, and a target with none is read as declaring none.
+    """
+    directory = target_root / config.get("standards_dir", ".harness/standards")
+    if not directory.is_dir():
+        return ""
+    parts = []
+    for path in sorted(directory.glob("*.md")):
+        try:
+            parts.append(f"--- {path.name} ---\n{path.read_text(encoding='utf-8')}")
+        except OSError:
+            continue
+    return "\n\n".join(parts)
+
+
+def _already_filed_block(answer) -> str:
+    """The items the query reported, rendered as data for the Inspector.
+
+    Data to recognise its own earlier work by, and not instructions: the
+    deterministic drop below has already removed everything whose key matched,
+    so what reaches the model is the rest — items a query reported that this
+    module could not match by key, which is exactly what a reader rather than
+    a comparison is needed for.
+    """
+    if not answer.answered:
+        return ("The query that would say what is already filed did not answer, "
+                "so nothing is known about it and dedupe has not run for this "
+                f"scope: {answer.reason}")
+    if not answer.items:
+        return "Nothing is already filed against these paths."
+    return "\n\n".join(
+        "\n".join(filter(None, [
+            f"key: {item.key}",
+            f"title: {item.title}",
+            f"summary: {item.summary}" if item.summary else "",
+            f"paths: {', '.join(item.paths)}" if item.paths else "",
+        ]))
+        for item in answer.items
+    )
+
+
+def _render(harness_root: Path, target_root: Path, config: dict, scope: Scope,
+            paths: tuple[str, ...], answer, artifact: Path) -> str:
+    """The prompt one invocation is given."""
+    context = context_assembler.schema_context(harness_root)
+    context["scope"] = scope.label
+    context["scope_kind"] = scope.kind
+    context["scope_paths"] = "\n".join(paths) or "(this scope tracks no files)"
+    context["repository_standards"] = _standards(target_root, config) or None
+    context["already_filed"] = _already_filed_block(answer)
+    context["findings_path"] = str(artifact)
+    context["workflow_candidates"] = workflow_selection.candidate_block(
+        workflow_selection.candidates(harness_root)
+    )
+    prose = context_assembler.resolved_partial(
+        harness_root, context_assembler.PROSE_LAYER, context
+    )
+    if prose is not None:
+        context["prose_layer"] = prose
+    template = context_assembler.load_template(harness_root, INSPECTOR_PROMPT)
+    return context_assembler.render(template, context)
+
+
+def _read_findings(artifact: Path, harness_root: Path | None):
+    """The envelope one invocation wrote, or the reason there is none.
+
+    Returns `(document, problem)`. The findings are a file the agent wrote and
+    nothing is parsed out of what it printed: an invocation that wrote no
+    file, wrote one that is not JSON, or wrote one that does not satisfy the
+    envelope schema yields no findings for that scope and says which of those
+    it was. A format enforced by nothing breaks silently, and a malformed
+    finding read out of prose would be indistinguishable from none.
+    """
+    try:
+        text = artifact.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, "the invocation wrote no findings file"
+    except OSError as error:
+        return None, f"the findings file could not be read: {error}"
+    try:
+        document = json.loads(text)
+    except ValueError as error:
+        return None, f"the findings file is not JSON: {error}"
+    problems = schema_validator.validate(
+        document, schema_validator.load_schema(FINDINGS_SCHEMA, harness_root)
+    )
+    if problems:
+        return None, ("the findings file does not satisfy the "
+                      f"inspection-findings schema: {problems[0]}")
+    return document, ""
+
+
+def _describe(finding, fallback: str) -> str:
+    """A finding named for a report, by whatever it carried to be named by."""
+    if isinstance(finding, dict):
+        for key in ("slug", "title"):
+            value = finding.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return fallback
+
+
+def _severity(finding) -> int | None:
+    """A finding's severity where it has a readable one, for the drop report."""
+    if isinstance(finding, dict):
+        value = finding.get("severity")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def inspect_scope(scope: Scope, target_root: Path, config: dict,
+                  harness_root: Path, bound: Bounds, blocked: tuple[str, ...],
+                  runner) -> _ScopeResult:
+    """One scope: ask what is filed, invoke once, and read what was written.
+
+    The order is the point. What is already filed against this scope's paths is
+    asked for *before* the invocation and injected into the prompt as data, and
+    a finding whose key matches an item the query reported is dropped without
+    the model being asked about it a second time. A query that could not answer
+    is recorded as dedupe not having run for this scope and the findings are
+    filed anyway.
+    """
+    result = _ScopeResult()
+    paths = scope_paths(target_root, scope, blocked)
+    answer = filed_query.query(paths, config, target_root, harness_root)
+    result.dedupe = Dedupe(
+        scope=scope.label,
+        ran=answer.answered,
+        known=len(answer.items),
+        reason=answer.reason,
+        excluded=answer.excluded,
+    )
+    known = {item.key for item in answer.items}
+
+    artifact, log_path = findings_paths(target_root, config)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    # An artifact left by an earlier invocation is not this one's, and reading
+    # one as this one's would report findings nothing found. Removed before the
+    # invocation and again after it is read, so whatever this invocation does,
+    # the next one starts with nothing there. What the invocation said on the
+    # way to writing it is kept by the runner's own log.
+    artifact.unlink(missing_ok=True)
+    try:
+        granted = list(config.get("allowed_tools") or ())
+        if DELIVERY_TOOL not in granted:
+            granted.append(DELIVERY_TOOL)
+        runner(
+            _render(harness_root, target_root, config, scope, paths, answer,
+                    artifact),
+            stage=f"inspector:{scope.label}",
+            cwd=target_root,
+            log_path=log_path,
+            permission_mode=config.get("permission_mode", "acceptEdits"),
+            model=config.get("model"),
+            allowed_tools=granted,
+            # Handed to the invocation rather than checked after it, so the
+            # invocation stops itself. The ceiling is per invocation, which is
+            # per scope; the report says how many invocations were made.
+            max_budget_usd=bound.max_cost_usd,
+        )
+        document, problem = _read_findings(artifact, harness_root)
+    finally:
+        artifact.unlink(missing_ok=True)
+
+    if document is None:
+        result.dropped.append(Drop(NO_ARTIFACT, f"{scope.label}: {problem}"))
+        return result
+
+    brief_schema = schema_validator.load_schema(BRIEF_SCHEMA, harness_root)
+    defined = harness_config.workflow_names(harness_root)
+    for index, finding in enumerate(document["findings"], start=1):
+        named = _describe(finding, f"the finding at position {index}")
+        problems = schema_validator.validate(finding, brief_schema)
+        if problems:
+            # One malformed finding costs only itself: it is named with the
+            # field that failed, and the findings beside it in the same file
+            # are filed exactly as they would have been.
+            result.dropped.append(
+                Drop(MALFORMED, f"{named}: {problems[0]}", _severity(finding))
+            )
+            continue
+        if finding["workflow"] not in defined:
+            # The acceptable names are the definitions the harness holds, so a
+            # third workflow becomes selectable by shipping a definition and
+            # with no edit here or to the brief schema.
+            result.dropped.append(Drop(
+                UNKNOWN_WORKFLOW,
+                f"{named}: '{finding['workflow']}' is not a workflow the "
+                f"harness defines; it defines: "
+                f"{', '.join(defined) if defined else 'no workflow definitions'}",
+                _severity(finding),
+            ))
+            continue
+        if outbox.identity_key(identity(finding)) in known:
+            result.dropped.append(Drop(
+                ALREADY_FILED,
+                f"{named}: the filed query already reported it",
+                _severity(finding),
+            ))
+            continue
+        result.found.append(_Found(finding=finding, scope=scope))
+    return result
+
+
+# --------------------------------------------------------------------------
+# The whole inspection
+# --------------------------------------------------------------------------
+
+
+def capped(found: list, max_findings: int):
+    """The findings kept and the ones the cap excluded.
+
+    Applied across the whole inspection rather than per scope, because the
+    bound is on what an inspection files. Sorted by severity so the ones kept
+    are the highest-severity rather than the first written — a cap on writing
+    order would be a cap on nothing worth bounding — and the sort is stable, so
+    findings of one severity keep the order their scopes produced them in.
+    """
+    ordered = sorted(found, key=lambda one: -one.finding["severity"])
+    return ordered[:max_findings], ordered[max_findings:]
+
+
+def inspect(target_root: Path, config: dict, harness_root: Path, *,
+            arguments=(), dry_run: bool = False,
+            runner=agent_runner.run_agent) -> Report:
+    """Inspect every scope, file what survives, and report what happened.
+
+    One invocation per scope, then one cap across all of them, then one
+    `outbox.enqueue` per surviving brief. Returns what happened and prints
+    nothing.
+
+    `dry_run` reports exactly what an ordinary invocation would file and
+    enqueues nothing: the scopes are inspected, the query is asked, the
+    findings are validated and the cap is applied identically, and only the
+    call into the queue is not made.
+
+    The bounds are assumed already resolved by a caller that could refuse on
+    them; `bounds` is that caller's half, and this one obeys whatever it is
+    given.
+    """
+    bound, problem = bounds(config)
+    if bound is None:
+        # A caller that refuses on a bad bound never reaches here. One that did
+        # not is given an inspection that made no invocation and filed nothing,
+        # rather than one that quietly obeyed a default nobody wrote.
+        return Report(dropped=(Drop(MALFORMED, problem),))
+
+    covered = scopes(arguments, config)
+    blocked = blocked_prefixes(harness_root)
+
+    found: list = []
+    dropped: list = []
+    dedupe: list = []
+    invocations = 0
+    for scope in covered:
+        result = inspect_scope(
+            scope, target_root, config, harness_root, bound, blocked, runner
+        )
+        invocations += 1
+        found.extend(result.found)
+        dropped.extend(result.dropped)
+        dedupe.append(result.dedupe)
+
+    kept, excluded = capped(found, bound.max_findings)
+    for one in excluded:
+        dropped.append(Drop(
+            PAST_THE_CAP,
+            f"{one.finding['slug']}: severity {one.finding['severity']}",
+            one.finding["severity"],
+        ))
+
+    filed: list = []
+    queue = outbox.queue_dir(target_root)
+    for one in kept:
+        if dry_run:
+            filed.append(Filed(
+                key="",
+                slug=one.finding["slug"],
+                title=one.finding["title"],
+                severity=one.finding["severity"],
+                scope=one.scope.label,
+            ))
+            continue
+        key = outbox.enqueue(queue, payload(one.finding, one.scope),
+                             identity(one.finding))
+        if not key:
+            # story-090's contract: the empty string is the item having been
+            # lost rather than a key. Nothing is named after it and nothing is
+            # reported as filed on it.
+            dropped.append(Drop(
+                LOST_BY_THE_QUEUE,
+                f"{one.finding['slug']}: the queue dropped it",
+                one.finding["severity"],
+            ))
+            continue
+        filed.append(Filed(
+            key=key,
+            slug=one.finding["slug"],
+            title=one.finding["title"],
+            severity=one.finding["severity"],
+            scope=one.scope.label,
+        ))
+
+    return Report(
+        scopes=covered,
+        invocations=invocations,
+        filed=tuple(filed),
+        dropped=tuple(dropped),
+        dedupe=tuple(dedupe),
+        dry_run=dry_run,
+    )

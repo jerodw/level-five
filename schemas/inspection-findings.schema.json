@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "inspection-findings",
+  "description": "The envelope one inspection of one scope writes. It is a file the agent wrote rather than anything parsed out of what it printed: a format enforced by nothing breaks silently, and a malformed finding read out of prose would be indistinguishable from no finding at all. ITS ITEMS ARE TYPED AS OBJECTS AND NOTHING MORE, and that is deliberate rather than lax. This validator subset has no reference keyword, so restating the brief's fields here would be a second definition of a shape this repository defines once in schemas/story-brief.schema.json — two definitions that agree today and drift the first time either is edited. Each finding is instead held to the brief schema on its own, which is also what makes one malformed finding cost only itself: it is dropped and named with the field that failed, and the findings beside it in the same file are filed exactly as they would have been.",
+  "type": "object",
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "description": "The findings this inspection of this scope produced, each of which is separately held to schemas/story-brief.schema.json. An empty array is an answer rather than an absence: it says the Inspector looked at this scope and found nothing worth filing.",
+      "items": { "type": "object" }
+    }
+  }
+}
