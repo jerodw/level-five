@@ -1,0 +1,498 @@
+story:
+  id: story-094
+  title: The Inspector writes story briefs
+  description: |
+    The harness has never had a mechanism that looks at a target's code and
+    says what is wrong with it. Every story it has run began with a human
+    noticing something. This story adds the Inspector: an agent invoked
+    deliberately over a scope a developer names, which reads the target's code
+    and writes story briefs for the defects it finds.
+
+    A brief is a pre-planning artifact. It carries intent, evidence and a
+    severity, and it is not an approved plan and never becomes one on its own -
+    a human plans it into a story artifact through l5-plan's interview, and
+    that interview is where the mandate is conferred. There is nothing here to
+    refuse, because a brief is not a story artifact and the coordinator has no
+    path that executes one.
+
+    This is the broad mode, invoked as l5-inspect over a scope the developer
+    names or over the scope the target's configuration declares. The narrow
+    mode that runs when a story completes is separate work and this story does
+    not reach the coordinator at all.
+
+    It is also the outbox's first producer. Nothing in the harness has enqueued
+    anything until now: story-089 shipped the queue, story-090 settled what
+    enqueue is total over, story-091 the filing transport, story-092 the sweep
+    seam, and story-093 the read side with no caller. This story is the caller,
+    and it is why the read side exists - an inspector that cannot find out what
+    it has already filed refiles it on every run, and a mechanism that reports
+    the same finding forever is one a developer learns to ignore.
+
+    Two consequences of the outbox being the only store are worth stating
+    rather than discovering. A landed entry drops its payload, so the tracker
+    is the only place a brief survives and the harness reads one back only
+    through the filed-query command. And an entry's identity decides its key,
+    so the identity must carry the mechanically stable parts of a finding and
+    never its prose title, which is the part a model rephrases between runs.
+
+    One correction to what the request describes, forced by the mechanism
+    story-093 shipped. The reference sync script writes one searchable marker
+    per entry of the payload's paths, and the reference query script searches
+    for the marker of a bare repository-relative path. A paths entry carrying a
+    line number would be filed under a marker no scoped query ever asks for, so
+    the dedupe this story exists to make possible would silently never match.
+    The paths a brief carries are therefore bare repository-relative paths, and
+    the file:line citations that are the evidentiary standard live in the body.
+  workflow: story-workflow
+
+tasks:
+  - Add schemas/story-brief.schema.json, the shape of one brief, and register
+    it in schemas/manifest.json. It is the outbox payload shape as well as the
+    document a later story will fetch and validate one of, so it stands alone
+    rather than being nested inside the inspector's own artifact shape.
+  - Add schemas/inspection-findings.schema.json, the envelope one inspection
+    writes, and register it too. Its items are typed as objects only; each
+    finding is held to the brief schema separately, so one malformed finding
+    is dropped and named rather than costing the others.
+  - Add orchestration/inspection.py, holding every deterministic decision -
+    scope resolution, the filed query and what is dropped by it, the identity
+    a brief is filed under, the cap, the drop report, and the enqueue call.
+  - Add prompts/inspector.md, the judgement half - what the Inspector looks
+    for, how it rates what it finds, how it classifies the workflow, and the
+    two mechanical rules that hold the scale still.
+  - Add scripts/l5-inspect, which parses arguments and hands over, and which
+    is where the developer-facing wording lives.
+  - Declare source_dirs, inspect_max_findings and inspect_max_cost_usd in the
+    harness configuration schema, read them in the new module, default the two
+    bounded ones in source, and comment all three into templates/config.yaml.
+  - Declare source_dirs in this repository's own configuration, so an
+    inspection of this harness is several coherent invocations rather than one
+    agent handed the whole tree.
+  - Teach prompts/assist.md what a brief is, since the assist agent is the
+    other producer of briefs and its closing line names an artifact shape that
+    no longer exists.
+  - Write the story's regression suite against a fake runner and fake
+    commands, so nothing in it invokes a model, reaches a network or touches a
+    tracker.
+  - Prove the three new configuration keys govern, in the shape every other
+    declared key is proven in.
+
+acceptance_criteria:
+  - scripts/l5-inspect exists, parses its arguments and hands over to
+    orchestration/inspection.py, and holds no decision of its own beyond the
+    wording it prints. Every judgement about scope, dedupe, bounds, identity
+    and filing is the module's and is exercised without the script.
+  - The unit of invocation is one scope per agent invocation. l5-inspect given
+    two paths makes two invocations; given none it makes one per source_dirs
+    entry plus one for tests_dir. A test observes the invocations rather than
+    inferring them from the arguments.
+  - A scope resolves to the repository-relative paths beneath it that git
+    tracks, with every path under a blocked path excluded. The blocked set is
+    read from the execution rules rather than restated, so a rule added there
+    is excluded here with no edit to this story's code.
+  - With source_dirs unset the scope is everything git tracks minus the
+    blocked paths and minus tests_dir, and tests_dir is its own scope where
+    the target declares one. A target that declares neither key is inspected
+    over its tracked tree rather than refused.
+  - Source and tests are a union and not a merge. tests_dir is not folded into
+    source_dirs and does not become one, the inspector is told which scope it
+    is looking at, and setting source_dirs changes nothing about the create
+    restriction tests_dir governs.
+  - The agent's findings come back as a file it wrote, validated against
+    schemas/inspection-findings.schema.json, and nothing is parsed out of what
+    it printed. An invocation that wrote no file, wrote a file that is not
+    JSON, or wrote one that does not satisfy the envelope schema yields no
+    findings for that scope and says which of those it was.
+  - Each finding in the envelope is validated against
+    schemas/story-brief.schema.json on its own. A finding that fails is
+    dropped and named with the field that failed, and the findings beside it
+    in the same file are unaffected.
+  - A finding naming a workflow the harness does not define is dropped and
+    named. The set of acceptable names comes from the workflow definitions the
+    harness holds, so a third workflow becomes selectable by shipping a
+    definition and with no edit to the schema or the module.
+  - A brief's paths are bare repository-relative paths. No path a brief
+    carries has a line number appended to it, and a test constructs a finding
+    citing a line and asserts the filed paths carry none, because the
+    reference query searches for the marker of a bare path and a path filed
+    with a line number is invisible to every scoped query that follows.
+  - The identity a brief is filed under is the kind, the category, the sorted
+    paths and the slug, and it carries no title, no body, no severity and no
+    line number. A test files the same finding twice with its title rewritten
+    and its severity changed and asserts one entry on disk under one key.
+  - The outbox computes the key. orchestration/inspection.py hashes nothing,
+    derives no digest of its own, and reaches the queue only through
+    outbox.enqueue.
+  - An enqueue that answers with the empty string is read as the item having
+    been lost rather than as a key. Nothing is named after it, nothing is
+    reported as filed, and the report says an item was dropped. A test forces
+    a drop and asserts the report names it.
+  - Everything a brief is filed with is JSON-serializable before it reaches
+    enqueue. A test asserts that what this story's producer constructs renders,
+    since the outbox coerces nothing and a Path in a payload is dropped
+    silently by design.
+  - Before inspecting a scope, what is already filed against that scope's paths
+    is asked for through orchestration/filed_query.py and injected into the
+    prompt as data. A finding whose key matches an item the query reported is
+    dropped without the model being asked about it.
+  - A query that did not answer is reported as dedupe not having run, in those
+    terms, and the inspection files what it found anyway. A test drives a query
+    command that fails and asserts both - that the report says dedupe did not
+    run, and that the findings were still enqueued.
+  - No inspection files more than inspect_max_findings briefs. What the cap
+    excluded is reported with how many were dropped and the severity of each,
+    and the findings kept are the highest-severity ones rather than the first
+    written.
+  - Each invocation is bounded by inspect_max_cost_usd, handed to the agent
+    runner as the allowance for that invocation so the invocation stops itself.
+    A test observes the value reaching the runner. The report says how many
+    invocations were made, so a reader can see that the ceiling is per scope.
+  - --dry-run reports exactly what an ordinary invocation would file and
+    enqueues nothing. A test asserts the queue directory is unchanged after a
+    dry run and holds the same entries after the equivalent ordinary run.
+  - The model is invoked through orchestration/agent_runner.py and nowhere
+    else, so the architecture standard that puts model calls in one module
+    holds for this feature. The runner is injected into the module, and every
+    test in this story drives a fake one.
+  - prompts/inspector.md states the categories, defines severity by
+    consequence and confidence as a separate axis, and carries the two
+    mechanical rules - that every finding cites file:line, and that a finding
+    cannot be severity 3 unless its confidence is high.
+  - prompts/inspector.md tells the Inspector to treat the repository standards
+    as an undifferentiated body of declared rules and to look for no standards
+    file by name, and to report a repository that declares none as its first
+    observation. The harness declares no required document set anywhere in
+    this story.
+  - prompts/inspector.md states the rule the slug is derived by, so two
+    inspections of the same defect derive the same slug, and states that the
+    title is prose and is deliberately not part of what a brief is filed under.
+  - The Inspector classifies each brief's workflow in the words the workflow
+    definitions already use. The definitions' own applies_when strings are what
+    the prompt carries, rendered from the definitions rather than restated, and
+    a finding that does not fall out cleanly says in its body why it chose.
+  - prompts/assist.md tells the assist agent what a brief contains, and no
+    longer asks it for a story request the developer hands to l5-plan.
+  - source_dirs, inspect_max_findings and inspect_max_cost_usd are declared in
+    schemas/harness-config.schema.json, are read by orchestration/inspection.py,
+    and the two bounded ones default in source. This repository's own
+    .harness/config.yaml declares source_dirs.
+  - An inspect_max_findings that is not a positive integer and an
+    inspect_max_cost_usd that is not a positive number are each refused by
+    l5-inspect naming the key and the value, before any invocation is made and
+    before anything is enqueued.
+  - No provider name, no endpoint, no credential and no tracker vocabulary
+    appears in orchestration/inspection.py or scripts/l5-inspect. The existing
+    scan that holds harness source free of target-stack literals covers both.
+  - orchestration/outbox.py, orchestration/outbox_sweep.py,
+    orchestration/command_transport.py and orchestration/filed_query.py are
+    unchanged. This story is a caller of all four and widens none of them.
+  - orchestration/story_coordinator.py is unchanged. Nothing in a run, a
+    resume or a sweep invokes an inspection, and a test asserts that
+    orchestration/inspection.py is reached from scripts/l5-inspect and from
+    the suite and from nothing else.
+  - Nothing under .harness/requests/ is read, written, moved or renamed by
+    this story.
+  - The whole suite passes under the configured test command, including the
+    tests this story adds, and no test in it invokes a model, reaches a
+    network or touches a tracker.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/story-brief.schema.json. Required title, body, category,
+      severity, confidence, effort and workflow; optional paths and
+      not_in_scope. category, severity, confidence and effort are enums;
+      workflow is a plain string, because the acceptable names are the
+      definitions the harness holds rather than a pair frozen into a schema.
+      Its description states what a brief is and is not - a pre-planning
+      artifact carrying intent and evidence, which a human plans into a story
+      artifact and which nothing executes - and states that paths are bare
+      repository-relative paths whose line-level evidence lives in the body,
+      with the reason: the reference query searches for the marker of a bare
+      path, so a path carrying a line number is filed where no scoped query
+      looks. It also states that title, body, severity and confidence are
+      deliberately outside what an entry is filed under.
+    - Write schemas/inspection-findings.schema.json. One object with a
+      required findings array whose items are typed as objects and nothing
+      more. Its description says why - the validator has no reference
+      keyword, so restating the brief's fields here would be a second
+      definition of a shape this repository defines once, and each finding is
+      instead held to the brief schema on its own, which is also what lets one
+      malformed finding be dropped without costing the rest.
+    - Register both schemas in schemas/manifest.json in alphabetical position,
+      so the inventory test that holds the manifest and the directory equal in
+      both directions stays green.
+    - Write orchestration/inspection.py. Its docstring states what a brief is
+      and what it is not, that this is the outbox's first producer and what
+      story-090's contract obliges a producer to do with the return value, and
+      that the identity carries the stable parts of a finding and never its
+      prose, with the reason.
+    - Give it scope resolution - the scopes an invocation covers, and the
+      tracked paths beneath one. Scopes come from the arguments where there
+      are any, and otherwise from source_dirs plus tests_dir; paths come from
+      git ls-files beneath the scope with every blocked path excluded, and the
+      blocked set is read from the loaded execution rules rather than written
+      here.
+    - Give it one function per scope that asks the filed query about that
+      scope's paths, renders the prompt, invokes the injected runner, reads
+      the artifact back, validates the envelope and each finding, drops what
+      the query already knows, and returns what it found and everything it
+      dropped. The runner is a parameter with agent_runner.run_agent as its
+      default, in the shape the coordinator already injects one.
+    - Ask for the findings artifact inside the workspace, under the configured
+      logs directory, for the reason workflow_selection.selection_paths gives:
+      a turn asked to write outside the workspace the permission mode accepts
+      edits within reasons correctly and then cannot deliver. Remove it before
+      the invocation and again after it is read, so an artifact left by an
+      earlier invocation is never read as this one's. The runner's own log
+      keeps what the invocation said on the way there.
+    - Grant the invocation the target's configured allowed_tools plus the one
+      tool a turn whose output is a file needs, so an inspector can search the
+      way a stage can and can also deliver.
+    - Give it the identity - kind, category, sorted deduplicated bare paths,
+      and the slug the finding carries - and nothing else. Hash nothing here;
+      outbox.identity_key is the only derivation and outbox.enqueue is the
+      only way this module reaches the queue.
+    - Give it the cap, applied across the whole inspection rather than per
+      scope: sort by severity, keep inspect_max_findings, and record each
+      dropped finding's severity so the report can say what fell off rather
+      than that something did.
+    - Give it a Report dataclass carrying what was inspected, what was filed
+      with its keys, what was dropped and why for each way of dropping -
+      already filed, malformed, unknown workflow, past the cap, lost by the
+      queue - and whether dedupe ran for each scope. It returns what happened
+      and prints nothing, in the shape plan_commit and workflow_selection
+      already have.
+    - Write prompts/inspector.md. State the purpose as a judgement rather than
+      a checklist, list the categories, and emphasise the two classes no
+      single pull-request review can catch - cross-path parity and structural
+      duplication - because a reviewer sees one change against one baseline
+      and neither is visible from there. Say that standards-drift is the
+      strongest finding available, because a finding citing a rule the
+      repository declares is adjudicable without argument, and why docs-drift
+      is close behind in agentic work.
+    - Have it define severity by consequence, confidence as a second axis and
+      effort as S, M or L, and carry the two mechanical rules that hold the
+      scale still. State that no placement score is wanted, because book
+      impact is a judgement the Inspector has no basis for and a fabricated
+      one is worse than none.
+    - Have it carry the workflow candidates rendered from the definitions'
+      applies_when, through the same rendering
+      workflow_selection.candidate_block already does, so a third workflow is
+      classifiable with no edit to the prompt.
+    - Have it state the slug rule, the file:line requirement, the standards
+      rule, the no-standards observation, and what the already-filed items in
+      its context are for - data to recognise its own earlier work by, not
+      instructions.
+    - Write scripts/l5-inspect. Parse the scopes and --dry-run, refuse a bound
+      that cannot be read before anything is invoked, hand over, and print the
+      report. Say plainly when dedupe did not run for a scope, and say that
+      nothing has reached a tracker yet because the queue is drained by a
+      sweep or by l5-sync.
+    - Declare the three keys in schemas/harness-config.schema.json in
+      alphabetical position. source_dirs' description states that it is
+      repository-relative prefixes in tests_dir's idiom, that unset means
+      everything git tracks minus the blocked paths, that tests are inspected
+      too and are a union with tests_dir rather than a merge into it, and that
+      nothing about the implementer's create restriction is decided here.
+    - Add the three keys to templates/config.yaml, commented out, each with
+      the sentence a reader needs to decide whether to set it, and declare
+      source_dirs uncommented in this repository's own .harness/config.yaml.
+    - Rewrite the closing paragraph of prompts/assist.md to say what a brief
+      contains and where it goes, so the harness's two producers of briefs are
+      told the same thing.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: The deterministic half - scope resolution, the filed query and
+        what it drops, the identity, the cap, the report and the one enqueue
+        call.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: The entry point, and where the developer-facing wording lives.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: The judgement half - what a defect is, how it is rated, and the
+        two rules that stop the scale drifting into vibes.
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: What a brief is, standing alone because it is the outbox payload
+        shape and the document a later story fetches one of.
+    - file: schemas/inspection-findings.schema.json
+      stage: implementer
+      reason: The envelope one inspection writes, so the findings are an
+        artifact this reads rather than prose it parses.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: Two new schemas have to be registered or the inventory test that
+        holds the manifest and the directory equal reports them.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The three key declarations, and where a reader meets what
+        source_dirs is for and why tests are a union with it.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The new keys commented out, so a freshly initialized target
+        meets them where it meets the rest.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: This repository declares its own source dirs, so an inspection
+        of the harness is several coherent invocations rather than one agent
+        handed the whole tree.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: Its closing line names an artifact shape that no longer exists;
+        the assist agent is the other producer of briefs and needs the same
+        guidance the Inspector has.
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: The story's regression suite - scope resolution, the artifact
+        read, every way a finding is dropped, the identity, the cap, the dry
+        run and the query that could not answer, each against a fake runner
+        and fake commands.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: Three newly declared keys each need a proof that varies them and
+        observes the harness obey them, plus their fallbacks and their
+        mutation controls.
+    - file: tests/test_artifact_schemas.py
+      stage: tester
+      reason: Two new schemas need the coverage every other artifact schema
+        has - a conforming document accepted and the ways of malforming it
+        refused.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A section on the Inspector - that a brief is not a story and
+        nothing executes one, that this is the outbox's first producer, why
+        the identity excludes the prose, and why source and tests are a union.
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - scripts/l5-inspect
+    - prompts/inspector.md
+    - prompts/assist.md
+    - schemas/story-brief.schema.json
+    - schemas/inspection-findings.schema.json
+    - schemas/manifest.json
+    - schemas/harness-config.schema.json
+    - templates/config.yaml
+    - .harness/config.yaml
+    - tests/test_inspection.py
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_artifact_schemas.py
+    - tests/test_no_target_stack_in_harness_source.py
+    - tests/test_schema_inventory_location.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - orchestration/story_coordinator.py
+    - orchestration/agent_runner.py
+    - schemas/outbox-entry.schema.json
+    - schemas/filed-items.schema.json
+    - schemas/story.schema.json
+    - workflows/
+    - hooks/
+    - templates/sync/
+    - templates/query/
+    - .harness/requests/
+    - scripts/l5-run
+    - scripts/l5-plan
+    - scripts/l5-sync
+    - scripts/l5-init
+
+verification_requirements:
+  - Confirm one scope is one agent invocation, by observing the invocations a
+    fake runner received rather than by reading the arguments that were
+    parsed. Two named scopes make two; no arguments makes one per source_dirs
+    entry plus one for tests_dir.
+  - Confirm a scope's paths are what git tracks beneath it minus the blocked
+    paths, by constructing a repository holding a file under a blocked path
+    and asserting it reaches neither the query nor the prompt.
+  - Confirm the findings come from a file the agent wrote and from nothing it
+    printed, by driving a fake runner that prints well-formed findings and
+    writes nothing, and asserting the inspection filed nothing and said why.
+  - Confirm one malformed finding costs only itself, by validating an envelope
+    holding a conforming finding beside one missing a required field and
+    asserting the first was filed and the second was named.
+  - Confirm no filed path carries a line number, by constructing a finding
+    that cites one and reading the entry the queue holds.
+  - Confirm the identity ignores the prose, by enqueueing the same finding
+    twice with a rewritten title and a changed severity and asserting one file
+    under one key.
+  - Confirm a deterministic match against what the query reported is dropped
+    without the model being consulted, by asserting the finding was dropped
+    and that no second invocation was made on its account.
+  - Confirm a query that could not answer is reported as dedupe not having run
+    and does not stop the filing, by driving a query command that exits
+    non-zero and reading both the report and the queue.
+  - Confirm the cap keeps the highest severities and names what it dropped,
+    by handing an inspection more findings than the bound with severities in
+    an order that makes first-written and highest-severity different answers.
+  - Confirm the per-invocation cost ceiling reaches the runner as the
+    allowance for that invocation, by observing what the fake runner was
+    given.
+  - Confirm --dry-run enqueues nothing, by comparing the queue directory
+    before and after, and confirm the equivalent ordinary run enqueues exactly
+    what the dry run reported.
+  - Confirm an enqueue that dropped an item is reported as a loss and not as a
+    filing, by making the queue directory unwritable and reading the report.
+  - Confirm nothing in this story invokes a model, reaches a network or
+    touches a tracker, and that every command and every runner in its suite is
+    a fake the test wrote.
+  - Confirm the three declared keys and the keys the harness reads are still
+    equal in both directions, and that each new key has a proof varying it to
+    a value that is neither the default nor this repository's own.
+  - Confirm orchestration/outbox.py, orchestration/outbox_sweep.py,
+    orchestration/command_transport.py, orchestration/filed_query.py,
+    orchestration/agent_runner.py and orchestration/story_coordinator.py are
+    byte-for-byte unchanged by this story.
+  - Confirm nothing under .harness/requests/ was read, written, moved or
+    renamed.
+  - Confirm no target-stack literal, provider name or tracker vocabulary
+    entered harness source, using the scan that already enforces it.
+  - Confirm the whole suite passes under the configured test command,
+    including the tests this story adds.
+
+constraints:
+  - A brief is not a story artifact and nothing executes one. This story adds
+    no path by which a brief becomes a story other than a developer planning
+    it through l5-plan, and confers no mandate.
+  - The harness learns nothing about any tracker. The query is asked through
+    the seam story-093 shipped and the filing goes to the queue story-089
+    shipped; no provider is named, no endpoint is built and no status is
+    interpreted.
+  - The outbox computes the key. This story declares an identity and calls
+    enqueue; it derives no digest of its own and reaches the queue no other
+    way.
+  - An identity carries no prose. The title, the body, the severity and the
+    confidence are payload, because they are what a model rephrases between
+    runs and a drifting identity is a duplicate on every inspection.
+  - Nothing in a run invokes an inspection. Broad mode is a terminal command a
+    developer asked for, and the coordinator is not touched.
+  - The findings are an artifact, not parsed output. No format the model
+    prints is read for meaning, because a format enforced by nothing breaks
+    silently and a malformed finding would be indistinguishable from none.
+  - No silent bound. The cap, the query's own bounds and anything the queue
+    dropped are each named in the report with what they excluded.
+  - Every invocation is bounded in cost, and the bound is handed to the
+    invocation rather than checked after it.
+  - The harness declares no required document set for a target. Standards are
+    globbed and no filename is interpreted, so a target with one standards
+    file and a target with twelve are inspected identically.
+  - Model calls stay in orchestration/agent_runner.py. The inspection module
+    takes a runner and the suite drives a fake one.
+  - No third-party dependency, and no test that reaches a network, a tracker
+    or a model.
+  - .harness/requests/ is left exactly as it is. The briefs in it are worked
+    examples and historical records, and a story that rewrote them would be
+    editing the evidence it learned the shape from.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 21:57:53
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
