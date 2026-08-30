@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "filed-items",
+  "description": "What a filed-query command answers with: the tracker's items that are already filed against the paths it was asked about, as the answering command chose to report them. The question is scoped rather than a listing — the command is asked what is filed against a path set, never what is open — so what crosses this boundary stays proportional to the code being asked about rather than to the tracker's backlog, and the searching is pushed to the only thing that knows how the tracker searches. WHAT THE HARNESS DOES WITH THIS: it records what the command reported and interprets none of it. No status is parsed, no policy is inferred, no field is synthesized, and no item is invented for a command that reported none. WHETHER A CLOSED ITEM APPEARS IS THE ANSWERING COMMAND'S DECISION, and deliberately not the harness's: a finding a human rejected must never be filed again, while a finding that was completed and which the code still exhibits is a regression worth hearing about again, and the harness cannot tell those apart without inventing a status vocabulary every target script would have to map onto — which is exactly what census_command refuses to do with counter names. So the command answers what it considers already-filed for the purpose of not filing again, and the recommendation lives in the reference script at templates/query/github.sh where a script author meets it. An answer that does not satisfy this shape is read as nothing known rather than best-effort parsed: a command that half-answers is a command whose answer cannot be trusted to say that nothing is filed. Nothing known and nothing filed are different answers — a command that ran and answered with an empty item list has said that nothing is filed, and a command that was absent or that failed has said nothing at all — and only the first of those permits a caller to conclude anything.",
+  "type": "object",
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "description": "The items the command considers already filed against the paths it was asked about. An empty array is an answer rather than an absence: it says the command searched and found nothing. Order is the command's own and is preserved as far as the harness's item bound allows; where that bound drops items, what it dropped is named rather than truncated silently.",
+      "items": {
+        "type": "object",
+        "required": ["key", "title"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The tracker's own name for the item — whatever the command wants the harness to record. It is opaque: nothing parses it, nothing decides from its content, and a key that is not a URL is recorded exactly as one that is."
+          },
+          "title": {
+            "type": "string",
+            "description": "What the item is called, as the command reported it. Required because a key alone tells a later reader nothing about whether their finding is the one already filed."
+          },
+          "summary": {
+            "type": "string",
+            "description": "More about the item, as the command reported it. Optional: a tracker that has nothing beyond a title to give should give nothing rather than repeat the title."
+          },
+          "paths": {
+            "type": "array",
+            "description": "The paths this item is filed against, as the command reported them. Optional, because a command may know an item matched without being able to say which of the asked-about paths it matched on.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

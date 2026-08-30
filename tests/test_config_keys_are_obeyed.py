@@ -68,6 +68,7 @@ import pytest
 
 import command_transport
 import conftest
+import filed_query
 import harness_config
 import outbox
 import outbox_sweep
@@ -126,6 +127,16 @@ TOKEN_EXEMPT: dict[str, str] = {
     "sweep_max_entries": (
         "the value is a count of filing attempts, parsed to a positive integer "
         "and refused by l5-sync when it is not one, so it cannot carry a word"
+    ),
+    "filed_query_timeout_seconds": (
+        "the value is a duration in seconds, parsed to a positive number and "
+        "reported as a problem by the query's settings resolution when it is "
+        "not one, so it cannot carry a word"
+    ),
+    "filed_query_max_items": (
+        "the value is a count of items one answer may carry, parsed to a "
+        "positive integer and reported as a problem by the query's settings "
+        "resolution when it is not one, so it cannot carry a word"
     ),
 }
 
@@ -199,6 +210,46 @@ SEEDED_PENDING_ENTRIES = SWEEP_MAX_ENTRIES + 2
 #: against, read off the sweep module rather than written here.
 DEFAULT_SWEEP_MAX_ENTRIES = outbox_sweep.DEFAULT_MAX_ENTRIES
 
+#: How long the fixture allows a filed-query command to run. Not a whole
+#: number of seconds, which no harness would pick: the default written in
+#: harness source is thirty and this repository configures none. It stands in
+#: for the token the value cannot carry, and its proof pins it from both sides
+#: — a command that answers inside it is heard and one that runs past it is
+#: killed — so the number itself is what is obeyed rather than merely
+#: something non-zero.
+#:
+#: What makes both sides cheap *and* decisive is that the bound sits below the
+#: default: a command asked to sleep for `QUERY_SLEEPS_PAST_THE_BOUND` is
+#: killed at the configured bound, and under the default it would finish and
+#: answer. So a harness that stopped reading the key fails the second half in
+#: seconds rather than after half a minute of waiting.
+FILED_QUERY_TIMEOUT = 1.7
+QUERY_SLEEPS_PAST_THE_BOUND = 4
+
+#: How many items the fixture allows one answer to carry. A bound no harness
+#: would pick: the default written in harness source is fifty and this
+#: repository configures none. Its proof pins it from both sides — a command
+#: answering with more than the bound has exactly the bound read and the
+#: remainder named as dropped — and what makes both sides decisive is that the
+#: answered count sits between the configured bound and the default, so a
+#: harness that had fallen back to the default would read every item and drop
+#: none.
+FILED_QUERY_MAX_ITEMS = 3
+ITEMS_THE_COMMAND_ANSWERS_WITH = FILED_QUERY_MAX_ITEMS + 2
+
+#: The defaults the fallback comparison and the orderings above are stated
+#: against, read off the query module rather than written here.
+DEFAULT_FILED_QUERY_TIMEOUT = filed_query.DEFAULT_TIMEOUT_SECONDS
+DEFAULT_FILED_QUERY_MAX_ITEMS = filed_query.DEFAULT_MAX_ITEMS
+
+#: Where the fixture's filed-query command lives inside the target, what it
+#: says when it answers, and what it is asked about. The path and the item key
+#: carry the token, so an answer naming this key can only have come from the
+#: harness running the configured command.
+QUERY_COMMAND_REL = "xyzzy-query/answers-what-is-filed.sh"
+QUERY_ITEM_KEY = "xyzzy-filed-item"
+QUERY_PATHS = ("xyzzy-src/asked-about.py",)
+
 #: Where the fixture's sync command lives inside the target, and what it
 #: prints. The path carries the token, so a landed entry naming this reference
 #: can only have come from the harness running the configured command.
@@ -211,6 +262,9 @@ VARYING: dict[str, object] = {
     "base_branch": "xyzzy-base",
     "branch_prefix": "xyzzy-branch/",
     "census_command": "xyzzy-census --count",
+    "filed_query_command": QUERY_COMMAND_REL,
+    "filed_query_max_items": str(FILED_QUERY_MAX_ITEMS),
+    "filed_query_timeout_seconds": str(FILED_QUERY_TIMEOUT),
     "history_dir": ".harness/xyzzy-history",
     "history_retention_days": str(RETENTION_DAYS),
     "logs_dir": ".harness/xyzzy-logs",
@@ -243,6 +297,9 @@ FALLBACKS: dict[str, object] = {
     "base_branch": None,
     "branch_prefix": "story/",
     "census_command": None,
+    "filed_query_command": None,
+    "filed_query_max_items": DEFAULT_FILED_QUERY_MAX_ITEMS,
+    "filed_query_timeout_seconds": DEFAULT_FILED_QUERY_TIMEOUT,
     "history_dir": harness_config.DEFAULT_HISTORY_DIR,
     "history_retention_days": None,
     "logs_dir": ".harness/logs",
@@ -303,6 +360,15 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "census_command": Proof(
         "test_census_command_is_the_command_the_suite_census_runs",
+        BEHAVIOURAL),
+    "filed_query_command": Proof(
+        "test_filed_query_command_is_the_command_the_question_is_put_to",
+        BEHAVIOURAL),
+    "filed_query_max_items": Proof(
+        "test_filed_query_max_items_is_the_bound_on_what_one_answer_carries",
+        BEHAVIOURAL),
+    "filed_query_timeout_seconds": Proof(
+        "test_filed_query_timeout_seconds_is_the_bound_a_query_is_held_to",
         BEHAVIOURAL),
     "history_dir": Proof(
         "test_history_dir_is_where_the_cross_run_records_are_written",
@@ -402,6 +468,23 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("census_command")',
          "None"),
+    ),
+    # The three query keys are read in the seam, which is the only module in
+    # the repository that invokes the configured filed-query command.
+    "filed_query_command": (
+        ("orchestration/filed_query.py",
+         "command = config.get(COMMAND_KEY)",
+         "command = None"),
+    ),
+    "filed_query_max_items": (
+        ("orchestration/filed_query.py",
+         "declared_max = config.get(MAX_ITEMS_KEY)",
+         "declared_max = None"),
+    ),
+    "filed_query_timeout_seconds": (
+        ("orchestration/filed_query.py",
+         "declared_timeout = config.get(TIMEOUT_KEY)",
+         "declared_timeout = None"),
     ),
     "history_dir": (
         ("orchestration/harness_config.py",
@@ -786,7 +869,8 @@ def clean_clone_record(run: Run) -> dict:
 
 EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
-    "census_command", "history_dir", "history_retention_days",
+    "census_command", "filed_query_command", "filed_query_max_items",
+    "filed_query_timeout_seconds", "history_dir", "history_retention_days",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "standards_dir",
     "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
@@ -1181,6 +1265,14 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
     # the configured bound and the default, so the configured value leaves
     # entries unattempted where the default would file every one of them.
     assert 0 < SWEEP_MAX_ENTRIES < SEEDED_PENDING_ENTRIES < DEFAULT_SWEEP_MAX_ENTRIES
+    # And the two query bounds, pinned the same way: the command sleeps and
+    # answers between each configured value and the default written in harness
+    # source, so the configured value kills where the default would hear, and
+    # drops where the default would read every item.
+    assert 0 < FILED_QUERY_TIMEOUT < QUERY_SLEEPS_PAST_THE_BOUND \
+        < DEFAULT_FILED_QUERY_TIMEOUT
+    assert 0 < FILED_QUERY_MAX_ITEMS < ITEMS_THE_COMMAND_ANSWERS_WITH \
+        < DEFAULT_FILED_QUERY_MAX_ITEMS
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -1411,6 +1503,100 @@ def test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts(tmp_path):
     stated = " ".join(summary.notes)
     assert str(SWEEP_MAX_ENTRIES) in stated, stated
     assert str(left) in stated, stated
+
+
+def asked_what_is_filed(tmp_path: Path, *, sleeps: int = 0, items: int = 1,
+                        **overrides) -> filed_query.Answer:
+    """Build a fixture target, install its query command, and ask it a question.
+
+    The command is a file this fixture writes, at the path the configuration
+    names, printing a document this module composed. Nothing reaches a network,
+    and the path and the item keys carry the token — so an answer naming those
+    keys can only have come from the harness running the *configured* command.
+
+    The three query keys are read in `orchestration/filed_query.py`, which is
+    the only module that invokes the command, so their proofs are driven at
+    that seam rather than through `run_story`: what they govern is one question
+    put to one command rather than anything a stage does.
+    """
+    values = fixture_config(**overrides)
+    target = build_target(tmp_path, values)
+    command = target / str(values["filed_query_command"])
+    command.parent.mkdir(parents=True, exist_ok=True)
+    answer = json.dumps({"items": [
+        {"key": f"{QUERY_ITEM_KEY}-{ordinal}",
+         "title": f"the {ordinal}th thing already filed"}
+        for ordinal in range(items)]})
+    document = command.parent / "answer.json"
+    document.write_text(answer, encoding="utf-8")
+    command.write_text(
+        "#!/bin/sh\n"
+        + (f"sleep {sleeps}\n" if sleeps else "")
+        + f'cat "{document}"\n',
+        encoding="utf-8")
+    command.chmod(0o755)
+
+    return filed_query.query(
+        QUERY_PATHS, harness_config.load_config(target), target)
+
+
+def test_filed_query_command_is_the_command_the_question_is_put_to(tmp_path):
+    """The configured command is the one that answered, observed at the answer.
+
+    The item key the answer carries is the one the fixture's own script
+    printed, and that script sits at the configured path and nowhere else. A
+    harness that had stopped reading the key would ask nothing at all, and the
+    answer would know nothing instead of reporting an item.
+    """
+    answer = asked_what_is_filed(tmp_path)
+    assert answer.answered is True, answer.reason
+    assert [item.key for item in answer.items] == [f"{QUERY_ITEM_KEY}-0"]
+
+    settings, problem = filed_query.resolve_settings(dict(VARYING))
+    assert problem == ""
+    assert settings.command == QUERY_COMMAND_REL
+
+
+def test_filed_query_timeout_seconds_is_the_bound_a_query_is_held_to(tmp_path):
+    """The configured bound decides both halves, observed rather than read.
+
+    A command that answers inside it is heard; the same command asked to sleep
+    past it is killed and the answer knows nothing, naming the bound. The two
+    questions differ in that sleep alone, so what separates them can only be
+    the number the configuration carries — and the number is below the default
+    written in harness source, so a harness that had fallen back to that
+    default would let the second command finish and answer.
+    """
+    inside = asked_what_is_filed(tmp_path / "inside")
+    assert inside.answered is True, inside.reason
+
+    beyond = asked_what_is_filed(tmp_path / "beyond",
+                                 sleeps=QUERY_SLEEPS_PAST_THE_BOUND)
+    assert beyond.answered is False
+    assert beyond.items == ()
+    assert str(FILED_QUERY_TIMEOUT) in beyond.reason
+
+
+def test_filed_query_max_items_is_the_bound_on_what_one_answer_carries(tmp_path):
+    """The configured bound decides how much of an answer is read.
+
+    A command answering with more items than the bound has exactly the bound
+    read, in the command's own order, and what the bound left out is named
+    rather than dropped silently. Both numbers are pinned: the answered count
+    sits between the configured bound and the default written in harness
+    source, so a harness that had fallen back to that default would read every
+    item and name nothing.
+    """
+    answer = asked_what_is_filed(tmp_path,
+                                 items=ITEMS_THE_COMMAND_ANSWERS_WITH)
+    assert answer.answered is True, answer.reason
+    assert [item.key for item in answer.items] == [
+        f"{QUERY_ITEM_KEY}-{ordinal}" for ordinal in range(FILED_QUERY_MAX_ITEMS)]
+
+    dropped = ITEMS_THE_COMMAND_ANSWERS_WITH - FILED_QUERY_MAX_ITEMS
+    stated = " ".join(answer.excluded)
+    assert str(FILED_QUERY_MAX_ITEMS) in stated, stated
+    assert str(dropped) in stated, stated
 
 
 def test_runs_dir_is_where_the_run_state_is_written_and_read_back(tmp_path):
