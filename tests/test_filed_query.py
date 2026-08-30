@@ -881,13 +881,19 @@ def test_a_mention_of_the_key_is_not_read_as_a_read(tmp_path):
     assert COMMAND_KEY in (SCRIPTS / "l5-init").read_text(encoding="utf-8")
 
 
-def test_this_story_ships_the_seam_with_no_caller():
-    """Nothing in a run, a plan or a sweep asks the query anything yet.
+def test_the_seams_one_caller_is_the_inspector():
+    """The seam shipped with no caller, and the Inspector is the one it got.
 
-    Stated so the next story's addition is visible as an addition rather than
-    as a line that was always there.
+    Written as an emptiness assertion by the story that shipped the seam, so
+    that the caller would be visible as an addition rather than as a line that
+    was always there. It has arrived, and asserting *which* module it is now
+    says more than asserting there is none: the query is asked by the producer
+    of briefs and by nothing in a run, a plan or a sweep, which is the property
+    the emptiness was standing in for. The control below is unchanged and is
+    what stops this passing on a scan that has stopped reporting.
     """
-    assert sources_importing("filed_query", REPO_ROOT) == set()
+    assert sources_importing("filed_query", REPO_ROOT) == \
+        {str(Path("orchestration") / "inspection.py")}
 
 
 def test_the_import_scan_reports_a_caller_when_there_is_one(tmp_path):

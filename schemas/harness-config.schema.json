@@ -47,6 +47,14 @@
       "type": "string",
       "description": "How long a cross-run history record is kept, in days. A string like every other configured scalar, because the config parser coerces nothing; it is parsed to a non-negative number and a value that is not one refuses the run. Unset, nothing is ever pruned and the whole history is kept, so pruning is opt-in. Set, records whose timestamp is older than the bound are dropped from each log by the prune that runs once per run, at run-directory creation and before that run's first append — which is the only point at which a log is rewritten, and it announces itself. A record whose timestamp cannot be read is kept rather than dropped: this store never discards what it cannot judge. It is a retention bound and not a calibration window; a reader that needs recent samples expresses one as a query bound over a log that was never pruned on its behalf."
     },
+    "inspect_max_cost_usd": {
+      "type": "string",
+      "description": "The allowance one Inspector invocation may spend, in US dollars. It is handed to the agent runner as that invocation's budget, so the invocation stops itself rather than being stopped after the fact — the same reason a stage's max_execution_cost_usd is handed down rather than checked between stages. THE CEILING IS PER SCOPE AND NOT PER INSPECTION: l5-inspect makes one invocation per scope, so an inspection over four scopes may spend four allowances, and the report says how many invocations it made so a reader can see that. A string like every other configured scalar, because the config parser coerces nothing. l5-inspect refuses a value that is not a positive number, naming the key and the value, before any invocation is made and before anything is enqueued. Unset, it is 5.0."
+    },
+    "inspect_max_findings": {
+      "type": "string",
+      "description": "How many briefs one inspection may file, across every scope it covered rather than per scope. What the cap excludes is reported with how many were dropped and the severity of each, and the findings kept are the highest-severity ones rather than the first written — a cap that dropped the tail of what an agent happened to write in would be a cap on writing order rather than on importance. A string like every other configured scalar, because the config parser coerces nothing. l5-inspect refuses a value that is not a positive integer, naming the key and the value, before any invocation is made and before anything is enqueued. Unset, it is 10."
+    },
     "logs_dir": {
       "type": "string",
       "description": "Directory, relative to the target root, holding raw agent output logs. Defaults to .harness/logs."
@@ -70,6 +78,11 @@
     "runs_dir": {
       "type": "string",
       "description": "Directory, relative to the target root, holding per-run state, events and artifacts. Defaults to .harness/runs. Also what l5-status lists."
+    },
+    "source_dirs": {
+      "type": "array",
+      "description": "The parts of a target's own source an inspection covers when the developer names no scope, as repository-relative path prefixes in tests_dir's idiom. One invocation is made per entry, so declaring them is what makes an inspection several coherent invocations rather than one agent handed the whole tree. Unset, the scope is everything git tracks minus the blocked paths and minus tests_dir — a target that declares neither key is inspected over its tracked tree rather than refused. SOURCE AND TESTS ARE A UNION AND NOT A MERGE: tests_dir is a scope of its own beside these, it is not folded into this list and does not become one of these, and the Inspector is told which of the two it is looking at. NOTHING ABOUT THE IMPLEMENTER'S CREATE RESTRICTION IS DECIDED HERE — that restriction is the workflow's {{tests_dir}} declaration and setting this key changes none of it.",
+      "items": { "type": "string" }
     },
     "standards_dir": {
       "type": "string",

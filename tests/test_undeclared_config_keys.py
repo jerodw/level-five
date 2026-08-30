@@ -922,18 +922,20 @@ def test_the_same_scan_reports_a_tie_planted_under_orchestration(tmp_path):
     assert [f.path for f in findings] == ["orchestration/planted.py"]
 
 
-def test_permanent_mentions_holds_nine_and_none_is_harness_config():
+def test_permanent_mentions_holds_ten_and_none_is_harness_config():
     """Read off the list the other module owns, because this story's edit to
     it is one of its acceptance criteria.
 
     The length is held here rather than left to prose because the list lives in
     another module: a reader of this assertion cannot see what it counts. It is
     meant to go red when the list grows, so that an entry joins a burn-down of
-    known ties deliberately rather than in passing — story-089's `scripts/l5-sync`
-    is the growth that last moved it.
+    known ties deliberately rather than in passing — the Inspector's own
+    `scripts/l5-inspect` is the growth that last moved it, and story-089's
+    `scripts/l5-sync` moved it before that. Both are the same growth: an entry
+    point this harness ships is a Python program and says so to the kernel.
     """
     mentions = stack_module.PERMANENT_MENTIONS
-    assert len(mentions) == 9, sorted(mentions)
+    assert len(mentions) == 10, sorted(mentions)
     assert not [path for path, _ in mentions
                 if path == "orchestration/harness_config.py"]
     # The control for that absence: the same comprehension over the same list

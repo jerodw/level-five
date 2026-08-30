@@ -150,6 +150,9 @@ PERMANENT_MENTIONS: dict[tuple[str, str], str] = {
     ('scripts/l5-init',
      '#!/usr/bin/env python3'):
         "the harness's own entry point is a Python program and says so to the kernel",
+    ('scripts/l5-inspect',
+     '#!/usr/bin/env python3'):
+        "the harness's own entry point is a Python program and says so to the kernel",
     ('scripts/l5-plan',
      '#!/usr/bin/env python3'):
         "the harness's own entry point is a Python program and says so to the kernel",
