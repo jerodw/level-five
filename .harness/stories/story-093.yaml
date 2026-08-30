@@ -1,0 +1,368 @@
+story:
+  id: story-093
+  title: The harness can ask what is already filed
+  description: |
+    The outbox files entries and never reads. That was right while nothing
+    produced entries automatically, and it stops being right the moment
+    something does: an inspector that cannot find out what it has already
+    filed refiles it on every run, and a mechanism that reports the same
+    finding forever is one a developer learns to ignore.
+
+    This story adds the read side, and it adds it in the shape the filing
+    side already has. A configured command answers one scoped question -
+    what is already filed against these paths, that I should not file again -
+    and the harness knows nothing else about the tracker. The question goes
+    to the command on stdin as JSON, the answer comes back on stdout as JSON,
+    and the exit code says whether it answered. GitHub, Jira and
+    files-in-source-control are scripts a target writes, exactly as
+    sync_command already made them.
+
+    The question is scoped rather than a listing, and that is the decision
+    the design rests on. A command asked to enumerate everything open
+    transfers a tracker's whole backlog to answer a question about one
+    directory, and it gets worse as the tracker grows. A command asked what
+    is filed against a path set transfers what is about that code, which
+    stays small however large the tracker is, and it pushes the searching to
+    the only thing that knows how the tracker searches.
+
+    Whether a closed item suppresses a refiling is the target's policy and
+    not the harness's. A finding a human rejected must never come back; a
+    finding that was completed and which the code still exhibits is a
+    regression and should. The harness cannot tell those apart without
+    inventing a status vocabulary every target script would have to map onto,
+    which is exactly what census_command refuses to do with counter names. So
+    the command answers what it considers already-filed for the purpose of not
+    filing again, the harness interprets none of it, and the recommendation
+    lives in the reference script where a script author meets it.
+
+    The totality rule is the outbox's, restated for a reader rather than
+    inherited by implication: a query that is absent, that fails, that times
+    out, that cannot be launched, or that answers with something this schema
+    does not accept all resolve to nothing known, and none of them raises.
+    What is different from the sweep is that nothing-known must be
+    distinguishable from nothing-filed - a caller that cannot tell them apart
+    reports silence as agreement. The answer therefore says whether it was
+    answered at all, so a later caller can say that dedupe did not run instead
+    of quietly filing a duplicate.
+
+    This story ships a seam with no caller. That is deliberate and it is the
+    shape story-089 used, which shipped the queue with no transport: the
+    contract is provable against fakes before anything depends on it, and the
+    consumer arrives in story-094.
+  workflow: story-workflow
+
+tasks:
+  - Add schemas/filed-items.schema.json, the shape a filed-query command's
+    stdout must satisfy, and register it in schemas/manifest.json.
+  - Add orchestration/filed_query.py, holding the settings resolution a
+    terminal caller may refuse on and the total query that cannot refuse.
+  - Declare filed_query_command, filed_query_timeout_seconds and
+    filed_query_max_items in the harness configuration schema, read them in
+    the new module, and default the two bounded ones in source.
+  - Bound what the harness will read from the command - a maximum number of
+    items, a maximum length per text field, and a maximum quantity of stdout -
+    and name what each bound left out rather than truncating silently.
+  - Add templates/query/github.sh, the reference implementation, and document
+    on it the contract the harness relies on and cannot enforce.
+  - Teach templates/sync/github.sh to write a searchable marker per path the
+    payload carries, so the reference pair actually agrees about where paths
+    live in a tracker item.
+  - Have l5-init install the query template beside the sync template, so a
+    freshly initialized target has both halves of the pair.
+  - Write the story's regression suite against fake commands, covering every
+    way a query can fail as well as the way it succeeds.
+  - Prove the three new configuration keys govern, in the shape every other
+    declared key is proven in.
+
+acceptance_criteria:
+  - orchestration/filed_query.py exists and is the only module in the
+    repository that invokes the configured filed-query command.
+  - The total query returns an answer on every path and raises on none. An
+    absent command, a command that cannot be launched, one that exits
+    non-zero, one that runs past its timeout, one whose stdout is not a single
+    JSON document, and one whose stdout does not satisfy the filed-items
+    schema each return an answer carrying no items and a reason saying which.
+  - The answer distinguishes nothing-known from nothing-filed. A command that
+    ran and answered with an empty item list reports that it was answered; a
+    command that was absent or that failed reports that it was not. A caller
+    reading only the item list cannot tell the two apart, and a test asserts
+    that the flag is what separates them.
+  - The answer's items carry the key, the title, the summary and the paths the
+    command reported, and nothing the harness invented. No item is synthesized
+    for a command that reported none.
+  - The question the command is asked is a single JSON document on stdin
+    carrying the paths the caller is asking about. A test observes the
+    document the command actually receives rather than inferring it from the
+    call.
+  - Stdout must be a single JSON document and nothing else. A command that
+    prints anything beside it - a debug line, a progress message, a shell
+    trace - answers nothing-known with a reason naming the parse failure, and
+    the reference script documents that diagnostics belong on stderr.
+  - A command that answers with more items than filed_query_max_items has the
+    excess dropped, and the answer names the bound and how many it dropped.
+    Nothing is truncated silently.
+  - A command whose stdout exceeds the source-level quantity bound, or whose
+    item text exceeds the source-level per-field bound, is bounded rather than
+    read whole, and the answer names which bound was reached.
+  - filed_query_command, filed_query_timeout_seconds and filed_query_max_items
+    are declared in schemas/harness-config.schema.json, are read by
+    orchestration/filed_query.py, and the two bounded ones default in source
+    to a positive number and a positive integer respectively.
+  - A filed_query_timeout_seconds that is not a positive number and a
+    filed_query_max_items that is not a positive integer are each reported by
+    the settings resolution as a problem naming the key and the value. The
+    total query consumes that problem into its answer rather than raising, so
+    a misconfigured target loses dedupe and loses nothing else.
+  - Every path through the query is bounded in time. A command that never
+    exits is killed at the configured timeout and the answer says so, and a
+    test proves the kill rather than asserting the argument was passed.
+  - templates/query/github.sh exists beside templates/sync/github.sh and
+    states the contract on itself - what arrives on stdin, what must be on
+    stdout, what stderr is for, and what each exit code means.
+  - templates/sync/github.sh writes one searchable marker per path in the
+    payload, and templates/query/github.sh searches for exactly that marker.
+    A test reads both files and asserts the marker each uses is the same
+    string, so the pair cannot drift apart unnoticed.
+  - The pairing is documented as a contract the harness requires and cannot
+    enforce - the two scripts are written by the same target and must agree
+    about where the paths live in a tracker item, and a target that installs
+    one without the other gets no dedupe rather than an error.
+  - No provider name, no endpoint, no credential and no tracker vocabulary
+    appears anywhere in orchestration/ or scripts/ for this feature. The
+    existing scan that holds harness source free of target-stack literals
+    covers the new module.
+  - scripts/l5-init installs the query template into a target the way it
+    installs the sync template, and a freshly initialized target has both.
+  - orchestration/outbox.py and orchestration/command_transport.py are
+    unchanged. The filing path this story reads beside is not touched by it.
+  - The whole suite passes under the configured test command, including the
+    tests this story adds, and no test in it reaches a network or invokes a
+    real tracker.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/filed-items.schema.json. One object with a required items
+      array; each item requires a key and a title and may carry a summary and
+      a paths array. Its description states what the shape is for - that these
+      are the tracker's items as the target chose to report them, that the
+      harness parses no status and infers no policy from them, and that
+      whether a closed item appears is the answering command's decision.
+    - Register the new schema in schemas/manifest.json in alphabetical
+      position, so the inventory test that holds the manifest and the directory
+      equal in both directions stays green.
+    - Write orchestration/filed_query.py. Its docstring states the two things
+      a reader needs before the code - that the question is scoped rather than
+      a listing and why that is what makes it scale, and that nothing-known
+      and nothing-filed are different answers that a caller must be able to
+      tell apart.
+    - Give it resolve_settings(config) -> (settings, problem), reading the
+      three keys in the literal-resolvable idiom
+      tests/test_config_keys_are_obeyed.py scans for, and returning a problem
+      string for a timeout that is not a positive number or a limit that is
+      not a positive integer. An absent command is not a problem - a target
+      that queries nothing is the ordinary case.
+    - Give it query(paths, config, target_root) -> Answer beside that, where
+      Answer is a frozen dataclass carrying the items, whether the command
+      answered, the reason it did not, and what any bound left out. It calls
+      resolve_settings first and carries a problem into the answer rather than
+      raising on it. Every failure mode funnels through one construction site
+      so that the ways of knowing nothing cannot disagree about what an answer
+      looks like.
+    - Run the command with subprocess in the shape command_transport already
+      runs one - shlex-split, cwd at the target root, stdin fed the question,
+      output captured, a timeout that kills rather than waits, and the process
+      group treatment that makes the kill reach a shell's children.
+    - Bound the read before parsing rather than after. Read at most the
+      source-level quantity of stdout; a command that produced more is
+      nothing-known with a reason, because a document truncated mid-token is
+      not a document. Then parse, validate against the schema through
+      schema_validator, apply the item cap keeping the command's own order,
+      and bound each text field by length.
+    - Declare the three keys in schemas/harness-config.schema.json in
+      alphabetical position. filed_query_command's description carries the
+      whole command contract - the JSON question on stdin, the single JSON
+      document on stdout, diagnostics on stderr, zero means answered and any
+      other code means it could not answer, that a failure costs dedupe and
+      nothing else, that its absence disables the query, and that it is the
+      paired half of sync_command and must agree with it about where paths are
+      recorded.
+    - Add the three keys commented out to templates/config.yaml beside the
+      sync keys, each with the sentence a reader needs to decide whether to
+      set it.
+    - Write templates/query/github.sh. It reads the paths from stdin with jq,
+      searches issues for the per-path marker the sync template writes, and
+      prints one JSON document. It writes every diagnostic to stderr because
+      its stdout is a document. Its comment block carries the recommendation
+      the harness deliberately does not encode - suppress what was rejected,
+      do not suppress what was completed, because a completed finding the code
+      still exhibits is a regression worth hearing about again.
+    - Teach templates/sync/github.sh to emit one marker line per entry in
+      .payload.paths, beside the key marker it already writes, guarded so a
+      payload carrying no paths files exactly as it does today. The marker
+      string is defined once in each script and the test that compares them
+      reads it from both.
+    - Have scripts/l5-init copy templates/query/ into the target beside
+      templates/sync/, following whatever shape the sync install already uses
+      rather than inventing a second one.
+    - Write tests/test_filed_query.py against fake commands written into a
+      tmp_path and configured by absolute path - the answering command, the
+      empty answerer, the absent command, the non-zero exit, the one that
+      never exits, the one that prints prose, the one that prints valid JSON
+      of the wrong shape, the one that prints too much, and the one that
+      answers with more items than the cap.
+    - Add the three keys to tests/test_config_keys_are_obeyed.py - EXPECTED_KEYS,
+      configured values carrying distinctive numbers, the fallbacks, the
+      mutation table entries naming the reads in filed_query.py, any
+      TOKEN_EXEMPT reasons the numeric keys need, and a behavioural proof that
+      pins each from both sides.
+  likely_file_changes:
+    - file: orchestration/filed_query.py
+      stage: implementer
+      reason: The seam itself - the refusable settings resolution, the total
+        query, and the single construction site every way of knowing nothing
+        funnels through.
+    - file: schemas/filed-items.schema.json
+      stage: implementer
+      reason: The shape a command's stdout must satisfy, and where a reader
+        meets the rule that the harness parses no status and infers no policy.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: A new schema has to be registered or the inventory test that
+        holds the manifest and the directory equal reports it.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The three key declarations, and where the whole command contract
+        is written for a reader who never opens the reference script.
+    - file: templates/query/github.sh
+      stage: implementer
+      reason: The reference implementation of the read side, carrying the
+        contract and the closed-item recommendation the harness declines to
+        encode.
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: One searchable marker per path in the payload, which is what
+        makes the reference pair actually able to find each other's work.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The new keys commented out beside the sync keys a reader will
+        already be looking at.
+    - file: scripts/l5-init
+      stage: implementer
+      reason: A target that gets the sync template and not the query template
+        has half a pair and silent non-dedupe.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: The story's regression suite - the answering command and every
+        way of knowing nothing, each against a fake written into tmp_path.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: Three newly declared keys each need a proof that varies them and
+        observes the harness obey them, plus their fallbacks and their
+        mutation controls.
+    - file: tests/test_artifact_schemas.py
+      stage: tester
+      reason: The new schema needs the coverage every other artifact schema
+        has - a conforming document accepted and the ways of malforming it
+        refused.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A section on the read side - why the question is scoped rather
+        than a listing, why nothing-known and nothing-filed are different
+        answers, why the closed-item policy is the target's, and that the two
+        reference scripts are a pair.
+
+scope:
+  modify:
+    - orchestration/filed_query.py
+    - schemas/filed-items.schema.json
+    - schemas/manifest.json
+    - schemas/harness-config.schema.json
+    - templates/query/github.sh
+    - templates/sync/github.sh
+    - templates/config.yaml
+    - scripts/l5-init
+    - tests/test_filed_query.py
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_artifact_schemas.py
+    - tests/test_no_target_stack_in_harness_source.py
+    - tests/test_schema_inventory_location.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/story_coordinator.py
+    - schemas/outbox-entry.schema.json
+    - schemas/story.schema.json
+    - workflows/
+    - prompts/
+    - hooks/
+    - scripts/l5-run
+    - scripts/l5-sync
+    - scripts/l5-plan
+
+verification_requirements:
+  - Confirm the total query returns an answer and never raises for every
+    failure mode the story names - absent, unlaunchable, non-zero, timed out,
+    unparseable, schema-invalid, over-long and over-count - by running each
+    against a real fake command rather than by reading the source.
+  - Confirm nothing-known and nothing-filed are distinguishable. A command
+    answering with an empty list and a command that failed produce answers
+    that differ in the flag and agree in the item list.
+  - Confirm the command receives the paths it was asked about as a single JSON
+    document on stdin, by having a fake command record what it read.
+  - Confirm the timeout kills. A command that sleeps past the configured
+    timeout produces a bounded answer in bounded time, and the test observes
+    the elapsed time rather than the argument list.
+  - Confirm every bound names what it left out - the item cap, the per-field
+    length bound and the stdout quantity bound each appear in the answer with
+    what they excluded.
+  - Confirm a command printing anything alongside its JSON document is
+    nothing-known rather than best-effort parsed, so a target cannot half-work.
+  - Confirm the three declared keys and the keys the harness reads are still
+    equal in both directions, and that each new key has a proof varying it to
+    a value that is neither the default nor this repository's own.
+  - Confirm the reference pair agrees: the marker templates/sync/github.sh
+    writes for a path is the marker templates/query/github.sh searches for,
+    asserted by reading both files.
+  - Confirm templates/sync/github.sh files a payload carrying no paths exactly
+    as it did before this story, so the addition is additive.
+  - Confirm a freshly initialized target has both templates installed.
+  - Confirm orchestration/outbox.py and orchestration/command_transport.py are
+    byte-for-byte unchanged by this story.
+  - Confirm no target-stack literal, provider name or tracker vocabulary
+    entered harness source, using the scan that already enforces it.
+  - Confirm the whole suite passes under the configured test command,
+    including the tests this story adds, and that no test reaches a network.
+
+constraints:
+  - The harness learns nothing about any tracker. No provider is named, no
+    endpoint is built, no credential is read and no status vocabulary is
+    interpreted. What the command answers is recorded and passed on.
+  - Whether a closed item suppresses a refiling is the answering command's
+    policy. The harness must not encode it, must not infer it, and must not
+    add a field that would let it start.
+  - A failed query costs dedupe and costs nothing else. It never raises into
+    a caller, never blocks, never refuses and never fails a run.
+  - The question is scoped. No listing operation is added, and no call site
+    may ask for everything, because the cost of that grows with the tracker
+    rather than with the code being asked about.
+  - No silent bound. Every limit names what it excluded in the answer it
+    returns.
+  - Every path through the query is bounded in time. There is no unbounded
+    wait and no zero timeout, which would be the same thing.
+  - The filing path is not widened. orchestration/command_transport.py keeps
+    the contract story-091 settled, and this story reads beside it rather than
+    through it.
+  - No third-party dependency, and no test that reaches a network or a real
+    tracker. Every command in the suite is a fake the test wrote.
+  - This story ships no caller. Nothing in a run, a plan or a sweep invokes
+    the query, and a test asserts that the seam is unreferenced so the next
+    story's addition is visible as an addition.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-08-29 20:09:35
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
