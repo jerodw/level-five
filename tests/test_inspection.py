@@ -28,7 +28,17 @@ implementation. The subjects are kept apart deliberately:
 
   * **the identity.** Kind, category, sorted bare paths and slug — driven by
     filing one finding twice with its title rewritten and its severity
-    changed, and reading the queue.
+    changed, and reading the queue, and pinned at the digest a fixed finding
+    is filed under, because a key already on disk is matched only by an
+    identity constructed exactly as the one that produced it.
+
+  * **the local queue as the other dedupe source.** Driven with no filed-query
+    command configured, which is the configuration this repository is in: a
+    landed entry drops a finding naming that source, a pending one drops it
+    under a reason of its own, and a failed one drops nothing at all. The two
+    sources are shown to be a union in both directions in one inspection, and
+    the three already-filed reasons are shown to be counted apart and printed
+    apart.
 
   * **the bounds.** The cap across the whole inspection, the per-invocation
     cost allowance observed at the runner, and the two refusals `l5-inspect`
@@ -68,7 +78,23 @@ Every absence asserted here carries a demonstration that it can fail:
     hard-wrapped form the file carried it in, which the same whitespace-
     collapsing comparison reports;
   * "every enqueue in this suite went to a queue the test owns" sits beside
-    the same predicate pointed at this repository, which it reports.
+    the same predicate pointed at this repository, which it reports;
+  * "a failed entry suppresses nothing" sits beside the same finding planted
+    landed, which is dropped, and rests on a fixture that reads every entry it
+    plants back through the queue's own reader — an entry the queue called
+    poisoned would contribute no key and pass for the wrong reason;
+  * "an unlistable queue costs tier one and nothing else" sits beside a
+    control that the directory really refuses to be listed, which skips by
+    name where the process can read it anyway;
+  * "the poisoned file is noted" sits beside the same queue without it, where
+    the note is absent and the index holds the same key;
+  * "reading the local index does not make dedupe complete" sits beside the
+    same index under a query that answers, where dedupe is reported as run;
+  * "`local_index` spawns nothing and reads no query command" sits beside the
+    two functions in that module that legitimately do, which the same scans
+    report;
+  * "nothing here reaches the hand-written briefs" sits beside a planted
+    source naming that directory, which the same search reports.
 
 Nothing here invokes a model: every invocation goes through a fake runner
 this module wrote, and `test_no_inspection_in_this_module_runs_without_a_fake
@@ -123,11 +149,19 @@ DELIVERY_TOOL = inspection.DELIVERY_TOOL
 INSPECTOR_PROMPT = inspection.INSPECTOR_PROMPT
 
 ALREADY_FILED = inspection.ALREADY_FILED
+ALREADY_FILED_LOCALLY = inspection.ALREADY_FILED_LOCALLY
+ALREADY_QUEUED = inspection.ALREADY_QUEUED
 MALFORMED = inspection.MALFORMED
 UNKNOWN_WORKFLOW = inspection.UNKNOWN_WORKFLOW
 PAST_THE_CAP = inspection.PAST_THE_CAP
 LOST_BY_THE_QUEUE = inspection.LOST_BY_THE_QUEUE
 NO_ARTIFACT = inspection.NO_ARTIFACT
+
+#: The three states an entry can be in, read off the queue's own module so no
+#: state name is spelled here beside the definition that decides them.
+PENDING = outbox.PENDING
+LANDED = outbox.LANDED
+FAILED = outbox.FAILED
 
 #: The two shapes, loaded as they ship. They are the subject of the schema
 #: assertions below and the definition every fixture finding is built to
@@ -947,8 +981,16 @@ def test_the_same_finding_rewritten_and_rerated_files_one_entry_under_one_key(
     """Two inspections of one defect, and one entry on disk.
 
     The second inspection's finding differs in exactly the parts a model
-    rephrases between runs — the title and the severity — and files under the
-    same key, replacing the payload rather than adding an entry beside it.
+    rephrases between runs — the title and the severity — and is recognised as
+    the same finding under the same key.
+
+    Since story-095 read the local queue as a dedupe index, that recognition is
+    where the identity's stability is observed: the first inspection's entry is
+    still pending, so the second drops the rewrite as already queued rather
+    than refiling it, and the queue still holds exactly one entry under the key
+    the first filed it as. A drifting identity would produce a second key, a
+    second entry and no drop, so the claim is unchanged and only what makes it
+    visible moved.
     """
     target = target_repository(tmp_path)
     config = configuration()
@@ -960,9 +1002,9 @@ def test_the_same_finding_rewritten_and_rerated_files_one_entry_under_one_key(
                         act=writes(rewritten))
 
     assert len(second.entries) == 1
-    assert first.report.filed[0].key == second.report.filed[0].key
-    assert second.entries[0]["payload"]["title"] == rewritten["title"]
-    assert second.entries[0]["payload"]["severity"] == HIGHEST
+    assert second.entries[0]["key"] == first.report.filed[0].key
+    assert second.report.filed == ()
+    assert len(second.report.dropped_for(inspection.ALREADY_QUEUED)) == 1
 
 
 def test_the_key_an_entry_is_filed_under_is_the_outboxs_own_derivation(
@@ -1049,12 +1091,17 @@ def test_the_module_reaches_the_queue_only_through_enqueue_and_hashes_nothing():
     """Two halves of one claim: the outbox computes the key.
 
     The module derives no digest of its own, and the only queue operations it
-    names are the key derivation, the write and where the queue lives. The
-    controls are below.
+    names are the key derivation, the write, where the queue lives, and — since
+    story-095 read the queue as a dedupe index — the two reads `l5-status`
+    already makes plus the two states it sorts entries by. Nothing here builds
+    a transport or spawns a subprocess for the queue. The controls are below.
     """
     source = (REPO_ROOT / "orchestration" / "inspection.py").read_text(
         encoding="utf-8")
-    assert outbox_attributes(source) == {"identity_key", "enqueue", "queue_dir"}
+    assert outbox_attributes(source) == {
+        "identity_key", "enqueue", "queue_dir",
+        "entry_files", "read_entry", "LANDED", "PENDING",
+    }
     assert "hashlib" not in source
     assert "sha256" not in source
 
@@ -1162,6 +1209,508 @@ def test_a_query_that_answered_is_reported_as_having_run(tmp_path):
     printed = report_text(found)
     assert "dedupe did NOT run" not in printed, printed
     assert "dedupe ran" in printed, printed
+
+
+# --------------------------------------------------------------------------
+# Dedupe: the local queue is the other source, and needs no configuration
+#
+# Every inspection below is driven with no filed-query command unless it names
+# one, which is the configuration this repository is in: the tier being
+# validated here is the one that answers anyway. Nothing here reaches a
+# network or a tracker — an entry is written into a queue beneath the test's
+# own target through the queue's own writer, and moved to the state the
+# assertion is about.
+# --------------------------------------------------------------------------
+
+
+def planted(target: Path, finding: dict, state: str) -> str:
+    """One entry in a target's own queue, in `state`, under `finding`'s key.
+
+    Written through the queue's own writer and then moved into the state the
+    assertion is about, in the shape a sync leaves each one: a landed entry
+    records the provider's reference and drops the payload it no longer needs,
+    a failed one records what refused it and the attempt it cost.
+
+    It is read back through `outbox.read_entry` before it is returned, and the
+    state it reads back as is asserted here. That is the control every
+    assertion below rests on: an entry this fixture wrote in a shape the queue
+    calls poisoned would contribute no key at all, and then "a failed entry
+    suppresses nothing" would pass for the wrong reason.
+    """
+    queue = outbox.queue_dir(target)
+    key = outbox.enqueue(queue, {"slug": finding["slug"]},
+                         inspection.identity(finding))
+    assert key, "the fixture's own enqueue lost the entry it meant to plant"
+
+    path = outbox.entry_path(queue, key)
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    entry["state"] = state
+    if state == LANDED:
+        entry.pop("payload", None)
+        entry["reference"] = f"zzz-tracker#{finding['slug']}"
+    elif state == FAILED:
+        entry["attempts"] = 1
+        entry["last_error"] = "the tracker refused it on its own terms"
+    path.write_text(json.dumps(entry, indent=2) + "\n", encoding="utf-8")
+
+    written, problems = outbox.read_entry(path)
+    assert problems == [], problems
+    assert written["state"] == state
+    return key
+
+
+def filed_payload_slugs(found: Inspected) -> list[str]:
+    """The slugs the queue holds a payload for, sorted.
+
+    A landed entry has dropped its payload, so the entries a test planted are
+    not counted among the ones an inspection wrote.
+    """
+    return sorted(entry["payload"]["slug"] for entry in found.entries
+                  if "payload" in entry)
+
+
+def test_a_landed_entry_in_the_local_queue_drops_a_finding_and_says_which_source(
+        tmp_path):
+    """Tier one, with no filed-query command configured at all.
+
+    That configuration is asserted rather than assumed, because it is the
+    point: this repository configures no query, and the tier being driven here
+    is the one that answers regardless. The finding beside the match is filed,
+    so the drop is about the match rather than about an inspection that stopped
+    filing, and the reason names the local queue rather than the query — which
+    did not run.
+    """
+    config = configuration()
+    assert filed_query.COMMAND_KEY not in config
+
+    target = target_repository(tmp_path)
+    known = brief(slug="the-one-this-harness-already-filed")
+    fresh = brief(slug="the-one-nobody-has-filed")
+    key = planted(target, known, LANDED)
+
+    found = inspecting(tmp_path, target=target, config=config,
+                       act=writes(known, fresh))
+
+    assert found.filed_slugs == [fresh["slug"]]
+    assert known["slug"] in found.detail(ALREADY_FILED_LOCALLY)
+    assert found.dropped(ALREADY_FILED) == ()
+    assert found.report.local_index.landed == frozenset({key})
+    assert filed_payload_slugs(found) == [fresh["slug"]]
+    assert found.report.dedupe_ran is False
+
+
+def test_a_failed_entry_suppresses_nothing_and_the_finding_is_filed_again(
+        tmp_path):
+    """The rule a tempting simpler one gets wrong.
+
+    A failed entry is terminal: no later sync files it, so the finding it
+    carries reached nobody, and dropping on it would lose that finding
+    permanently with no signal. The finding is filed again and replaces the
+    failed entry at the same key with a pending one — another chance rather
+    than a duplicate, because the key is derived from the identity alone.
+
+    The control is below in the same test: the same finding, against the same
+    fixture, planted landed instead — which *is* dropped. So "not dropped" here
+    is a fact about the state the entry is in rather than about a queue nothing
+    read.
+    """
+    target = target_repository(tmp_path)
+    finding = brief(slug="the-one-that-reached-nobody")
+    key = planted(target, finding, FAILED)
+
+    found = inspecting(tmp_path, target=target, act=writes(finding))
+
+    assert found.filed_slugs == [finding["slug"]]
+    assert found.report.dropped == ()
+    assert [entry["key"] for entry in found.entries] == [key]
+    assert found.entries[0]["state"] == PENDING
+    assert found.entries[0]["payload"]["slug"] == finding["slug"]
+    assert found.report.local_index.landed == frozenset()
+    assert found.report.local_index.queued == frozenset()
+
+    landed = target_repository(tmp_path, name="the-same-finding-landed")
+    planted(landed, finding, LANDED)
+    control = inspecting(tmp_path, target=landed, act=writes(finding))
+    assert control.report.filed == ()
+    assert finding["slug"] in control.detail(ALREADY_FILED_LOCALLY)
+
+
+def test_a_pending_entry_is_dropped_as_queued_rather_than_as_already_filed(
+        tmp_path):
+    """Two states, two reasons, driven side by side so the two can be compared.
+
+    A pending entry is written down here and seen by no tracker, so it is not
+    the evidence a landed one is: reporting it as filed would claim the harness
+    filed something nothing external has seen. It is dropped, the report does
+    not count it as newly filed, and the reason differs from the one the same
+    finding produces when its entry has landed.
+    """
+    assert len({ALREADY_FILED, ALREADY_FILED_LOCALLY, ALREADY_QUEUED}) == 3
+
+    finding = brief(slug="the-one-waiting-in-the-queue")
+    queued_target = target_repository(tmp_path, name="holds-it-pending")
+    key = planted(queued_target, finding, PENDING)
+    landed_target = target_repository(tmp_path, name="holds-it-landed")
+    planted(landed_target, finding, LANDED)
+
+    queued = inspecting(tmp_path, target=queued_target, act=writes(finding))
+    landed = inspecting(tmp_path, target=landed_target, act=writes(finding))
+
+    assert queued.report.filed == ()
+    assert len(queued.dropped(ALREADY_QUEUED)) == 1
+    assert finding["slug"] in queued.detail(ALREADY_QUEUED)
+    assert queued.dropped(ALREADY_FILED_LOCALLY) == ()
+    assert queued.report.local_index.queued == frozenset({key})
+    assert [entry["key"] for entry in queued.entries] == [key]
+    assert queued.entries[0]["state"] == PENDING
+
+    assert len(landed.dropped(ALREADY_FILED_LOCALLY)) == 1
+    assert landed.dropped(ALREADY_QUEUED) == ()
+    assert queued.dropped(ALREADY_QUEUED)[0].reason != \
+        landed.dropped(ALREADY_FILED_LOCALLY)[0].reason
+
+
+def test_the_two_sources_are_a_union_and_each_drop_names_the_source_that_knew(
+        tmp_path):
+    """Both directions in one inspection, with a third finding neither knows.
+
+    One finding the query reported and the queue does not hold, one the queue
+    holds landed and the query did not report, and one nobody has seen. Each
+    slug is asserted present in its own source's drops and absent from the
+    other's, so neither absence is a search that has stopped seeing anything:
+    the same comparison finds each slug once.
+    """
+    target = target_repository(tmp_path)
+    by_query = brief(slug="the-one-only-the-tracker-knows")
+    by_queue = brief(slug="the-one-only-this-machine-filed")
+    fresh = brief(slug="the-one-neither-source-knows")
+    planted(target, by_queue, LANDED)
+
+    item = {"key": outbox.identity_key(inspection.identity(by_query)),
+            "title": "what the tracker already carries"}
+    found = inspecting(
+        tmp_path, target=target, act=writes(by_query, by_queue, fresh),
+        config=configuration(**{
+            filed_query.COMMAND_KEY: answering_query(tmp_path, item)}))
+
+    assert found.report.dedupe[0].ran is True
+    assert found.filed_slugs == [fresh["slug"]]
+
+    assert by_query["slug"] in found.detail(ALREADY_FILED)
+    assert by_queue["slug"] not in found.detail(ALREADY_FILED)
+    assert by_queue["slug"] in found.detail(ALREADY_FILED_LOCALLY)
+    assert by_query["slug"] not in found.detail(ALREADY_FILED_LOCALLY)
+
+
+def reported_lines(printed: str, reason: str) -> list[str]:
+    """Every line of the report that is a drop for exactly `reason`.
+
+    Matched at the start of the line rather than by substring, because one
+    reason is a prefix of another — and whether the two are told apart is the
+    thing being asserted, so a comparison that could not tell them apart would
+    answer the wrong question.
+    """
+    return [line.strip() for line in printed.splitlines()
+            if line.strip().startswith(f"{reason}: ")]
+
+
+def test_the_three_already_filed_reasons_are_counted_and_printed_apart(
+        tmp_path):
+    """One inspection carrying a drop from each source, told apart twice.
+
+    Once through `dropped_for`, which must return each reason's drop without
+    the others', and once through what a developer reads, where the three are
+    three lines rather than one merged into another.
+    """
+    target = target_repository(tmp_path)
+    by_query = brief(slug="the-one-the-tracker-reported")
+    landed = brief(slug="the-one-the-queue-holds-landed")
+    pending = brief(slug="the-one-the-queue-holds-pending")
+    planted(target, landed, LANDED)
+    planted(target, pending, PENDING)
+
+    item = {"key": outbox.identity_key(inspection.identity(by_query)),
+            "title": "what the tracker already carries"}
+    found = inspecting(
+        tmp_path, target=target, act=writes(by_query, landed, pending),
+        config=configuration(**{
+            filed_query.COMMAND_KEY: answering_query(tmp_path, item)}))
+
+    for reason, finding in ((ALREADY_FILED, by_query),
+                            (ALREADY_FILED_LOCALLY, landed),
+                            (ALREADY_QUEUED, pending)):
+        drops = found.dropped(reason)
+        assert len(drops) == 1, (reason, drops)
+        assert finding["slug"] in drops[0].detail
+
+    printed = report_text(found)
+    for reason, finding in ((ALREADY_FILED, by_query),
+                            (ALREADY_FILED_LOCALLY, landed),
+                            (ALREADY_QUEUED, pending)):
+        lines = reported_lines(printed, reason)
+        assert len(lines) == 1, (reason, printed)
+        assert finding["slug"] in lines[0]
+
+
+@pytest.fixture
+def unlistable_queue_target(tmp_path: Path) -> Path:
+    """A target whose queue can be written to and cannot be listed.
+
+    Written to, deliberately: a queue that could not be written either would
+    make "the inspection still files what it found" unobservable, and the claim
+    is that losing tier one costs tier one and nothing else.
+    """
+    target = target_repository(tmp_path, name="an-unlistable-queue")
+    queue = outbox.queue_dir(target)
+    queue.mkdir(parents=True, exist_ok=True)
+    queue.chmod(0o300)
+    yield target
+    queue.chmod(0o700)
+
+
+def refuses_to_be_listed(target: Path) -> None:
+    """Skip unless the queue beneath `target` really cannot be listed.
+
+    A developer running the suite as root can read a directory with no read
+    bit, which would make the assertions resting on it vacuous rather than
+    false — so that case is skipped by name rather than passed silently.
+    """
+    try:
+        list(outbox.queue_dir(target).iterdir())
+    except OSError:
+        return
+    pytest.skip("this process can list a directory with no read permission")
+
+
+def test_the_unlistable_queue_really_cannot_be_listed(unlistable_queue_target):
+    """The control for the assertion below: the directory refuses to be listed,
+    so a report saying the index could not be read is the guard working rather
+    than a path that quietly succeeded."""
+    refuses_to_be_listed(unlistable_queue_target)
+    with pytest.raises(OSError):
+        outbox.entry_files(outbox.queue_dir(unlistable_queue_target))
+
+
+def test_a_queue_that_cannot_be_listed_costs_tier_one_and_nothing_else(
+        unlistable_queue_target, tmp_path):
+    """The inspection runs, invokes, files what it found, and says what it lost.
+
+    Nothing is raised out of the module: a queue that cannot be read is nothing
+    known rather than an error, in the one-directional bias every other total
+    path there takes. What was filed is read off the queue afterwards, with the
+    directory made listable again for the reading alone.
+    """
+    refuses_to_be_listed(unlistable_queue_target)
+    queue = outbox.queue_dir(unlistable_queue_target)
+
+    found = inspecting(tmp_path, target=unlistable_queue_target,
+                       act=writes(brief()))
+
+    index = found.report.local_index
+    assert index.read is False
+    assert str(queue) in index.reason
+    assert index.landed == frozenset()
+    assert len(found.invocations) == 1
+    assert found.filed_slugs == [brief()["slug"]]
+    assert found.report.dropped == ()
+    assert index.reason in report_text(found)
+
+    queue.chmod(0o700)
+    assert filed_payload_slugs(found) == [brief()["slug"]]
+
+
+def test_a_poisoned_entry_contributes_no_key_and_stops_nothing(tmp_path):
+    """The entry beside the poison is indexed exactly as it would have been.
+
+    The poisoned file is counted and named as a count in what a developer
+    reads. The control is the same inspection over the same queue without the
+    poisoned file, where the count is zero and the note is absent — so the note
+    is a fact about the file rather than something always printed.
+    """
+    known = brief(slug="the-one-beside-the-poison")
+    fresh = brief(slug="the-one-nobody-has-filed")
+    note = "could not be read as entries"
+
+    target = target_repository(tmp_path, name="holds-a-poisoned-file")
+    planted(target, known, LANDED)
+    poison = outbox.queue_dir(target) / f"zzz-not-an-entry{outbox.ENTRY_SUFFIX}"
+    poison.write_text("{ this file is not an entry", encoding="utf-8")
+
+    found = inspecting(tmp_path, target=target, act=writes(known, fresh))
+
+    assert found.report.local_index.unreadable == 1
+    assert found.report.local_index.landed == frozenset(
+        {outbox.identity_key(inspection.identity(known))})
+    assert known["slug"] in found.detail(ALREADY_FILED_LOCALLY)
+    assert found.filed_slugs == [fresh["slug"]]
+    assert note in report_text(found)
+
+    clean = target_repository(tmp_path, name="holds-no-poisoned-file")
+    planted(clean, known, LANDED)
+    control = inspecting(tmp_path, target=clean, act=writes(known, fresh))
+    assert control.report.local_index.unreadable == 0
+    assert control.report.local_index.landed == \
+        found.report.local_index.landed
+    assert note not in report_text(control)
+
+
+def local_index_lines(printed: str) -> list[str]:
+    """Every line of the report that speaks about the local queue."""
+    return [line.strip() for line in printed.splitlines()
+            if "local queue" in line]
+
+
+def test_the_report_says_what_the_local_index_held_even_when_it_held_nothing(
+        tmp_path):
+    """A source that is silent when it found nothing cannot be told from one
+    that did not run.
+
+    So the line is asserted on an inspection whose queue was empty, and beside
+    it on one whose queue held a landed entry and a pending one — where the
+    same line says something different. Two lines that could not differ would
+    be a report that says nothing.
+    """
+    empty = inspecting(tmp_path, act=writes(brief()), name="an-empty-queue")
+    index = empty.report.local_index
+    assert index.read is True
+    assert (index.landed, index.queued, index.unreadable) == \
+        (frozenset(), frozenset(), 0)
+
+    nothing = local_index_lines(report_text(empty))
+    assert len(nothing) == 1, nothing
+    assert "0" in nothing[0]
+
+    target = target_repository(tmp_path, name="an-index-holding-two")
+    planted(target, brief(slug="one-that-landed"), LANDED)
+    planted(target, brief(slug="one-that-is-queued"), PENDING)
+    held = inspecting(tmp_path, target=target, act=writes(brief()))
+
+    assert len(held.report.local_index.landed) == 1
+    assert len(held.report.local_index.queued) == 1
+    said = local_index_lines(report_text(held))
+    assert len(said) == 1, said
+    assert said != nothing
+
+
+def test_dedupe_ran_stays_a_statement_about_the_filed_query_alone(tmp_path):
+    """A read local index does not make dedupe complete.
+
+    It knows only what this machine filed, so a duplicate filed elsewhere or by
+    hand is invisible to it. An inspection whose query could not answer reports
+    that dedupe did not run even where the index was read and matched
+    something. The control is the same index under a query that answers, where
+    the same inspection reports dedupe as having run.
+    """
+    known = brief(slug="the-one-this-machine-filed")
+    fresh = brief(slug="the-one-nobody-has-filed")
+
+    target = target_repository(tmp_path, name="an-index-and-a-failing-query")
+    planted(target, known, LANDED)
+    found = inspecting(
+        tmp_path, target=target, act=writes(known, fresh),
+        config=configuration(**{
+            filed_query.COMMAND_KEY: failing_query(tmp_path)}))
+
+    assert found.report.local_index.read is True
+    assert found.report.local_index.landed
+    assert found.report.dedupe_ran is False
+    assert known["slug"] in found.detail(ALREADY_FILED_LOCALLY)
+    assert "dedupe did NOT run" in report_text(found)
+
+    other = target_repository(tmp_path, name="an-index-and-an-answering-query")
+    planted(other, known, LANDED)
+    control = inspecting(
+        tmp_path, target=other, act=writes(known, fresh),
+        config=configuration(**{
+            filed_query.COMMAND_KEY: answering_query(tmp_path)}))
+
+    assert control.report.local_index.landed == found.report.local_index.landed
+    assert control.report.dedupe_ran is True
+    assert known["slug"] in control.detail(ALREADY_FILED_LOCALLY)
+
+
+def test_the_local_index_is_read_through_the_queues_two_reads_and_nothing_else():
+    """No transport, no subprocess, and no filed-query command.
+
+    Read off the function this harness ships, which is the subject of the
+    claim. The controls are the two functions beside it in the same module: one
+    that legitimately spawns a subprocess and one that legitimately asks the
+    filed query, both of which the same three scans report — so the silences
+    above are facts about this function rather than scans that see nothing.
+    """
+    source = introspection.getsource(inspection.local_index)
+    assert outbox_attributes(source) == {
+        "queue_dir", "entry_files", "read_entry", "LANDED", "PENDING",
+    }
+    assert script_attributes(source, "subprocess") == set()
+    assert script_attributes(source, "filed_query") == set()
+    assert filed_query.COMMAND_KEY not in source
+
+    spawns = introspection.getsource(inspection._tracked)
+    assert script_attributes(spawns, "subprocess")
+
+    asks = introspection.getsource(inspection.inspect_scope)
+    assert script_attributes(asks, "filed_query")
+
+    whole = (REPO_ROOT / "orchestration" / "inspection.py").read_text(
+        encoding="utf-8")
+    assert filed_query.COMMAND_KEY not in whole
+
+
+#: A finding written out here rather than derived from the fixtures, and the
+#: key the harness files it under. The digest is the pin: every key already on
+#: disk was derived from this construction, and a change to what the identity
+#: carries, to the order it carries it in, or to the kind, invalidates all of
+#: them at once. That must be a deliberate act rather than a side effect of
+#: something else, which is what this pin makes it.
+PINNED_FINDING = {
+    "slug": "zzz-a-finding-pinned-so-the-key-cannot-drift",
+    "category": "structural-duplication",
+    "paths": ["zzz-src/second.py", "zzz-src/first.py:12"],
+    "title": "prose the identity does not carry",
+    "body": "more prose the identity does not carry",
+    "severity": 3,
+    "confidence": "high",
+}
+PINNED_KEY = "719582c79825521a691a8b3e7187ba539c4c3821ece953965a02869a7681cbce"
+
+
+def test_the_identity_a_brief_is_filed_under_is_byte_for_byte_what_it_was():
+    """The identity, and the key derived from it, pinned against drift.
+
+    Not a restatement of what the identity carries — the test above already
+    says that — but the digest itself, because a key already on disk is only
+    matched by an identity constructed exactly as the one that produced it.
+    """
+    identity = inspection.identity(PINNED_FINDING)
+    assert identity == {
+        "kind": KIND,
+        "category": PINNED_FINDING["category"],
+        "paths": ["zzz-src/first.py", "zzz-src/second.py"],
+        "slug": PINNED_FINDING["slug"],
+    }
+    assert outbox.identity_key(identity) == PINNED_KEY
+
+
+#: The directory of hand-written briefs this story records as considered and
+#: rejected: it is gitignored and local, its briefs carry no identity, and it
+#: answers a different question from the one a tracker answers.
+REQUESTS_DIR = ".harness/requests"
+
+
+def test_nothing_the_inspector_ships_reaches_the_hand_written_briefs():
+    """Neither the module nor the entry point reads, writes or names it.
+
+    The control is a planted source naming the directory, which the same search
+    reports — so the silence over the two shipped files is a fact about them
+    rather than about a search that has stopped seeing anything.
+    """
+    for path in (REPO_ROOT / "orchestration" / "inspection.py",
+                 SCRIPTS / "l5-inspect"):
+        assert REQUESTS_DIR not in path.read_text(encoding="utf-8"), path
+
+    planted_source = f'BRIEFS = "{REQUESTS_DIR}"\n'
+    assert REQUESTS_DIR in planted_source
 
 
 # --------------------------------------------------------------------------
