@@ -44,6 +44,14 @@
 # let the next sync re-run the whole thing; the search at the top is what
 # makes that safe.
 #
+# THE QUERY SCRIPT IS THIS ONE'S PAIR. templates/query/github.sh asks what is
+# already filed against a set of paths, and it finds what this script wrote by
+# searching for the per-path marker below. The two are written by the same
+# target and must agree about where a path is recorded in a tracker item; the
+# harness requires the agreement and cannot enforce it, so a target that
+# installs one without the other gets no dedupe rather than an error. Change
+# the marker here and change it there in the same edit.
+#
 # A SYNC COMMAND MUST NOT COMMIT. It writes to a tracker; a human or a run
 # commits to the repository. The harness does not enforce this and says so
 # rather than implying a check that does not exist. Do not add a git commit
@@ -56,6 +64,12 @@ set -uo pipefail
 # --- what this target files against. Edit these. ------------------------
 LABEL="${L5_SYNC_LABEL:-l5}"
 PROJECT="${L5_SYNC_PROJECT:-}"   # a project number or URL; empty skips the board
+
+# The searchable marker written once per path the payload carries.
+# templates/query/github.sh searches for exactly this prefix, and a test reads
+# this line out of both files and asserts the two strings are the same, so the
+# pair cannot drift apart unnoticed. Change it in both or in neither.
+PATH_MARKER_PREFIX="l5-path: "
 
 fail_transient() { echo "$*" >&2; exit 75; }
 fail_terminal()  { echo "$*" >&2; exit 1; }
@@ -79,6 +93,20 @@ marker="l5-sync-key: ${key}"
 body="${body}
 
 <!-- ${marker} -->"
+
+# One marker per path the payload carries, so the query script can find this
+# item by searching for a path. A payload carrying no paths adds nothing and
+# files exactly as it did before this existed.
+paths="$(printf '%s' "$entry" | jq -r '(.payload.paths // []) | .[]' 2>/dev/null)" || paths=""
+if [ -n "$paths" ]; then
+  while IFS= read -r one; do
+    [ -n "$one" ] || continue
+    body="${body}
+<!-- ${PATH_MARKER_PREFIX}${one} -->"
+  done <<PATHS
+$paths
+PATHS
+fi
 
 # --- idempotency: search before creating --------------------------------
 # A search that fails is transient rather than terminal: we do not know

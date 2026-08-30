@@ -391,13 +391,16 @@ def test_plan_validation_introduces_no_second_parser_or_validator():
 #: two planner invocations wrote, an agent-authored answer held to the schema
 #: the prompt asked it to satisfy exactly as every other agent-authored
 #: artifact is; `outbox` checks what it reads back out of its own queue, which
-#: is how a poisoned entry is a decidable condition rather than a judgement.
-#: The rule these tests hold is about the *story* artifact having one reader,
-#: and each exemption is held shut from both sides below so it cannot quietly
-#: become a second one.
+#: is how a poisoned entry is a decidable condition rather than a judgement;
+#: `filed_query` checks what a target's own command printed on stdout, which is
+#: how an answer the harness cannot use is nothing-known with a reason rather
+#: than a crash in a caller. The rule these tests hold is about the *story*
+#: artifact having one reader, and each exemption is held shut from both sides
+#: below so it cannot quietly become a second one.
 VALIDATES_ANOTHER_ARTIFACT = (
     "orchestration/workflow_selection.py",
     "orchestration/outbox.py",
+    "orchestration/filed_query.py",
 )
 
 

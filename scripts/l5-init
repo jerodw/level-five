@@ -30,7 +30,7 @@ def main() -> int:
         print(f"{harness_dir} already initialized.", file=sys.stderr)
         return 1
 
-    for sub in ("standards", "docs", "stories", "runs", "logs", "sync"):
+    for sub in ("standards", "docs", "stories", "runs", "logs", "sync", "query"):
         (harness_dir / sub).mkdir(parents=True, exist_ok=True)
 
     config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")
@@ -42,13 +42,18 @@ def main() -> int:
             template.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
-    # The reference sync commands, installed executable because the harness
-    # launches one as a command rather than reading it. A target opts in by
-    # naming one in sync_command; installing it does not file anything.
-    for script in sorted((TEMPLATES / "sync").glob("*.sh")):
-        installed = harness_dir / "sync" / script.name
-        installed.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
-        installed.chmod(0o755)
+    # The reference sync and query commands, installed executable because the
+    # harness launches one as a command rather than reading it. A target opts
+    # in by naming one in sync_command or filed_query_command; installing them
+    # files nothing and asks nothing. Both halves are installed together
+    # because they are a pair: the sync script records a path in a tracker item
+    # and the query script searches for what it recorded, so a target that got
+    # one without the other would have filing with no dedupe behind it.
+    for directory in ("sync", "query"):
+        for script in sorted((TEMPLATES / directory).glob("*.sh")):
+            installed = harness_dir / directory / script.name
+            installed.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
+            installed.chmod(0o755)
 
     print(f"Initialized {harness_dir}")
     print("Next: replace the starter standards in .harness/standards/, then plan a story with l5-plan.")
