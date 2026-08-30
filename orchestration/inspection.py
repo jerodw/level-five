@@ -40,11 +40,37 @@ number would be filed under a marker no scoped query ever asks for, and the
 dedupe this module exists to make possible would silently never match. Line
 numbers are the evidentiary standard and they live in the body.
 
+**Dedupe is two sources and neither waits on the other.** The filed query asks a
+tracker what is already filed against a scope's paths. The local outbox queue is
+read as an index of what *this harness* has already filed — free, with no
+network and no configuration, the same read `l5-status` already makes. Both are
+consulted on every inspection: the local index is not a fallback for a query
+that failed, and the query is not a fallback for an index that is empty. A
+fallback would make the answer depend on which source responded, and story-093
+went out of its way to make nothing known distinguishable from nothing filed
+precisely so a caller can say dedupe did not run.
+
+**Which state a queue entry is in decides what it is evidence of.** A landed
+entry means the provider named what it holds, so it suppresses. A pending entry
+is in the queue and not yet on any tracker, so it is reported as already queued
+rather than already filed — treating it as filed would let the report claim it
+filed something new when nothing external has seen it. A failed entry is
+terminal and no later sync will file it, so it must not suppress: a failed entry
+is a finding that reached nobody, and suppressing on it would lose the finding
+permanently with no signal. "It is in the queue" is the tempting wrong rule.
+
+**The local index is a subset and does not complete dedupe.** It knows only what
+this machine filed; another machine's filings and anything filed by hand are
+invisible to it, so it can miss a duplicate the query would catch. That is why
+it is an addition rather than a replacement, and why `Report.dedupe_ran` remains
+a statement about the filed query alone.
+
 **No silent bound.** Every way of dropping a finding is named in the report with
-what it excluded: already filed, malformed, an unknown workflow, past the cap,
-lost by the queue. A scope whose filed query could not answer is reported as
-dedupe not having run, in those terms, and its findings are filed anyway —
-losing dedupe is not a reason to lose the findings.
+what it excluded: already filed by the tracker, already filed by this harness,
+already queued, malformed, an unknown workflow, past the cap, lost by the queue.
+A scope whose filed query could not answer is reported as dedupe not having run,
+in those terms, and its findings are filed anyway — losing dedupe is not a
+reason to lose the findings.
 """
 from __future__ import annotations
 
@@ -110,7 +136,21 @@ TESTS = "tests"
 #: The ways a finding can be dropped. Each is named in the report with what it
 #: excluded, because a bound whose effect is not stated reads as a scope with
 #: nothing wrong in it.
+#: The filed query knew it: a tracker reported it against this scope's paths.
 ALREADY_FILED = "already filed"
+
+#: The local queue holds it landed: this harness filed it and a provider named
+#: what it holds. Distinct from the reason above so a reader is told which
+#: source knew, and so a caller counting the ways an inspection dropped things
+#: can count the two separately.
+ALREADY_FILED_LOCALLY = "already filed by this harness"
+
+#: The local queue holds it pending: this harness has it written down and no
+#: tracker has seen it. Distinct from both reasons above because it is not the
+#: same evidence — nothing external holds it, so reporting it as filed would
+#: claim something that has not happened.
+ALREADY_QUEUED = "already queued"
+
 MALFORMED = "malformed"
 UNKNOWN_WORKFLOW = "names a workflow the harness does not define"
 PAST_THE_CAP = "past the cap"
@@ -381,6 +421,90 @@ class Dedupe:
 
 
 @dataclass(frozen=True)
+class LocalIndex:
+    """What the local outbox queue knows, read once for a whole inspection.
+
+    This is the free tier of the dedupe: no network, no configuration, no
+    subprocess and nothing that can fail slowly — the same read `l5-status`
+    already makes, through `outbox.entry_files` and `outbox.read_entry` alone.
+    It is consulted on every inspection rather than only when the filed query
+    fails, because both answer the same question and both are asked.
+
+    **It is a subset of what the filed query answers**, and a reader must not
+    mistake it for a complete one. It knows only what this machine filed:
+    another machine's filings and anything filed by hand are invisible to it,
+    so an inspection whose query could not answer still reports that dedupe did
+    not run even where this was read successfully.
+
+    `read` false is a queue that could not be listed, with `reason` saying why;
+    that costs this tier and costs nothing else. `unreadable` counts the files
+    in the queue that could not be read as entries — each contributes no key and
+    stops nothing. The default is an index that was read and held nothing, which
+    suppresses nothing and claims no failure.
+    """
+
+    read: bool = True
+    landed: frozenset = frozenset()
+    queued: frozenset = frozenset()
+    unreadable: int = 0
+    reason: str = ""
+
+
+def local_index(target_root: Path,
+                harness_root: Path | None = None) -> LocalIndex:
+    """The keys the local queue holds, by the state their entries are in.
+
+    Read once for a whole inspection rather than once per scope, because the
+    queue is not scoped: it is a record of what this harness filed, and every
+    scope asks it the same question.
+    """
+    queue = outbox.queue_dir(target_root)
+    try:
+        files = outbox.entry_files(queue)
+    except OSError as error:
+        # A queue that cannot be listed is nothing known rather than an error,
+        # the one-directional bias every other total path in this module takes.
+        # It costs this tier, it is reported, and nothing is raised out of here.
+        # A directory that does not exist needs no special case: `entry_files`
+        # already answers it with no entries rather than an error.
+        return LocalIndex(
+            read=False,
+            reason=f"the queue at {queue} could not be listed: {error}",
+        )
+
+    landed: set = set()
+    queued: set = set()
+    unreadable = 0
+    for path in files:
+        entry, _ = outbox.read_entry(path, harness_root)
+        if entry is None:
+            # A poisoned entry contributes no key and stops nothing: the
+            # entries beside it in the same queue are indexed exactly as they
+            # would have been, and the count is reported.
+            unreadable += 1
+            continue
+        state = entry["state"]
+        if state == outbox.LANDED:
+            landed.add(entry["key"])
+        elif state == outbox.PENDING:
+            queued.add(entry["key"])
+        # A failed entry is skipped deliberately and contributes to neither
+        # set. It is terminal: no later sync will file it, so it is a finding
+        # that reached nobody, and suppressing on it would lose that finding
+        # permanently with no signal. Leaving it out means the finding is
+        # enqueued again and replaces the failed entry at the same key with a
+        # pending one — the finding getting another chance rather than a
+        # duplicate, since the key is derived from the identity alone.
+
+    return LocalIndex(
+        read=True,
+        landed=frozenset(landed),
+        queued=frozenset(queued),
+        unreadable=unreadable,
+    )
+
+
+@dataclass(frozen=True)
 class Report:
     """What one inspection inspected, filed and dropped.
 
@@ -394,6 +518,11 @@ class Report:
     filed: tuple[Filed, ...] = ()
     dropped: tuple[Drop, ...] = ()
     dedupe: tuple[Dedupe, ...] = ()
+    #: What the local queue held, on every inspection including one where it
+    #: held nothing — a source that is silent when it found nothing is
+    #: indistinguishable from one that did not run. Defaulted so this dataclass
+    #: stays constructible as the error paths above already construct it.
+    local_index: LocalIndex = LocalIndex()
     dry_run: bool = False
 
     def dropped_for(self, reason: str) -> tuple[Drop, ...]:
@@ -402,7 +531,13 @@ class Report:
 
     @property
     def dedupe_ran(self) -> bool:
-        """Whether every scope's filed query answered."""
+        """Whether every scope's filed query answered.
+
+        A statement about the filed query alone, deliberately: the local index
+        is a subset that knows only what this machine filed, so a duplicate
+        filed elsewhere is invisible to it and reading it successfully does not
+        make dedupe complete.
+        """
         return all(one.ran for one in self.dedupe)
 
 
@@ -612,7 +747,7 @@ def _severity(finding) -> int | None:
 
 def inspect_scope(scope: Scope, target_root: Path, config: dict,
                   harness_root: Path, bound: Bounds, blocked: tuple[str, ...],
-                  runner) -> _ScopeResult:
+                  runner, index: LocalIndex = LocalIndex()) -> _ScopeResult:
     """One scope: ask what is filed, invoke once, and read what was written.
 
     The order is the point. What is already filed against this scope's paths is
@@ -621,6 +756,11 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
     the model being asked about it a second time. A query that could not answer
     is recorded as dedupe not having run for this scope and the findings are
     filed anyway.
+
+    `index` is the local queue read once for the whole inspection and handed
+    down, because the queue is not scoped. It defaults to an empty index, so a
+    caller that does not supply one gets exactly what it got before the local
+    tier existed.
     """
     result = _ScopeResult()
     paths = scope_paths(target_root, scope, blocked)
@@ -633,6 +773,10 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
         excluded=answer.excluded,
     )
     known = {item.key for item in answer.items}
+    # The two sources are a union: a finding either of them knows is dropped,
+    # and neither source's answer depends on the other having answered. `known`
+    # is kept separately so a drop can name which source knew it.
+    checked = known | index.landed
 
     artifact, log_path = findings_paths(target_root, config)
     artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -670,8 +814,8 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
 
     brief_schema = schema_validator.load_schema(BRIEF_SCHEMA, harness_root)
     defined = harness_config.workflow_names(harness_root)
-    for index, finding in enumerate(document["findings"], start=1):
-        named = _describe(finding, f"the finding at position {index}")
+    for position, finding in enumerate(document["findings"], start=1):
+        named = _describe(finding, f"the finding at position {position}")
         problems = schema_validator.validate(finding, brief_schema)
         if problems:
             # One malformed finding costs only itself: it is named with the
@@ -693,13 +837,36 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
                 _severity(finding),
             ))
             continue
-        if outbox.identity_key(identity(finding)) in known:
+        key = outbox.identity_key(identity(finding))
+        if key in checked:
+            # The query first, then the local landed set. Both are in `checked`
+            # and either alone is enough to drop; what this decides is only
+            # which source the reader is told knew it.
+            if key in known:
+                result.dropped.append(Drop(
+                    ALREADY_FILED,
+                    f"{named}: the filed query already reported it",
+                    _severity(finding),
+                ))
+            else:
+                result.dropped.append(Drop(
+                    ALREADY_FILED_LOCALLY,
+                    f"{named}: the local queue holds it landed",
+                    _severity(finding),
+                ))
+            continue
+        if key in index.queued:
+            # Written down here and seen by no tracker, so it is not the same
+            # evidence a landed entry is: it is reported as already queued, and
+            # the report does not count it as newly filed.
             result.dropped.append(Drop(
-                ALREADY_FILED,
-                f"{named}: the filed query already reported it",
+                ALREADY_QUEUED,
+                f"{named}: the local queue holds it pending, not yet filed",
                 _severity(finding),
             ))
             continue
+        # A key the local queue holds *failed* reaches here deliberately and is
+        # filed: see `local_index` for why a terminal entry must not suppress.
         result.found.append(_Found(finding=finding, scope=scope))
     return result
 
@@ -727,9 +894,10 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
             runner=agent_runner.run_agent) -> Report:
     """Inspect every scope, file what survives, and report what happened.
 
-    One invocation per scope, then one cap across all of them, then one
-    `outbox.enqueue` per surviving brief. Returns what happened and prints
-    nothing.
+    The local queue is read once, then one invocation per scope, then one cap
+    across all of them, then one `outbox.enqueue` per surviving brief. Returns
+    what happened — including what the local index held, on every inspection
+    and not only one where it held something — and prints nothing.
 
     `dry_run` reports exactly what an ordinary invocation would file and
     enqueues nothing: the scopes are inspected, the query is asked, the
@@ -749,6 +917,9 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
 
     covered = scopes(arguments, config)
     blocked = blocked_prefixes(harness_root)
+    # Read once for the whole inspection rather than once per scope: the queue
+    # is not scoped, and every scope asks it the same question.
+    index = local_index(target_root, harness_root)
 
     found: list = []
     dropped: list = []
@@ -756,7 +927,8 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
     invocations = 0
     for scope in covered:
         result = inspect_scope(
-            scope, target_root, config, harness_root, bound, blocked, runner
+            scope, target_root, config, harness_root, bound, blocked, runner,
+            index,
         )
         invocations += 1
         found.extend(result.found)
@@ -809,5 +981,6 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         filed=tuple(filed),
         dropped=tuple(dropped),
         dedupe=tuple(dedupe),
+        local_index=index,
         dry_run=dry_run,
     )

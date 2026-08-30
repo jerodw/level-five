@@ -17,6 +17,16 @@ a human plans it into a story through l5-plan's interview, and that
 interview is where the mandate is conferred. Nothing in a run, a resume or
 a sweep invokes an inspection — this command is the only thing that does.
 
+A finding already filed is dropped, and there are two sources that can know
+so. The filed query asks a tracker what is filed against the scope's paths,
+and needs a command configured. The local outbox queue is read as an index of
+what this harness has already filed, and needs no configuration at all: a
+landed entry suppresses, a pending one is reported as already queued rather
+than already filed, and a failed one suppresses nothing, because it is
+terminal and the finding it carries reached nobody. Both are consulted every
+time; neither is a fallback for the other. Reading the local queue does not
+make dedupe complete, because it knows only what this machine filed.
+
 --dry-run reports exactly what an ordinary invocation would file and
 enqueues nothing. It still makes the invocations, because what would be
 filed is not knowable without them.
@@ -80,6 +90,23 @@ def report(found, dry_run: bool) -> int:
                 print(f"      note: {excluded}")
         else:
             print(f"  dedupe did NOT run for {one.scope}: {one.reason}")
+
+    # The other tier, said on every inspection including one where the index
+    # held nothing: a source that is silent when it found nothing is
+    # indistinguishable from one that did not run. It is not scoped, because
+    # the queue is a record of what this harness filed rather than of one part
+    # of the tree. Reading it does not make dedupe complete — it knows only
+    # what this machine filed — which is why the lines above stand whatever it
+    # says here.
+    index = found.local_index
+    if index.read:
+        print(f"  local queue read: {len(index.landed)} landed identities, "
+              f"{len(index.queued)} queued")
+    else:
+        print(f"  local queue could NOT be read: {index.reason}")
+    if index.unreadable:
+        print(f"      note: {index.unreadable} file(s) in the queue could not "
+              "be read as entries and contributed nothing")
 
     verb = "would file" if dry_run else "filed"
     print(f"{verb} {len(found.filed)} brief(s):")
