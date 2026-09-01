@@ -2222,6 +2222,13 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "this repository configures in .harness/config.yaml, because the "
         "claim is that this deployment's own story directory is the one the "
         "shipped rule set blocks, which a fixture's directory cannot say",
+    "test_brief_fetch.py":
+        "the workflow set a brief may name is an input to it and is built, "
+        "under a harness root the module materializes for itself. What it "
+        "resolves live is the schema inventory this repository ships: that "
+        "schemas/fetched-brief.schema.json is registered in "
+        "schemas/manifest.json under the name the fetch loads it by, which is "
+        "a claim about what this repository ships and about nothing else",
     "test_capacity_pause.py":
         "the workflow its runs execute is built and the pause bound those "
         "targets configure is its own, because what a capacity classification "

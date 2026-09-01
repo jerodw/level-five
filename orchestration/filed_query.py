@@ -234,6 +234,99 @@ def _kill_group(process: subprocess.Popen) -> None:
             pass
 
 
+def run_bounded(settings: Settings, question: str,
+                target_root: Path | None = None):
+    """Run the configured command on one question and read what it said.
+
+    Returns `(text, reason)`: the command's stdout decoded, or None with the
+    reason there is none. It **raises on nothing** — every way of failing to
+    get an answer comes back as a reason — so a caller may be total by
+    consuming the reason and a caller that refuses may print it.
+
+    Written once and called twice, by the dedupe question below and by the
+    brief fetch in `brief_fetch`, so both are bounded the same way rather than
+    by two spellings of one bound that can disagree. What it holds is the
+    spawn and the reading of it: a new session so the timeout's kill reaches
+    the process group rather than the command alone, output to temporary files
+    rather than pipes so what is read into memory is bounded by this read
+    rather than by how much the command chose to print, one byte past
+    `MAX_STDOUT_BYTES` so an answer that reaches the bound can be told from one
+    that exceeds it without the whole of it being read, and a tail of stderr
+    carried back in the reason a non-zero exit gives.
+
+    What it does **not** hold is what an answer means: parsing it, holding it
+    to a shape and deciding what an empty one says are the caller's, because
+    the two questions answer in two shapes.
+    """
+    try:
+        argv = shlex.split(settings.command)
+    except ValueError as error:
+        return None, (
+            f"the command could not be launched: {settings.command!r} cannot be "
+            f"read as an argument list: {error}"
+        )
+    if not argv:
+        return None, (
+            f"the command could not be launched: {settings.command!r} is an "
+            "empty argument list"
+        )
+
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            process = subprocess.Popen(  # noqa: S603 - the command is the target's
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=out,
+                stderr=err,
+                cwd=str(target_root) if target_root is not None else None,
+                start_new_session=True,
+            )
+        except OSError as error:
+            return None, (
+                f"the command could not be launched: {settings.command}: {error}"
+            )
+
+        try:
+            process.communicate(question.encode("utf-8"), timeout=settings.timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(process)
+            try:
+                process.communicate()
+            except Exception:  # noqa: BLE001 - the answer is already decided
+                pass
+            return None, (
+                f"the command ran past its timeout of {settings.timeout} seconds "
+                f"and was killed: {settings.command}"
+            )
+
+        out.seek(0)
+        raw = out.read(MAX_STDOUT_BYTES + 1)
+        err.seek(0)
+        stderr = err.read(ERROR_TAIL_LENGTH * 2).decode("utf-8", "replace")
+
+    if process.returncode != 0:
+        said = _tail(stderr)
+        return None, (
+            f"the command exited {process.returncode} and did not answer"
+            + (f": {said}" if said else "")
+        )
+
+    if len(raw) > MAX_STDOUT_BYTES:
+        return None, (
+            f"the command answered with more than the {MAX_STDOUT_BYTES} bytes "
+            "of stdout this query reads, so the document was not read whole "
+            "and was not parsed: a document truncated mid-token is not a document"
+        )
+
+    try:
+        return raw.decode("utf-8"), ""
+    except UnicodeDecodeError as error:
+        return None, (
+            f"the command's stdout is not a single JSON document: it is not "
+            f"readable as text: {error}"
+        )
+
+
 def _bounded_text(value, excluded: list[str]) -> str:
     """One text field, shortened to the per-field bound if it exceeds it."""
     text = value if isinstance(value, str) else ""
@@ -306,80 +399,13 @@ def query(paths, config: dict, target_root: Path | None = None,
             "is known about what is already filed"
         )
 
-    try:
-        argv = shlex.split(settings.command)
-    except ValueError as error:
-        return _nothing_known(
-            f"the command could not be launched: {settings.command!r} cannot be "
-            f"read as an argument list: {error}"
-        )
-    if not argv:
-        return _nothing_known(
-            f"the command could not be launched: {settings.command!r} is an "
-            "empty argument list"
-        )
-
+    # The question carries the paths, where the brief-fetch question carries a
+    # key. One JSON document on stdin either way, and the shared run below is
+    # what makes both obey one bound, one timeout and one kill.
     question = json.dumps({"paths": list(paths)}, sort_keys=True)
-
-    # The command's output goes to files rather than to pipes, so that what
-    # this reads into memory is bounded by the read below rather than by how
-    # much the command chose to print.
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        try:
-            process = subprocess.Popen(  # noqa: S603 - the command is the target's
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=out,
-                stderr=err,
-                cwd=str(target_root) if target_root is not None else None,
-                start_new_session=True,
-            )
-        except OSError as error:
-            return _nothing_known(
-                f"the command could not be launched: {settings.command}: {error}"
-            )
-
-        try:
-            process.communicate(question.encode("utf-8"), timeout=settings.timeout)
-        except subprocess.TimeoutExpired:
-            _kill_group(process)
-            try:
-                process.communicate()
-            except Exception:  # noqa: BLE001 - the answer is already decided
-                pass
-            return _nothing_known(
-                f"the command ran past its timeout of {settings.timeout} seconds "
-                f"and was killed: {settings.command}"
-            )
-
-        out.seek(0)
-        # One byte past the bound, so an answer that reaches the bound can be
-        # told from one that exceeds it without the whole of it being read.
-        raw = out.read(MAX_STDOUT_BYTES + 1)
-        err.seek(0)
-        stderr = err.read(ERROR_TAIL_LENGTH * 2).decode("utf-8", "replace")
-
-    if process.returncode != 0:
-        said = _tail(stderr)
-        return _nothing_known(
-            f"the command exited {process.returncode} and did not answer"
-            + (f": {said}" if said else "")
-        )
-
-    if len(raw) > MAX_STDOUT_BYTES:
-        return _nothing_known(
-            f"the command answered with more than the {MAX_STDOUT_BYTES} bytes "
-            "of stdout this query reads, so the document was not read whole "
-            "and was not parsed: a document truncated mid-token is not a document"
-        )
-
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as error:
-        return _nothing_known(
-            f"the command's stdout is not a single JSON document: it is not "
-            f"readable as text: {error}"
-        )
+    text, problem = run_bounded(settings, question, target_root)
+    if text is None:
+        return _nothing_known(problem)
 
     try:
         document = json.loads(text)

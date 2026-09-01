@@ -12,3 +12,5 @@
 {"story_id": "story-092", "timestamp": "2026-08-29 16:26:52", "stage": "verifier", "retry_decision": "retry", "retry_category": "implementation", "retry_stage": "implementer"}
 {"story_id": "story-093", "timestamp": "2026-08-29 20:40:21", "stage": "tester", "retry_stage": "tester"}
 {"story_id": "story-094", "timestamp": "2026-08-29 22:41:25", "stage": "verifier", "retry_decision": "retry", "retry_category": "validation", "retry_stage": "tester"}
+{"story_id": "story-096", "timestamp": "2026-09-01 13:18:16", "stage": "tester", "retry_stage": "tester"}
+{"story_id": "story-096", "timestamp": "2026-09-01 13:19:19", "stage": "tester", "retry_stage": "tester"}
