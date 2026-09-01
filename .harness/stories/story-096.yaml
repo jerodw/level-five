@@ -1,0 +1,413 @@
+story:
+  id: story-096
+  title: l5-plan plans from a brief
+  description: |
+    l5-plan takes its request as command-line text and has no other input.
+    Once briefs live in a tracker rather than in a local directory, the only
+    way to plan one is for a human to open the tracker item, copy the body and
+    paste it into a shell argument, or for an assist agent to read it and
+    relay it in its own words - which is worse, because what the planner then
+    works from is a paraphrase of the evidence rather than the evidence.
+
+    This story lets l5-plan be handed a brief instead of a string. It fetches
+    the brief through the same configured command the Inspector already
+    queries for dedupe, renders it as the request the planning session is
+    given, and otherwise behaves exactly as it does today. It is the link that
+    makes the chain a loop: without it the Inspector files briefs into a
+    tracker that nothing in the harness can read back.
+
+    What this changes is only where the request comes from. The interview
+    still happens, the developer still approves, and l5-plan still stamps the
+    mandate from what it observed them answer. Planning with nobody present is
+    a separate question about how a mandate could be conferred by something
+    other than a person at a terminal, and it must be argued on its own rather
+    than arriving as a side effect of a convenience. "Plan from a brief" and
+    "plan headlessly" sound like the same feature and are not.
+
+    The brief is used at plan time and nowhere else. It is not written into
+    the story artifact, not stored, not re-read, and no coordinator, run,
+    resume or stage path touches it. After l5-plan exits, the only trace of it
+    is its key in the story's description, as prose. Every later stage reads
+    the story artifact and never the brief.
+
+    Fetching a brief is a different question from dedupe and is asked as a
+    second question to the same command. Dedupe asks what is filed against a
+    path set and answers with a key, a title, a short summary and the paths,
+    every text field bounded, because that answer must stay cheap however
+    large the tracker grows. Planning needs the opposite - one brief, in full,
+    unbounded by those per-field limits, because a truncated brief is a brief
+    that plans wrong. So it is asked by key rather than by path, since a
+    developer planning a brief has its key in front of them and asking by path
+    would return a set and leave the caller guessing which member was meant.
+
+    One correction to what the request describes, forced by what story-094
+    shipped. The request says no change to the filing side is needed. It is:
+    templates/sync/github.sh writes only a brief's title and body into the
+    tracker item, plus the key and per-path markers, so slug, category,
+    severity, confidence, effort and workflow are recorded nowhere a query can
+    read them back. A fetched brief would therefore fail the brief schema on
+    fields the filing threw away, and workflow - the one field this story
+    depends on - is among them. The reference pair is widened here so the
+    round trip is lossless, which is the widening the request asked to be
+    confirmed and moved into this story if it was needed.
+
+    The key is opaque. It is a URL in the reference implementation only
+    because that implementation files GitHub issues; for a target whose
+    tracker is files in source control it is a document path, and for one that
+    hands back the outbox's own digest it is a digest. The harness parses
+    none of them, which is the stance schemas/filed-items.schema.json already
+    takes on the key it reports.
+
+    Planned from .harness/requests/l5-plan-plans-from-a-brief.md.
+  workflow: story-workflow
+
+tasks:
+  - Add schemas/fetched-brief.schema.json, the shape a command answers a
+    brief-fetch question with, and register it in schemas/manifest.json. A
+    brief is carried under an optional property rather than at the top level,
+    so a command that ran and found nothing under the key is a different
+    answer from a command that failed, and the caller can tell them apart.
+  - Lift the bounded subprocess run inside filed_query.query - the new
+    session, the output files, the stdout bound, the timeout and the process
+    group kill - into a helper the fetch and the query both call, leaving
+    filed_query.query's own behaviour unchanged.
+  - Add orchestration/brief_fetch.py, holding the fetch question, the two
+    stage validation of what comes back, and every refusal. It resolves its
+    command through filed_query.resolve_settings rather than reading the
+    configuration key itself.
+  - Teach scripts/l5-plan a --brief option that names the brief to plan, and
+    make it mutually exclusive with request text.
+  - Make the brief's workflow the proposal rather than invoking the workflow
+    selector, confirmed where there is a terminal and accepted where there is
+    not, with an explicit --workflow winning over it.
+  - Render a fetched brief as the request text the planning session is given,
+    including the instruction to record the brief's key in the story's
+    description.
+  - Widen the filing side's reference pair so a filed brief comes back whole -
+    templates/sync/github.sh records the payload under a marker of its own,
+    and templates/query/github.sh reads it back and answers the fetch
+    question.
+  - Say in schemas/harness-config.schema.json and in templates/config.yaml
+    that filed_query_command now answers two questions.
+  - Adapt the assertion in tests/test_filed_query.py that names the Inspector
+    as the seam's only caller, which this story makes false.
+  - Write the story's regression suite against fake commands, so nothing in it
+    invokes a model, reaches a network or touches a tracker.
+
+acceptance_criteria:
+  - scripts/l5-plan --brief <key> fetches the named brief and starts a
+    planning session whose request is that brief's content. A test drives it
+    against a fake command answering a known brief and asserts the request the
+    session was given carries the brief's title, body, paths and not_in_scope.
+  - The story artifact a brief-driven session produces is held to the same
+    contract as any other. It goes to stories_dir, carries a mandate stamped
+    from an observed approval, names its workflow, and is committed by l5-plan
+    and by nothing else. This story adds an input path and touches no output.
+  - The brief is read at plan time and nowhere else. Nothing in the story
+    artifact records the brief beyond its key in the description, nothing
+    persists the fetched document, and a test asserts that
+    orchestration/brief_fetch.py is imported by scripts/l5-plan and by the
+    suite and by nothing else - in particular by no module a run, a resume or
+    a sweep reaches.
+  - A brief-driven invocation and an invocation given the same content as
+    request text produce artifacts that differ only in what the planner wrote.
+    A test plans both against a fake session and asserts the two request texts
+    agree on the brief's prose.
+  - The fetch is asked as a second question to filed_query_command: one JSON
+    document on stdin carrying the key under "key", where the dedupe question
+    carries the paths under "paths". A test asserts the document a fetch sends
+    carries the key and no paths, and that the dedupe question is unchanged.
+  - The key is opaque and is sent exactly as it was given. The harness does
+    not resolve it, normalize it, join it against the target root, check that
+    it exists, or decide anything from whether it looks like a URI. A test
+    drives a key that is a URL, one that is a repository-relative path and one
+    that is a hex digest, and asserts the command received each verbatim.
+  - An empty key is the one thing refused without asking the command, because
+    there is nothing to ask about. Every other judgement about what a key
+    means belongs to the answering command.
+  - What the command answers is validated against
+    schemas/fetched-brief.schema.json, and the brief it carries is validated
+    against schemas/story-brief.schema.json on its own. A brief that fails is
+    refused naming the field that failed, in the shape orchestration
+    /inspection.py already names a dropped finding's field.
+  - An answer that satisfies the envelope but carries no brief is refused as
+    the key not having resolved, and is worded differently from an answer that
+    could not be obtained at all. A test asserts the two are distinguishable
+    from what l5-plan printed.
+  - A brief naming a workflow the harness does not define is refused naming
+    the workflow and listing the ones the harness defines. The acceptable set
+    comes from the workflow definitions the harness holds, so a third workflow
+    becomes plannable by shipping a definition.
+  - No configured command, a command that cannot be launched, one that exits
+    non-zero, one that runs past its timeout, one whose stdout is not a single
+    JSON document, and one whose answer fails either schema each refuse this
+    invocation, naming what happened and saying that the request can be passed
+    as text instead. A test drives each and asserts the wording distinguishes
+    them.
+  - Every one of those refusals happens before the planning session starts,
+    before the stories directory is snapshotted, and before anything is
+    written or committed. A test asserts that after a refused fetch no session
+    was invoked, the stories directory is unchanged, and the working tree
+    holds nothing new.
+  - The fetch refuses where the dedupe query absorbs, and the difference is
+    deliberate: a terminal invocation a human asked for may be refused, and
+    filed_query.query stays total, never raising and never blocking a run. A
+    test asserts query's behaviour on a failing command is what it was before
+    this story.
+  - The full brief is fetched. No per-field bound shortens what comes back,
+    and a test fetches a brief whose body is longer than filed_query's
+    MAX_TEXT_LENGTH and asserts the request the session was given carries it
+    whole.
+  - The bounded subprocess run is written once and called twice. A test
+    asserts the fetch obeys the same stdout bound, the same timeout and the
+    same process group kill the dedupe query obeys, by driving a command that
+    overruns each.
+  - orchestration/filed_query.py remains the only source that reads
+    filed_query_command, because orchestration/brief_fetch.py resolves its
+    settings through filed_query.resolve_settings. The existing assertion that
+    holds this passes unchanged.
+  - A brief naming a workflow makes the workflow selector unnecessary, and it
+    is not invoked. A test asserts no selector invocation is made on the brief
+    path, and that no selection answer file is written.
+  - Where there is a terminal, the brief's workflow is put to the developer
+    through the same confirmation the selector's proposal goes through, with
+    the brief named as the reason. Enter accepts it, naming another workflow
+    overrides it, and anything else aborts without starting a session.
+  - Where there is no terminal, the brief's workflow is accepted without
+    asking, so a brief-driven invocation is not refused for having nobody to
+    confirm a proposal. A test asserts that l5-plan --brief without a terminal
+    reaches the session, and that l5-plan without a terminal, without --brief
+    and without --workflow is still refused exactly as it is today.
+  - An explicit --workflow wins over the brief's, and l5-plan says which it
+    used and that the brief named another. A test asserts both are reported.
+  - --brief and request text are mutually exclusive, and an invocation giving
+    both is refused saying so rather than silently preferring one.
+  - The request text the session is given tells the planner to record the
+    brief's key in the story's description. A test asserts the key appears in
+    what the session was given, alongside the instruction.
+  - templates/sync/github.sh records the brief payload under a marker of its
+    own, so a filed brief can be answered back whole, and templates
+    /query/github.sh reads that marker to answer the fetch question. The two
+    markers are the same string in both files, held by a test that reads the
+    assignment out of each, in the shape the existing path-marker pair is
+    already held.
+  - templates/query/github.sh answers the dedupe question exactly as it does
+    today when the question carries paths, and answers a brief when the
+    question carries a key. A test drives both questions at the script's own
+    parsing and asserts neither changed the other.
+  - schemas/harness-config.schema.json and templates/config.yaml say that
+    filed_query_command answers two questions and what each carries. No
+    configuration key is added, since the fetch reuses the command and the
+    timeout the dedupe query already declares.
+  - Nothing in this story writes to a tracker, marks a brief as planned, lists
+    or browses briefs, or makes a path by which a brief becomes a story
+    without a developer planning it.
+  - orchestration/outbox.py, orchestration/outbox_sweep.py, orchestration
+    /command_transport.py, orchestration/inspection.py and orchestration
+    /story_coordinator.py are unchanged.
+  - schemas/story.schema.json, schemas/story-brief.schema.json,
+    prompts/planner.md, prompts/inspector.md and prompts/assist.md are
+    unchanged. The traceability this story adds is prose in a description and
+    needs no widening of the story contract.
+  - Nothing under .harness/requests/ is read, written, moved or renamed.
+  - The whole suite passes under the configured test command, including the
+    tests this story adds, and no test in it invokes a model, reaches a
+    network or touches a tracker.
+
+technical_plan:
+  implementation_steps:
+    - Write schemas/fetched-brief.schema.json and register it in
+      schemas/manifest.json. An object whose only property is an optional
+      brief, typed as an object, held to schemas/story-brief.schema.json
+      separately so a malformed brief is named by field rather than by shape.
+      Its description says why the property is optional - so that a key that
+      did not resolve is a different answer from a command that failed.
+    - In orchestration/filed_query.py, lift the body of query that launches
+      the command and reads its output into a module-level helper taking the
+      resolved settings, the question document, the target root and the
+      caller's own reasons for each failure, and returning either the raw
+      stdout or the reason it has none. Rewrite query to call it. Nothing
+      about query's contract moves - it stays total, it still names every
+      bound it applied, and its tests pass unchanged.
+    - Write orchestration/brief_fetch.py. It resolves settings through
+      filed_query.resolve_settings, refuses an empty key, sends the question
+      as a JSON document carrying the key verbatim, and validates the answer
+      against fetched-brief and then the brief against story-brief. It
+      returns a fetched brief or a refusal carrying its reason, and it raises
+      on nothing. It also renders a brief as request text, since that is a
+      block a test should be able to assert on without the script, in the
+      shape workflow_selection.candidate_block already takes.
+    - Check the brief's workflow against the definitions the harness holds,
+      using harness_config's own listing so a shipped definition is plannable
+      with no edit here.
+    - In scripts/l5-plan, add --brief to the option loop and refuse the
+      combination of --brief with request text. Fetch above everything - above
+      the workflow decision, above the template render and above the stories
+      directory snapshot - so a refusal leaves nothing invoked and nothing
+      written. Print each refusal through story_coordinator.refuse, so a
+      developer reads the harness's own refusal wording.
+    - Make the brief's workflow the proposal. Construct the selection the
+      confirmation already reads rather than invoking the selector, so the
+      terminal path reuses confirm unchanged and its wording stays in one
+      place. Where can_prompt is false, take the brief's workflow without
+      asking. Where --workflow was given, use it and report that the brief
+      named another.
+    - Hand the rendered brief to the session as the request, so the planner
+      receives the brief's own prose rather than a summary of it.
+    - Widen templates/sync/github.sh to write the payload under its own marker
+      beside the key and path markers, and templates/query/github.sh to branch
+      on whether the question carries a key or paths, answering a brief in the
+      first case and the items it already answers in the second.
+    - Update the filed_query_command description in
+      schemas/harness-config.schema.json and its comment in
+      templates/config.yaml to describe both questions and both answer shapes.
+    - Adapt the caller assertion in tests/test_filed_query.py to name
+      orchestration/brief_fetch.py alongside orchestration/inspection.py.
+  likely_file_changes:
+    - file: schemas/fetched-brief.schema.json
+      stage: implementer
+      reason: The shape a command answers a brief-fetch question with, new.
+    - file: schemas/manifest.json
+      stage: implementer
+      reason: Registers the new schema so schema_validator can load it.
+    - file: orchestration/filed_query.py
+      stage: implementer
+      reason: The bounded subprocess run is lifted into a helper the fetch
+        also calls; query's own behaviour is unchanged.
+    - file: orchestration/brief_fetch.py
+      stage: implementer
+      reason: The fetch question, the two stage validation and every refusal,
+        new.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: --brief, the brief-driven workflow proposal, and the wording of
+        the refusals.
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: Records the brief payload so a filed brief can be answered back
+        whole rather than as a title and a body.
+    - file: templates/query/github.sh
+      stage: implementer
+      reason: Answers the fetch question by reading the marker its pair now
+        writes.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: filed_query_command now answers two questions and the
+        declaration must say so.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The comment beside filed_query_command says what it is asked.
+    - file: tests/test_filed_query.py
+      stage: implementer
+      reason: Its assertion that the Inspector is the seam's only caller
+        names one module, and this story adds a second.
+      reverting_breaks_the_suite: This edit is forced by a deliberate change
+        elsewhere in this story. orchestration/brief_fetch.py imports
+        filed_query, so the assertion naming orchestration/inspection.py as
+        the seam's only caller is false the moment the new module exists.
+        Reverting the edit restores an assertion that contradicts the
+        shipped code, and the suite fails on it.
+    - file: tests/test_brief_fetch.py
+      stage: tester
+      reason: The fetch, the opacity of the key, each refusal, and that a
+        long body is not shortened.
+    - file: tests/test_plan_from_a_brief.py
+      stage: tester
+      reason: l5-plan's brief path end to end against a fake command and a
+        fake session, including the workflow confirmation and the mutual
+        exclusion with request text.
+    - file: README.md
+      stage: documenter
+      reason: The l5-plan usage line and the description of how a planning
+        session is started now include being handed a brief.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The inspection-to-planning loop closes here, and the document
+        describes the loop.
+
+scope:
+  modify:
+    - scripts/l5-plan
+    - orchestration/brief_fetch.py
+    - orchestration/filed_query.py
+    - schemas/fetched-brief.schema.json
+    - schemas/manifest.json
+    - schemas/harness-config.schema.json
+    - templates/sync/github.sh
+    - templates/query/github.sh
+    - templates/config.yaml
+    - tests/
+    - README.md
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/inspection.py
+    - orchestration/story_coordinator.py
+    - orchestration/plan_mandate.py
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - schemas/story.schema.json
+    - schemas/story-brief.schema.json
+    - schemas/filed-items.schema.json
+    - schemas/outbox-entry.schema.json
+    - prompts/planner.md
+    - prompts/inspector.md
+    - prompts/assist.md
+    - workflows/
+    - .harness/requests/
+
+verification_requirements:
+  - Confirm that a brief-driven invocation and an invocation given the same
+    content as request text reach the planning session with the same prose,
+    and that the artifact contract is identical on both paths.
+  - Confirm that every fetch failure - unconfigured, unlaunchable, non-zero
+    exit, timeout, non-JSON stdout, envelope failure, brief-schema failure,
+    unresolved key, undefined workflow - refuses before a session starts and
+    before anything is written, and that the wording distinguishes them.
+  - Confirm that no per-field bound shortens a fetched brief, by fetching one
+    whose body exceeds the bound the dedupe answer applies.
+  - Confirm that the key reaches the command verbatim for a URL, a
+    repository-relative path and a hex digest, and that the harness resolves,
+    normalizes and inspects none of them.
+  - Confirm that filed_query.query is unchanged in behaviour after the
+    subprocess run is lifted out of it, including that it remains total.
+  - Confirm that orchestration/brief_fetch.py is reached from scripts/l5-plan
+    and from the suite and from nowhere else, and that no run, resume or
+    sweep path imports it.
+  - Confirm that the mandate on a brief-planned story is stamped from an
+    observed approval exactly as on any other, and that a rejected session
+    stamps nothing and commits nothing.
+  - Confirm that the two reference scripts agree on the marker the brief
+    payload is recorded under, and that the dedupe question they already
+    answer is unaffected.
+  - Confirm the whole suite passes under the configured test command and that
+    no test invokes a model, reaches a network or touches a tracker.
+
+constraints:
+  - Planning stays interactive. Nothing here confers a mandate, changes how
+    one is conferred, or makes a path by which a brief becomes a story
+    without a developer planning it.
+  - The brief is a plan-time input only. It is not written into the story
+    artifact, not persisted, and not read by any run, resume or sweep path.
+  - filed_query.query stays total. It must continue to return an answer on
+    every path, raise on none, and never block or refuse a run.
+  - No new configuration key. The fetch reuses filed_query_command and the
+    timeout the dedupe query already declares.
+  - The key stays opaque. No harness code parses it, resolves it, normalizes
+    it, joins it against a root, or decides anything from its form.
+  - No provider name, no endpoint, no credential and no tracker vocabulary
+    appears in orchestration/brief_fetch.py or scripts/l5-plan. The existing
+    scan that holds harness source free of target-stack literals covers both.
+  - A brief is held to schemas/story-brief.schema.json and to no second,
+    looser shape. There is one definition of what a brief is.
+  - The harness writes nothing to a tracker on this path. l5-plan reads and
+    does not become a producer.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-01 12:49:47
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
