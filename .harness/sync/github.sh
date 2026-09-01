@@ -71,6 +71,14 @@ PROJECT="${L5_SYNC_PROJECT:-}"   # a project number or URL; empty skips the boar
 # pair cannot drift apart unnoticed. Change it in both or in neither.
 PATH_MARKER_PREFIX="l5-path: "
 
+# The marker the whole payload is recorded under, so a filed brief can be
+# answered back whole rather than as a title and a body. The title and the body
+# alone lose the slug, the category, the severity, the confidence, the effort
+# and the workflow, and a fetched brief missing them fails the brief schema on
+# fields the filing threw away. Held to the same string in both files by the
+# same test, for the same reason. Change it in both or in neither.
+PAYLOAD_MARKER_PREFIX="l5-payload: "
+
 fail_transient() { echo "$*" >&2; exit 75; }
 fail_terminal()  { echo "$*" >&2; exit 1; }
 
@@ -107,6 +115,17 @@ if [ -n "$paths" ]; then
 $paths
 PATHS
 fi
+
+# The whole payload, recorded once under its own marker so the query script can
+# answer a brief-fetch question with the brief as it was filed. Encoded rather
+# than written as JSON, because a JSON document written raw into an HTML comment
+# carries newlines and can carry the comment's own terminator; jq does both
+# halves, so neither script needs a base64 binary.
+encoded="$(printf '%s' "$entry" | jq -r '(.payload // {}) | tojson | @base64')" \
+  || fail_terminal "the entry's payload could not be encoded"
+body="${body}
+
+<!-- ${PAYLOAD_MARKER_PREFIX}${encoded} -->"
 
 # --- idempotency: search before creating --------------------------------
 # A search that fails is transient rather than terminal: we do not know

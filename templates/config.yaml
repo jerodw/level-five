@@ -42,18 +42,26 @@ test_command: {test_command}
 # so raise one only having considered the other. Delete the key and the bound
 # is 20.
 # sweep_max_entries: 20
-# The other half of the pair: how the harness asks what is already filed, so
-# that a producer of findings does not file the same one on every run. One
-# command, invoked once per question. The paths being asked about go to it on
-# stdin as JSON; its stdout must be a single JSON document in the shape of
-# schemas/filed-items.schema.json and nothing else, so every diagnostic belongs
-# on stderr; exit 0 means it answered and any other code means it could not.
-# Nothing here can fail a run: an absent, failing, slow or unparseable answer
-# costs dedupe and costs nothing else. l5-init installs a reference
-# implementation at .harness/query/github.sh beside the sync one. THE TWO ARE A
-# PAIR the harness requires and cannot enforce — they must agree about where a
-# path is recorded in a tracker item, and a target that sets one without the
-# other simply gets no dedupe.
+# The other half of the pair: how the harness asks what is already filed. ONE
+# COMMAND ANSWERING TWO QUESTIONS, invoked once per question, told which by what
+# the question document on stdin carries. Carrying "paths" it is the dedupe
+# question, so that a producer of findings does not file the same one on every
+# run, and it is answered in the shape of schemas/filed-items.schema.json.
+# Carrying "key" it is the fetch question — one brief, by the key this command
+# itself reported for it — so that l5-plan --brief can plan a brief that was
+# filed rather than have it retyped, and it is answered in the shape of
+# schemas/fetched-brief.schema.json, whole and unbounded, because a truncated
+# brief is a brief that plans wrong. An answer to that one carrying no brief
+# says the key resolved to nothing, which is a different answer from failing to
+# answer. Either way stdout is a single JSON document and nothing else, so every
+# diagnostic belongs on stderr; exit 0 means it answered and any other code
+# means it could not. A failed dedupe question cannot fail a run — it costs
+# dedupe and nothing else — while a failed fetch refuses that l5-plan invocation
+# before anything is written, and the request can be given as text instead.
+# l5-init installs a reference implementation at .harness/query/github.sh beside
+# the sync one. THE TWO ARE A PAIR the harness requires and cannot enforce —
+# they must agree about where a path and a payload are recorded in a tracker
+# item, and a target that sets one without the other simply gets no dedupe.
 # filed_query_command: .harness/query/github.sh
 # How long that command may run before it is killed, in seconds. The kill
 # reaches its process group, so a command that spawned children leaves none

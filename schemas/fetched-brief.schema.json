@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fetched-brief",
+  "description": "What a command answers a brief-fetch question with: the one brief filed under the key it was asked about, or nothing under that key. This is the second question the filed-query command answers, and it is deliberately the opposite shape to the first: the dedupe question asks what is filed against a path set and answers with a key, a title, a short summary and the paths, every text field bounded, because that answer must stay cheap however large the tracker grows; this one asks by key and answers with one brief in full, unbounded by those per-field limits, because a truncated brief is a brief that plans wrong. THE BRIEF IS CARRIED UNDER AN OPTIONAL PROPERTY RATHER THAN AT THE TOP LEVEL, and the reason is that a command that ran and found nothing under the key and a command that failed are different answers a caller must be able to tell apart: an answer satisfying this shape and carrying no brief says the key did not resolve, while a command that could not be launched, exited non-zero, ran past its timeout or answered with something that is not one JSON document has said nothing at all. Collapsing the two would let a planning session be refused for the wrong reason. WHAT THE HARNESS DOES WITH THE KEY: nothing. It is opaque and is sent exactly as it was given — a URL, a repository-relative document path and a digest are all keys, and the harness resolves none of them, normalizes none of them, joins none of them against a root and decides nothing from whether one looks like a URI, which is the stance schemas/filed-items.schema.json already takes on the key it reports. THE BRIEF ITSELF IS HELD TO schemas/story-brief.schema.json AND TO NO SECOND, LOOSER SHAPE: it is typed here only as an object, so that a brief which is malformed in a field is named by the field that failed rather than by this envelope's shape, and so that there is one definition of what a brief is.",
+  "type": "object",
+  "properties": {
+    "brief": {
+      "type": "object",
+      "description": "The brief filed under the key, whole, in the shape of schemas/story-brief.schema.json — validated against that schema separately, so this declares only that it is an object. Optional, and its absence is an answer: the command ran, looked, and found nothing under that key. A caller reading a fetched brief may therefore report a key that did not resolve differently from a fetch that could not be made at all."
+    }
+  }
+}

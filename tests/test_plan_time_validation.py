@@ -397,14 +397,19 @@ def test_plan_validation_introduces_no_second_parser_or_validator():
 #: than a crash in a caller; `inspection` checks the findings file an Inspector
 #: invocation wrote, and each finding in it separately against the brief
 #: schema, which is how one malformed finding is dropped and named rather than
-#: costing the ones beside it. The rule these tests hold is about the *story*
-#: artifact having one reader, and each exemption is held shut from both sides
-#: below so it cannot quietly become a second one.
+#: costing the ones beside it; `brief_fetch` checks what a target's command
+#: answered a brief-fetch question with, against the envelope and then the
+#: brief it carries against the brief schema on its own, which is how a brief
+#: that is malformed in a field is refused naming the field rather than the
+#: shape. The rule these tests hold is about the *story* artifact having one
+#: reader, and each exemption is held shut from both sides below so it cannot
+#: quietly become a second one.
 VALIDATES_ANOTHER_ARTIFACT = (
     "orchestration/workflow_selection.py",
     "orchestration/outbox.py",
     "orchestration/filed_query.py",
     "orchestration/inspection.py",
+    "orchestration/brief_fetch.py",
 )
 
 

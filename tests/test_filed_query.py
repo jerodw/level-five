@@ -881,19 +881,30 @@ def test_a_mention_of_the_key_is_not_read_as_a_read(tmp_path):
     assert COMMAND_KEY in (SCRIPTS / "l5-init").read_text(encoding="utf-8")
 
 
-def test_the_seams_one_caller_is_the_inspector():
-    """The seam shipped with no caller, and the Inspector is the one it got.
+def test_the_seams_callers_are_the_inspector_and_the_brief_fetch():
+    """The seam shipped with no caller, and these are the ones it has.
 
     Written as an emptiness assertion by the story that shipped the seam, so
-    that the caller would be visible as an addition rather than as a line that
-    was always there. It has arrived, and asserting *which* module it is now
-    says more than asserting there is none: the query is asked by the producer
-    of briefs and by nothing in a run, a plan or a sweep, which is the property
-    the emptiness was standing in for. The control below is unchanged and is
-    what stops this passing on a scan that has stopped reporting.
+    that a caller would be visible as an addition rather than as a line that
+    was always there, and narrowed to name the Inspector when that one arrived.
+    story-096 adds the second and last: `brief_fetch` asks the same command the
+    other question, by key rather than by path, and resolves its settings
+    through `resolve_settings` rather than reading the configuration key itself
+    — which is why the scan above still reports exactly one source reading
+    that key.
+
+    Still an exact set equality in both directions, so a third caller fails
+    here and a caller that stopped importing fails here too. What the equality
+    holds is the property the emptiness was standing in for: the query is asked
+    by the producer of briefs and by the fetch a developer drives from a
+    terminal, and by nothing a run, a resume or a sweep reaches. The control
+    below is unchanged and is what stops this passing on a scan that has
+    stopped reporting.
     """
-    assert sources_importing("filed_query", REPO_ROOT) == \
-        {str(Path("orchestration") / "inspection.py")}
+    assert sources_importing("filed_query", REPO_ROOT) == {
+        str(Path("orchestration") / "brief_fetch.py"),
+        str(Path("orchestration") / "inspection.py"),
+    }
 
 
 def test_the_import_scan_reports_a_caller_when_there_is_one(tmp_path):
@@ -1098,9 +1109,11 @@ LEDGER_VARIABLE = "L5_STUB_LEDGER"
 STUB_GH = '''#!INTERPRETER
 """A stub `gh`, standing in for a tracker. It reaches no network.
 
-It implements exactly the two invocations the two reference scripts make:
-`issue create`, which appends to a ledger and prints a URL, and `issue list
---search`, which matches the search text against each issue's body.
+It implements exactly the invocations the two reference scripts make: `issue
+create`, which appends to a ledger and prints a URL, `issue list --search`,
+which matches the search text against each issue's body, and `issue view`,
+which prints one issue's body by the key the create printed -- the invocation
+the query script makes to answer a brief-fetch question.
 """
 import json
 import os
@@ -1128,6 +1141,17 @@ if argv[:2] == ["issue", "create"]:
     issues.append(issue)
     json.dump(issues, open(ledger, "w"))
     print(issue["url"])
+elif argv[:2] == ["issue", "view"]:
+    # One issue by the key `issue create` printed, which for this stub is the
+    # url and for a real tracker is whatever that tracker's own key is. The
+    # number is accepted too, because the reference sync falls back to it.
+    wanted = argv[2]
+    found = [issue for issue in issues
+             if wanted in (issue["url"], str(issue["number"]))]
+    if not found:
+        sys.stderr.write("no issue is filed under %s\\n" % wanted)
+        sys.exit(1)
+    print(found[0]["body"])
 elif argv[:2] == ["issue", "list"]:
     search = (flag(argv, "--search", "") or "").strip('"')
     fields = (flag(argv, "--json", "") or "").split(",")
