@@ -1,0 +1,127 @@
+story:
+  id: story-097
+  title: A run says which story it is
+  description: |
+    Every point where a developer decides something about a story, or watches
+    one begin, names it by its identifier alone, and the approval prompt names
+    nothing at all: "approve this plan?" omits its own subject, which is the act
+    the whole mandate mechanism rests on. A number is not what a developer
+    recognises, and a session that produced more than one artifact — or an
+    afternoon that planned several — is exactly where the number cannot be
+    resolved from memory.
+
+    This story prints the story's title beside its id at the approval prompt,
+    the run offer, the skip line each artifact gets when the offer is declined
+    or moot, and the fresh run's workflow-started announcement, which is both
+    the first line on the console and the first line of events.log. The title is
+    already in the artifact, written by the planner in the interview the
+    developer just had.
+
+    Nothing about how a mandate is conferred changes: the prompt gains a
+    subject, the act behind it is untouched, one question is still asked and one
+    commit still made.
+  workflow: story-workflow
+
+tasks:
+  - Add a bounded title reader to orchestration/story_coordinator.py beside read_story - a module constant carrying the reason for its value, in the idiom command_transport.ERROR_TAIL_LENGTH already uses, and a function taking a parsed story and returning its title collapsed to one line and cut to that bound with a trailing ellipsis.
+  - Name the title after the story id in the fresh run's workflow-started announcement in orchestration/story_coordinator.py, taken from the reading the run already made.
+  - Read each new artifact's text once in scripts/l5-plan's report, and use that one read for both the session-written-block check and the titles it hands to the approval prompt and the run offer.
+  - Print one line per artifact, naming its id and title, above the approval question in scripts/l5-plan's approve.
+  - Name the id and title together in the run offer's prompt and in each skip line printed by scripts/l5-plan's offer.
+  - Adapt the assertions in tests/test_foreign_work_refusal.py, tests/test_rerun_refusal.py and tests/test_the_approval_is_observed.py that pin the text of the announcement and of the run offer.
+  - Write a regression module holding the four messages, the bound, and the fallback.
+  - Record in .harness/docs/ARCHITECTURE.md what these four lines now say and why the approval prompt is the one that mattered.
+
+acceptance_criteria:
+  - The approval prompt prints one line per artifact naming that artifact's story id and title, above the question, before anything is stamped.
+  - The run offer's prompt names the story's title as well as its id.
+  - Each skip line printed when the offer is declined, or when more than one artifact makes it moot, names the story's title as well as its id, and still hands over the command that runs it.
+  - A fresh run's workflow-started message names the story's title after the story id, and still names the workflow it is executing.
+  - A title longer than the bound is printed collapsed to one line, cut to the bound, and ending in a single-character ellipsis; a title containing newlines is printed as one line.
+  - An artifact that does not parse, or that carries no title, is listed by its id alone at the approval prompt, the approval question is still asked, and the validation that follows still reports the artifact's fault.
+  - The title is read through orchestration/story_coordinator's own reader, and no call site added by this story reads a story artifact with a YAML parser.
+  - The fresh run's announcement is still a single append_event call under the kind workflow-started, so events.log and execution-history.json remain two renderings of one write.
+  - A resumed run's announcement is unchanged.
+  - execution-history.json gains no field, and the entries this story's messages produce validate against the schema the harness already ships.
+  - What a mandate records, when it is stamped, and how many questions are asked before it is stamped are all unchanged - one question, one stamp per artifact, one commit.
+  - The regression module fails against the harness as it stands before this story and passes after it.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_coordinator.py, beside read_story, add a module constant bounding a printed title and a function that takes a parsed story and returns the bounded title. Collapse all whitespace runs to single spaces, strip, and if the result is longer than the bound cut it to the bound and end it with an ellipsis character. Return an empty string when the parsed story is absent, carries no story mapping, or carries no title.
+    - Document the constant with the reason for its value in the idiom command_transport.ERROR_TAIL_LENGTH uses - the bound keeps a story id and its title inside a conventional terminal line, and the title is prose an agent wrote, so it is bounded at the point it is printed rather than trusted.
+    - In orchestration/story_coordinator.run_story, pass the title read from reading.parsed into the fresh run's workflow-started message, after the story id. Leave the call a single append_event under the kind it already carries, and leave the resumed branch alone.
+    - In scripts/l5-plan's report, read each new artifact's text once into a mapping from path to text. Feed that mapping to the existing session-written-block check rather than re-reading, and derive a mapping from path to bounded title from it through story_coordinator's reader and the new function.
+    - Hand the titles to approve, which prints one line per artifact naming the artifact's story id and its title above the question it already asks. An artifact with no title is named by its id alone. The question's own wording is unchanged, so it is still the last thing printed before the read.
+    - Hand the titles to offer, which names the id and the title together in the prompt it writes to a terminal and in each skip line it prints. The command each skip line hands over is unchanged.
+    - Adapt the three test modules whose assertions pin this text - two hold an exact equality over a run's whole event stream and one matches the run offer's question as a substring.
+    - Write tests/test_a_run_says_which_story_it_is.py, driving scripts/l5-plan through the suite's terminal fixture and a run through the fixture target, asserting each of the four messages names the title, that a long and a multi-line title are bounded to one line, that an untitled artifact is named by its id alone with the approval still asked, and that the announcement is still one event under its existing kind.
+    - Record the change in .harness/docs/ARCHITECTURE.md next to what story-072 wrote about the run's first line, saying what the four lines now carry, that the approval prompt is the one that omitted its subject, and that the bound exists because a title is prose from an agent.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Holds the bounded-title constant and function beside read_story, and the fresh run's workflow-started announcement that now names the title.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Reads each artifact once, and names id and title at the approval prompt, the run offer and the skip line.
+    - file: tests/test_foreign_work_refusal.py
+      stage: implementer
+      reason: Holds an exact equality over a clean run's whole event stream, whose first entry is the workflow-started announcement this story extends.
+      reverting_breaks_the_suite: The pinned stream is compared for equality, so the entry has to carry the title the announcement now prints. Reverting this edit while keeping the announcement leaves the expected stream disagreeing with the run's first event and the assertion fails.
+    - file: tests/test_rerun_refusal.py
+      stage: implementer
+      reason: Holds the same exact equality over a first run's event stream, with the announcement as its first entry.
+      reverting_breaks_the_suite: Same equality as the module above. Reverting this edit while keeping the announcement leaves the expected first entry without the title the run now writes, and the assertion fails.
+    - file: tests/test_the_approval_is_observed.py
+      stage: implementer
+      reason: Matches the run offer's question as a substring built from the story id alone, which no longer appears once the title sits between the id and the word now.
+      reverting_breaks_the_suite: The substring the assertions look for is split by the title this story inserts. Reverting this edit while keeping the run offer's new wording leaves those assertions searching for text the script no longer prints.
+    - file: tests/test_a_run_says_which_story_it_is.py
+      stage: tester
+      reason: The regression module for this story - the four messages, the bound, and the fallback to an id alone.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records what the approval prompt, the run offer, the skip line and the run's first line now say, and why the title is bounded where it is printed.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/plan_mandate.py
+    - orchestration/plan_commit.py
+    - orchestration/plan_validation.py
+    - orchestration/plan_run_offer.py
+    - orchestration/story_parser.py
+    - schemas/
+    - workflows/
+    - prompts/
+
+verification_requirements:
+  - Confirm that the approval prompt, the run offer, the skip line and the fresh run's workflow-started announcement each name the story's title beside its id.
+  - Confirm that a title longer than the declared bound is printed as one bounded line ending in an ellipsis, and that a title containing newlines is printed as one line.
+  - Confirm that an artifact carrying no title, or one that does not parse, is named by its id alone at the approval prompt, that the approval question is still asked, and that the validation that follows still reports the fault.
+  - Confirm that the fresh run's announcement is still produced by one append_event call under the kind workflow-started, and that a resumed run's announcement is unchanged.
+  - Confirm that no call site added by this story parses a story artifact with a YAML parser, and that the title is obtained through story_coordinator's own reader.
+  - Confirm that the mandate block, the moment it is stamped, the single approval question and the session's single artifact commit are all unchanged.
+  - Confirm that the regression module fails against the harness as it stood before this story and passes after it.
+  - Confirm the full suite passes.
+
+constraints:
+  - Do not change how a mandate is conferred, what it records, or when it is stamped.
+  - Do not ask a separate question per artifact, and do not split the session's one artifact commit.
+  - Do not change the wording of any other message the harness prints - stage transitions, verdicts and refusals already name the story where they need to.
+  - Do not change the story schema, the story dialect, or how a story artifact is parsed.
+  - Do not add a field to execution-history.json or change the workflow-started event kind.
+  - Do not read a story artifact with a YAML parser; the story dialect is not YAML and the shipped reader is the only reader.
+  - Keep the story id in every message this story touches; the title is added beside it and replaces nothing.
+  - Keep the bound a documented module constant rather than a literal at a call site.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-01 16:39:16
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
