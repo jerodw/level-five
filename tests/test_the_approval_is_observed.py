@@ -234,6 +234,14 @@ def test_the_terminal_test_is_the_offer_s_own_rather_than_a_second_spelling():
 #: What a session writes: the artifact with no block at all.
 BODY = artifact(PLANNED_ID)
 
+#: The title `artifact` gives that story. Since story-097 the run offer names it
+#: after the id, so the question these assertions look for is no longer the id
+#: followed immediately by the word `now`.
+PLANNED_TITLE = "Stub planned story"
+
+#: The run offer's question as the script now writes it.
+RUN_OFFER = f"run {PLANNED_ID}: {PLANNED_TITLE} now?"
+
 #: The blank line separating the artifact from whatever was appended after it.
 #: It is not part of the block — the block's extent starts at its key line — so
 #: it is one of the bytes the strip has to leave behind, and putting it on this
@@ -617,7 +625,7 @@ def expected_steps(planning: Planning) -> list[str]:
         f"committed {', '.join(conferring_paths(planning))} as ",
         f"committed {PLANNED_REL} as Plan {PLANNED_ID}:",
         "pushed main to",
-        f"run {PLANNED_ID} now?",
+        RUN_OFFER,
     ]
 
 
@@ -850,7 +858,7 @@ def test_the_headless_invocation_reads_nothing_at_all(planning: Planning,
     result = plan_without_a_terminal(planning,
                                      L5_STUB_WRITE=session_writing(BODY))
     assert "approve this plan?" not in result.stdout
-    assert f"run {PLANNED_ID} now?" not in result.stdout
+    assert RUN_OFFER not in result.stdout
 
     second = make_planning(tmp_path / "with-a-terminal")
     second.remote = bare_remote(tmp_path / "with-a-terminal", second,
@@ -858,7 +866,7 @@ def test_the_headless_invocation_reads_nothing_at_all(planning: Planning,
     approving = run_plan(second, L5_STUB_WRITE=session_writing(BODY))
     assert approving.returncode == 0, approving.stdout + approving.stderr
     assert "approve this plan?" in approving.stdout
-    assert f"run {PLANNED_ID} now?" in approving.stdout
+    assert RUN_OFFER in approving.stdout
 
 
 # --------------------------------------------------------------------------
