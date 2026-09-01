@@ -14,3 +14,5 @@
 {"story_id": "story-094", "timestamp": "2026-08-29 22:41:25", "stage": "verifier", "retry_decision": "retry", "retry_category": "validation", "retry_stage": "tester"}
 {"story_id": "story-096", "timestamp": "2026-09-01 13:18:16", "stage": "tester", "retry_stage": "tester"}
 {"story_id": "story-096", "timestamp": "2026-09-01 13:19:19", "stage": "tester", "retry_stage": "tester"}
+{"story_id": "story-097", "timestamp": "2026-09-01 16:59:14", "stage": "tester", "retry_stage": "tester"}
+{"story_id": "story-097", "timestamp": "2026-09-01 17:00:33", "stage": "tester", "retry_stage": "tester"}

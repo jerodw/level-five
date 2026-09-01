@@ -528,11 +528,24 @@ def report(
     # them, so it is found whether or not there is a terminal: a headless
     # invocation that let one through would be the path by which an agent's own
     # block reaches a commit no process observed.
+    # Each artifact is read once here and that one read serves both readers of
+    # it: the session-written-block check immediately below, and the titles the
+    # approval prompt and the run offer name their stories by.
+    texts = {path: path.read_text(encoding="utf-8") for path in artifacts}
     written = [
-        path
-        for path in artifacts
-        if plan_mandate.carries_a_mandate(path.read_text(encoding="utf-8"))
+        path for path, text in texts.items() if plan_mandate.carries_a_mandate(text)
     ]
+    # The title is read through the coordinator's own reader, which is the one
+    # reader of a story artifact this repository has, and bounded by the
+    # coordinator's own function. An artifact that does not parse, or that
+    # carries no title, answers with the empty string and is named by its id
+    # alone; the fault it carries is the validation's to report, below.
+    titles = {
+        path: story_coordinator.story_title(
+            story_coordinator.read_story(text).parsed
+        )
+        for path, text in texts.items()
+    }
     # The mandate is stamped between the snapshot and the validation, so the
     # artifact the validation is handed is the artifact the coordinator would
     # run: a block appended afterwards would be a block the plan-time check
@@ -555,7 +568,7 @@ def report(
         # artifact can still be refused below for a fault — which leaves
         # everything in the tree to re-run from, and is cheaper than validating
         # against a second, relaxed spelling of the schema.
-        if not approve(written):
+        if not approve(written, titles):
             return reject(artifacts, written)
         # Read after the answer rather than before the question, so conferred_at
         # is when the approval was observed rather than when the session ended.
@@ -668,7 +681,7 @@ def report(
         )
         return 1
     print(f"l5-plan: pushed {push.branch} to {push.remote}")
-    return offer(artifacts, base)
+    return offer(artifacts, base, titles)
 
 
 def refuse_session_block(written: Sequence[Path], artifacts: Sequence[Path]) -> int:
@@ -706,7 +719,7 @@ def refuse_session_block(written: Sequence[Path], artifacts: Sequence[Path]) -> 
     return 1
 
 
-def approve(written: Sequence[Path]) -> bool:
+def approve(written: Sequence[Path], titles: dict | None = None) -> bool:
     """Ask the developer whether they approve what the session planned.
 
     Asked after the session has ended and before anything is stamped,
@@ -714,12 +727,20 @@ def approve(written: Sequence[Path]) -> bool:
     observed rather than one it inferred from a terminal and a file. The
     decision is `plan_mandate.approved`'s; the wording is this script's.
 
+    The question is given its subject first: one line per artifact naming that
+    artifact's story id and its title, printed above the question and before
+    anything is stamped. The question itself is unchanged and is still the last
+    thing printed before the read. An artifact with no title is named by its id
+    alone rather than by a placeholder.
+
     A session-written block is folded into this same question rather than
     repaired quietly or refused outright: the developer is told the block is
     there and that approving discards it, because an agent that ignored an
     explicit instruction about the one field it must not write is an agent
     whose remaining output deserves a closer read.
     """
+    for path, title in (titles or {}).items():
+        print(f"l5-plan: {path.stem}" + (f": {title}" if title else ""))
     if written:
         for path in written:
             print(
@@ -806,7 +827,11 @@ def stamp(
     return True
 
 
-def offer(artifacts: Sequence[Path], base: str | None = None) -> int:
+def offer(
+    artifacts: Sequence[Path],
+    base: str | None = None,
+    titles: dict | None = None,
+) -> int:
     """Offer to run the story that was just committed, or say how to run it.
 
     Reached only on the path that reports success, so a commit that failed and
@@ -821,11 +846,22 @@ def offer(artifacts: Sequence[Path], base: str | None = None) -> int:
     The prompt is written only to a terminal. When stdin is not one, nothing is
     asked and nothing is read, and the skip path's command is printed exactly as
     it would have been had the developer declined.
+
+    The prompt and each skip line name the story's title beside its id, so a
+    developer offered a run recognises what they are being offered. The command
+    a skip line hands over is unchanged, and a story with no title is named by
+    its id alone.
     """
-    story_ids = [artifact.stem for artifact in artifacts]
+    named = {artifact.stem: (titles or {}).get(artifact, "") for artifact in artifacts}
+    story_ids = list(named)
+
+    def naming(story_id: str) -> str:
+        title = named.get(story_id, "")
+        return f"{story_id}: {title}" if title else story_id
+
     if len(story_ids) == 1 and plan_run_offer.can_prompt(sys.stdin):
         print(
-            f"l5-plan: run {story_ids[0]} now? "
+            f"l5-plan: run {naming(story_ids[0])} now? "
             "Enter runs it, anything else skips: ",
             end="",
             flush=True,
@@ -834,7 +870,7 @@ def offer(artifacts: Sequence[Path], base: str | None = None) -> int:
             return plan_run_offer.launch_run(HARNESS_ROOT, story_ids[0], base)
     for story_id in story_ids:
         command = plan_run_offer.run_command(HARNESS_ROOT, story_id, base)
-        print(f"l5-plan: run {story_id} with: {command}")
+        print(f"l5-plan: run {naming(story_id)} with: {command}")
     return 0
 
 

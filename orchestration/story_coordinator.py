@@ -166,6 +166,42 @@ def read_story(story_text: str, harness_root: Path | None = None) -> StoryReadin
     return StoryReading(parsed, schema_validator.validate(parsed, schema))
 
 
+#: The longest story title this harness prints beside a story id. The bound
+#: keeps an id and its title inside a conventional terminal line, so a message
+#: naming both stays one line at the width a developer is most likely reading
+#: at. It is bounded at the point it is printed rather than trusted because a
+#: title is prose an agent wrote: nothing about the story contract constrains
+#: its length or forbids it a newline, and a message assembled from it is a
+#: message whose shape the planner would otherwise decide.
+PRINTED_TITLE_MAX_LENGTH = 60
+
+
+def story_title(story: dict | None) -> str:
+    """The story's title, collapsed to one line and bounded for printing.
+
+    The one reader of a story artifact's title for the messages that name a
+    story beside its id. Whitespace runs collapse to single spaces, so a title
+    carrying a newline prints as one line; a title longer than the bound is cut
+    to it and ended with a single-character ellipsis.
+
+    An absent parse, a parse carrying no story mapping and a story carrying no
+    title all answer with the empty string, so a caller that could not read a
+    title names the story by its id alone rather than by a placeholder.
+    """
+    if not isinstance(story, dict):
+        return ""
+    inner = story.get("story")
+    if not isinstance(inner, dict):
+        return ""
+    title = inner.get("title")
+    if not isinstance(title, str):
+        return ""
+    collapsed = " ".join(title.split())
+    if len(collapsed) <= PRINTED_TITLE_MAX_LENGTH:
+        return collapsed
+    return collapsed[:PRINTED_TITLE_MAX_LENGTH] + "…"
+
+
 def story_digest(story_text: str) -> str:
     """A digest of the story artifact exactly as the run was given it.
 
@@ -6296,12 +6332,17 @@ def run_story(
         # definitions differing in their stage list make implementer-then-
         # documenter ambiguous between a correct refactor and a story that
         # skipped its tester. The name is already resolved, so this says what
-        # the run already knows. Still one append_event call under the kind the
-        # event already carried, so events.log and execution-history.json stay
-        # two renderings of one write.
+        # the run already knows. The title comes from the reading this run
+        # already made, for the reason the id does: a number is not what a
+        # developer recognises, and an afternoon that planned several stories
+        # is where it cannot be resolved from memory. Still one append_event
+        # call under the kind the event already carried, so events.log and
+        # execution-history.json stay two renderings of one write.
+        title = story_title(reading.parsed)
         append_event(
             run_dir,
-            f"workflow {workflow_name} started for {story_id}",
+            f"workflow {workflow_name} started for {story_id}"
+            + (f": {title}" if title else ""),
             kind="workflow-started",
         )
 

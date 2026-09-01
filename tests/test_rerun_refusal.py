@@ -670,7 +670,9 @@ FIRST_RUN_EVENTS = [
     # story-072: a fresh run's first line names the definition it is executing
     # as well as the story. The name is the one
     # `conftest.configured_workflow` configures this target to run.
-    f"workflow story-workflow started for {STORY_ID}",
+    # story-097: it also names the story's title after the id, taken from the
+    # reading the run already made.
+    f"workflow story-workflow started for {STORY_ID}: {STORY_TITLE}",
     # story-087: the second thing a run says is what its pre-flight mandate
     # walk resolved, for the same reason the claim-support note below is
     # listed rather than dropped — this stays an exact equality.

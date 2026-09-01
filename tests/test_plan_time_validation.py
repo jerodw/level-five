@@ -854,16 +854,19 @@ def test_a_valid_session_commits_and_pushes_exactly_as_it_did_before(
                      old_repo, "add a thing", L5_STUB_WRITE=written)
     new = run_plan(new_repo, "add a thing", L5_STUB_WRITE=written)
 
-    # Three things the new script says and the old one had no notion of:
-    # story-059 ends a successful push by offering to run what was committed,
-    # and story-087 says which mandate it conferred and that it committed the
-    # record of it. Each is subtracted by what it says, each must appear on
-    # exactly one line, and everything else — the status, the stderr and every
-    # other byte of the commit-and-push report — is still compared exactly.
+    # Things the new script says and the old one had no notion of: story-059
+    # ends a successful push by offering to run what was committed, story-087
+    # says which mandate it conferred and that it committed the record of it,
+    # and story-097 gives the approval question its subject by naming each
+    # artifact's story id and title above it. Each is subtracted by what it
+    # says, each must appear on exactly one line, and everything else — the
+    # status, the stderr and every other byte of the commit-and-push report —
+    # is still compared exactly.
     SAID_SINCE = (
         "runs on a mandate conferred by",
         "Record the mandate conferred for",
         "run story-900",
+        "l5-plan: story-900: ",
     )
     lines = new.stdout.splitlines(keepends=True)
     for marker in SAID_SINCE:
@@ -1091,12 +1094,28 @@ def test_the_module_returns_problems_rather_than_printing_them():
 
 
 def test_the_script_stays_a_thin_entry_point():
-    """The composition and the decision live in orchestration."""
+    """The composition and the decision live in orchestration.
+
+    The script named `read_story` nowhere at all until story-097, which gave
+    the approval prompt and the run offer their subject and so had to read each
+    artifact's title. That is a read of a story and not a validation of one, so
+    what is asserted here is the claim the absence stood for rather than the
+    absence: no reader of a story artifact is reimplemented or reached for
+    directly, the one reading that happens goes through the coordinator's own
+    reader, and it is there to derive a title rather than to compose a check
+    `plan_validation` owns. Held shut from both sides — a second reading, one
+    that does not go through the coordinator, or one whose result does not
+    reach the bounded-title function, each fails here.
+    """
     source = L5_PLAN.read_text(encoding="utf-8")
     assert "plan_validation.artifact_problems" in source
     assert "strictness_problems" not in source
     assert "stage_exception_problems" not in source
-    assert "read_story" not in source
+    assert "story_parser" not in source
+    assert "schema_validator" not in source
+    assert source.count("read_story") == 1
+    assert "story_coordinator.read_story" in source
+    assert "story_coordinator.story_title(" in source
     assert "story_coordinator.refuse_bad_story" in source
 
 

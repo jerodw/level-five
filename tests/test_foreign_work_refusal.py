@@ -593,7 +593,10 @@ CLEAN_RUN_EVENTS = [
     # as well as the story, because two definitions differing in their stage
     # list make the stages below ambiguous on their own. The name is the one
     # `conftest.configured_workflow` configures this target to run.
-    "workflow story-workflow started for story-001",
+    # story-097: it also names the story's title after the id, because a number
+    # is not what a developer recognises. The title is this fixture's own.
+    "workflow story-workflow started for story-001: "
+    "Sample story for coordinator tests",
     # story-087: the second thing a run says is what its pre-flight mandate
     # walk resolved, recorded now that there is a run directory to record it
     # in. Listed rather than dropped, for the reason the claim-support note
