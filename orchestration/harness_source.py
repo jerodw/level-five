@@ -99,13 +99,21 @@ HARNESS_SOURCE_DIRS: tuple[str, ...] = (
     "hooks",
     "scripts",
     "templates",
+    "plugin",
 )
 
 # The subset of the above that a target reads or that describes a target's
-# repository: prompts an agent is given, and the workflow definition whose
-# declarations name paths in the target. A path literal here can only mean
+# repository: prompts an agent is given, the workflow definition whose
+# declarations name paths in the target, and the skills the harness loads
+# into a session it starts in a target. A path literal here can only mean
 # a target's, which is what makes the layout rule decidable in them.
-TARGET_FACING_DIRS: tuple[str, ...] = ("prompts", "workflows")
+#
+# The plugin directory is here for the reason `prompts` is, and it is the
+# same reason rather than an analogous one: what it holds is prose an agent
+# is given while it is standing in a target repository, so a stack token or
+# a test-layout path in it is the harness assuming what it is running
+# against, exactly as one in a prompt would be.
+TARGET_FACING_DIRS: tuple[str, ...] = ("prompts", "workflows", "plugin")
 
 # Tokens naming a language or toolchain. A guess, and incomplete by
 # construction -- see "What this does not catch" above.

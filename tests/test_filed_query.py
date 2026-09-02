@@ -881,7 +881,7 @@ def test_a_mention_of_the_key_is_not_read_as_a_read(tmp_path):
     assert COMMAND_KEY in (SCRIPTS / "l5-init").read_text(encoding="utf-8")
 
 
-def test_the_seams_callers_are_the_inspector_and_the_brief_fetch():
+def test_the_seams_callers_are_the_two_producers_and_the_brief_fetch():
     """The seam shipped with no caller, and these are the ones it has.
 
     Written as an emptiness assertion by the story that shipped the seam, so
@@ -893,16 +893,24 @@ def test_the_seams_callers_are_the_inspector_and_the_brief_fetch():
     — which is why the scan above still reports exactly one source reading
     that key.
 
-    Still an exact set equality in both directions, so a third caller fails
+    The third and last is `brief_filing`, the second producer of briefs: it
+    asks the same question the Inspector asks — what is already filed against
+    these paths — about the one brief an assist session was asked to file, and
+    resolves its settings the way the fetch does rather than reading the
+    configuration key itself, which is why the scan above still reports exactly
+    one source reading that key.
+
+    Still an exact set equality in both directions, so a fourth caller fails
     here and a caller that stopped importing fails here too. What the equality
     holds is the property the emptiness was standing in for: the query is asked
-    by the producer of briefs and by the fetch a developer drives from a
+    by the two producers of briefs and by the fetch a developer drives from a
     terminal, and by nothing a run, a resume or a sweep reaches. The control
     below is unchanged and is what stops this passing on a scan that has
     stopped reporting.
     """
     assert sources_importing("filed_query", REPO_ROOT) == {
         str(Path("orchestration") / "brief_fetch.py"),
+        str(Path("orchestration") / "brief_filing.py"),
         str(Path("orchestration") / "inspection.py"),
     }
 

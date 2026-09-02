@@ -668,6 +668,10 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
 #: nothing else — the successor to the single exemption this rule carried
 #: before a run swept anything. Each is named with what earns it:
 #:
+#:   brief_filing.py       the queue's second producer: it files one brief an
+#:                         assist session was asked for, reached from its own
+#:                         entry point and from the suite and from nothing a
+#:                         run executes, so it enqueues and never drains.
 #:   command_transport.py  answers in the `Filing` values the queue defines,
 #:                         so it must name the queue to import them.
 #:   inspection.py         the queue's first producer, reached from
@@ -678,6 +682,14 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
 #:                         queue's drain, and the only route a run has to it.
 #:   run_status.py         reads the queue as data for the l5-status listing,
 #:                         building no transport and filing nothing.
+#:   story_brief.py        names the queue in prose and reaches it not at all:
+#:                         it says what goes into the identity both producers
+#:                         file under, and points at the queue as the one place
+#:                         a key is derived and the one way a brief gets there.
+#:                         It imports nothing from the queue and calls none of
+#:                         its operations, which is what the scan below holds
+#:                         by requiring the name and what the coordinator's
+#:                         own check holds for the operations.
 #:   story_coordinator.py  reaches the queue through the seam and nowhere
 #:                         else, which is what the check below decides.
 #:
@@ -685,10 +697,12 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
 #: naming the queue is reported, and a module inside it that stops naming the
 #: queue is a stale exemption nobody would otherwise notice.
 MODULES_THAT_MAY_NAME_THE_QUEUE = (
+    "brief_filing.py",
     "command_transport.py",
     "inspection.py",
     f"{outbox_sweep.__name__}.py",
     "run_status.py",
+    "story_brief.py",
     "story_coordinator.py",
 )
 

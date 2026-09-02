@@ -2491,6 +2491,15 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "prompts/story-tester.md, because the criterion is that this "
         "repository's own tester prompt shortened and names the guard, which "
         "only the shipped template can answer",
+    "test_the_assist_agent_files_a_brief.py":
+        "everything the filing decides is driven against a harness root it "
+        "mirrors and a target repository it builds, because the workflow set, "
+        "the blocked prefixes and the tracker's answers are inputs to that "
+        "decision. What it resolves live is what this repository ships and "
+        "nothing else: prompts/assist.md, because the criterion is that this "
+        "deployment's own assist prompt keeps the brief shape and now names "
+        "the skill, and because the launcher is asserted to hand the session "
+        "that very file rather than a file shaped like it",
     "test_undeclared_config_keys.py":
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":

@@ -60,3 +60,10 @@ A brief is not a story artifact and nothing executes one. It states the
 work and the case for it; the developer plans it into a story through
 l5-plan's interview, and that interview is where the mandate is
 conferred.
+
+Filing a brief is what the file-a-brief skill does, and it is where the
+filing happens: it carries the slug rule, what the developer is shown
+before anything is filed, and the entry point that validates the brief and
+enqueues it. A brief you write and do not file reaches nothing, so when
+the developer wants one filed, use that skill rather than writing the
+brief anywhere yourself.
