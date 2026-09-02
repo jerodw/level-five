@@ -1,0 +1,211 @@
+story:
+  id: story-100
+  title: A completed story is inspected
+  description: |
+    The Inspector story-094 added is a capability a developer invokes. This
+    story makes it standing: when a run completes, the coordinator inspects
+    what that story touched and files briefs for what it finds, so nobody has
+    to remember to ask.
+
+    It adds no categories, no severity scale and no brief shape. Every
+    judgement about what a good finding is stays in prompts/inspector.md, and
+    the dedupe, validation, identity, cap and filing stay in
+    orchestration/inspection.py. What is new here is run integration, and that
+    is the whole of the story's risk surface.
+
+    The scope is the files the run changed plus, for each, the files git tracks
+    directly in its containing directory, bounded to source_dirs and tests_dir
+    and capped by file count. Changed files alone cannot reveal duplication or
+    a parity gap, because both live in the file the story did not change; the
+    containing directories in full re-inspect a subsystem on every story that
+    touches it. The expansion is computed in orchestration before any agent is
+    invoked, so it is testable and its cost is known in advance.
+
+    It runs after the completion commit, so a slow inspection cannot delay the
+    durability of the work, and before the completion sweep, so briefs it
+    enqueues are filed by that same sweep rather than waiting for the next run.
+    story-092's criterion that _complete sweeps after the completion commit
+    stays true: this inserts between them and moves nothing.
+
+    It may never block, delay or refuse a run. That is the outbox sweep's rule,
+    inherited for the sweep's reason: a mechanism whose whole purpose is to be
+    helpful must not become the thing that stops the work. It is expressed the
+    way story-092 expressed it, as a total function with no return value and no
+    exception by which it could tell a caller to stop, so a later reader cannot
+    make it consistent with the refusing pre-flights around it and delete the
+    guarantee by accident.
+
+    What an inspection did is recorded durably. The run directory is gitignored
+    and reaches no clone, and the tracked cross-run logs are deliberately
+    summaries, so an inspection reporting only into events.log would leave no
+    evidence that any inspection had ever run. This story declares
+    inspection-log.jsonl, the name schemas/cross-run-history.schema.json already
+    reserves for a producer, and commits the record in a second commit that
+    stages the record paths by name.
+  workflow: story-workflow
+
+tasks:
+  - Add orchestration/story_inspection.py, holding the deterministic scope expansion, the file cap, the record and the record commit, and reaching orchestration/inspection.py for the invocation, dedupe, validation, cap and filing. Its one entry point is total - it returns nothing, raises nothing, and has no parameter by which a caller could be told to stop - in the shape orchestration/outbox_sweep.py's sweep already has.
+  - Declare inspect_after_story_max_files in schemas/harness-config.schema.json. Its absence disables the post-story inspection; its value is the maximum number of files one inspection may take into scope after expansion. A value that is not a positive integer disables the inspection and is named in the record rather than refusing anything, because a total function cannot refuse.
+  - Compute the changed set from the stages' changed-files records. Add recorded_by_all_stages(run_dir, stages) to orchestration/story_coordinator.py and re-express the existing recorded_by_other_stages as a filter over it, so the two share one derivation rather than reading the same records twice.
+  - Implement the expansion - the changed paths, plus for each the files git tracks directly in its containing directory, one level and not recursively - bounded to source_dirs and tests_dir, with the execution rules' blocked prefixes excluded. A deleted path contributes its containing directory but not itself. A changed path outside both scope keys is dropped and named, and its directory is not pulled in.
+  - Implement the file cap - changed files ordered before siblings, so the cap trims siblings before it trims what the story touched, and trims changed files too where they alone exceed it. What the cap excluded is named in the record.
+  - Give orchestration/inspection.py an explicit path list on Scope and a third scope kind beside SOURCE and TESTS, and let inspect_scope take paths where it is given them while computing them exactly as it does today where it is not.
+  - Add one framing placeholder to prompts/inspector.md. Broad mode asks whether this code is well designed; the post-story mode asks whether this change left a defect. Both values are supplied by their caller, so neither renders as the literal None.
+  - Widen orchestration/story_brief.py's payload scope from a part of the tree to where the brief came from, so a brief this producer files carries its provenance. It stays payload and never identity, so a finding broad mode filed and this mode rediscovers collapses onto one key.
+  - Call the inspection from _complete, after the completion commit and above the sweep, passing the changed set and the run directory. Nothing else in _complete moves.
+  - Add the event kind and its three flat keyword fields to append_event, in the idiom verifier_outcome and retry_decision already use, and declare inspection-log.jsonl in schemas/cross-run-history.schema.json, removing it from that schema's RESERVED sentence and leaving adjudication-log.jsonl there.
+  - Commit the record from inside the total function, staging the record paths by name and never with git add -A, skipping the commit entirely where the index is empty, under a subject that carries no COMPLETION_COMMIT_MARKER and matches neither the completion, escalation nor pause shape.
+  - Comment inspect_after_story_max_files into templates/config.yaml beside the other inspection keys, and declare it in this repository's own .harness/config.yaml so the harness inspects itself from the next story onward.
+  - Cover the whole of it in a new test module, add the new key's entry to tests/test_config_keys_are_obeyed.py's KEY_PROOFS, and cover the new cross-run log in tests/test_cross_run_history.py.
+  - Record the mechanism, the ordering, the expansion rule, the cap, the record commit and the new key in .harness/docs/ARCHITECTURE.md and README.md.
+
+acceptance_criteria:
+  - A run whose inspection fails entirely - the agent unavailable, the filed query failing, the enqueue dropping every item, the record commit failing - still commits its work, still completes, and exits with the status it would have had with inspect_after_story_max_files unset.
+  - The post-story inspection runs after the completion commit and before the completion sweep, and a test observes that ordering from the order the calls were made rather than from where they sit in the source.
+  - An escalated run, a paused run and a capacity-stopped run each inspect nothing, and a completing run under the same fixture is the control that shows the inspection does happen.
+  - A run with inspect_after_story_max_files unset invokes no inspector, appends no inspection event, makes no record commit, and leaves events.log byte-for-byte what the same run leaves today.
+  - The scope expansion is computed without a model, and a test asserts the expanded set for a known collection of changed-files records.
+  - A changed file outside both source_dirs and tests_dir is excluded from the scope and does not pull its containing directory into it, and the exclusion is named in the record.
+  - A changed file that was deleted contributes its containing directory to the scope and does not contribute itself.
+  - The expansion adds only the files git tracks directly in a changed file's containing directory, and a test with a populated subdirectory beneath that directory shows the subdirectory's files are not in scope.
+  - Where the expanded set exceeds inspect_after_story_max_files the scope is trimmed to the cap, the trimmed paths are named, and a test shows sibling files are trimmed before any changed file is.
+  - Where the changed files alone exceed the cap they are trimmed too, and what was trimmed is named on the same terms.
+  - A value of inspect_after_story_max_files that is not a positive integer disables the inspection, is reported with the key and the value, and refuses nothing - the run completes with the status it would have had with the key unset.
+  - The post-story inspection makes exactly one agent invocation whatever mix of source and tests files the run changed, and the invocation is told it is looking at a change rather than at the source half or the tests half.
+  - The rendered post-story prompt asks whether the change left a defect, and the rendered broad-mode prompt asks its own question; neither framing placeholder renders as the literal None.
+  - A finding this mode files and the same finding filed by an l5-inspect run of the same repository land on one outbox key, so the scope a brief carries does not divide the dedupe.
+  - How many findings the invocation produced, how many were filed, and how many were dropped to the cap and to each dedupe source reach that run's events.log.
+  - A completed inspection appends one record to .harness/history/inspection-log.jsonl carrying the story id, the timestamp, and the findings, filed and dropped counts, and that record is inside a commit rather than left in the working tree.
+  - The record commit stages the record paths by name: a file the inspection agent changed elsewhere in the repository is left in the working tree and is not committed.
+  - The record commit is skipped where it would stage nothing, so a target that tracks no record path gains no commit.
+  - completion_commits does not match the record commit, and _head_escalated does not read it as an escalation.
+  - A tree left clean by the run is still clean after the inspection and the record commit, so the next run's clean-tree pre-flight is not refused by anything this story added.
+  - The post-story entry point returns nothing, declares no parameter by which a caller could refuse, and a test constructs the failure of every part of it and observes the run completing regardless.
+  - inspect_max_cost_usd bounds the post-story invocation and inspect_max_findings bounds what it files; no second ceiling and no second brief cap is declared.
+  - schemas/cross-run-history.schema.json declares inspection-log.jsonl and no longer names it as reserved, and still names adjudication-log.jsonl as reserved.
+  - This repository's .harness/config.yaml declares inspect_after_story_max_files, and templates/config.yaml carries it commented beside the other inspection keys.
+
+technical_plan:
+  implementation_steps:
+    - Add recorded_by_all_stages(run_dir, stages) to orchestration/story_coordinator.py returning every path any stage's changed-files record names, and re-express recorded_by_other_stages as that function filtered by stage name, so the record reading is written once.
+    - Write orchestration/story_inspection.py. Read the cap key; absent or unusable means the entry point returns having invoked nothing, appended nothing and committed nothing, with the unusable case named in the record it appends. Expand the changed set to the scope, apply the cap, build the scope object, call inspection.inspect_scope, apply inspection.capped and inspection's enqueue path, then append the record and commit it. Wrap the whole body so nothing raises out of it, on outbox_sweep.sweep's terms.
+    - Reach orchestration/story_coordinator.py from that module through a deferred import for append_event, the idiom orchestration/outbox.py already uses for its own coordinator import, and run git through a module-local subprocess call with a fixed argument list, the idiom inspection._tracked already uses.
+    - Widen orchestration/inspection.py - an explicit path list on Scope, a third kind beside SOURCE and TESTS, and inspect_scope honouring supplied paths - leaving every broad-mode path computing exactly what it computes today.
+    - Add the framing placeholder to prompts/inspector.md and supply it from both callers.
+    - Widen orchestration/story_brief.py's payload scope docstring and let this producer pass its own provenance, leaving identity untouched.
+    - Add the event kind and its three keyword fields to append_event, and declare inspection-log.jsonl in schemas/cross-run-history.schema.json with the story id, timestamp and the three counts, keeping the record a summary as that schema requires.
+    - Declare inspect_after_story_max_files in schemas/harness-config.schema.json, comment it into templates/config.yaml, and set it in this repository's .harness/config.yaml.
+    - Insert the call in _complete between the completion commit and outbox_sweep.sweep, passing the run directory, the changed set and the story id, and thread stages into _complete for the changed-set derivation.
+    - Write the new test module: the ordering by journal, the four terminal outcomes, the unconfigured control, the expansion table, the cap, the record, the record commit and its non-recognition, and the constructed failure of every part.
+    - Add the new key's KEY_PROOFS entry in tests/test_config_keys_are_obeyed.py with a varying value no harness would pick, and cover inspection-log.jsonl in tests/test_cross_run_history.py.
+    - Record the mechanism and its reasoning in .harness/docs/ARCHITECTURE.md, and the new key and the second commit in README.md.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The new module - the expansion, the cap, the record, the record commit and the total entry point.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: recorded_by_all_stages, the call site in _complete between the completion commit and the sweep, and append_event's new kind and keyword fields.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: An explicit path list on Scope, a third scope kind, and inspect_scope honouring supplied paths.
+    - file: orchestration/story_brief.py
+      stage: implementer
+      reason: The payload scope widens from a part of the tree to where the brief came from, so an auto-filed brief carries its provenance.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: The framing placeholder that makes the post-story question a regression question rather than a design one.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares inspect_after_story_max_files, whose absence disables the feature and whose value is the file cap.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declares inspection-log.jsonl and removes it from the reserved sentence, leaving adjudication-log.jsonl reserved.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The new key commented in beside the other inspection keys.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: This repository turns the feature on for itself.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: The story's own coverage - ordering, the terminal outcomes, the unconfigured control, the expansion, the cap, the record and the record commit.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The new key needs a KEY_PROOFS entry, and the module's set equality against the schema's declared keys is red from the implementer's schema edit until it has one.
+      reverting_breaks_the_suite: The implementer declares inspect_after_story_max_files in schemas/harness-config.schema.json, and this module asserts set equality in both directions between the declared keys and KEY_PROOFS. Reverting this entry leaves a declared key with no proof, which is exactly the failure the module exists to raise.
+    - file: tests/test_cross_run_history.py
+      stage: tester
+      reason: inspection-log.jsonl becomes a declared log and needs coverage that the new kind is projected into it and that the record carries what the schema declares.
+      reverting_breaks_the_suite: This module derives what it checks from schemas/cross-run-history.schema.json, which the implementer changes to declare a fourth log. Reverting the adaptation leaves the module asserting against three logs where the schema declares four.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The mechanism, the ordering and its two reasons, the expansion rule, the cap, the record commit and the new key.
+    - file: README.md
+      stage: documenter
+      reason: The story table row, and the second commit a completed run now leaves.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - orchestration/inspection.py
+    - orchestration/story_brief.py
+    - prompts/inspector.md
+    - schemas/harness-config.schema.json
+    - schemas/cross-run-history.schema.json
+    - templates/config.yaml
+    - .harness/config.yaml
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/filed_query.py
+    - orchestration/agent_runner.py
+    - schemas/story-brief.schema.json
+    - schemas/inspection-findings.schema.json
+    - schemas/outbox-entry.schema.json
+    - scripts/l5-inspect
+    - workflows/
+    - templates/query/
+    - templates/sync/
+
+verification_requirements:
+  - Confirm that a run whose every part of the inspection fails still commits its work, completes, and exits with the status the same run has with the feature unconfigured, and that the failures were constructed rather than assumed.
+  - Confirm the ordering - completion commit, then inspection, then sweep - is observed from the order the calls were made and not from where they appear in the source.
+  - Confirm an escalated run, a paused run and a capacity-stopped run inspect nothing, and that a completing run under the same fixture is shown as the control.
+  - Confirm a run with the key unset is byte-for-byte the run it is today, down to what reaches events.log.
+  - Confirm the expansion is asserted against known changed-files records with no model involved, including an out-of-scope changed file whose directory stays out, a deleted file contributing only its directory, and a subdirectory that is not pulled in.
+  - Confirm the cap trims siblings before changed files, trims changed files where they alone exceed it, and names what it trimmed in both cases.
+  - Confirm exactly one agent invocation is made whatever mix of source and tests files the run changed, and that the invocation's prompt carries the post-story framing rather than the broad-mode one.
+  - Confirm the counts of findings, filed briefs and each way a finding was dropped reach that run's events.log, and that the summary record reaches .harness/history/inspection-log.jsonl inside a commit.
+  - Confirm the record commit stages only the record paths, by constructing a repository file the inspection agent changed and showing it is left uncommitted in the working tree.
+  - Confirm completion_commits does not match the record commit and _head_escalated does not read it as an escalation.
+  - Confirm a tree the run left clean is still clean after the inspection and the record commit.
+  - Confirm the entry point returns nothing and offers no parameter by which a caller could be told to stop, in the terms the sweep's own equivalent assertion uses.
+  - Confirm no second cost ceiling and no second brief cap were introduced, and that the existing inspect_max_cost_usd and inspect_max_findings bound the post-story invocation.
+  - Confirm every documented claim about this story is supported by evidence on this branch and in this run directory.
+
+constraints:
+  - The post-story inspection may never block, delay or refuse a run, by any means: no return value a caller could branch on, no exception, no parameter, no exit status.
+  - Nothing about what a good finding is changes. No category, no severity scale, no brief shape and no scoring rule is added, removed or reworded.
+  - No second cost ceiling and no second brief cap are declared. The post-story invocation runs under inspect_max_cost_usd and files under inspect_max_findings.
+  - The scope expansion happens in orchestration and never inside the agent, so it is testable and its cost is known before the invocation is made.
+  - The record commit never uses git add -A. It stages the record paths by name, so an edit the inspection agent made elsewhere in the repository is never folded into a commit this story creates.
+  - The completion commit is never rewritten or amended by anything this story adds.
+  - The inspection sits below the completion commit and above the completion sweep, and the sweep stays the last thing _complete does.
+  - The new event kind must not be routed to execution-log.jsonl, mandate-log.jsonl or retry-log.jsonl. It reaches inspection-log.jsonl alone, and that log's record stays a summary rather than a copy of what the run directory holds.
+  - Broad mode's behaviour is unchanged. An l5-inspect invocation covers the same scopes, makes the same invocations, files under the same keys and prints the same report as it does today.
+  - A brief's identity stays kind, category, sorted bare paths and slug. The scope a brief carries stays payload, so the two producers cannot file the same finding under two keys.
+  - Nothing in this story confers a mandate, plans a brief into a story, or writes anything under the stories directory.
+  - The clean-tree pre-flight of the next run must not be refused by anything this story leaves behind.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-01 23:02:24
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
