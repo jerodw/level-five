@@ -39,6 +39,7 @@
           "capacity-paused",
           "escalated",
           "story-completed",
+          "inspection-completed",
           "note"
         ]
       },
@@ -80,6 +81,18 @@
       "retry_stage": {
         "type": "string",
         "description": "The stage the retry was routed to, read off the workflow's declared route rather than a constant. With retry_category it makes the route a reader can reconstruct from the history alone. On a self-routed entry it names the entry's own stage, because a self-route has no destination other than itself; counting the self-routed entries for a stage is therefore a query against this history rather than a number kept anywhere."
+      },
+      "findings": {
+        "type": "integer",
+        "description": "How many findings an inspection's invocation produced. Absent on every entry that is not an inspection, and present on one that is even where it is zero, because a run whose change had nothing wrong with it is an answer rather than a missing field."
+      },
+      "filed": {
+        "type": "integer",
+        "description": "How many of those findings reached the outbox as briefs. Absent on every entry that is not an inspection."
+      },
+      "dropped": {
+        "type": "integer",
+        "description": "How many were dropped, for every reason together: already filed by either dedupe source, already queued, malformed, naming a workflow the harness does not define, past the brief cap, or lost by the queue. Which way each went is in the entry's own message, where each reason is named with how many went that way. Absent on every entry that is not an inspection."
       }
     }
   }

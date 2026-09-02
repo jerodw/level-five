@@ -31,7 +31,9 @@ Every absence asserted below carries a demonstration that it can fail:
     sits beside the same scan over that source with a construction that omits it
     appended, which the scan reports;
   * "no decision in `orchestration/` reads the field" sits beside the same scan
-    over that source with a branch on it planted, which the scan reports;
+    over that source with a branch on it planted, which the scan reports; the
+    modules that scan runs over are derived rather than listed, and that
+    derivation carries its own control in both directions;
   * "a record that omits the field fails validation" is itself the control for
     the field being required, run beside the same instance carrying it, which
     validates;
@@ -264,16 +266,89 @@ def decisions_outside_the_shadow_rule(source: str) -> list[int]:
 BRANCHING_ON_THE_SCOPE = f"\nif result.{SCOPE}:\n    pass\n"
 COMPARING_THE_SCOPE = f"\nnarrowed = result.{SCOPE} != ()\n"
 
+#: The scan above asks its question by name, and `scope` is not a name this
+#: repository reserved: the Inspector carries a `Scope` of its own — a part of
+#: a target's tree, or the change a story made — and a decision it takes on
+#: one of those is not a decision on this record's field, however identically
+#: the two read to an AST walk. What is true of every module that could hold a
+#: suite run's scope, and of no other, is that it names the record the field
+#: is declared on: the field is not passed around loose, it arrives on a
+#: record, and a module that constructs or annotates one writes that name.
+#:
+#: Derived from the source rather than listed, so a module that begins holding
+#: a `CleanCloneResult` joins this scan the moment it does and no exemption
+#: here can go stale. What the derivation gives up is a decision taken on a
+#: record received under no annotation and never named — which is why the
+#: construction scan above keeps running over every module regardless: a
+#: record reaching such a module still has to be built somewhere this file
+#: looks.
+RECORD = RESULT.__name__
 
-@pytest.mark.parametrize("module", ORCHESTRATION_MODULES,
+
+def names_the_record(source: str) -> bool:
+    """Whether a module could hold a suite run record at all."""
+    return RECORD in source
+
+
+MODULES_HOLDING_THE_RECORD = [
+    path for path in ORCHESTRATION_MODULES
+    if names_the_record(path.read_text(encoding="utf-8"))]
+
+
+@pytest.mark.parametrize("module", MODULES_HOLDING_THE_RECORD,
                          ids=lambda path: path.name)
 def test_no_decision_under_orchestration_consults_the_scope(module):
     """The scope is decided through one rule and read inline by nothing. It is
     declared, passed along and serialized, and no branch, comparison or
-    assertion anywhere in `orchestration/` takes its value as a subject except
-    by handing it to the rule that owns the comparison."""
+    assertion in a module that holds the record takes its value as a subject
+    except by handing it to the rule that owns the comparison."""
     source = module.read_text(encoding="utf-8")
     assert decisions_outside_the_shadow_rule(source) == []
+
+
+def test_the_module_that_owns_the_record_is_among_the_modules_scanned():
+    """The premise the parametrization rests on: a derivation that selected
+    nothing, or that dropped the one module the field lives in, would pass the
+    assertion above over an empty tree."""
+    assert MODULES_HOLDING_THE_RECORD
+    assert Path(story_coordinator.__file__).resolve() in {
+        path.resolve() for path in MODULES_HOLDING_THE_RECORD}
+
+
+def test_the_derivation_admits_a_module_the_moment_it_names_the_record():
+    """The control on the filter itself, in both directions and over one
+    source, so what separates the two cases is the record's name alone.
+
+    A module that branches on a `scope` of its own is not scanned — that is
+    the exemption — and the same source is scanned the moment it names the
+    record. The decision scan reports the planted branch in both, so the
+    exclusion is this derivation's doing rather than a scan that has stopped
+    seeing.
+    """
+    unrelated = "def read(scope):\n    pass\n" + BRANCHING_ON_THE_SCOPE
+    holding = f"result: {RECORD}\n" + unrelated
+
+    assert not names_the_record(unrelated)
+    assert names_the_record(holding)
+    assert decisions_outside_the_shadow_rule(unrelated)
+    assert decisions_outside_the_shadow_rule(holding)
+
+
+def test_something_under_orchestration_is_exempted_by_the_derivation():
+    """And the exemption is load-bearing rather than theoretical: a module
+    under `orchestration/` does take a decision on a `scope` that is not this
+    record's, which is the case the derivation exists to tell apart. Were that
+    to stop being true the derivation would be inert and this assertion says
+    so, rather than leaving a narrowing nothing exercises.
+    """
+    exempted = {path.name for path in ORCHESTRATION_MODULES
+                if not names_the_record(path.read_text(encoding="utf-8"))
+                and decisions_outside_the_shadow_rule(
+                    path.read_text(encoding="utf-8"))}
+    assert exempted, (
+        "no module under orchestration/ decides on a scope of its own; the "
+        "derivation above now excludes nothing and can be removed, restoring "
+        "the scan over every module")
 
 
 def test_the_exempt_rule_is_one_the_coordinator_actually_decides_through():

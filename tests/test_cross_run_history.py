@@ -47,10 +47,13 @@ from pathlib import Path
 
 import pytest
 
+import agent_runner
 import conftest
 import harness_config
+import inspection
 import schema_validator
 import story_coordinator
+import story_inspection
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -74,8 +77,13 @@ EVENT = story_coordinator.HISTORY_EVENT_PROPERTY
 
 #: The logs this harness has no producer for. Written here because they are
 #: this assertion's subject: the story's whole treatment of them is that the
-#: schema names them and the harness ships neither.
-RESERVED = ("inspection-log.jsonl", "adjudication-log.jsonl")
+#: schema names them and the harness ships none of them.
+#:
+#: The inspection log was one of them until story-100, which gave the harness
+#: the producer it was reserved against: a completed run inspects what its
+#: story changed and appends a record. So it moved out of this tuple and into
+#: the declaration, which is what the reservation always said would happen.
+RESERVED = ("adjudication-log.jsonl",)
 
 #: The two logs, told apart by what their own declarations carry rather than by
 #: their filenames: the outcome log is the one declaring how an execution
@@ -92,6 +100,11 @@ ROUTING_LOG = next(name for name, shape in DECLARATIONS.items()
 CONFERRAL_LOG = next(name for name, shape in DECLARATIONS.items()
                      if "conferred_by" in shape["properties"])
 
+#: The fourth, told apart by the count only an inspection records. Derived for
+#: the reason the three above are, so this module still writes no log filename.
+INSPECTION_LOG = next(name for name, shape in DECLARATIONS.items()
+                      if "findings" in shape["properties"])
+
 
 
 def projected(log: str) -> set[str]:
@@ -102,6 +115,16 @@ def projected(log: str) -> set[str]:
 
 def kinds_routed_to(log: str) -> list[str]:
     return DECLARATIONS[log]["properties"][EVENT]["enum"]
+
+
+def routed_kinds() -> set[str]:
+    """Every kind any declaration routes somewhere.
+
+    Over all the declared logs rather than a named pair of them: a kind the
+    fourth log claims is a routed kind, and a union that named only two would
+    call it unrouted and then assert it projects nowhere.
+    """
+    return {kind for log in DECLARATIONS for kind in kinds_routed_to(log)}
 
 #: The kinds a run can put through the projection at all: the event kinds the
 #: run's own structured history declares. Read off that schema rather than
@@ -183,15 +206,82 @@ PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
 
 
+#: What the fixture allows one post-story inspection to take into scope. The
+#: key is configured at all because since story-100 a run *produces* the fourth
+#: declared log: leaving it unset would leave that log with no producer inside a
+#: run, and the derived sets below would then describe a deployment rather than
+#: the harness.
+INSPECTION_FILE_CAP = 20
+
+
 @pytest.fixture
 def configured_workflow() -> str:
     return WORKFLOW["name"]
 
 
 @pytest.fixture
+def target_root(target_root: Path) -> Path:
+    """The shared target with the post-story inspection turned on.
+
+    Overrides the fixture in `tests/conftest.py` and requests it, so what these
+    runs execute in is the same repository every other module's runs execute
+    in plus the one key this module needs. The addition is committed, because a
+    test's own setup is part of the repository the run starts *from*.
+    """
+    config = target_root / ".harness" / "config.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + f"{inspection.SOURCE_DIRS_KEY}:\n  - src/\n"
+        + f"{story_inspection.MAX_FILES_KEY}: {INSPECTION_FILE_CAP}\n",
+        encoding="utf-8")
+    conftest.commit_setup(target_root, "turn the post-story inspection on")
+    return target_root
+
+
+class NoFindings:
+    """Stands in for `agent_runner.run_agent` for the post-story inspection.
+
+    It reaches no model and finds nothing: what this module is about is the
+    record an inspection leaves, and a finding would only add a queue entry to
+    every fixture here. `tests/test_a_completed_story_is_inspected.py` is where
+    what an inspection finds is the subject.
+    """
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
+                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+        self.calls += 1
+        artifact, _ = inspection.findings_paths(
+            Path(cwd), harness_config.load_config(Path(cwd)))
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(json.dumps({"findings": []}), encoding="utf-8")
+        return AgentResult(ok=True, result_text="inspected")
+
+
+@pytest.fixture(autouse=True)
+def no_model(monkeypatch) -> NoFindings:
+    """Substituted for every test in this module, so the inspection a completed
+    run makes reaches this fake rather than a provider."""
+    inspector = NoFindings()
+    monkeypatch.setattr(agent_runner, "run_agent", inspector)
+    return inspector
+
+
+@pytest.fixture
 def harness_root(tmp_path: Path) -> Path:
-    return conftest.materialize_workflow(
+    root = conftest.materialize_workflow(
         WORKFLOW, tmp_path / "cross-run-history-harness", rules=FIXTURE_RULES)
+    # The template the post-story inspection renders. The builder writes one
+    # prompt per workflow stage and an inspection is not a stage, so this one
+    # is the fixture's own — and it is deliberately bare: what an Inspector is
+    # asked is `tests/test_a_completed_story_is_inspected.py`'s subject, and
+    # all this module needs is a rendering that succeeds.
+    (root / "prompts" / inspection.INSPECTOR_PROMPT).write_text(
+        "# the template this fixture renders\n{{scope_paths}}\n",
+        encoding="utf-8")
+    return root
 
 
 def failing_verdict(attempt: int) -> dict:
@@ -322,6 +412,17 @@ def escalated(target_root, harness_root):
 
 
 @pytest.fixture
+def retried_then_completed(target_root, harness_root):
+    """One retry taken and then a pass, which is the one shape that reaches
+    every log a run can reach: the retry log, the outcome log, and — because
+    only a completing run inspects what it changed — the inspection log."""
+    runner = Runner(target_root, [failing_verdict(1), PASS])
+    assert story_coordinator.run_story(
+        "story-001", harness_root, target_root, runner) == 0
+    return target_root, run_dir_of(target_root)
+
+
+@pytest.fixture
 def retried_twice(target_root, harness_root):
     """Two retries taken, then the ceiling escalates the third attempt."""
     runner = Runner(target_root, [failing_verdict(n) for n in (1, 2, 3)])
@@ -347,8 +448,12 @@ def test_the_schema_is_shipped_valid_and_named_in_the_manifest():
 
 
 def test_each_declared_log_names_the_kinds_it_records_and_the_fields_it_carries():
-    assert set(DECLARATIONS) == {OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG}
-    assert len({OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG}) == 3
+    derived = {OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG, INSPECTION_LOG}
+    assert set(DECLARATIONS) == derived
+    # Each was told apart by a field of its own, so four derivations that
+    # collapsed onto one log would be reported here rather than silently
+    # asserting the same log four times.
+    assert len(derived) == len(DECLARATIONS)
     for log, shape in DECLARATIONS.items():
         assert log.endswith(".jsonl"), log
         assert shape["type"] == "object"
@@ -394,7 +499,9 @@ def test_the_reserved_logs_are_named_as_reserved_and_declared_nowhere():
     assert all(declares_a_log(name) for name in DECLARATIONS)
 
 
-def test_the_harness_creates_no_log_the_declaration_does_not_name(retried_twice):
+def test_the_harness_creates_no_log_the_declaration_does_not_name(
+    retried_then_completed,
+):
     """The absence, with the declared logs as its control.
 
     A directory listing that found nothing would satisfy "no reserved log was
@@ -410,8 +517,13 @@ def test_the_harness_creates_no_log_the_declaration_does_not_name(retried_twice)
     declarations rather than named here, and is asserted to be a real one — a
     listing equal to the whole declared set would mean a run had produced
     something no run can produce.
+
+    The shape is the one that retried *and* completed, because a run that ends
+    any other way inspects nothing: an escalated run reaches every log but the
+    inspection's, and requiring it to hold one would require a run to write
+    what a stopped run must not.
     """
-    target_root, _ = retried_twice
+    target_root, _ = retried_then_completed
     present = {path.name for path in history_dir_of(target_root).iterdir()}
     assert RUN_PRODUCED_LOGS and RUNLESS_LOGS
     assert present == RUN_PRODUCED_LOGS
@@ -434,6 +546,38 @@ def test_a_completed_run_appends_exactly_one_record_saying_it_completed(complete
     assert written[0]["status"] == state_of(run_dir)["status"] == "completed"
     assert written[0]["story_id"] == run_dir.name
     assert records(target_root, ROUTING_LOG) == []
+
+
+def test_a_completed_run_appends_one_inspection_record_and_a_stopped_run_none(
+    completed, no_model,
+):
+    """The fourth log's producer, and the one shape that has one.
+
+    A completed run inspects what its story changed, so it leaves one record
+    carrying the story it inspected and the three counts the declaration names.
+    The record is a summary and not a copy: what it says about the findings is
+    three numbers, and which finding went which way is in the run's own
+    events.log.
+    """
+    target_root, run_dir = completed
+    written = records(target_root, INSPECTION_LOG)
+
+    assert no_model.calls == 1, "the inspection made no invocation"
+    assert len(written) == 1
+    assert written[0]["story_id"] == run_dir.name
+    assert set(written[0]) <= projected(INSPECTION_LOG)
+    assert (written[0]["findings"], written[0]["filed"],
+            written[0]["dropped"]) == (0, 0, 0)
+
+
+def test_a_run_that_escalated_leaves_the_inspection_log_untouched(
+    escalated, no_model,
+):
+    """The control for the record above: the same fixture, the same key, a run
+    that stopped — and no invocation, no record."""
+    target_root, _ = escalated
+    assert no_model.calls == 0
+    assert records(target_root, INSPECTION_LOG) == []
 
 
 def test_an_escalated_run_appends_exactly_one_record_saying_it_escalated(escalated):
@@ -583,8 +727,7 @@ def test_an_entry_whose_kind_no_declaration_names_projects_nowhere():
     """
     declared_kinds = schema_validator.load_schema(
         "execution-history")["items"]["properties"][EVENT]["enum"]
-    routed = set(kinds_routed_to(OUTCOME_LOG)) | set(kinds_routed_to(ROUTING_LOG))
-    unrouted = sorted(set(declared_kinds) - routed)
+    unrouted = sorted(set(declared_kinds) - routed_kinds())
     assert unrouted, "every declared event kind is routed; there is nothing to check"
 
     for kind in unrouted:
@@ -610,9 +753,8 @@ def test_a_run_emits_kinds_no_log_declares_and_they_leave_no_record(shape, reque
     """The same claim as a fact about a real run rather than a constructed
     entry: every run emits stage events, and none of them reach a log."""
     target_root, run_dir = request.getfixturevalue(shape)
-    routed = set(kinds_routed_to(OUTCOME_LOG)) | set(kinds_routed_to(ROUTING_LOG))
     emitted = {entry[EVENT] for entry in story_coordinator.load_history(run_dir)}
-    assert emitted - routed, "the run emitted only routed kinds"
+    assert emitted - routed_kinds(), "the run emitted only routed kinds"
     total = sum(len(records(target_root, log)) for log in DECLARATIONS)
     assert total == sum(len(routed_entries(run_dir, log)) for log in DECLARATIONS)
 
@@ -622,14 +764,16 @@ def test_a_run_emits_kinds_no_log_declares_and_they_leave_no_record(shape, reque
 # --------------------------------------------------------------------------
 
 
-def test_the_records_survive_deletion_of_the_run_directory(retried_twice):
+def test_the_records_survive_deletion_of_the_run_directory(
+    retried_then_completed,
+):
     """The property the story exists for.
 
     The run directory is deleted outright — the state, the events log, the
     per-run execution history, every artifact — and the logs still hold that
     run's records.
     """
-    target_root, run_dir = retried_twice
+    target_root, run_dir = retried_then_completed
     # Over the logs a run can reach, for the reason
     # `test_the_harness_creates_no_log_the_declaration_does_not_name` gives: a
     # log with no producer inside a run holds nothing after one, so requiring

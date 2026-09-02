@@ -35,6 +35,16 @@ source_dirs:
   - workflows/
   - hooks/
   - templates/
+# This harness inspects itself as each of its own stories completes: after the
+# completion commit, so a slow inspection cannot delay the durability of the
+# work, and before the completion sweep, so the briefs it enqueues are filed by
+# that same sweep. The scope is the files the story changed plus the files git
+# tracks directly beside them, which is what makes duplication and parity gaps
+# visible — both live in the file the story did not change. This bounds that
+# scope in files; what the invocation may spend and how many briefs it may file
+# are the two inspect_ keys the defaults above cover. Delete the key and no run
+# inspects anything.
+inspect_after_story_max_files: 60
 # The cross-run history — the append-only logs that outlive the run
 # directories they describe — is left at its default of .harness/history, and
 # unlike runs_dir and logs_dir above it is versioned and blocked to every

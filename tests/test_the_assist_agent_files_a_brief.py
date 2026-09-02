@@ -1005,10 +1005,17 @@ COMPARED_OVER = (
 
 
 class AScope:
-    """What `payload` reads a scope through: its path, and nothing else."""
+    """What `payload` reads a scope through: where the brief came from.
 
-    def __init__(self, path: str = "src/"):
+    Two fields since a scope can be somewhere other than a part of the tree:
+    `origin`, which such a scope carries and a prefix-described one leaves
+    empty, and `path`. Empty here in every case this module drives, so what is
+    asserted below is exactly what was asserted before either field was read.
+    """
+
+    def __init__(self, path: str = "src/", origin: str = ""):
         self.path = path
+        self.origin = origin
 
 
 def identity_before(brief: dict, paths: tuple[str, ...]) -> dict:

@@ -123,10 +123,24 @@ INSPECTION_LOG = "inspection.log"
 #: way a stage can and can also deliver.
 DELIVERY_TOOL = "Write"
 
-#: Which of the two scopes an invocation is looking at. Source and tests are a
-#: union rather than a merge, and the Inspector is told which it has.
+#: Which scope an invocation is looking at. Source and tests are a union rather
+#: than a merge, and the Inspector is told which it has. CHANGE is the third,
+#: and it is not a part of the tree at all: it is what one story changed, plus
+#: what sits beside it, which is a set of paths a caller computes and hands
+#: over rather than one a prefix describes.
 SOURCE = "source"
 TESTS = "tests"
+CHANGE = "change"
+
+#: The question broad mode asks. Supplied by `scopes` below rather than left to
+#: default in the render, so that both modes' framings are values their own
+#: caller passes and neither can reach the template as the literal None.
+BROAD_FRAMING = (
+    "Ask whether this code is well designed: whether it says what it means, "
+    "whether it agrees with the rules this repository declares about itself, "
+    "and whether a competent maintainer would want to know about what you "
+    "have found."
+)
 
 #: The ways a finding can be dropped. Each is named in the report with what it
 #: excluded, because a bound whose effect is not stated reads as a scope with
@@ -163,21 +177,41 @@ class Scope:
     """One unit of invocation: a part of the tree, and which half of it it is.
 
     `path` is a repository-relative prefix, or "" for everything the
-    repository tracks. `kind` is SOURCE or TESTS and is what the Inspector is
-    told it is looking at — the two are a union and not a merge, so a tests
-    scope is never folded into a source one. `excluded` is what this scope
-    leaves to another scope, which is how the everything-scope keeps a
-    declared tests directory out of itself without becoming a merge of the two.
+    repository tracks. `kind` is SOURCE, TESTS or CHANGE and is what the
+    Inspector is told it is looking at — the first two are a union and not a
+    merge, so a tests scope is never folded into a source one. `excluded` is
+    what this scope leaves to another scope, which is how the everything-scope
+    keeps a declared tests directory out of itself without becoming a merge of
+    the two.
+
+    `paths` is an explicit list of the files this scope covers, for a caller
+    that has computed them itself rather than describing them with a prefix.
+    Where it is empty — every broad-mode scope — the paths are computed from
+    `path` exactly as they always were. Where it is not, they are taken as
+    given and no prefix is consulted, which is what lets a scope be a set of
+    files with nothing structural in common.
+
+    `origin` is where this scope came from where that is not a part of the
+    tree, and it is what such a scope is labelled by and what a brief filed
+    from it carries as its provenance. Empty for a scope a prefix describes,
+    which leaves both of those exactly what they were.
+
+    `framing` is the question the invocation is asked. It carries a value on
+    every scope, supplied by whichever caller built it, so the placeholder it
+    fills never renders as the literal None.
     """
 
     path: str
     kind: str
     excluded: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
+    origin: str = ""
+    framing: str = BROAD_FRAMING
 
     @property
     def label(self) -> str:
         """What this scope is called in a report and in a prompt."""
-        return self.path or "the whole tracked tree"
+        return self.origin or self.path or "the whole tracked tree"
 
 
 def _prefix(path: str) -> str:
@@ -220,12 +254,16 @@ def scopes(arguments, config: dict) -> tuple[Scope, ...]:
                 kind=TESTS
                 if tests_prefix and _prefix(one).startswith(tests_prefix)
                 else SOURCE,
+                framing=BROAD_FRAMING,
             )
             for one in named
         )
 
     declared = config.get(SOURCE_DIRS_KEY) or []
-    found = [Scope(path=one, kind=SOURCE) for one in declared if one.strip()]
+    found = [
+        Scope(path=one, kind=SOURCE, framing=BROAD_FRAMING)
+        for one in declared if one.strip()
+    ]
     if not found:
         # Nothing declared: everything the repository tracks, with the tests
         # directory left to the scope below rather than merged into this one.
@@ -234,10 +272,11 @@ def scopes(arguments, config: dict) -> tuple[Scope, ...]:
                 path="",
                 kind=SOURCE,
                 excluded=(tests_prefix,) if tests_prefix else (),
+                framing=BROAD_FRAMING,
             )
         ]
     if tests_prefix:
-        found.append(Scope(path=tests_dir, kind=TESTS))
+        found.append(Scope(path=tests_dir, kind=TESTS, framing=BROAD_FRAMING))
     return tuple(found)
 
 
@@ -316,11 +355,16 @@ identity = story_brief.identity
 def payload(finding: dict, scope: Scope) -> dict:
     """What is filed with a brief: the finding, with its paths made bare.
 
-    The scope a finding came from is this producer's to supply — a brief
-    nothing scoped carries an empty one — so this is the one of the four that
-    is reached with an argument of this module's rather than re-exported whole.
+    Where the brief came from is this producer's to supply — a brief nothing
+    scoped carries an empty one — so this is the one of the four that is
+    reached with an argument of this module's rather than re-exported whole.
+    A scope that is a part of the tree carries that part; one that is not
+    carries its own account of where it came from, which is what a post-story
+    inspection's briefs carry. It is payload either way and never identity, so
+    a finding filed under one and rediscovered under the other collapses onto
+    one key.
     """
-    return story_brief.payload(finding, scope.path)
+    return story_brief.payload(finding, scope.origin or scope.path)
 
 
 # --------------------------------------------------------------------------
@@ -629,6 +673,10 @@ def _render(harness_root: Path, target_root: Path, config: dict, scope: Scope,
     context = context_assembler.schema_context(harness_root)
     context["scope"] = scope.label
     context["scope_kind"] = scope.kind
+    # Supplied by the scope its caller built rather than defaulted here, so the
+    # two modes' questions are each their own caller's and neither can reach
+    # the template unset.
+    context["framing"] = scope.framing
     context["scope_paths"] = "\n".join(paths) or "(this scope tracks no files)"
     context["repository_standards"] = _standards(target_root, config) or None
     context["already_filed"] = _already_filed_block(answer)
@@ -709,9 +757,12 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
     down, because the queue is not scoped. It defaults to an empty index, so a
     caller that does not supply one gets exactly what it got before the local
     tier existed.
+
+    A scope carrying an explicit path list is taken at its word; every other
+    scope has its paths computed from its prefix exactly as it always did.
     """
     result = _ScopeResult()
-    paths = scope_paths(target_root, scope, blocked)
+    paths = scope.paths or scope_paths(target_root, scope, blocked)
     answer = filed_query.query(paths, config, target_root, harness_root)
     result.dedupe = Dedupe(
         scope=scope.label,
@@ -837,6 +888,57 @@ def capped(found: list, max_findings: int):
     return ordered[:max_findings], ordered[max_findings:]
 
 
+def file_findings(target_root: Path, found: list, max_findings: int, *,
+                  dry_run: bool = False):
+    """Apply the cap and file what survives it, reporting both.
+
+    Returns `(filed, dropped)`. This is the whole of what a producer of
+    findings does with them, and it is here rather than at a call site because
+    there is more than one producer: an inspection of a part of the tree and an
+    inspection of what one story changed file under the same cap, through the
+    same enqueue, and drop what they drop for the same named reasons. A second
+    copy of this would be a second answer to what filing a finding means.
+
+    `dry_run` reports exactly what an ordinary call would file and enqueues
+    nothing: the cap is applied identically and only the call into the queue is
+    not made.
+    """
+    kept, excluded = capped(found, max_findings)
+    dropped = [
+        Drop(
+            PAST_THE_CAP,
+            f"{one.finding['slug']}: severity {one.finding['severity']}",
+            one.finding["severity"],
+        )
+        for one in excluded
+    ]
+    filed: list = []
+    queue = outbox.queue_dir(target_root)
+    for one in kept:
+        key = ""
+        if not dry_run:
+            key = outbox.enqueue(queue, payload(one.finding, one.scope),
+                                 identity(one.finding))
+            if not key:
+                # story-090's contract: the empty string is the item having
+                # been lost rather than a key. Nothing is named after it and
+                # nothing is reported as filed on it.
+                dropped.append(Drop(
+                    LOST_BY_THE_QUEUE,
+                    f"{one.finding['slug']}: the queue dropped it",
+                    one.finding["severity"],
+                ))
+                continue
+        filed.append(Filed(
+            key=key,
+            slug=one.finding["slug"],
+            title=one.finding["title"],
+            severity=one.finding["severity"],
+            scope=one.scope.label,
+        ))
+    return tuple(filed), dropped
+
+
 def inspect(target_root: Path, config: dict, harness_root: Path, *,
             arguments=(), dry_run: bool = False,
             runner=agent_runner.run_agent) -> Report:
@@ -883,45 +985,10 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         dropped.extend(result.dropped)
         dedupe.append(result.dedupe)
 
-    kept, excluded = capped(found, bound.max_findings)
-    for one in excluded:
-        dropped.append(Drop(
-            PAST_THE_CAP,
-            f"{one.finding['slug']}: severity {one.finding['severity']}",
-            one.finding["severity"],
-        ))
-
-    filed: list = []
-    queue = outbox.queue_dir(target_root)
-    for one in kept:
-        if dry_run:
-            filed.append(Filed(
-                key="",
-                slug=one.finding["slug"],
-                title=one.finding["title"],
-                severity=one.finding["severity"],
-                scope=one.scope.label,
-            ))
-            continue
-        key = outbox.enqueue(queue, payload(one.finding, one.scope),
-                             identity(one.finding))
-        if not key:
-            # story-090's contract: the empty string is the item having been
-            # lost rather than a key. Nothing is named after it and nothing is
-            # reported as filed on it.
-            dropped.append(Drop(
-                LOST_BY_THE_QUEUE,
-                f"{one.finding['slug']}: the queue dropped it",
-                one.finding["severity"],
-            ))
-            continue
-        filed.append(Filed(
-            key=key,
-            slug=one.finding["slug"],
-            title=one.finding["title"],
-            severity=one.finding["severity"],
-            scope=one.scope.label,
-        ))
+    filed, over = file_findings(
+        target_root, found, bound.max_findings, dry_run=dry_run
+    )
+    dropped.extend(over)
 
     return Report(
         scopes=covered,

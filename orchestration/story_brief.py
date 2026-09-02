@@ -90,10 +90,14 @@ def identity(brief: dict) -> dict:
 def payload(brief: dict, scope: str = "") -> dict:
     """What is filed with a brief: the brief, with its paths made bare.
 
-    `scope` is where the brief came from where that is a part of the tree — the
-    Inspector's scope — and is empty for a brief nothing scoped, which is every
-    brief a developer files by hand. It is payload rather than identity, so a
-    brief about one file files under the same key whichever scope produced it.
+    `scope` is where the brief came from. That is a part of the tree for a
+    broad inspection, which passes its own scope; it is an account of what
+    produced the brief for a producer that is not reading a part of the tree at
+    all, such as an inspection of what one story changed; and it is empty for a
+    brief nothing scoped, which is every brief a developer files by hand. It is
+    payload rather than identity in every one of those cases, so a brief about
+    one file files under the same key whichever producer found it — which is
+    what stops one mode's findings and another's dividing the dedupe.
 
     Everything here is JSON-serializable by construction: it came out of a JSON
     document and the fields added to it are strings, which matters because the

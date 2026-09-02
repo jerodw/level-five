@@ -93,6 +93,21 @@ test_command: {test_command}
 # four scopes may spend four of these, and the report says how many invocations
 # it made. Delete the key and the allowance is 5.0.
 # inspect_max_cost_usd: 5.0
+# Whether a completed run inspects what its story changed, and how many files
+# that inspection may take into scope. Delete the key and no run inspects
+# anything: the whole mechanism is off, and a completed run leaves exactly what
+# it left before. Set it and a run that completes is inspected after its
+# completion commit and before its completion sweep, over the files its stages
+# recorded as changed plus the files git tracks directly beside them — one
+# level, so that duplication and parity gaps, which live in the file the story
+# did not change, are visible at all. Where the expansion exceeds this the
+# scope is trimmed to it, siblings before changed files, and the record says
+# what was trimmed. It bounds files and nothing else: what an invocation may
+# spend is inspect_max_cost_usd above and how many briefs it may file is
+# inspect_max_findings. The inspection may never block, delay or refuse a run,
+# so a value that is not a positive integer switches it off and is named in the
+# record rather than refusing anything.
+# inspect_after_story_max_files: 60
 # Where this repository's tests live, as a path prefix ending in a slash. It is
 # what the workflow's {{tests_dir}} token resolves to: the stage restricted from
 # creating tests is restricted here, and the stage that writes them is told to
