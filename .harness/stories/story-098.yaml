@@ -1,0 +1,246 @@
+story:
+  id: story-098
+  title: A brief describes work, not only a defect
+  description: |
+    schemas/story-brief.schema.json describes itself as "one defect the
+    Inspector found", and the shape follows from that premise: category is
+    an enum of ten defect kinds, severity asks how bad the consequence is
+    if this is left alone, and confidence asks how sure the writer is that
+    this is real. That was right while the Inspector was the only producer
+    of briefs, because everything it can find is a defect. It stops being
+    right the first time a human files one: leaving a feature that was
+    never built alone has no consequence, and a feature a developer just
+    asked for cannot be imagined.
+
+    This story widens the brief so it can describe work to be done. severity
+    is redefined as how much the work matters and confidence as how sure the
+    writer is of the judgement the brief makes, each given a defect reading
+    and a work-to-be-done reading at every level, so no existing defect brief
+    changes meaning. category gains feature and refactor, appended so the
+    existing ten keep their positions and every brief already filed keeps the
+    key it was filed under. Nothing is added to what an entry is filed under:
+    the identity stays kind, category, sorted bare paths and slug.
+
+    The discarded alternative was a kind discriminator — defect, feature,
+    refactor — with category scoped under it. It is the most expressive and
+    it is the one that cannot be had cheaply: inspection.py's payload builds
+    {**finding, "kind": KIND, ...}, so a brief-level kind would be silently
+    overwritten by the producer kind story-brief in both the payload and the
+    identity, and a brief whose kind changed between two writings would file
+    twice, which is the failure the identity exists against.
+
+    This ships a contract change with no behaviour change, and that is
+    expected: nothing emits a feature brief the day it lands. The Inspector
+    reads code and reports what is wrong with it, and widening what a brief
+    can say does not make it a proposer of features. Its ten categories and
+    its two mechanical rules stand unchanged.
+
+    Planned from the brief a-brief-is-not-only-a-defect.
+  workflow: story-workflow
+
+tasks:
+  - Reword schemas/story-brief.schema.json off the defect premise - the
+    schema's own description, and the descriptions of title, slug, body,
+    category, severity, confidence and paths - so each says what it means
+    for a defect and for work to be done. Leave the paragraph on bare
+    repository-relative paths and the paragraph on what an entry is filed
+    under exactly as they stand: both are mechanical and neither is affected.
+  - Append feature and refactor to the category enum, after the existing ten
+    and in that order, and describe each in terms that do not overlap an
+    existing entry - feature as behaviour the system does not have and
+    should, refactor as a change of structure carrying no change of
+    behaviour.
+  - Redefine severity in schemas/story-brief.schema.json as how much the
+    work matters, keeping the enum 1, 2, 3 and keeping 3 the highest, with a
+    defect reading and a work reading given for each level.
+  - Redefine confidence in schemas/story-brief.schema.json as how sure the
+    writer is of the judgement the brief makes, keeping the enum low, medium,
+    high and keeping it an axis separate from severity.
+  - Widen the brief restatement in prompts/assist.md - a brief may state a
+    defect, a feature or a refactor; the slug names the work rather than the
+    defect; severity and confidence in their new terms.
+  - Scope the opening of prompts/inspector.md's slug section to the
+    Inspector's own findings, since it reads as a claim about every brief.
+    Change nothing else in that prompt: its category list, its severity and
+    confidence guidance and its two mechanical rules are the Inspector's own
+    and remain correct for what the Inspector files.
+  - Add a regression module holding the widened contract, and register it in
+    tests/test_baseline_honesty.py's live-artifact table with why it resolves
+    the shipped schema and prompts rather than fixtures of its own.
+  - Record the widened contract in .harness/docs/ARCHITECTURE.md where it
+    describes the brief's shape.
+
+acceptance_criteria:
+  - A brief whose category is feature validates against
+    schemas/story-brief.schema.json.
+  - A brief whose category is refactor validates against
+    schemas/story-brief.schema.json.
+  - Every category the schema accepted before this story it still accepts,
+    and the ten of them appear in the enum in the order they appeared in
+    before, ahead of the entries this story appends.
+  - The severity enum is still the integers 1, 2 and 3 and the confidence
+    enum is still low, medium and high, so a brief written against the
+    previous schema validates unchanged.
+  - What identity() in orchestration/inspection.py returns for a brief is
+    still exactly kind, category, paths and slug, and filing one brief twice
+    with its title rewritten and its severity changed still produces one
+    entry rather than two.
+  - The severity description in schemas/story-brief.schema.json no longer
+    defines the field by what happens if the finding is left alone, and says
+    what each of the three levels means for work that is wanted as well as
+    for work that is wrong.
+  - The confidence description in schemas/story-brief.schema.json no longer
+    asks only whether the finding is real.
+  - No description in schemas/story-brief.schema.json calls the brief's
+    subject a defect in a way that excludes work to be done.
+  - prompts/assist.md states that a brief may describe a defect, a feature or
+    a refactor, and its restatement of severity and confidence agrees with
+    the schema's.
+  - prompts/inspector.md still lists its ten categories spelled as they are
+    now, still states the file:line rule and the rule that a finding may not
+    be severity 3 unless its confidence is high, and still derives the slug
+    by the rule it states.
+  - The sentence in prompts/inspector.md that introduces the slug is scoped
+    to the briefs the Inspector writes rather than stated of every brief.
+  - Neither prompt describes a brief field the schema does not declare, and
+    neither states an enum value the schema does not accept.
+  - A test module in the configured test location holds the criteria above
+    against the shipped schema and the two shipped prompts, and is named in
+    tests/test_baseline_honesty.py's live-artifact table with the reason it
+    reads them live.
+  - .harness/docs/ARCHITECTURE.md describes the widened category set and the
+    redefined severity and confidence, and describes no defect-only reading
+    of either field.
+  - The suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Rewrite the description of schemas/story-brief.schema.json's own
+      top-level object so it opens on what a brief is rather than on one
+      defect the Inspector found, keeping the two upper-case paragraphs -
+      the one on bare paths and the one on what an entry is filed under -
+      as they are, because neither depends on the premise being widened.
+    - Reword title, slug, body and paths in that schema so each names the
+      work the brief is about rather than the defect. body keeps the
+      file:line evidentiary standard, worded so that it binds a brief with
+      code to cite and does not assert a citation for work that does not
+      exist yet.
+    - Append feature and refactor to the category enum and reword the field
+      description from what kind of defect this is to what kind of work this
+      is, leaving the sentence explaining why category is part of the
+      identity in place.
+    - Rewrite severity as how much the work matters, giving each of 3, 2 and
+      1 a reading for a defect and a reading for work to be done, and keeping
+      the two sentences that say it is payload rather than identity and that
+      it is defined by neither effort nor confidence.
+    - Rewrite confidence as how sure the writer is of the judgement the brief
+      makes, keeping the sentence that says why it is an axis separate from
+      severity.
+    - Widen the paragraph in prompts/assist.md that restates what a brief
+      carries, so it names the three kinds of work a brief may describe and
+      restates severity and confidence in the schema's new terms.
+    - Scope prompts/inspector.md's slug sentence to the Inspector's own
+      briefs, and leave the rest of that prompt untouched.
+    - Write the regression module against the shipped schema and the two
+      shipped prompts, and add its entry to the live-artifact table in
+      tests/test_baseline_honesty.py.
+    - Record the widened contract in .harness/docs/ARCHITECTURE.md where the
+      brief's shape is described.
+  likely_file_changes:
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: The contract this story widens - the enum, the two redefined
+        fields, and the descriptions that carry the defect premise.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: Restates the brief's shape to the agent that will be the first
+        producer to file something that is not a defect; a widening that
+        reaches only the schema leaves this describing a shape that no longer
+        exists.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: Its slug section opens with a claim about every brief rather
+        than about the Inspector's own; scoped, and nothing else changed.
+    - file: tests/test_a_brief_is_not_only_a_defect.py
+      stage: tester
+      reason: The regression module for the widened contract - that both new
+        categories validate, that the old ten and both enums are unchanged,
+        that the identity is untouched, and that the three documents agree.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: Its live-artifact table names every module that resolves
+        shipped artifacts rather than fixtures, and the new module resolves
+        the schema and both prompts.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Describes the brief's shape and would otherwise state the
+        defect-only reading of category, severity and confidence.
+
+scope:
+  modify:
+    - schemas/story-brief.schema.json
+    - prompts/assist.md
+    - prompts/inspector.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/inspection.py
+    - orchestration/brief_fetch.py
+    - orchestration/outbox.py
+    - orchestration/filed_query.py
+    - schemas/inspection-findings.schema.json
+    - schemas/fetched-brief.schema.json
+    - schemas/story.schema.json
+    - scripts/
+    - workflows/
+
+verification_requirements:
+  - Confirm that a brief carrying category feature and a brief carrying
+    category refactor each validate against the shipped
+    schemas/story-brief.schema.json, and that a brief carrying a category
+    outside the enum is still refused naming the field.
+  - Confirm that the ten categories the schema accepted before this story
+    are all still accepted and still precede the appended entries, and that
+    the severity and confidence enums are unchanged in both membership and
+    type.
+  - Confirm that identity() in orchestration/inspection.py is unchanged and
+    still returns kind, category, paths and slug, and that two writings of
+    one brief differing in title and severity still file one entry.
+  - Confirm that no description in schemas/story-brief.schema.json defines
+    severity by the consequence of leaving the finding alone, and that none
+    defines confidence solely as whether the finding is real.
+  - Confirm that prompts/assist.md and schemas/story-brief.schema.json agree
+    on what category, severity and confidence mean, and that prompts/
+    inspector.md's ten categories, its file:line rule, its severity-3 rule
+    and its slug derivation rule are all still present and unchanged.
+  - Confirm the new test module is registered in
+    tests/test_baseline_honesty.py's live-artifact table and that the suite
+    passes with it.
+  - Confirm .harness/docs/ARCHITECTURE.md describes the widened contract and
+    contains no remaining defect-only statement of what these fields mean.
+
+constraints:
+  - The identity a brief is filed under does not change - not its members,
+    not their order, and not how any member is derived. A brief filed before
+    this story is filed under the same key after it.
+  - No new field is added to schemas/story-brief.schema.json, and no field
+    is removed. The required list is unchanged.
+  - The severity enum stays the integers 1, 2 and 3 with 3 the highest, so
+    the ordering orchestration/inspection.py applies when it caps an
+    inspection continues to mean what it meant.
+  - The Inspector's behaviour does not change. It reads code and reports what
+    is wrong with it, and this story does not make it a proposer of features:
+    the categories it is told to use, its severity and confidence guidance
+    and its two mechanical rules stand.
+  - No producer of briefs is added and no consumer is taught to read the new
+    categories. This is a contract change with no behaviour change.
+  - The paragraph in schemas/story-brief.schema.json requiring bare
+    repository-relative paths, and the paragraph stating what an entry is
+    filed under, are preserved in substance.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-01 19:08:31
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
