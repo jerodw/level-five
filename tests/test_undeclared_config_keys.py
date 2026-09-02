@@ -904,6 +904,13 @@ def test_the_scan_reports_only_the_two_legitimate_mentions_under_orchestration()
     assert {path for path, _ in under_orchestration} == {
         "orchestration/story_parser.py",
         "orchestration/story_coordinator.py",
+        # An entry point rather than a module read only as one: it is invoked
+        # directly, so it names the interpreter it runs under to the kernel,
+        # exactly as every entry point under scripts/ does. It is a permanent
+        # mention like theirs and not a tie, which the comparison below holds
+        # by deriving what it expects from the permanent list rather than from
+        # this set.
+        "orchestration/brief_filing.py",
     }
     assert under_orchestration == {(path, line.strip())
                                    for path, line in expected}
@@ -922,7 +929,7 @@ def test_the_same_scan_reports_a_tie_planted_under_orchestration(tmp_path):
     assert [f.path for f in findings] == ["orchestration/planted.py"]
 
 
-def test_permanent_mentions_holds_ten_and_none_is_harness_config():
+def test_permanent_mentions_holds_eleven_and_none_is_harness_config():
     """Read off the list the other module owns, because this story's edit to
     it is one of its acceptance criteria.
 
@@ -931,11 +938,14 @@ def test_permanent_mentions_holds_ten_and_none_is_harness_config():
     meant to go red when the list grows, so that an entry joins a burn-down of
     known ties deliberately rather than in passing — the Inspector's own
     `scripts/l5-inspect` is the growth that last moved it, and story-089's
-    `scripts/l5-sync` moved it before that. Both are the same growth: an entry
-    point this harness ships is a Python program and says so to the kernel.
+    `scripts/l5-sync` moved it before that, and the brief-filing entry point an
+    assist session invokes moved it last. All three are the same growth: an
+    entry point this harness ships is a Python program and says so to the
+    kernel. The last of them sits under `orchestration/` rather than under
+    `scripts/`, which changes where it is and not what it is.
     """
     mentions = stack_module.PERMANENT_MENTIONS
-    assert len(mentions) == 10, sorted(mentions)
+    assert len(mentions) == 11, sorted(mentions)
     assert not [path for path, _ in mentions
                 if path == "orchestration/harness_config.py"]
     # The control for that absence: the same comprehension over the same list

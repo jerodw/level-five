@@ -24,21 +24,15 @@ key — so nothing here is named after one, nothing is reported as filed on one,
 and the report says an item was dropped. That is the whole of what a producer
 owes the queue, and this module owes it because it is the first one.
 
-**The identity carries the mechanically stable parts of a finding and never its
-prose.** Kind, category, sorted bare paths and slug; not the title, not the
-body, not the severity, not the confidence. Those are the parts a model
-rephrases between runs, and an identity that drifts is a duplicate filed on
-every inspection — which, since a landed entry drops its payload, is a
-duplicate nothing local can even notice. The outbox computes the key from that
-identity: this module hashes nothing, derives no digest of its own, and reaches
-the queue only through `outbox.enqueue`.
-
-**The paths a brief carries are bare repository-relative paths.** The sync
-command writes one searchable marker per entry of the payload's paths and the
-query command searches for the marker of a bare path, so a path carrying a line
-number would be filed under a marker no scoped query ever asks for, and the
-dedupe this module exists to make possible would silently never match. Line
-numbers are the evidentiary standard and they live in the body.
+**What a brief is filed under is `orchestration/story_brief.py`'s and not this
+module's.** The kind, the bare-path rule, the identity and the payload live
+there because there are two producers of briefs — this one and an assist
+session filing one a developer asked for — and an identity derived twice is a
+duplicate filed on every inspection. The names below are that module's, reached
+through here so every existing reader of `inspection.identity` goes on reading
+the same values. The outbox computes the key from that identity: this module
+hashes nothing, derives no digest of its own, and reaches the queue only
+through `outbox.enqueue`.
 
 **Dedupe is two sources and neither waits on the other.** The filed query asks a
 tracker what is already filed against a scope's paths. The local outbox queue is
@@ -85,12 +79,13 @@ import filed_query
 import harness_config
 import outbox
 import schema_validator
+import story_brief
 import workflow_selection
 
-#: What this producer files. Part of every identity, so an entry this module
-#: wrote is distinguishable from any other producer's without reading its
-#: payload — which a landed entry no longer has.
-KIND = "story-brief"
+#: What this producer files, and what the other one files: one derivation
+#: beneath both, so a brief a developer filed by hand and a finding this module
+#: reported land on one key.
+KIND = story_brief.KIND
 
 #: The parts of a target's own source an inspection covers when no scope is
 #: named on the command line.
@@ -308,71 +303,24 @@ def scope_paths(target_root: Path, scope: Scope,
 # --------------------------------------------------------------------------
 
 
-def bare_path(path: str) -> str:
-    """One path with any line-level suffix taken off it.
-
-    `orchestration/inspection.py:42` and `…:42:7` both become the file. The
-    reason is mechanical: the reference sync command writes one searchable
-    marker per path a payload carries and the reference query command searches
-    for the marker of a bare path, so a path filed with a line number is
-    invisible to every scoped query that follows and the dedupe this module
-    exists for would silently never match. The line is not lost — the body is
-    where file:line evidence belongs and where a reader looks for it.
-    """
-    head = path.strip()
-    while True:
-        stem, separator, tail = head.rpartition(":")
-        if not separator or not tail.isdigit() or not stem:
-            return head
-        head = stem
-
-
-def bare_paths(finding: dict) -> tuple[str, ...]:
-    """The paths a finding is about: bare, deduplicated and sorted.
-
-    Sorted and deduplicated because they are part of the identity, and an
-    identity that depended on the order a model happened to write two paths in
-    would file one defect twice.
-    """
-    declared = finding.get("paths") or []
-    return tuple(sorted({
-        bare_path(one) for one in declared
-        if isinstance(one, str) and one.strip()
-    }))
-
-
-def identity(finding: dict) -> dict:
-    """What a brief is filed under, and nothing else.
-
-    The kind, the category, the sorted bare paths and the slug. No title, no
-    body, no severity, no confidence and no line number: those are what a
-    model rephrases and re-rates between runs, and an identity carrying them
-    is an identity that drifts, which is a duplicate filed on every
-    inspection. Nothing is hashed here — `outbox.identity_key` is the only
-    derivation and `outbox.enqueue` is the only way this module reaches the
-    queue.
-    """
-    return {
-        "kind": KIND,
-        "category": finding["category"],
-        "paths": list(bare_paths(finding)),
-        "slug": finding["slug"],
-    }
+#: The bare-path rule and the identity, reached through here so that every
+#: reader of `inspection.bare_path`, `inspection.bare_paths` and
+#: `inspection.identity` goes on reading exactly what it read before, while
+#: there is one derivation beneath them rather than one per producer. The
+#: reasoning behind each moved with it and is in `story_brief`'s own docstring.
+bare_path = story_brief.bare_path
+bare_paths = story_brief.bare_paths
+identity = story_brief.identity
 
 
 def payload(finding: dict, scope: Scope) -> dict:
     """What is filed with a brief: the finding, with its paths made bare.
 
-    Everything here is JSON-serializable by construction — it came out of a
-    JSON document, and the two fields added to it are strings — because the
-    outbox coerces nothing and a value it cannot render is an item it drops.
+    The scope a finding came from is this producer's to supply — a brief
+    nothing scoped carries an empty one — so this is the one of the four that
+    is reached with an argument of this module's rather than re-exported whole.
     """
-    return {
-        **finding,
-        "kind": KIND,
-        "scope": scope.path,
-        "paths": list(bare_paths(finding)),
-    }
+    return story_brief.payload(finding, scope.path)
 
 
 # --------------------------------------------------------------------------

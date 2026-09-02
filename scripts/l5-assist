@@ -2,12 +2,28 @@
 """Launch the interactive assist agent: a copilot for the harness itself.
 
 Usage: l5-assist ["<question>"]
+
+The session is given the skills the harness ships, by loading the plugin
+directory beside this script for the session rather than installing anything
+into the target repository. That is what makes a skill available in an assist
+session started in any target: the harness carries it, the session loads it,
+and the target is left exactly as it was.
 """
 import os
 import sys
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
+
+#: The skills the harness ships to the sessions it starts. Loaded for the
+#: session with --plugin-dir, so nothing is installed into the target and a
+#: session started anywhere has them.
+PLUGIN_DIR = HARNESS_ROOT / "plugin"
+
+#: Where the session finds the harness it was started from, so a skill can
+#: name an entry point without a path relative to wherever the developer
+#: happened to be standing.
+HARNESS_ROOT_VARIABLE = "L5_HARNESS_ROOT"
 
 
 def main() -> None:
@@ -16,11 +32,14 @@ def main() -> None:
         "claude",
         "--permission-mode",
         "acceptEdits",
+        "--plugin-dir",
+        str(PLUGIN_DIR),
         "--append-system-prompt",
         assist_prompt,
     ]
     if len(sys.argv) > 1:
         args.append(" ".join(sys.argv[1:]))
+    os.environ[HARNESS_ROOT_VARIABLE] = str(HARNESS_ROOT)
     os.execvp("claude", args)
 
 

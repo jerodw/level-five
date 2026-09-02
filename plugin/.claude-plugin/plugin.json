@@ -1,0 +1,8 @@
+{
+  "name": "l5-harness",
+  "description": "Skills the l5 harness ships to the sessions it starts, loaded for the session rather than installed into a target repository.",
+  "version": "1.0.0",
+  "author": {
+    "name": "l5 harness"
+  }
+}
