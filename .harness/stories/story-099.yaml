@@ -1,0 +1,189 @@
+story:
+  id: story-099
+  title: The assist agent files a brief
+  description: |
+    prompts/assist.md knows what a brief is. story-094 taught it the whole
+    shape and named it as one of the harness's two producers of briefs, and
+    story-098 widened what a brief may state. What it does not know is where a
+    brief goes: it is told to express a harness improvement as a story brief
+    and then stops, so the brief exists as text in a terminal and reaches
+    nothing.
+
+    This story lets the assist agent file the brief it wrote, into the outbox,
+    exactly as the Inspector's are filed. The developer says what they want a
+    brief for, the agent writes one, shows it to them, and files it on their
+    word.
+
+    It is the outbox rather than a directory of files, and that is the whole
+    design. A second producer path writing files would have to rebuild
+    everything the outbox already provides beside it — the dedupe identity, the
+    idempotency key, the sync transport, the landed/pending/failed record — and
+    dedupe would never see those briefs, so the Inspector would go on filing
+    findings a developer had already filed by hand. Enqueueing costs nothing
+    extra and makes an assist-written brief and an Inspector-written one
+    indistinguishable downstream, which is right, because they are the same
+    artifact differing only in what noticed the work. A target that wants
+    briefs as local files gets them by configuring a files-in-source-control
+    sync_command and filed_query_command pair, which the filing design already
+    names as a first-class target rather than a workaround.
+
+    This widens what the assist agent may do, and the widening is worth stating
+    plainly rather than slipping in. Today that agent reads and explains, and
+    grounds every explanation in run directories, stage artifacts and the
+    coordinator's own records. This makes it write — not to the repository, but
+    to a tracker outside it, through a command the harness invokes. The case
+    for it is that a brief is inert: nothing executes one, nothing is
+    authorized by one, and a brief nobody wants costs a human reading it and
+    deciding no. The producer discipline the outbox already imposes is what
+    keeps an unwanted brief from being filed repeatedly.
+
+    The seam is a skill rather than a command a developer types, because the
+    filing is part of a conversation and not an operation somebody invokes from
+    a shell. The harness ships a plugin directory carrying a file-a-brief
+    skill, scripts/l5-assist loads it for the session with --plugin-dir, and
+    the skill is therefore available in an assist session run in any target
+    with nothing installed into that target. The judgement half — the slug
+    rule, the bare paths, showing the developer the brief before it is filed —
+    is the skill's; the deterministic half is a module, so a schema check, a
+    workflow check, an identity and an enqueue are Python that the suite drives
+    rather than prose a model is trusted to follow.
+
+    What a brief is filed under moves out of orchestration/inspection.py into a
+    module of its own, because there are now two producers and an identity
+    derived twice is a duplicate filed on every inspection. The names
+    inspection already exposes stay reachable, so nothing that reads them
+    changes; what changes is that there is one derivation beneath them.
+
+    Nothing here plans. A filed brief becomes a story through l5-plan's
+    interview and the mandate is conferred there, exactly as story-096 leaves
+    it. Nothing here marks a brief planned or changes its status in the
+    tracker, nothing changes what the Inspector looks for, and the transport,
+    the sweep and the queue are unchanged — this story is a caller of them and
+    widens none of them.
+  workflow: story-workflow
+
+tasks:
+  - Extract what a brief is filed under — the kind, the bare-path rule, the identity and the payload — from orchestration/inspection.py into orchestration/story_brief.py, and have inspection derive them from there, leaving the names inspection already exposes reachable so nothing that reads them changes.
+  - Add orchestration/brief_filing.py, the deterministic filing of one brief - validating it against schemas/story-brief.schema.json, refusing a workflow the harness does not define, deriving the identity through story_brief, asking the filed query and the local outbox index what is already filed, and calling outbox.enqueue once for a brief that survives.
+  - Give brief_filing an entry point an assist session invokes on a brief document, which holds no decision of its own - every judgement is the module's and every word a developer reads is the entry point's.
+  - Ship a plugin directory carrying a file-a-brief skill, and load it from scripts/l5-assist with --plugin-dir so the skill reaches an assist session in any target with nothing installed into that target.
+  - Write the skill's filing procedure - derive the slug by the rule the harness states, carry bare repository-relative paths with line-level evidence in the body, show the developer the brief and file on their word, invoke the entry point, and report what it said including a drop as a drop.
+  - Point prompts/assist.md at the skill for filing, leaving the brief shape it already carries where it is.
+  - Cover the shipped skill prose by the harness-source scan, so prose an agent is given in a target repository is held to the same two rules prompts/ is.
+
+acceptance_criteria:
+  - A brief that does not satisfy schemas/story-brief.schema.json is not enqueued, and what the developer is told names the field that failed rather than the shape.
+  - A brief naming a workflow no definition under workflows/ names is not enqueued, and the refusal names the workflows the harness defines, read from the definitions the harness holds rather than from a restated list.
+  - The key a brief is filed under is outbox.identity_key over the identity story_brief.identity returns; the filing path hashes nothing and derives no digest of its own.
+  - A brief and an Inspector finding carrying the same kind, category, bare paths and slug produce the same key, and a test demonstrates it by deriving both through the one module.
+  - A path carrying a line number is made bare before the identity is derived and before the payload is written, so what is filed carries the file and the body carries the line.
+  - A brief the filed query reported is reported to the developer as already filed and is not enqueued; one the local queue holds pending is reported as already queued; one the local queue holds landed is reported as already filed by this harness; and the three are distinguishable in what the developer reads.
+  - A filed query that could not answer is reported as dedupe not having run, and the brief is filed anyway rather than being refused or silently treated as new.
+  - An outbox.enqueue that answers with the empty string is reported as an item that was dropped, and is never reported as a key.
+  - The entry point exits non-zero when nothing was filed and zero when a brief was enqueued, so an assist session can tell the two apart without reading prose.
+  - claude plugin validate --strict passes over the shipped plugin directory, and a test runs it.
+  - The skill states the slug rule, that paths are bare repository-relative paths with file:line evidence in the body, and that the developer is shown the brief and it is filed on their word.
+  - scripts/l5-assist loads the shipped plugin directory for the session, so an assist session started in any target has the skill without anything being installed into that target.
+  - prompts/assist.md still carries the brief shape story-094 and story-098 put there, and now names the skill as where filing happens.
+  - No path this story adds writes anything beneath .harness/stories/, stamps a mandate, or changes the status of anything already filed.
+  - The names orchestration/inspection.py exposed before this story still resolve to the same values afterwards.
+
+technical_plan:
+  implementation_steps:
+    - Create orchestration/story_brief.py holding the brief kind, bare_path, bare_paths, identity and payload, with the reasoning that currently sits beside them in inspection.py moved with them, and state in its docstring that it exists because there are two producers.
+    - Rewrite inspection.py's uses to go through story_brief while keeping the names it exposes reachable, so tests and any other reader of inspection.identity are unaffected.
+    - Write orchestration/brief_filing.py in the shape brief_fetch already takes for a terminal caller - returning what happened rather than printing it - covering the schema check, the workflow check, the identity, the filed query, the local outbox index, the single enqueue, and a result naming which of those decided the outcome.
+    - Add the entry point to brief_filing, reading one brief document, printing the outcome and exiting on whether anything was filed.
+    - Add the plugin directory - a .claude-plugin/plugin.json naming and attributing it, and a skills/file-a-brief/SKILL.md carrying the filing procedure - and pass it to claude from scripts/l5-assist with --plugin-dir.
+    - Add a sentence to prompts/assist.md pointing at the skill, without moving the brief shape out of it.
+    - Add the plugin directory to the harness-source scan's directories so the skill prose is held to the no-target-stack and target-layout rules.
+  likely_file_changes:
+    - file: orchestration/story_brief.py
+      stage: implementer
+      reason: New. What a brief is filed under, defined once for both producers.
+    - file: orchestration/brief_filing.py
+      stage: implementer
+      reason: New. The deterministic filing of one brief, and the entry point an assist session invokes.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: Derives the identity and the payload from story_brief instead of holding them, keeping the names it exposes reachable.
+    - file: orchestration/harness_source.py
+      stage: implementer
+      reason: The shipped skill prose joins the directories the two source rules scan.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: Points at the skill for filing; the brief shape stays where it is.
+    - file: scripts/l5-assist
+      stage: implementer
+      reason: Loads the shipped plugin directory for the session so the skill is available in any target.
+    - file: plugin/.claude-plugin/plugin.json
+      stage: implementer
+      reason: New. The manifest that makes the shipped directory loadable as a plugin.
+    - file: plugin/skills/file-a-brief/SKILL.md
+      stage: implementer
+      reason: New. The filing procedure the assist agent follows, and the invocation of the entry point.
+    - file: tests/test_the_assist_agent_files_a_brief.py
+      stage: tester
+      reason: New. The filing module against a fake transport and a fixture repository, the entry point's wording and exit status, the shared identity, and the shipped plugin's validity.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the second producer of briefs, the skill seam and the module that owns the brief identity.
+    - file: README.md
+      stage: documenter
+      reason: Records that an assist session can file a brief, and the story in the story table.
+
+scope:
+  modify:
+    - orchestration/story_brief.py
+    - orchestration/brief_filing.py
+    - orchestration/inspection.py
+    - orchestration/harness_source.py
+    - prompts/assist.md
+    - scripts/l5-assist
+    - plugin/
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - orchestration/brief_fetch.py
+    - orchestration/story_coordinator.py
+    - orchestration/plan_mandate.py
+    - prompts/inspector.md
+    - schemas/story-brief.schema.json
+    - schemas/outbox-entry.schema.json
+    - schemas/filed-items.schema.json
+    - scripts/l5-plan
+    - scripts/l5-inspect
+    - scripts/l5-sync
+    - scripts/l5-init
+    - templates/
+    - workflows/
+
+verification_requirements:
+  - The full suite passes, including every test the Inspector already had, so the extraction is demonstrably behaviour-preserving.
+  - A brief filed through the new path and a finding filed by the Inspector with the same kind, category, bare paths and slug are shown to land on one key.
+  - Every way of not filing - a malformed brief, an undefined workflow, an already-filed brief, an already-queued brief, and an enqueue that dropped the item - is shown to be reported distinctly and to enqueue nothing.
+  - A filed query that cannot answer is shown to cost dedupe and nothing else - the brief is still filed and the developer is told dedupe did not run.
+  - The shipped plugin directory is shown to validate, and scripts/l5-assist is shown to pass it to claude.
+  - No path added by this story is shown to write beneath .harness/stories/, stamp a mandate, or reach a transport other than through outbox.enqueue.
+
+constraints:
+  - The outbox, the sweep, the command transport and the filed query are callers' business here: this story calls them and changes none of them.
+  - Nothing this story adds plans, runs, confers a mandate, or marks a brief as planned or otherwise changes what is already filed.
+  - The Inspector's judgement, prompt, scope resolution, cap and dedupe reporting are unchanged.
+  - The extraction preserves the names orchestration/inspection.py already exposes, so every existing reader of them goes on reading them.
+  - A failure to file never raises out of the entry point: every failure is reported and turned into an exit status.
+  - The filing path derives no idempotency key of its own; outbox.identity_key is the only derivation and outbox.enqueue is the only way it reaches the queue.
+  - The acceptable workflow names are the definitions the harness holds, so a third workflow becomes filable by shipping a definition and with no edit to this path.
+  - The shipped skill prose carries no target-stack literal and no target-layout path, as the prompts it sits beside do not.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-01 20:43:42
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
