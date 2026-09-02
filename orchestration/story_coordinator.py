@@ -815,14 +815,20 @@ def history_record(
     history, which append_event has loaded to number the entry it is
     appending. Everything else comes off the entry, and a field the entry does
     not carry is omitted rather than written null — the rule the run's own
-    structured history already follows.
+    structured history already follows. A caller with no work item to name is
+    held to that same rule: an empty story id is not set at all, so the field is
+    absent rather than present and empty. A broad-mode inspection is such a
+    caller — it is not made by a run and has no story to name — and an empty
+    string there would be a value every reader of the log would have to know to
+    discount.
     """
     kinds = declaration["properties"][HISTORY_EVENT_PROPERTY]["enum"]
     kind = entry.get("event")
     if kind not in kinds:
         return None
     values = dict(entry)
-    values["story_id"] = story_id
+    if story_id:
+        values["story_id"] = story_id
     values["status"] = kind.removeprefix("story-")
     values["retry_count"] = sum(
         1 for recorded in history if recorded.get("retry_decision") == "retry"
@@ -987,6 +993,10 @@ def append_event(
     findings: int | None = None,
     filed: int | None = None,
     dropped: int | None = None,
+    mode: str | None = None,
+    cost_usd: float | None = None,
+    scope_files: int | None = None,
+    invocations: int | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -1035,6 +1045,14 @@ def append_event(
         "findings": findings,
         "filed": filed,
         "dropped": dropped,
+        # What that inspection was and what it cost, on exactly the terms the
+        # three counts above are on: omitted when absent, and absent is how an
+        # invocation that reported no cost is recorded — a zero there would be
+        # indistinguishable from an inspection that genuinely cost nothing.
+        "mode": mode,
+        "cost_usd": cost_usd,
+        "scope_files": scope_files,
+        "invocations": invocations,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)

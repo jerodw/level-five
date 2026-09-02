@@ -93,6 +93,23 @@
       "dropped": {
         "type": "integer",
         "description": "How many were dropped, for every reason together: already filed by either dedupe source, already queued, malformed, naming a workflow the harness does not define, past the brief cap, or lost by the queue. Which way each went is in the entry's own message, where each reason is named with how many went that way. Absent on every entry that is not an inspection."
+      },
+      "mode": {
+        "type": "string",
+        "description": "Which inspection this entry records: the narrow one a completed run makes of what its story changed. Absent on every entry that is not an inspection. The broad mode an l5-inspect invocation runs in appears in the cross-run inspection log and never here, because it is not made by a run and has no run history to appear in.",
+        "enum": ["broad", "narrow"]
+      },
+      "cost_usd": {
+        "type": "number",
+        "description": "What the inspection's invocation reported spending, in US dollars, exactly as the runner's own result reported it. Carried and never computed: nothing re-derives it by reading an agent log back. Absent where the invocation reported no cost, rather than written as zero, because a zero is what an inspection that genuinely cost nothing would carry and conflating the two corrupts any average taken later. Absent on every entry that is not an inspection."
+      },
+      "scope_files": {
+        "type": "integer",
+        "description": "How many files the inspection had in scope. What a cost means depends on how much was read, so the two are recorded together. Absent on every entry that is not an inspection."
+      },
+      "invocations": {
+        "type": "integer",
+        "description": "How many agent invocations the recorded cost covers. Absent on every entry that is not an inspection, and zero on one recording an inspection that was not made."
       }
     }
   }

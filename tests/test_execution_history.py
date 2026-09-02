@@ -635,11 +635,16 @@ def test_the_schema_uses_only_the_keywords_the_validator_supports():
 #: entry here fails, and an entry naming a field the schema no longer declares
 #: fails too. The three counts at the end are an inspection's, present on an
 #: entry that is one and absent from every entry that is not — which is exactly
-#: what "optional" means here.
+#: what "optional" means here. The four beside them are an inspection's too:
+#: which mode it was, what it cost, how large its scope was and how many
+#: invocations that cost covers. `cost_usd` is absent where the invocation
+#: reported no cost rather than written as zero, which is the same reading of
+#: "optional" one step sharper — absent means the harness was told no figure.
 OPTIONAL_FIELDS = {
     "stage", "artifacts", "duration_seconds", "verifier_outcome",
     "retry_decision", "retry_reason", "retry_category", "retry_stage",
     "findings", "filed", "dropped",
+    "mode", "cost_usd", "scope_files", "invocations",
 }
 
 
