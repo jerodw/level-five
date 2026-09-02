@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "story-brief",
-  "description": "One defect the Inspector found, written as a pre-planning artifact. A BRIEF IS NOT A STORY AND NOTHING EXECUTES ONE: it carries intent, evidence and a severity, it is not an approved plan, and it never becomes one on its own. A human plans it into a story artifact through l5-plan's interview, and that interview is where the mandate is conferred — so there is nothing here to refuse, because the coordinator has no path that runs a brief. It stands alone rather than being nested inside the inspector's own envelope because it is two things at once: the payload an outbox entry carries, and the document a later story fetches one of and validates on its own. THE PATHS A BRIEF CARRIES ARE BARE REPOSITORY-RELATIVE PATHS, and the reason is mechanical rather than stylistic: the sync command writes one searchable marker per entry of the payload's paths, and the query command searches for the marker of a bare repository-relative path, so a path carrying a line number would be filed under a marker no scoped query ever asks for and the dedupe this whole mechanism exists for would silently never match. The file:line citations that are the evidentiary standard live in the body, where they are read by a person and not searched for by a script. WHAT AN ENTRY IS FILED UNDER is the kind, the category, the sorted paths and the slug, and title, body, severity and confidence are deliberately outside it: they are the parts a model rephrases between runs, and an identity that drifts is a duplicate filed on every inspection.",
+  "description": "One piece of work somebody wants done, written as a pre-planning artifact: a defect the Inspector found, a feature the system does not have, or a refactor that would change its structure and not its behaviour. The Inspector is one producer of these and everything it can find is a defect, but the shape is not the Inspector's — a human filing a brief for work that was never built is filing the same document. A BRIEF IS NOT A STORY AND NOTHING EXECUTES ONE: it carries intent, evidence and a severity, it is not an approved plan, and it never becomes one on its own. A human plans it into a story artifact through l5-plan's interview, and that interview is where the mandate is conferred — so there is nothing here to refuse, because the coordinator has no path that runs a brief. It stands alone rather than being nested inside the inspector's own envelope because it is two things at once: the payload an outbox entry carries, and the document a later story fetches one of and validates on its own. THE PATHS A BRIEF CARRIES ARE BARE REPOSITORY-RELATIVE PATHS, and the reason is mechanical rather than stylistic: the sync command writes one searchable marker per entry of the payload's paths, and the query command searches for the marker of a bare repository-relative path, so a path carrying a line number would be filed under a marker no scoped query ever asks for and the dedupe this whole mechanism exists for would silently never match. The file:line citations that are the evidentiary standard live in the body, where they are read by a person and not searched for by a script. WHAT AN ENTRY IS FILED UNDER is the kind, the category, the sorted paths and the slug, and title, body, severity and confidence are deliberately outside it: they are the parts a model rephrases between runs, and an identity that drifts is a duplicate filed on every inspection.",
   "type": "object",
   "required": [
     "title",
@@ -16,19 +16,19 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "What the defect is, in one line, for a human scanning a tracker. Prose, and deliberately not part of what the brief is filed under: two inspections of one defect will phrase it differently, and filing on the phrasing would file it twice."
+      "description": "What the work is, in one line, for a human scanning a tracker: what is wrong where the brief states a defect, what should exist where it states work to be done. Prose, and deliberately not part of what the brief is filed under: two writings of one brief will phrase it differently, and filing on the phrasing would file it twice."
     },
     "slug": {
       "type": "string",
-      "description": "A short kebab-case name for the defect, derived by the rule prompts/inspector.md states so that two inspections of the same defect derive the same one. It is the part of the identity that distinguishes two findings of the same category against the same paths, so a brief without one has no stable name to be filed under and is dropped."
+      "description": "A short kebab-case name for the work itself — the defect where the brief states one, the behaviour that is missing or the structure to be changed where it states work to be done — naming neither the fix nor the file. The Inspector derives its own by the rule prompts/inspector.md states, so that two inspections of one defect derive the same one; a brief written by hand is under the same obligation for the same reason. It is the part of the identity that distinguishes two briefs of the same category against the same paths, so a brief without one has no stable name to be filed under and is dropped."
     },
     "body": {
       "type": "string",
-      "description": "The case for the finding: what is wrong, the evidence for it cited as file:line, what the consequence is, and what would resolve it. This is where line-level evidence lives, because paths above may not carry it."
+      "description": "The case for the work: what is wrong or what is wanted, why it matters, and what would resolve it. Where the brief is about code that exists, the evidence for it is cited as file:line, and this is where that line-level evidence lives, because the paths above may not carry it. Work that does not exist yet has no line to cite, and a citation invented for it would be evidence of nothing; the case is then made from what the system does instead."
     },
     "category": {
       "type": "string",
-      "description": "What kind of defect this is. Part of the identity, because it is a classification the Inspector makes from the code rather than a phrasing it chooses.",
+      "description": "What kind of work this is. Part of the identity, because it is a classification made from the code rather than a phrasing somebody chooses. The first ten are the kinds of defect the Inspector reports and are spelled and ordered as it has always spelled and ordered them, so a brief filed before feature and refactor existed keeps the key it was filed under. feature is behaviour the system does not have and should: nothing is wrong with what is there, and what is missing was never built. refactor is a change of structure that carries no change of behaviour: everything the system does it goes on doing, and what moves is how it is arranged. Neither overlaps the ten above — a defect is the system failing to do what it already claims to do, which is what separates it from behaviour never claimed and from a rearrangement claiming nothing new.",
       "enum": [
         "standards-drift",
         "docs-drift",
@@ -39,17 +39,19 @@
         "complexity",
         "coverage-gap",
         "security",
-        "performance"
+        "performance",
+        "feature",
+        "refactor"
       ]
     },
     "severity": {
       "type": "integer",
-      "description": "How bad the consequence is if this is left alone: 3 is a defect that produces wrong behaviour or silently disables a check, 2 is one that costs correctness of understanding or will produce a defect under a foreseeable change, 1 is one worth fixing when the code is next open. Defined by consequence and not by effort or by confidence, and a finding may not be 3 unless its confidence is high. It is payload rather than identity, because it is a judgement a second inspection may rate differently about one defect.",
+      "description": "How much this work matters, with 3 the highest. 3 is a defect that produces wrong behaviour or silently disables a check, or work the system is being held back by — what is missing or misarranged is costing something now. 2 is a defect that costs correctness of understanding or will produce one under a foreseeable change, or work that would pay for itself the next time this area is touched. 1 is a defect worth fixing when the code is next open, or work that would be an improvement and is not waiting on anything. It is defined by neither effort nor confidence, and a brief may not be 3 unless its confidence is high. It is payload rather than identity, because it is a judgement a second writing may rate differently about one piece of work.",
       "enum": [1, 2, 3]
     },
     "confidence": {
       "type": "string",
-      "description": "How sure the Inspector is that this is real, as an axis separate from severity: a high-consequence guess and a certain triviality are different things and collapsing them into one number loses both.",
+      "description": "How sure the writer is of the judgement this brief makes — that the defect it reports is real, or that the work it asks for is the work that is wanted — as an axis separate from severity: a judgement that matters greatly and is a guess, and one that is certain and matters little, are different things, and collapsing them into one number loses both.",
       "enum": ["low", "medium", "high"]
     },
     "effort": {
@@ -63,7 +65,7 @@
     },
     "paths": {
       "type": "array",
-      "description": "The repository-relative paths this finding is about, bare and carrying no line number, no column and no selector — see the reason in this schema's own description. Optional, because a finding about the absence of something has no path to name; a brief carrying none is filed under an identity with no paths, and no scoped query will find it.",
+      "description": "The repository-relative paths this work is about, bare and carrying no line number, no column and no selector — see the reason in this schema's own description. Optional, because work about the absence of something has no path to name, which is the ordinary case for a feature that was never built; a brief carrying none is filed under an identity with no paths, and no scoped query will find it.",
       "items": { "type": "string" }
     },
     "not_in_scope": {

@@ -149,8 +149,8 @@ planning the brief can overrule you, and can only overrule a choice whose
 reasoning they can see.
 
 [The slug, and what a brief is filed under]
-Each brief carries a `slug`: a short kebab-case name for the defect
-itself. Derive it by this rule, so that two inspections of one defect
+Each brief you write carries a `slug`: a short kebab-case name for the
+defect itself. Derive it by this rule, so that two inspections of one defect
 derive the same slug and the second does not file a duplicate.
 
 - Name the defect, not the fix and not the file. `duplicated-blocked-path-
