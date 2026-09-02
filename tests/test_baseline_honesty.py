@@ -2210,6 +2210,21 @@ def live_artifact_reading_modules() -> list[str]:
 #: It is asserted equal to what the scan reports in both directions, so it
 #: cannot grow silently and cannot keep a name whose module was converted.
 DECLARED_LIVE_ARTIFACT_READERS = {
+    "test_a_brief_is_not_only_a_defect.py":
+        "it builds no fixture because it has none to build: what it resolves "
+        "live are the three documents that are its subject — "
+        "schemas/story-brief.schema.json, whose widened category enum, "
+        "redefined severity and confidence and unchanged identity, field list "
+        "and required list are what the criteria are about, and "
+        "prompts/inspector.md and prompts/assist.md, because the claim is that "
+        "this repository's own two producers of briefs restate that contract "
+        "as the schema states it. A fixture schema would say only what the "
+        "module had just written into it, and a fixture prompt would say "
+        "nothing about what either producer is told. The absences it asserts "
+        "of those documents are controlled against the descriptions and the "
+        "sentence this story replaced, and against copies of the shipped "
+        "prompts with the violation planted in them, so no assertion here "
+        "depends on the live text staying silent for a reason nobody checked",
     "test_a_stage_cannot_edit_its_own_story.py":
         "its runs are driven against a workflow it builds and under execution "
         "rules of its own, because what a run does with a record naming a "

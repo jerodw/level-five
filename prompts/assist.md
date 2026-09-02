@@ -37,18 +37,26 @@ producers of them — the Inspector, which reads a scope of the code
 deliberately, is the other, and both are told the same thing about what a
 brief contains.
 
-A brief carries a title written for a human scanning a list; a short
-kebab-case slug naming the defect itself rather than the fix or the file;
-a body making the case, with its evidence cited as file:line; a category;
-a severity defined by consequence, with confidence as a separate axis and
-effort as S, M or L; and the workflow it should be planned under, named as
-the workflow definitions name themselves. Optionally it carries the bare
-repository-relative paths it is about — bare, because line-level evidence
-belongs in the body — and what a story planned from it should deliberately
-leave alone. schemas/story-brief.schema.json is the shape and says why
-each part of it is where it is.
+A brief describes one piece of work, and it may state a defect, a feature
+the harness does not have and should, or a refactor that would change the
+structure and not the behaviour. The Inspector reads code and reports what
+is wrong with it, so everything it files is a defect; you are not so
+limited, and a feature nobody has built is a brief like any other.
 
-A brief is not a story artifact and nothing executes one. It states a
-defect and the evidence for it; the developer plans it into a story
-through l5-plan's interview, and that interview is where the mandate is
+A brief carries a title written for a human scanning a list; a short
+kebab-case slug naming the work itself rather than the fix or the file;
+a body making the case, with its evidence cited as file:line wherever the
+brief is about code that exists; a category; a severity saying how much
+the work matters, with confidence — how sure you are of the judgement the
+brief makes — as a separate axis, and effort as S, M or L; and the
+workflow it should be planned under, named as the workflow definitions
+name themselves. Optionally it carries the bare repository-relative paths
+it is about — bare, because line-level evidence belongs in the body — and
+what a story planned from it should deliberately leave alone.
+schemas/story-brief.schema.json is the shape and says why each part of it
+is where it is.
+
+A brief is not a story artifact and nothing executes one. It states the
+work and the case for it; the developer plans it into a story through
+l5-plan's interview, and that interview is where the mandate is
 conferred.

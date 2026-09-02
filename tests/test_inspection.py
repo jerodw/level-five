@@ -177,6 +177,16 @@ def brief_enum(field_name: str) -> list:
 
 BRIEF_REQUIRED = tuple(BRIEF_SCHEMA["required"])
 CATEGORIES = brief_enum("category")
+#: The categories a brief may carry that the Inspector does not file. Since
+#: story-098 a brief describes work rather than only a defect, so the schema
+#: accepts feature and refactor; the Inspector reads code and reports what is
+#: wrong with it, and neither is something it can find. Named here so that a
+#: category added to the schema later has to be classified as one the Inspector
+#: files or one it does not, rather than quietly leaving the prompt behind.
+NOT_THE_INSPECTORS_CATEGORIES = ("feature", "refactor")
+INSPECTOR_CATEGORIES = [
+    category for category in CATEGORIES if category not in NOT_THE_INSPECTORS_CATEGORIES
+]
 SEVERITIES = sorted(brief_enum("severity"))
 CONFIDENCES = brief_enum("confidence")
 EFFORTS = brief_enum("effort")
@@ -2229,13 +2239,21 @@ def flattened(text: str) -> str:
     return " ".join(text.split())
 
 
-def test_the_prompt_states_every_category_the_schema_declares():
-    """Derived from the schema in both directions rather than eyeballed: a
-    category the prompt does not describe is one the Inspector is asked to
-    choose blind."""
+def test_the_prompt_states_every_category_the_inspector_files():
+    """Derived from the schema rather than eyeballed: a category the prompt
+    does not describe is one the Inspector is asked to choose blind.
+
+    The schema accepts two the Inspector does not file, and they are subtracted
+    by name so the subtraction is a classification rather than a hole: every
+    member of the enum lands on one side or the other, and one added later
+    lands on neither until somebody decides which it is."""
     text = inspector_prompt()
-    for category in CATEGORIES:
+    for category in INSPECTOR_CATEGORIES:
         assert category in text, category
+    assert set(INSPECTOR_CATEGORIES) | set(NOT_THE_INSPECTORS_CATEGORIES) == set(
+        CATEGORIES
+    )
+    assert set(INSPECTOR_CATEGORIES) & set(NOT_THE_INSPECTORS_CATEGORIES) == set()
 
 
 def test_the_prompt_defines_severity_by_consequence_and_confidence_apart():
