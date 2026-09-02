@@ -1,0 +1,258 @@
+story:
+  id: story-101
+  title: An inspection records what it cost
+  description: |
+    The Inspector runs under a cost ceiling and nothing accumulates what an
+    inspection actually spends, so there is no corpus to tune that ceiling
+    against. Every cost ceiling in this harness was set from a record —
+    max_run_cost_usd_reason derives its figure from run totals cost.json had
+    been accumulating — and a number that was guessed and never tightened stays
+    wherever it was guessed. Narrow mode is what makes this urgent: it fires on
+    every completed story, several times a day, each invocation unnoticed
+    individually.
+
+    This story records every inspection's spend, in a store that outlives the
+    invocation. Both modes append one line per inspection to the declared
+    cross-run log inspection-log.jsonl, carrying what it cost, which mode it
+    was, how large its scope was, how many findings came back and how many were
+    filed, so a single read answers what inspection has cost. A narrow-mode
+    inspection additionally appends its cost to that run's cost.json, because
+    its inspection is part of that run's life.
+
+    The figure is carried, never re-derived: run_agent already parses
+    total_cost_usd off the result event, and inspect_scope currently discards
+    the result it gets. Reading the agent log back to recover a number would be
+    a second parser of the harness's own output.
+
+    The precise point is that a narrow-mode inspection's cost must be recorded
+    but must not count against max_run_cost_usd. The inspection runs after the
+    completion commit, when the run's work is done and committed; charging it
+    against a ceiling the run has already honoured could push a completed run
+    over its cap for spend that happened after the thing the cap protects.
+    Recording and enforcing are different jobs, and the split already exists:
+    the ceiling is compared against state.entry_cost_usd, and cost.json is the
+    record. Not touching the allowance is the whole of it.
+
+    No ceiling changes here, and nothing reads the record yet. There is no
+    corpus; this is what starts one.
+  workflow: story-workflow
+
+tasks:
+  - Carry the cost the inspection invocation reported, rather than discarding
+    it. inspect_scope receives the runner's result already and drops it on the
+    floor; the reported cost_usd reaches _ScopeResult, and Report gains the sum
+    of what its invocations reported.
+  - Declare the record's new fields on inspection-log.jsonl in
+    schemas/cross-run-history.schema.json - the mode, the cost, the scope's
+    file count and the number of invocations the cost covers - and move
+    story_id out of that log's required list, because a broad-mode inspection
+    has no story to name.
+  - Stop history_record from writing an empty story_id, so a caller that has no
+    work item to name omits the field rather than writing an empty string. This
+    is the rule the projection already follows for a field the entry does not
+    carry.
+  - Have the post-story inspection pass the new values alongside the three
+    counts it already passes to append_event, so events.log,
+    execution-history.json and the cross-run log stay one write path.
+  - Have the post-story inspection append its cost to that run's cost.json,
+    without adding it to the run's live allowance.
+  - Have broad mode write its own record - one line per l5-inspect invocation,
+    through the same per-log append with an explicit history directory that
+    plan_mandate.record uses - and commit the log path by name, so the record
+    does not sit in the working tree as a dirty tree the next run's pre-flight
+    refuses.
+  - Guard both writes. A record that cannot be written costs the record and
+    nothing else: it never fails an inspection, and in narrow mode it never
+    touches the run.
+  - Document what is now recorded and where, including what the cost.json entry
+    a post-story inspection appends means.
+
+acceptance_criteria:
+  - A broad-mode inspection appends one line to the declared log
+    inspection-log.jsonl carrying what it cost, that it was the broad mode, how
+    many files were in scope, how many findings it produced, how many were
+    filed, how many were dropped and when it ended.
+  - A narrow-mode inspection's line in that same log carries those same fields,
+    so one read of one file answers what inspection has cost across both modes
+    without walking any run directory.
+  - A broad-mode record carries no story_id, because a broad inspection has no
+    story; a narrow-mode record carries the story its run ran, exactly as it
+    does today.
+  - The cost recorded is the figure the invocation reported through the
+    runner's own result. A test demonstrates that no code path reads an agent
+    log back to recover it.
+  - A narrow-mode inspection's cost appears in that run's cost.json as one
+    invocation entry beside the stage invocations, with the entry index the run
+    records for the current entry.
+  - A narrow-mode inspection's cost does not count against max_run_cost_usd. A
+    run whose recorded spend sits at the edge of its ceiling completes, is
+    inspected, and is not retroactively over the ceiling.
+  - An inspection whose invocation reported no cost records that it reported
+    none - the field is absent from the record and no entry is added to
+    cost.json - rather than recording a zero that would corrupt any average
+    taken later.
+  - A record that cannot be written fails nothing. A broad-mode inspection
+    whose record write raises still reports what it filed and still exits as it
+    would have; a narrow-mode inspection whose record write raises still
+    completes the run, and the run's exit is what it would have been.
+  - The broad-mode record is committed, staging the declared log path by name
+    and never with git add -A, so a file the inspection agent changed elsewhere
+    is left in the working tree rather than folded into that commit.
+  - No ceiling value changes, and no routing decision reads any of the new
+    record. Nothing in the coordinator compares a recorded inspection cost
+    against anything.
+  - The existing three counts on an inspection record keep their meaning and
+    their values, and an inspection that was not made still leaves the line it
+    leaves today with its counts at zero.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/inspection.py, keep the value the runner returns inside
+      inspect_scope and put the reported cost on _ScopeResult. A runner that
+      returns nothing, or a result carrying no cost, yields None rather than
+      zero - the distinction the whole story turns on.
+    - Add the same distinction to Report - the sum of what its invocations
+      reported, and None where none of them reported anything - so l5-inspect's
+      caller has the figure without a second traversal.
+    - In schemas/cross-run-history.schema.json, declare mode, cost_usd,
+      scope_files and invocations on inspection-log.jsonl's items, and take
+      story_id out of that log's required list with a description saying it is
+      absent for a broad-mode inspection. Adding a field is an edit here and
+      nowhere else, which is what makes the log declaration the single place
+      the record's shape is decided.
+    - In orchestration/story_coordinator.py, stop history_record from setting
+      story_id when the caller has none to give. Add the new fields as
+      append_event keywords beside findings, filed and dropped, so they are
+      omitted when absent on exactly the terms those three already are.
+    - In orchestration/story_inspection.py, pass the mode, the cost, the scope
+      size and the invocation count through _say, and append the cost to
+      cost.json through the coordinator's own append_cost_record with stage
+      "inspection", the run's current entry index and attempt 0. Do not add it
+      to state.entry_cost_usd - the allowance is what the ceiling reads, and
+      this spend happened after the work the ceiling protects. Both are inside
+      the module's existing totality guard.
+    - In orchestration/inspection.py, write the broad-mode record at the end of
+      inspect, through story_coordinator.append_history_records with the
+      history directory resolved from the target as plan_mandate.record
+      resolves it, and commit the declared log path by name. Guard both, so a
+      history directory that cannot be written or a git call that fails costs
+      the record and nothing else.
+    - In schemas/cost-record.schema.json, describe the entry a post-story
+      inspection appends - what its stage names, why its attempt is zero, and
+      that it is recorded but never charged to the allowance the ceiling reads.
+      The shape does not change.
+    - Write the regression module for all of the above, driving both modes with
+      a fake runner that reports a known cost and one that reports none.
+    - Document in README.md and .harness/docs/ARCHITECTURE.md what an
+      inspection now records, where it lands for each mode, and that the
+      recorded figure is deliberately not enforcement.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: Carry the invocation's reported cost through _ScopeResult and
+        Report, and write and commit the broad-mode record.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Pass the new values into the record it already appends, and
+        append the cost to the run's cost.json without touching the allowance.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Accept the new fields as append_event keywords, and omit a
+        story_id the caller does not have.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declare the new fields on inspection-log.jsonl and make story_id
+        optional there.
+    - file: schemas/cost-record.schema.json
+      stage: implementer
+      reason: Describe the entry a post-story inspection appends. Prose only -
+        the record's shape is unchanged.
+    - file: tests/test_an_inspection_records_what_it_cost.py
+      stage: tester
+      reason: The regression module for the acceptance criteria - the record's
+        contents in both modes, the cost.json entry, the ceiling that is not
+        charged, the absent cost, and the guarded writes.
+    - file: README.md
+      stage: documenter
+      reason: Say what an inspection records and where it lands.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the split between the cost that is accounted for and the
+        allowance that is enforced, at the point the post-story inspection is
+        described.
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - schemas/cross-run-history.schema.json
+    - schemas/cost-record.schema.json
+    - tests/
+    - README.md
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - prompts/
+    - .harness/config.yaml
+    - templates/
+    - scripts/
+    - orchestration/agent_runner.py
+    - orchestration/outbox.py
+    - orchestration/filed_query.py
+
+verification_requirements:
+  - Confirm a broad-mode inspection writes exactly one line to
+    inspection-log.jsonl carrying its cost, its mode, its scope file count, its
+    finding counts and a timestamp in the form the other logs use, and that the
+    line carries no story_id.
+  - Confirm a narrow-mode inspection's line in that same log carries the same
+    fields and its story_id, and that its three existing counts are unchanged
+    in meaning and value.
+  - Confirm the recorded cost equals what the runner's result reported, and
+    that no path reads an agent log file to obtain it.
+  - Confirm a narrow-mode inspection appends one entry to that run's cost.json
+    and that the run's live allowance on state.json is unchanged by it.
+  - Confirm a run whose recorded spend is at the edge of max_run_cost_usd
+    completes, is inspected, and is not reported as over its ceiling.
+  - Confirm an invocation reporting no cost leaves the field absent from the
+    record and adds no entry to cost.json, rather than recording zero.
+  - Confirm a record write that raises fails neither mode: the broad
+    inspection's report and exit are what they would have been, and the run
+    completes with the status it would have had.
+  - Confirm the broad-mode commit stages the declared log path by name, and
+    that an unrelated modified file in the working tree is not in that commit.
+  - Confirm the full suite passes with .venv/bin/python -m pytest tests/ -q -n
+    auto, and that the new module's tests fail against the unmodified code.
+
+constraints:
+  - The post-story inspection stays a total function. It returns nothing,
+    raises on no path, and declares no parameter by which a caller could be
+    told to stop. Recording may not become the thing that stops the work.
+  - No ceiling value changes. Neither inspect_max_cost_usd nor
+    max_run_cost_usd nor max_execution_cost_usd is retuned by this story;
+    there is no corpus yet, and this is what starts one.
+  - cost-record.schema.json's shape does not change - no field is added,
+    removed or made optional. Only its prose gains the description of the entry
+    a post-story inspection appends.
+  - How run cost is recorded for stage invocations, and how max_run_cost_usd
+    and max_execution_cost_usd are enforced, are unchanged.
+  - Which record reaches which log stays decided by the cross-run history
+    declaration alone. No condition in append_event or append_history_records
+    decides where an inspection record goes.
+  - The figure is carried, never computed. Nothing re-derives a cost by parsing
+    an agent log or an events line.
+  - History is evidence, never state. Nothing added here is read back to make a
+    routing decision, and state.json remains the coordinator's only routing
+    source.
+  - No reporting command, dashboard or query over the new record is added. What
+    reads the corpus is decided once there is a corpus to read.
+  - The broad-mode commit stages its paths by name and never with git add -A,
+    and carries no completion, escalation or pause marker.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-02 08:10:10
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
