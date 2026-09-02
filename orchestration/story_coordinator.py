@@ -35,6 +35,7 @@ import agent_runner
 import context_assembler
 import harness_config
 import outbox_sweep
+import story_inspection
 import schema_validator
 import story_parser
 
@@ -983,6 +984,9 @@ def append_event(
     retry_reason: str | None = None,
     retry_category: str | None = None,
     retry_stage: str | None = None,
+    findings: int | None = None,
+    filed: int | None = None,
+    dropped: int | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -1024,6 +1028,13 @@ def append_event(
         "retry_reason": retry_reason,
         "retry_category": retry_category,
         "retry_stage": retry_stage,
+        # An inspection's three counts, flat keyword fields in the idiom
+        # verifier_outcome and retry_decision already use: absent on every
+        # entry that is not one, and present on one that is even where the
+        # count is zero, because zero findings is an answer.
+        "findings": findings,
+        "filed": filed,
+        "dropped": dropped,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)
@@ -2710,29 +2721,24 @@ def stage_baseline_dir(run_dir: Path, baseline: str, stage_name: str) -> Path:
     return run_dir / baseline / stage_name
 
 
-def recorded_by_other_stages(
-    run_dir: Path, stages: list[dict], stage_name: str
-) -> set[str]:
-    """Every repository path some *other* stage's changed-files record names.
+def recorded_by_all_stages(run_dir: Path, stages: list[dict]) -> set[str]:
+    """Every repository path any stage's changed-files record names.
 
-    Whoever created a governed path is the fact the baseline merge turns on,
-    and this is where the harness already records it: every writing stage
-    declares the name of its own record in the workflow, so the records of
-    every stage but this one are the account of what this stage did not write.
-
-    The route a stage was entered by is not consulted and must not be: a resume
-    can change several things between two entries, so it is a proxy for
-    authorship rather than the fact itself.
+    The one derivation of what a run touched, read off the records the writing
+    stages declare in the workflow. Two questions are asked of it and both are
+    asked here rather than each reading the records for itself: what *another*
+    stage touched, which the baseline merge turns on, and what the *run*
+    touched, which is what a post-story inspection takes into scope.
 
     A record that is absent or unreadable contributes nothing rather than
-    raising — the question is what another stage is *known* to have touched,
-    and an answer that cannot be established is not one. It names no stage and
-    no artifact; both come off the loaded workflow.
+    raising — the question is what a stage is *known* to have touched, and an
+    answer that cannot be established is not one. It names no stage and no
+    artifact; both come off the loaded workflow.
     """
     paths: set[str] = set()
     for stage in stages:
         record = stage.get("changed_files")
-        if not record or stage["name"] == stage_name:
+        if not record:
             continue
         try:
             changed = json.loads((run_dir / record).read_text(encoding="utf-8"))
@@ -2741,6 +2747,26 @@ def recorded_by_other_stages(
         for group in ("modified", "created", "deleted"):
             paths.update(changed.get(group, []))
     return paths
+
+
+def recorded_by_other_stages(
+    run_dir: Path, stages: list[dict], stage_name: str
+) -> set[str]:
+    """Every repository path some *other* stage's changed-files record names.
+
+    Whoever created a governed path is the fact the baseline merge turns on,
+    and this is where the harness already records it: the records of every
+    stage but this one are the account of what this stage did not write. It is
+    the derivation above filtered by stage name, so the two share one reading
+    of the records rather than reading them twice and being able to disagree.
+
+    The route a stage was entered by is not consulted and must not be: a resume
+    can change several things between two entries, so it is a proxy for
+    authorship rather than the fact itself.
+    """
+    return recorded_by_all_stages(
+        run_dir, [stage for stage in stages if stage["name"] != stage_name]
+    )
 
 
 def capture_stage_baseline(
@@ -5712,7 +5738,8 @@ def resume_from_capacity(run_dir: Path, state: RunState) -> None:
 
 def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
               *, config: dict | None = None,
-              harness_root: Path | None = None) -> int:
+              harness_root: Path | None = None,
+              stages: list[dict] | None = None) -> int:
     state.status = "completed"
     state.current_stage = ""
     save_state(run_dir, state)
@@ -5793,6 +5820,23 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     else:
         _git(target_root, "commit", "--allow-empty", "-m",
              completion_commit_message(state, title))
+    # The post-story inspection, between the completion commit above and the
+    # sweep below, and both halves of that position are load-bearing. It is
+    # below the commit so that a slow inspection cannot delay the durability of
+    # the work — an inspection is an agent invocation, and nothing about
+    # whether the story's work survives may wait on one. It is above the sweep
+    # so that a brief it enqueues is filed by that same sweep rather than
+    # waiting for the next run to drain the queue. story-092's criterion that
+    # `_complete` sweeps after the completion commit stays exactly true: this
+    # inserts between the two and moves neither.
+    #
+    # It must not refuse, for the reason the sweep beside it must not. It
+    # returns nothing, so there is no value to branch on here, and it raises on
+    # no path, so nothing below it is conditional on it having worked.
+    story_inspection.inspect_after_story(
+        run_dir, target_root, config or {}, harness_root, state.story_id,
+        stages or [],
+    )
     # The second opportunistic sweep, *after* the completion commit and not
     # before it. A sweep talks to a provider that may be slow or unreachable,
     # and nothing about the durability of the work may wait on that: the work
@@ -7624,5 +7668,5 @@ def run_story(
 
     return _complete(
         run_dir, state, reading.parsed, target_root,
-        config=config, harness_root=harness_root,
+        config=config, harness_root=harness_root, stages=stages,
     )

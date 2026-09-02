@@ -20,8 +20,11 @@ Do not fix anything. Do not edit any file of the repository. Do not run
 the repository's tests. The one file you write is the findings file named
 below.
 
+[The question you are answering]
+{{framing}}
+
 [The scope you are reading]
-You are looking at the {{scope_kind}} half of this repository, at:
+You are reading the {{scope_kind}} scope of this repository:
 
     {{scope}}
 

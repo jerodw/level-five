@@ -66,6 +66,7 @@ from pathlib import Path
 
 import pytest
 
+import agent_runner
 import command_transport
 import conftest
 import filed_query
@@ -148,6 +149,13 @@ TOKEN_EXEMPT: dict[str, str] = {
         "the value is an allowance in US dollars, parsed to a positive number "
         "and refused by l5-inspect when it is not one, so it cannot carry a "
         "word"
+    ),
+    "inspect_after_story_max_files": (
+        "the value is a count of files one post-story inspection may take into "
+        "scope, parsed to a positive integer and — because that inspection may "
+        "never refuse a run — switching the inspection off when it is not one, "
+        "so a value carrying a word would be the key absent under another name "
+        "and would prove nothing"
     ),
 }
 
@@ -276,6 +284,19 @@ INSPECT_MAX_COST = 0.29
 DEFAULT_INSPECT_MAX_FINDINGS = inspection.DEFAULT_MAX_FINDINGS
 DEFAULT_INSPECT_MAX_COST = inspection.DEFAULT_MAX_COST_USD
 
+#: How many files the fixture allows one post-story inspection to take into
+#: scope. A bound no harness would pick: there is no default at all — the key's
+#: absence switches the mechanism off — and this repository configures sixty.
+#: It stands in for the token the value cannot carry, and its proof pins it
+#: from both sides: the repository the run inspects holds more files in scope
+#: than the bound, so exactly the bound reaches the invocation and the rest are
+#: reported as trimmed, where an unbounded scope would carry every one of them.
+INSPECT_AFTER_STORY_MAX_FILES = 3
+
+#: How many files the fixture puts in the inspected part of that repository.
+#: More than the bound, which is what gives the bound something to trim.
+FILES_IN_THE_INSPECTED_SCOPE = INSPECT_AFTER_STORY_MAX_FILES + 2
+
 #: The part of the fixture target an inspection covers, and the file under it.
 #: The prefix carries the token, so a scope named after it can only have come
 #: from the harness reading the configured key.
@@ -307,6 +328,7 @@ VARYING: dict[str, object] = {
     "filed_query_timeout_seconds": str(FILED_QUERY_TIMEOUT),
     "history_dir": ".harness/xyzzy-history",
     "history_retention_days": str(RETENTION_DAYS),
+    "inspect_after_story_max_files": str(INSPECT_AFTER_STORY_MAX_FILES),
     "inspect_max_cost_usd": str(INSPECT_MAX_COST),
     "inspect_max_findings": str(INSPECT_MAX_FINDINGS),
     "logs_dir": ".harness/xyzzy-logs",
@@ -345,6 +367,9 @@ FALLBACKS: dict[str, object] = {
     "filed_query_timeout_seconds": DEFAULT_FILED_QUERY_TIMEOUT,
     "history_dir": harness_config.DEFAULT_HISTORY_DIR,
     "history_retention_days": None,
+    # No default at all: absent is the post-story inspection switched off, so
+    # what the code computes with the key unread is None.
+    "inspect_after_story_max_files": None,
     "inspect_max_cost_usd": DEFAULT_INSPECT_MAX_COST,
     "inspect_max_findings": DEFAULT_INSPECT_MAX_FINDINGS,
     "logs_dir": ".harness/logs",
@@ -421,6 +446,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "history_retention_days": Proof(
         "test_history_retention_days_is_the_bound_the_prune_applies",
+        BEHAVIOURAL),
+    "inspect_after_story_max_files": Proof(
+        "test_inspect_after_story_max_files_bounds_what_a_completed_run_inspects",
         BEHAVIOURAL),
     "inspect_max_cost_usd": Proof(
         "test_inspect_max_cost_usd_is_the_allowance_each_invocation_is_given",
@@ -551,9 +579,17 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
          "configured = config.get(HISTORY_RETENTION_KEY)",
          "configured = None"),
     ),
-    # The three inspection keys are read in the module that holds every
-    # deterministic decision an inspection makes, which is the only module
-    # that resolves a scope or bounds an invocation.
+    # The file cap is read in the module that holds the run integration: what
+    # a completed story puts in scope, and the bound on it, are that module's
+    # and nothing else's.
+    "inspect_after_story_max_files": (
+        ("orchestration/story_inspection.py",
+         "declared = config.get(MAX_FILES_KEY)",
+         "declared = None"),
+    ),
+    # The two bounds an invocation runs under are read in the module that holds
+    # every deterministic decision an inspection makes, which is the only
+    # module that resolves a scope or bounds an invocation.
     "inspect_max_cost_usd": (
         ("orchestration/inspection.py",
          "declared = config.get(MAX_COST_KEY)",
@@ -808,8 +844,9 @@ class RecordingRunner:
     only as an argument.
     """
 
-    def __init__(self, run_dir: Path):
+    def __init__(self, run_dir: Path, changed: list[str] | None = None):
         self.run_dir = run_dir
+        self.changed = list(changed or ["src/app.py"])
         self.calls: list[dict] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
@@ -824,7 +861,8 @@ class RecordingRunner:
             handle.write(f"===== stage: {stage} =====\n")
         if stage == "implementer":
             _write_json(self.run_dir / "changed-files.json",
-                        {"modified": ["src/app.py"], "created": [], "deleted": []})
+                        {"modified": self.changed, "created": [],
+                         "deleted": []})
             (self.run_dir / "implementation-summary.md").write_text(
                 "Did the work.\n", encoding="utf-8")
         elif stage == "tester":
@@ -944,6 +982,7 @@ EXPECTED_KEYS = (
     "allowed_tools", "architecture_docs", "base_branch", "branch_prefix",
     "census_command", "filed_query_command", "filed_query_max_items",
     "filed_query_timeout_seconds", "history_dir", "history_retention_days",
+    "inspect_after_story_max_files",
     "inspect_max_cost_usd", "inspect_max_findings",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "source_dirs", "standards_dir",
@@ -1356,6 +1395,13 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
     # anything the harness later decides, so what makes it a number no harness
     # would pick is that it is neither the default nor a whole dollar.
     assert 0 < INSPECT_MAX_COST < DEFAULT_INSPECT_MAX_COST
+    # And the file cap, pinned by the repository its proof inspects: more files
+    # sit in the inspected scope than the bound allows, so the bound trims and
+    # an unbounded scope would carry all of them. There is no default to
+    # compare against — the key's absence is the mechanism switched off, which
+    # is what FALLBACKS records for it.
+    assert 0 < INSPECT_AFTER_STORY_MAX_FILES < FILES_IN_THE_INSPECTED_SCOPE
+    assert FALLBACKS["inspect_after_story_max_files"] is None
 
 
 @pytest.mark.parametrize("key", sorted(VARYING))
@@ -1754,10 +1800,11 @@ class Inspection:
 def inspected(tmp_path: Path, *, findings: int = 1, **overrides) -> Inspection:
     """Build the fixture and inspect it through a fake runner.
 
-    The three inspection keys are read in `orchestration/inspection.py`, which
-    is the only module that resolves a scope or bounds an invocation, so their
-    proofs are driven at that seam rather than through `run_story`: nothing in
-    a run, a resume or a sweep invokes an inspection.
+    The two bounds an invocation runs under are read in
+    `orchestration/inspection.py`, which is the only module that resolves a
+    scope or bounds an invocation, so their proofs are driven at that seam
+    rather than through `run_story`. The file cap the post-story inspection is
+    bounded by is a different question and is proven through a run, below.
     """
     values = fixture_config(**overrides)
     harness = build_harness(tmp_path)
@@ -1816,6 +1863,96 @@ def test_inspect_max_findings_is_the_bound_on_what_one_inspection_files(
     for drop in excluded:
         assert drop.severity is not None
         assert "xyzzy-defect-" in drop.detail
+
+
+#: Where the fixture puts the files a completed run's inspection reads, and the
+#: file the run's own implementer stage changes inside it. The prefix carries
+#: the token for the reason every other varying value does.
+CHANGED_SOURCE_DIR = "xyzzy-changed/"
+CHANGED_SOURCE_FILE = f"{CHANGED_SOURCE_DIR}changed.py"
+
+
+def files_in_the_inspected_scope() -> list[str]:
+    """Every file the fixture tracks in the part of the tree a completed run's
+    inspection covers: the one the story changed, and the ones beside it."""
+    beside = [f"{CHANGED_SOURCE_DIR}beside_{ordinal}.py"
+              for ordinal in range(FILES_IN_THE_INSPECTED_SCOPE - 1)]
+    return [CHANGED_SOURCE_FILE, *beside]
+
+
+class PostStoryInspector:
+    """Stands in for `agent_runner.run_agent` for a post-story inspection.
+
+    The coordinator resolves the runner for that invocation itself rather than
+    handing down the one a run was given, so this is installed where the
+    coordinator reaches for it. It records what it was handed and finds
+    nothing: the proof below is about which files reached the invocation.
+    """
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
+                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+        self.calls.append({"prompt": prompt, "stage": stage, "cwd": Path(cwd)})
+        artifact, _ = inspection.findings_paths(
+            Path(cwd), harness_config.load_config(Path(cwd)))
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(json.dumps({"findings": []}), encoding="utf-8")
+        return AgentResult(ok=True, result_text="inspected")
+
+
+@pytest.fixture(autouse=True)
+def post_story_inspector(monkeypatch) -> PostStoryInspector:
+    """Substituted for every test in this module.
+
+    Every fixture run here configures the file cap, because every declared key
+    is varied in every fixture — so every completing run inspects, and without
+    this the runs would reach a provider.
+    """
+    inspector = PostStoryInspector()
+    monkeypatch.setattr(agent_runner, "run_agent", inspector)
+    return inspector
+
+
+def test_inspect_after_story_max_files_bounds_what_a_completed_run_inspects(
+        tmp_path, post_story_inspector):
+    """The configured number of files reaches the invocation, and no more.
+
+    The fixture's inspected directory holds more files than the bound and the
+    story changes one of them, so the expansion is the change plus the files
+    beside it — more than the bound — and exactly the bound is what the
+    invocation is handed. A harness that had stopped reading the key would make
+    no invocation at all, because the key's absence is the mechanism switched
+    off; one that read it and ignored it would hand over all of them.
+    """
+    values = fixture_config(source_dirs=[CHANGED_SOURCE_DIR])
+    harness = build_harness(tmp_path)
+    target = build_target(tmp_path, values)
+    for relative in files_in_the_inspected_scope():
+        path = target / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {relative}\n", encoding="utf-8")
+    _git(target, "add", "-A")
+    _git(target, "commit", "-q", "-m", "the tree the story changes")
+
+    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    runner = RecordingRunner(run_dir, changed=[CHANGED_SOURCE_FILE])
+    code = story_coordinator.run_story(STORY_ID, harness, target, runner)
+
+    assert code == 0, runner.calls
+    assert len(post_story_inspector.calls) == 1, post_story_inspector.calls
+    prompt = post_story_inspector.calls[0]["prompt"]
+    reached = [one for one in files_in_the_inspected_scope() if one in prompt]
+    assert len(reached) == INSPECT_AFTER_STORY_MAX_FILES, reached
+    # The file the story changed is never what the bound trims, and every file
+    # the bound took away is named rather than counted: a reader of this run
+    # can tell which files the inspection did not read.
+    assert CHANGED_SOURCE_FILE in reached
+    said = (run_dir / "events.log").read_text(encoding="utf-8")
+    for relative in files_in_the_inspected_scope():
+        if relative not in reached:
+            assert relative in said, (relative, said)
 
 
 def test_inspect_max_cost_usd_is_the_allowance_each_invocation_is_given(

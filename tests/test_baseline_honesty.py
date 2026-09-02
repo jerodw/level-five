@@ -2225,6 +2225,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "sentence this story replaced, and against copies of the shipped "
         "prompts with the violation planted in them, so no assertion here "
         "depends on the live text staying silent for a reason nobody checked",
+    "test_a_completed_story_is_inspected.py":
+        "every run it drives goes through a workflow it builds, against a "
+        "target repository it constructs and configures, because the stage "
+        "list, the changed-files records, the source and tests directories and "
+        "the file cap are all inputs to what the post-story inspection does "
+        "with them. The one thing it resolves live is what the story's last "
+        "criterion is about and nothing else: that this deployment's own "
+        ".harness/config.yaml declares inspect_after_story_max_files, so that "
+        "the harness inspects itself from the next story onward, and that "
+        "templates/config.yaml offers a new target the same key commented "
+        "beside the other inspection keys. Neither is a claim a fixture "
+        "configuration could make, because both are claims about the files "
+        "this repository ships",
     "test_a_stage_cannot_edit_its_own_story.py":
         "its runs are driven against a workflow it builds and under execution "
         "rules of its own, because what a run does with a record naming a "

@@ -21,6 +21,7 @@ the schema conformance of a run's history, and the prompt-scope assertion
 with the baseline resolution it needs.
 """
 import ast
+import inspect
 import json
 import re
 import shutil
@@ -629,13 +630,36 @@ def test_the_schema_uses_only_the_keywords_the_validator_supports():
     assert schema_validator.validate([], HISTORY_SCHEMA) == []
 
 
+#: Every field an entry may carry and is not required to, held as a declared
+#: set and compared in both directions: a field added to the schema without an
+#: entry here fails, and an entry naming a field the schema no longer declares
+#: fails too. The three counts at the end are an inspection's, present on an
+#: entry that is one and absent from every entry that is not — which is exactly
+#: what "optional" means here.
+OPTIONAL_FIELDS = {
+    "stage", "artifacts", "duration_seconds", "verifier_outcome",
+    "retry_decision", "retry_reason", "retry_category", "retry_stage",
+    "findings", "filed", "dropped",
+}
+
+
 def test_optional_fields_are_expressed_by_absence_from_required():
     item = HISTORY_SCHEMA["items"]
     assert set(item["required"]) == {"sequence", "timestamp", "event", "message"}
     optional = set(item["properties"]) - set(item["required"])
-    assert optional == {"stage", "artifacts", "duration_seconds",
-                        "verifier_outcome", "retry_decision", "retry_reason",
-                        "retry_category", "retry_stage"}
+    assert optional == OPTIONAL_FIELDS
+
+
+def test_every_optional_field_is_one_append_event_can_be_given():
+    """The other direction, against the writer rather than the schema.
+
+    A declared optional field nothing can write would be a shape the history
+    promises and no run can produce; a keyword the writer takes and the schema
+    does not declare would be a field written into a document that forbids it.
+    """
+    keywords = set(inspect.signature(story_coordinator.append_event).parameters)
+    assert OPTIONAL_FIELDS <= keywords
+    assert keywords - OPTIONAL_FIELDS == {"run_dir", "message", "kind"}
 
 
 def test_no_union_keyword_appears_anywhere_in_the_schema():

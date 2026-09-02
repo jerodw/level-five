@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "cross-run-history",
-  "description": "The declaration of the harness-scoped logs under history_dir, and the whole of what decides which events reach them. One property per log, named for the file it declares, holding that log read as an array of parsed lines: its items.properties.event.enum enumerates the execution-history event kinds routed to that log, and its items.properties declare the fields a record there carries. Selection and record shape are therefore one file rather than a condition written into append_event, and adding a kind to a log is an edit here and nowhere else. The `event` property is the selection and is not itself projected: a record carries the other declared fields, so what routed it is read off the enum that named its kind rather than repeated on every line. A field the execution-history entry does not carry is omitted rather than written null, which is the rule execution-history.json already follows. A record is a summary and never a copy: the per-run artifacts hold the detail, and a log that duplicated them would inherit their size and lose its queryability. History is evidence, never state — nothing here is read back to make a routing decision, and the only read of a log at all is the prune that bounds it by history_retention_days. Two further logs are named here as RESERVED and are deliberately not declared above: inspection-log.jsonl and adjudication-log.jsonl. This harness has no producer for either — inspection and adjudication are level 4 concepts it does not have — so it creates neither, and naming them here rather than shipping an empty file is the whole of what it does about them. A later harness that acquires a producer declares its log as a property beside the two above, and gets the projection with no change to orchestration. The per-log declarations are properties rather than a $defs block because the harness's own validator honors a deliberately small keyword subset and refuses a schema claiming a constraint it cannot check; a property named for its log carries the same declaration and stays checkable.",
+  "description": "The declaration of the harness-scoped logs under history_dir, and the whole of what decides which events reach them. One property per log, named for the file it declares, holding that log read as an array of parsed lines: its items.properties.event.enum enumerates the execution-history event kinds routed to that log, and its items.properties declare the fields a record there carries. Selection and record shape are therefore one file rather than a condition written into append_event, and adding a kind to a log is an edit here and nowhere else. The `event` property is the selection and is not itself projected: a record carries the other declared fields, so what routed it is read off the enum that named its kind rather than repeated on every line. A field the execution-history entry does not carry is omitted rather than written null, which is the rule execution-history.json already follows. A record is a summary and never a copy: the per-run artifacts hold the detail, and a log that duplicated them would inherit their size and lose its queryability. History is evidence, never state — nothing here is read back to make a routing decision, and the only read of a log at all is the prune that bounds it by history_retention_days. One further log is named here as RESERVED and is deliberately not declared above: adjudication-log.jsonl. This harness has no producer for it — adjudication is a level 4 concept it does not have — so it creates none, and naming it here rather than shipping an empty file is the whole of what it does about it. A later harness that acquires a producer declares its log as a property beside the ones above, and gets the projection with no change to orchestration — which is what inspection-log.jsonl, reserved here until this harness acquired the producer that writes it, now demonstrates rather than predicts. The per-log declarations are properties rather than a $defs block because the harness's own validator honors a deliberately small keyword subset and refuses a schema claiming a constraint it cannot check; a property named for its log carries the same declaration and stays checkable.",
   "type": "object",
   "properties": {
     "execution-log.jsonl": {
@@ -49,6 +49,41 @@
           "timestamp": {
             "type": "string",
             "description": "When the outcome occurred, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what history_retention_days is compared against."
+          }
+        }
+      }
+    },
+    "inspection-log.jsonl": {
+      "type": "array",
+      "description": "One record per inspection a completed run made of what its story changed. Written to .harness/history/inspection-log.jsonl, one JSON object per line, appended as the inspection ends. It exists because the run directory is gitignored and reaches no clone: an inspection reporting only into that run's events.log would leave no evidence in the repository that any inspection had ever run. A record is a summary and never a copy — what was found, filed and dropped is here as three counts, and which finding went which way is in the run's own events.log and in the outbox entries the inspection wrote. The inspection is a total function that may not block, delay or refuse a run, so a record here is also what a configuration it could not obey is named in: an inspection that was not made because the file cap was unusable leaves a line saying so with its counts at zero, because naming the problem is the only thing a function that cannot refuse can do about it.",
+      "items": {
+        "type": "object",
+        "required": ["story_id", "timestamp"],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The execution-history event kinds routed to this log, on the terms the execution log's own event property states: this enum is the selection, and the property is not projected into a record. It names this kind alone, which is what keeps an inspection out of execution-log.jsonl, mandate-log.jsonl and retry-log.jsonl: none of their enums names it.",
+            "enum": ["inspection-completed"]
+          },
+          "story_id": {
+            "type": "string",
+            "description": "The story whose completed run made this inspection, derived from the run directory's own name."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "When the inspection ended, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what history_retention_days is compared against."
+          },
+          "findings": {
+            "type": "integer",
+            "description": "How many findings the invocation produced. Present even where it is zero: an inspection that found nothing is an answer, and a line whose counts are all zero is how an inspection that was not made at all is distinguished from one nobody ran."
+          },
+          "filed": {
+            "type": "integer",
+            "description": "How many of those findings reached the outbox as briefs."
+          },
+          "dropped": {
+            "type": "integer",
+            "description": "How many were dropped, for every reason together. Which way each went is not summarised here: it is in the run's own events.log, where each reason is named with how many went that way."
           }
         }
       }

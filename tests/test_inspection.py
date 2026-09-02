@@ -2439,16 +2439,31 @@ def planted_root(tmp_path: Path, name: str, source: str) -> Path:
     return root
 
 
-def test_the_inspection_module_is_reached_from_the_entry_point_and_nowhere_else():
-    """Nothing in a run, a resume or a sweep invokes an inspection.
+#: Every source in the harness that may reach this module, held as a declared
+#: set for the reason `MODULES_THAT_MAY_NAME_THE_QUEUE` is: the set is checked
+#: in both directions, so an importer added without an entry here fails, and an
+#: entry naming a source that no longer imports it fails too.
+#:
+#: Broad mode is a terminal command a developer asked for, and its entry point
+#: is one of them. The other is the run integration story-100 added: a
+#: completed run inspects what its story changed, so exactly one module inside
+#: `orchestration/` reaches this one, and it is the module whose whole subject
+#: is that. The suite reaches it too and is not scanned here, because a test
+#: importing the module under test is what a test does.
+MAY_IMPORT_THE_INSPECTION = {
+    str(Path("scripts") / "l5-inspect"),
+    str(Path("orchestration") / "story_inspection.py"),
+}
 
-    Broad mode is a terminal command a developer asked for, so the only
-    importer in the harness is its entry point — the suite reaches it too, and
-    the suite is not scanned here because a test importing the module under
-    test is what a test does.
-    """
-    assert sources_importing("inspection", REPO_ROOT) == \
-        {str(Path("scripts") / "l5-inspect")}
+
+def test_the_inspection_module_is_reached_from_the_two_callers_and_nowhere_else():
+    """Nothing else in a run, a resume or a sweep invokes an inspection."""
+    found = sources_importing("inspection", REPO_ROOT)
+    assert found == MAY_IMPORT_THE_INSPECTION
+    # Held shut from both sides: every declared importer is a source that
+    # exists, so the set cannot be widened by naming a file nobody wrote.
+    for relative in MAY_IMPORT_THE_INSPECTION:
+        assert (REPO_ROOT / relative).is_file(), relative
 
 
 def test_the_import_scan_reports_a_second_caller_when_there_is_one(tmp_path):
