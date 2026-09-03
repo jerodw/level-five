@@ -1,0 +1,231 @@
+story:
+  id: story-102
+  title: A run stands on its branch before it writes anything
+  description: |
+    `run_story` checks out the story branch last, below the run-directory
+    creation, the cross-run history init and prune, and every re-entry
+    mutation a resume makes. Those writes land on whatever branch the
+    developer typed `l5-run` from, and `.harness/history/execution-log.jsonl`
+    is tracked and differs between branches, so git refuses the checkout and
+    the run dies with an unhandled RuntimeError — after archiving the entry,
+    zeroing the counters, writing `status: running` and appending three
+    history records. story-101's second resume, invoked from `main` on
+    2026-09-03, is the observed instance.
+
+    It has been latent in every resume. A fresh run takes `checkout -b`, which
+    carries local modifications onto the new branch; only an existing branch
+    refuses, and only when the file differs — which it always does, because a
+    story branch is cut before later stories merge their own records into the
+    base. Each failed attempt appends another `resumed` record, so the history
+    over-reports how many times the run was resumed.
+
+    This story states the invariant and moves the seam to enforce it: nothing
+    the run writes — tracked or gitignored — happens until the run stands on
+    its branch. Every check that can be made without standing there stays
+    above the checkout, so the ordering the harness already keeps, that every
+    refusal sits above every act, is preserved rather than traded away. The
+    checkout becomes the run's first act, and a checkout that cannot be made
+    refuses the way every neighbouring pre-flight refuses instead of raising.
+
+    Two consequences follow from the move rather than being added beside it.
+    `prune_history` today reads and rewrites the base's history file rather
+    than the story branch's, and below the checkout it reads the branch's own.
+    And `unchanged_since_escalation`, which stays above the checkout because
+    it refuses, resolves `HEAD~1` — whatever branch the developer stands on —
+    where it means the story branch's tip's parent, so an off-branch resume
+    can never establish sameness and never refuses. It is repointed at
+    `state.branch` here so it asks the question it was written to ask.
+
+    Where the cross-run history lives is not in scope: writing it on the story
+    branch is story-082's design and reaches `main` with the story's work.
+  workflow: story-workflow
+
+tasks:
+  - Move the branch checkout in `run_story` to sit immediately below the last
+    refusal that can be made without standing on the branch and above every
+    act the run takes, so it becomes the run's first act.
+  - Hoist the resume checks that today sit inside the mutating branch — the
+    `unchanged_since_escalation` refusal, the attempt-collision refusal and
+    the entry-collision refusal — above the checkout, keeping every refusal
+    above every act.
+  - Move `run_dir.mkdir`, the verification subdirectory, `set_history_dir`,
+    `prune_history` with its refusal and its pruned note, `resume_from_capacity`,
+    the archive-move-and-reset re-entry mutations, the fresh-run `RunState`
+    and `save_state`, the workflow-started and mandate notes, the outbox sweep
+    and the branch-behind note below the checkout.
+  - Change `_checkout_story_branch` to report the problems git named rather
+    than raising `RuntimeError`, and refuse at its one call site through a new
+    thin caller of `refuse()` that names the branch, lists the paths git named
+    and says what clears them.
+  - Repoint `unchanged_since_escalation` at the story branch: resolve
+    `state.branch~1` rather than `HEAD~1`, so the escalation-commit comparison
+    describes the branch the run is resuming wherever the developer stands.
+  - Write a standing test module for the invariant, covering the resume that
+    reproduces the failure, the resume that already stands on the branch, the
+    refusal's message and its cleanliness, the source order, and the guard's
+    off-branch behaviour with a control.
+  - Record the ordering and the invariant in the architecture document,
+    including what moving the prune below the checkout changes about which
+    history file it reads.
+
+acceptance_criteria:
+  - A resume invoked while standing on a branch other than the story's, where
+    the story branch's tracked cross-run history differs from the branch stood
+    on, reaches its stage rather than raising.
+  - A resume invoked while already standing on the story branch behaves as it
+    did before this story, since that is the configuration in which the defect
+    hides.
+  - In `run_story`, the branch checkout is written above `run_dir.mkdir`,
+    above `set_history_dir` and `prune_history`, above `archive_attempt` and
+    `move_entry_artifacts`, above `resume_from_capacity`, above `save_state`,
+    and above every `append_event` call in the function.
+  - In `run_story`, the branch checkout is written below the story read, below
+    the stage-exception cross-check, below the dirty-tree refusal, below the
+    completed-branch guard, below the `unchanged_since_escalation` refusal and
+    below both resume-collision refusals.
+  - `_checkout_story_branch` raises no exception on a checkout git refused; it
+    reports what git reported, and `run_story` turns that into a refusal
+    through `refuse()` — exit status 1, the branch named, one line per path
+    git named, and guidance saying what clears them.
+  - A run whose checkout is refused leaves no run directory where none
+    existed, writes no `state.json`, appends no record to events.log or to the
+    cross-run history, archives no attempt, opens no entry directory, resets
+    no counter and invokes no agent.
+  - `unchanged_since_escalation` resolves the escalation-commit comparison
+    against `state.branch` rather than against `HEAD`, so a resume invoked from
+    another branch compares the story branch.
+  - A resume invoked from another branch, with the story artifact, the story
+    branch and the harness all unchanged since the escalation, is refused with
+    the guard's evidence; the same resume with one of those inputs changed
+    proceeds.
+  - A test demonstrates that each ordering assertion can report the violation
+    it exists to catch, rather than passing vacuously.
+
+technical_plan:
+  implementation_steps:
+    - Read `run_story` end to end and mark the boundary: everything that only
+      reads or refuses, and everything that writes. `run_dir.mkdir` and the
+      verification subdirectory are acts, not preparation, and belong below.
+    - Restructure the resume handling into two passes rather than one. The
+      first pass, above the checkout, makes the decisions - the escalated
+      run's `unchanged_since_escalation` refusal, the attempt-collision
+      refusal and the entry-collision refusal - reading `attempt_dir` and
+      `entry_dir` for existence only, which needs no run directory. The second
+      pass, below the checkout, performs what those decisions permitted.
+    - Place the checkout between the two passes, keeping the `start_point`
+      resolution that already precedes it, and record in a comment that this
+      is the run's first act and why the two passes exist.
+    - Give `_checkout_story_branch` a return value carrying what git reported
+      instead of a `raise`, in the shape `base_problems` and `pruned.problems`
+      already use, and add `_refuse_checkout` beside `_refuse_dirty_tree` and
+      `_refuse_base` as another thin caller of `refuse()`. The message names
+      the branch, lists the paths git named and says what clears them - commit
+      or stash them, or check out the branch by hand and run the story again.
+    - Move the history block below the checkout so `set_history_dir` and
+      `prune_history` read the story branch's own history file, and keep the
+      prune above this run's first append, which the move preserves.
+    - Repoint the escalation-commit comparison in `unchanged_since_escalation`
+      at `f"{state.branch}~1"`. Leave the `status --porcelain` leg alone and
+      say in the docstring why it needs no change: the dirty-tree pre-flight
+      above the guard has already refused for every status that reaches it.
+    - Run the tests the change touches - the resume, capacity-pause,
+      cross-run-history and rerun-refusal modules, and the two source-order
+      assertions in `test_stage_output_ownership.py` and
+      `test_single_story_reader.py`, which the new position is expected to
+      leave holding.
+    - Write the standing test module. Build a target repository whose story
+      branch carries a cross-run history record the base does not, escalate a
+      run on it, check out the base, and resume from there - the configuration
+      that produced the traceback. Pair it with the same resume performed while
+      standing on the story branch. Drive a refused checkout by making the
+      branch unreachable and assert the exit status, the message and that
+      nothing was written. Assert the source order with a demonstration that
+      each assertion bites.
+    - Record the invariant and the new ordering in the architecture document,
+      naming what moved, what stayed above the checkout and why, and what the
+      prune now reads.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: |
+        `run_story` holds the ordering; `_checkout_story_branch` raises where
+        it should report; `unchanged_since_escalation` resolves HEAD where it
+        means the story branch; the new `_refuse_checkout` joins the other thin
+        callers of `refuse()`.
+    - file: tests/test_a_run_stands_on_its_branch_first.py
+      stage: tester
+      reason: |
+        The standing module for the invariant: the off-branch resume that
+        reproduced the failure, the on-branch resume that always worked, the
+        refusal's message and cleanliness, the source order, and the guard's
+        off-branch behaviour with its control.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: |
+        The pre-flight ordering and the resume description are recorded there
+        and both change: the checkout becomes the run's first act, the resume
+        decides above it and mutates below it, and the prune reads the story
+        branch's history rather than the base's.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/harness_config.py
+    - orchestration/outbox_sweep.py
+    - workflows/
+    - schemas/
+    - prompts/
+    - bin/
+
+verification_requirements:
+  - Confirm the branch checkout is written above every write `run_story`
+    performs and below every refusal it makes that does not require standing
+    on the branch, and that the new test module asserts this from source
+    rather than only from a run that happens to be refused.
+  - Confirm a resume invoked from a branch other than the story's, with a
+    divergent tracked cross-run history, completes without an unhandled
+    exception, and that a resume invoked from the story branch is unchanged.
+  - Confirm a refused checkout exits 1 through `refuse()`, names the branch and
+    the paths git named, and that the run directory, the tracked files, the
+    state and the counters are exactly as the refused run found them.
+  - Confirm `_checkout_story_branch` has no remaining `raise` on a failed
+    checkout and that `run_story` is its only caller.
+  - Confirm `unchanged_since_escalation` compares against `state.branch` and
+    that its refusal and its non-refusal are both demonstrated from a resume
+    invoked off the story branch.
+  - Confirm every ordering and absence the new module asserts is paired with a
+    demonstration that the same assertion reports the violation it exists to
+    catch.
+  - Confirm the cross-run history record this run appends lands on the story
+    branch, unchanged from story-082's design.
+
+constraints:
+  - Where the cross-run history lives does not change. It stays under
+    `.harness/history/`, tracked, written on the story branch, reaching `main`
+    with the story's work.
+  - What `prune_history` does does not change. Only where it runs moves, so it
+    reads the story branch's history file rather than the base's; it still
+    refuses rather than repairs, still rewrites only where
+    `history_retention_days` is set, and still runs above this run's first
+    append.
+  - Every refusal that can be made without standing on the story branch stays
+    above the checkout. No check moves below it to make the reordering easier.
+  - No flag, environment variable or configuration key skips the checkout
+    refusal, on the rule the dirty-tree check already states: a bypass on a
+    correctness guard becomes the default invocation.
+  - The self-route budget and the flake that escalated story-101 are not
+    touched; they are separate briefs.
+  - The `status --porcelain` leg of `unchanged_since_escalation` keeps its
+    current meaning; only the escalation-commit comparison is repointed.
+  - A resume that already stands on the story branch keeps its current
+    behaviour byte for byte, including the guard's verdict.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-03 17:28:00
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
