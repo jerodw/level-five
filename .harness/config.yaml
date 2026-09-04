@@ -70,6 +70,18 @@ test_command: .venv/bin/python -m pytest tests/ -q -n auto
 # given the key, which is what makes a lost response safe to retry, and it
 # does not commit. Read .harness/sync/github.sh for the whole contract.
 sync_command: .harness/sync/github.sh
+# The other half of that pair: how this repository asks what it has already
+# filed. Without it an inspection can only report that dedupe did not run, and
+# then refile everything it found last time — which is what both post-story
+# inspections so far have done. With it, the second inspection over the same
+# paths recognises the first one's briefs and files what is new. The command is
+# asked a scoped question — what is filed against these paths — and answers one
+# JSON document; it is also what l5-plan --brief fetches a filed brief through.
+# A failure here costs dedupe and blocks no run: the harness reads it as
+# knowing nothing rather than as nothing being filed, says so, and files
+# anyway. It is the sync command's pair and must agree with it about the two
+# markers, which is a contract the harness requires and cannot enforce.
+filed_query_command: .harness/query/github.sh
 # How long that command may run before it is killed, in seconds. The kill
 # reaches its process group, so a command that spawned children of its own
 # leaves none behind, and the entry is left pending rather than failed —

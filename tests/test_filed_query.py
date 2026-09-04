@@ -54,6 +54,31 @@ implementation. The subjects are kept apart deliberately:
     wrote, so "the pair agrees" is a fact about what they do rather than
     about what their headers say.
 
+  * **the board, through both copies of the sync script.** The mechanics are
+    the template's and the values are this target's, so the same assertions
+    are made of both: the installed `.harness/sync/github.sh` on its own
+    values with nothing in its environment, and `templates/sync/github.sh`
+    handed exactly the two values the installed copy sets. An entry reaches
+    the board in the configured column; every failure below the issue's
+    creation exits 75 with the issue still filed; an entry whose board call
+    failed reaches the board on the next sweep with no second issue created;
+    an item the board already reports a Status for is left where it is; and
+    an item the listing did not return at all is answered transiently rather
+    than overwritten.
+
+  * **the split between the two copies.** The template carries no project and
+    no column, the installed copy carries both, and every line the two do not
+    share is one of the editable constant assignments — asserted as the shape
+    of the difference rather than as byte identity, which the installed copy
+    is meant to break.
+
+  * **what the byte comparison used to guarantee.** That the file this
+    repository runs is the file its suite exercises is asserted behaviourally
+    in its place: the installed sync script files a brief, and the command
+    this repository has configured as its `filed_query_command` — read out of
+    `.harness/config.yaml` rather than named here — answers for it and
+    fetches it back whole.
+
 Every absence asserted here carries a demonstration that it can fail:
 
   * "no item is synthesized" sits beside an answering command whose items are
@@ -69,7 +94,19 @@ Every absence asserted here carries a demonstration that it can fail:
   * "the two scripts use the same marker" sits beside a rendering of one of
     them with the marker changed, which the same extraction reports;
   * "a payload carrying no paths writes no path marker" sits beside the same
-    filing with paths, whose body carries one marker per path.
+    filing with paths, whose body carries one marker per path;
+  * "no item was added" and "no `item-edit` was made" each sit beside the same
+    drive with nothing broken, where the item is added and the Status written,
+    which the stub's record of every project call it was made shows;
+  * "no second issue was created" sits beside a filing under a different key,
+    which does create one;
+  * "the template names no project and no column" sits beside the same
+    extraction over the installed copy, which names both;
+  * "the two copies differ only in constant values" sits beside a rendering of
+    the template differing in a line of mechanics, which the same predicate
+    reports;
+  * "neither sync script invokes git" sits beside a rendering of one with a
+    commit added, which the same scan reports.
 
 Every command driven as a `filed_query_command` here is a file this module
 wrote, and `fixture_command_problems` is what makes that a checked property
@@ -79,6 +116,7 @@ scripts are run against a stub `gh` this module wrote, first on `PATH`.
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import os
 import re
@@ -92,6 +130,7 @@ from pathlib import Path
 
 import pytest
 
+import brief_fetch
 import command_transport
 import conftest
 import filed_query
@@ -110,6 +149,54 @@ QUERY_DIR = "query"
 SYNC_DIR = "sync"
 REFERENCE_QUERY_SCRIPTS = sorted(
     path.name for path in (TEMPLATES / QUERY_DIR).glob("*.sh"))
+
+#: The two copies of the sync script: the one the harness ships to every other
+#: target, and the one this repository actually files its own briefs through.
+TEMPLATE_SYNC = TEMPLATES / SYNC_DIR / "github.sh"
+INSTALLED_SYNC = REPO_ROOT / ".harness" / SYNC_DIR / "github.sh"
+
+#: How an editable constant is written in a sync script: one name, one
+#: environment variable, one default, on one line. Both copies state their
+#: values this way, which is what lets the difference between them be read as
+#: values rather than as text.
+CONSTANT_ASSIGNMENT = re.compile(
+    r'^(?P<name>[A-Z][A-Z0-9_]*)="\$\{(?P<variable>L5_[A-Z0-9_]+)'
+    r':-(?P<default>[^}]*)\}"', re.MULTILINE)
+
+
+def sync_constants(text: str) -> dict[str, tuple[str, str]]:
+    """Each editable constant a sync script declares: name → (variable, default).
+
+    Read off the script rather than listed here, so a constant that was renamed
+    or dropped is a resolution that fails rather than an override that silently
+    stops overriding anything.
+    """
+    return {found.group("name"): (found.group("variable"),
+                                  found.group("default"))
+            for found in CONSTANT_ASSIGNMENT.finditer(text)}
+
+
+TEMPLATE_CONSTANTS = sync_constants(TEMPLATE_SYNC.read_text(encoding="utf-8"))
+
+#: The prefix every one of those variables shares, derived from the template
+#: rather than spelled here — it is what `stub_tracker` strips out of the
+#: environment so a copy driven "with nothing set" really has nothing set.
+SYNC_VARIABLE_PREFIX = os.path.commonprefix(
+    [variable for variable, _ in TEMPLATE_CONSTANTS.values()])
+
+#: The board this deployment files against, and the column a newly filed entry
+#: lands in. Written here rather than read out of `.harness/sync/github.sh`,
+#: because the claim these make is that the installed copy files against
+#: *these*: a test that read the values out of its own subject would pass
+#: whatever they had been changed to, which is the assertion not being made.
+THIS_TARGETS_PROJECT = "1"
+THIS_TARGETS_PROJECT_OWNER = "@me"
+THIS_TARGETS_STATUS_FIELD = "Status"
+THIS_TARGETS_STATUS_OPTION = "Backlog"
+
+#: A column nothing files into: what a human moved a landed item to, and what a
+#: later sweep must leave it at.
+A_COLUMN_A_HUMAN_MOVED_IT_TO = "In progress"
 
 #: What the module says about itself, read off it so this file names no key,
 #: bound or schema of its own.
@@ -1072,12 +1159,26 @@ def test_this_repository_carries_the_installed_query_script():
     The reference implementation is exercised by the repository that ships it,
     which is what stops the template being a file nobody ever runs — and the
     pair is what makes holding one half of it wrong.
+
+    The query half is still byte-identical to its template, and that half of
+    the assertion is unchanged: nothing about this deployment's queries is
+    particular to it. The sync half no longer is, deliberately — the installed
+    copy carries the project this repository files against, which is exactly
+    what a template must not carry — so what is asserted of it here is that it
+    is present and runnable. What the byte comparison used to guarantee, that
+    the file this repository runs is the file its suite exercises, is asserted
+    behaviourally instead: the installed copy is driven end to end through the
+    same stub tracker the template is.
     """
-    for directory in (SYNC_DIR, QUERY_DIR):
-        for template in sorted((TEMPLATES / directory).glob("*.sh")):
-            installed = REPO_ROOT / ".harness" / directory / template.name
-            assert installed.read_bytes() == template.read_bytes()
-            assert os.access(installed, os.X_OK)
+    for template in sorted((TEMPLATES / QUERY_DIR).glob("*.sh")):
+        installed = REPO_ROOT / ".harness" / QUERY_DIR / template.name
+        assert installed.read_bytes() == template.read_bytes()
+        assert os.access(installed, os.X_OK)
+
+    for template in sorted((TEMPLATES / SYNC_DIR).glob("*.sh")):
+        installed = REPO_ROOT / ".harness" / SYNC_DIR / template.name
+        assert installed.is_file()
+        assert os.access(installed, os.X_OK)
 
 
 # --------------------------------------------------------------------------
@@ -1114,14 +1215,43 @@ needs_jq = pytest.mark.skipif(
 #: than a path compiled into the stub, so one stub serves both scripts.
 LEDGER_VARIABLE = "L5_STUB_LEDGER"
 
-STUB_GH = '''#!INTERPRETER
-"""A stub `gh`, standing in for a tracker. It reaches no network.
+#: How a test tells the stub to break on purpose. Two variables rather than
+#: one, because the two failures they cause are different claims: a project
+#: call that fails is a board the sync cannot write to, and a listing that
+#: reports nothing is a board the sync cannot *read* — which the script must
+#: not mistake for an item whose Status is empty.
+FAIL_VARIABLE = "L5_STUB_FAILS_AT"
+OMIT_VARIABLE = "L5_STUB_ITEM_LIST_REPORTS_NOTHING"
 
-It implements exactly the invocations the two reference scripts make: `issue
-create`, which appends to a ledger and prints a URL, `issue list --search`,
-which matches the search text against each issue's body, and `issue view`,
-which prints one issue's body by the key the create printed -- the invocation
-the query script makes to answer a brief-fetch question.
+STUB_GH = '''#!INTERPRETER
+"""A stub `gh`, standing in for a tracker and its project board. It reaches no
+network.
+
+It implements exactly the invocations the reference scripts make and exits
+non-zero on anything else, which is what keeps it a fake tracker rather than a
+second implementation:
+
+  issue create        appends to the ledger and prints a URL.
+  issue list --search matches the search text against each issue's body.
+  issue view          prints one issue's body by the key the create printed --
+                      the invocation the query script makes to answer a
+                      brief-fetch question.
+  project item-add    adds the url to a project, or reports the item already
+                      there rather than adding a second one, which is the
+                      behaviour the sync script's retry depends on.
+  project item-list   the project's items. An item whose Status is unset
+                      carries no `status` key at all, which is how gh reports
+                      one, so a script that read a missing key as an empty
+                      string and a script that could not tell them apart are
+                      distinguishable here.
+  project view        the project's node id.
+  project field-list  the project's fields and their options, by name.
+  project item-edit   sets one single-select field on one item, by ids.
+
+The ledger holds the issues, the projects and every project invocation that was
+made, so a test can assert on a call that was *not* made as well as on one that
+was. FAIL_VARIABLE names project subcommands that must exit non-zero, and
+OMIT_VARIABLE makes `item-list` report a project with no items in it.
 """
 import json
 import os
@@ -1134,7 +1264,19 @@ def flag(argv, name, default=None):
 
 argv = sys.argv[1:]
 ledger = os.environ["LEDGER_VARIABLE"]
-issues = json.load(open(ledger)) if os.path.exists(ledger) else []
+state = json.load(open(ledger))
+issues = state["issues"]
+projects = state["projects"]
+
+
+def save():
+    json.dump(state, open(ledger, "w"))
+
+
+def refuse(message):
+    sys.stderr.write(message + "\\n")
+    sys.exit(1)
+
 
 if argv[:2] == ["issue", "create"]:
     number = len(issues) + 1
@@ -1147,7 +1289,7 @@ if argv[:2] == ["issue", "create"]:
         "stateReason": None,
     }
     issues.append(issue)
-    json.dump(issues, open(ledger, "w"))
+    save()
     print(issue["url"])
 elif argv[:2] == ["issue", "view"]:
     # One issue by the key `issue create` printed, which for this stub is the
@@ -1157,8 +1299,7 @@ elif argv[:2] == ["issue", "view"]:
     found = [issue for issue in issues
              if wanted in (issue["url"], str(issue["number"]))]
     if not found:
-        sys.stderr.write("no issue is filed under %s\\n" % wanted)
-        sys.exit(1)
+        refuse("no issue is filed under %s" % wanted)
     print(found[0]["body"])
 elif argv[:2] == ["issue", "list"]:
     search = (flag(argv, "--search", "") or "").strip('"')
@@ -1170,44 +1311,180 @@ elif argv[:2] == ["issue", "list"]:
     else:
         print(json.dumps([{name: issue.get(name) for name in fields}
                           for issue in matched]))
+elif argv[:1] == ["project"]:
+    subcommand = argv[1]
+    # Recorded before the refusal below, so a call a test told the stub to fail
+    # is still a call the test can see was made.
+    state["calls"].append({"command": subcommand, "argv": argv})
+    save()
+    if subcommand in (os.environ.get("FAIL_VARIABLE", "") or "").split(","):
+        refuse("the stub was told to fail at project %s" % subcommand)
+
+    if subcommand == "item-edit":
+        # By ids, which is what the real one takes. Every id must resolve, so a
+        # script that passed a field id where a project id belongs is reported
+        # rather than quietly writing.
+        project_id = flag(argv, "--project-id")
+        owned = [one for one in projects.values() if one["id"] == project_id]
+        if not owned:
+            refuse("no project is known by the id %s" % project_id)
+        project = owned[0]
+        fields = [one for one in project["fields"]
+                  if one["id"] == flag(argv, "--field-id")]
+        options = [one for one in (fields[0].get("options", []) if fields else [])
+                   if one["id"] == flag(argv, "--single-select-option-id")]
+        items = [one for one in project["items"] if one["id"] == flag(argv, "--id")]
+        if not (fields and options and items):
+            refuse("project %s has no such item, field or option: %s"
+                   % (project_id, " ".join(argv)))
+        items[0]["status"] = options[0]["name"]
+        save()
+        print(json.dumps(items[0]))
+    else:
+        owner = flag(argv, "--owner")
+        project = projects.get("%s/%s" % (owner, argv[2]))
+        if project is None:
+            refuse("no project %s is owned by %s" % (argv[2], owner))
+        if subcommand == "view":
+            print(json.dumps({"id": project["id"], "title": project["title"]}))
+        elif subcommand == "field-list":
+            print(json.dumps({"fields": project["fields"]}))
+        elif subcommand == "item-add":
+            url = flag(argv, "--url")
+            found = [one for one in project["items"] if one["url"] == url]
+            if found:
+                item = found[0]
+            else:
+                item = {"id": "PVTI_%d" % (len(project["items"]) + 1), "url": url}
+                project["items"].append(item)
+                save()
+            print(json.dumps({"id": item["id"], "type": "Issue",
+                              "url": item["url"]}))
+        elif subcommand == "item-list":
+            limit = int(flag(argv, "--limit", "30"))
+            reported = ([] if os.environ.get("OMIT_VARIABLE")
+                        else project["items"][:limit])
+            listed = []
+            for one in reported:
+                shown = {"id": one["id"],
+                         "content": {"type": "Issue", "url": one["url"]}}
+                if one.get("status"):
+                    shown["status"] = one["status"]
+                listed.append(shown)
+            print(json.dumps({"items": listed}))
+        else:
+            refuse("the stub was asked for something it does not do: %s"
+                   % " ".join(argv))
 else:
-    sys.stderr.write("the stub was asked for something it does not do: %s\\n"
-                     % " ".join(argv))
-    sys.exit(1)
+    refuse("the stub was asked for something it does not do: %s"
+           % " ".join(argv))
 '''
 
 
+def seeded_board() -> dict:
+    """The board the stub starts with: this target's project, and a Status
+    field with the options a project of this kind has.
+
+    A Title field sits beside the Status field so that resolving the Status
+    field's id by name is a resolution rather than a choice of the only field
+    there is, and two options sit beside `Backlog` so that resolving the option
+    by name is the same.
+    """
+    return {
+        f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}": {
+            "id": "PVT_the-stubs-project",
+            "title": "the board this module wrote",
+            "fields": [
+                {"id": "PVTF_title", "name": "Title", "type": "TITLE"},
+                {
+                    "id": "PVTSSF_status",
+                    "name": THIS_TARGETS_STATUS_FIELD,
+                    "type": "SINGLE_SELECT",
+                    "options": [
+                        {"id": "opt-backlog", "name": THIS_TARGETS_STATUS_OPTION},
+                        {"id": "opt-moved", "name": A_COLUMN_A_HUMAN_MOVED_IT_TO},
+                        {"id": "opt-done", "name": "Done"},
+                    ],
+                },
+            ],
+            "items": [],
+        }
+    }
+
+
 def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
-    """A `gh` this module wrote, first on PATH, and the ledger it writes to."""
+    """A `gh` this module wrote, first on PATH, and the ledger it writes to.
+
+    Every variable the sync scripts read their board values out of is stripped
+    from the environment rather than inherited, so a copy driven with nothing
+    set is driven with nothing set — which is the whole claim of the test that
+    files through the installed copy on this target's own values.
+    """
     directory = tmp_path / "stub-bin"
     ledger = tmp_path / "tracker-ledger.json"
     fixture_file(directory, "gh",
                  STUB_GH.replace("INTERPRETER", sys.executable)
-                        .replace("LEDGER_VARIABLE", LEDGER_VARIABLE))
+                        .replace("LEDGER_VARIABLE", LEDGER_VARIABLE)
+                        .replace("FAIL_VARIABLE", FAIL_VARIABLE)
+                        .replace("OMIT_VARIABLE", OMIT_VARIABLE))
+    ledger.write_text(json.dumps(
+        {"issues": [], "projects": seeded_board(), "calls": []}),
+        encoding="utf-8")
     environment = {
-        **os.environ,
+        name: value for name, value in os.environ.items()
+        if not name.startswith(SYNC_VARIABLE_PREFIX)
+    }
+    environment.update({
         "PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}",
         LEDGER_VARIABLE: str(ledger),
-    }
+    })
     return environment, ledger
 
 
-def file_through_the_reference_sync(tmp_path: Path, environment: dict, *,
-                                    key: str, payload: dict) -> str:
-    """One entry filed by the shipped sync script, and the reference it named."""
+def run_the_sync(script: Path, tmp_path: Path, environment: dict, *,
+                 key: str, payload: dict,
+                 extra: dict | None = None) -> subprocess.CompletedProcess:
+    """One invocation of a sync script on one entry, whatever it exits."""
     entry = {"key": key, "identity": {"kind": "finding"}, "state": "pending",
              "payload": payload}
-    result = subprocess.run(
-        [INTERPRETER, str(TEMPLATES / SYNC_DIR / "github.sh")],
+    return subprocess.run(
+        [INTERPRETER, str(script)],
         input=json.dumps(entry), capture_output=True, text=True, timeout=60,
         cwd=tmp_path,
-        env={**environment, command_transport.KEY_ENVIRONMENT_VARIABLE: key})
+        env={**environment, **(extra or {}),
+             command_transport.KEY_ENVIRONMENT_VARIABLE: key})
+
+
+def file_through_the_reference_sync(tmp_path: Path, environment: dict, *,
+                                    key: str, payload: dict,
+                                    script: Path | None = None,
+                                    extra: dict | None = None) -> str:
+    """One entry filed by a sync script, and the reference it named."""
+    result = run_the_sync(script or TEMPLATE_SYNC, tmp_path, environment,
+                          key=key, payload=payload, extra=extra)
     assert result.returncode == 0, result.stderr
     return result.stdout.strip().splitlines()[-1]
 
 
+def ledger_state(ledger: Path) -> dict:
+    return json.loads(ledger.read_text(encoding="utf-8"))
+
+
 def bodies(ledger: Path) -> list[str]:
-    return [issue["body"] for issue in json.loads(ledger.read_text())]
+    return [issue["body"] for issue in ledger_state(ledger)["issues"]]
+
+
+def board_items(ledger: Path) -> list[dict]:
+    """The items on this target's project, as the stub holds them."""
+    projects = ledger_state(ledger)["projects"]
+    return projects[
+        f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}"]["items"]
+
+
+def project_calls(ledger: Path, command: str | None = None) -> list[dict]:
+    """Every project invocation the stub was made, optionally by subcommand."""
+    return [call for call in ledger_state(ledger)["calls"]
+            if command is None or call["command"] == command]
 
 
 @needs_jq
@@ -1312,6 +1589,520 @@ def test_the_query_script_answers_nothing_known_when_its_search_fails(tmp_path):
         os.environ.update(previous)
 
     assert knows_nothing(answer)
+
+
+# --------------------------------------------------------------------------
+# The board, driven through both copies of the sync script
+#
+# The mechanics are the template's and the values are this target's, so the
+# same assertions are made of both copies: the installed one on its own values
+# with nothing in its environment, and the template on the two values the
+# installed copy sets, handed to it through the variables the template itself
+# declares for them. A mechanic that works in one and not the other is a
+# failing test here rather than an unnoticed divergence.
+# --------------------------------------------------------------------------
+
+BOTH_SYNC_COPIES = [
+    pytest.param(INSTALLED_SYNC, id="installed"),
+    pytest.param(TEMPLATE_SYNC, id="template"),
+]
+
+#: Every project subcommand the shipped script invokes, read off the script
+#: rather than listed here: the claim below is about *every* call made after
+#: the issue exists, and a call added to the script without being added to this
+#: list would be a claim quietly narrowed.
+PROJECT_SUBCOMMANDS = sorted(set(re.findall(
+    r"gh project ([a-z-]+)", TEMPLATE_SYNC.read_text(encoding="utf-8"))))
+
+#: What the transport reads as "the entry stays pending and a later sweep
+#: retries it". Named rather than written as a bare 75 beside each assertion.
+TRANSIENT_EXIT = 75
+
+#: The payload the board tests file. Nothing about the board depends on its
+#: shape, so it is the smallest thing the sync script can file.
+AN_ENTRY = {"title": "the parser drops the last token",
+            "body": "what it says", "paths": list(ASKED)}
+
+
+def a_filed_brief() -> dict:
+    """A payload that is a brief, for the fetch that reads one back whole.
+
+    The workflow is derived from the definitions the harness holds rather than
+    named here, because what this asserts is that the pair carries a payload
+    back unchanged — a name written here would make it assert which workflows
+    this repository ships instead.
+    """
+    return {
+        **AN_ENTRY,
+        "slug": "the-parser-drops-the-last-token",
+        "category": "correctness",
+        "severity": 2,
+        "confidence": "high",
+        "effort": "S",
+        "workflow": harness_config.workflow_names(REPO_ROOT)[0],
+    }
+
+
+def board_environment_for(script: Path) -> dict:
+    """What a copy needs in its environment to file against the stub's board.
+
+    The installed copy needs nothing, which is the point of it. The template
+    carries no project and no column by design, so it is handed exactly the two
+    values the installed copy sets in its own text.
+    """
+    if script == INSTALLED_SYNC:
+        return {}
+    return {
+        TEMPLATE_CONSTANTS["PROJECT"][0]: THIS_TARGETS_PROJECT,
+        TEMPLATE_CONSTANTS["STATUS_OPTION"][0]: THIS_TARGETS_STATUS_OPTION,
+    }
+
+
+def sync_to_the_board(script: Path, tmp_path: Path, environment: dict, *,
+                      key: str, payload: dict | None = None,
+                      breaking: dict | None = None):
+    """One invocation of `script` against the stub's board.
+
+    `breaking` is whatever the stub is to be broken with for this invocation
+    alone, so a test can drive the same key twice with the board failing the
+    first time and answering the second.
+    """
+    return run_the_sync(
+        script, tmp_path, environment, key=key, payload=payload or AN_ENTRY,
+        extra={**board_environment_for(script), **(breaking or {})})
+
+
+def test_the_template_declares_the_two_constants_the_board_tests_override():
+    """What `board_environment_for` rests on, asserted rather than assumed.
+
+    A shipped artifact and the subject: the template's whole design is that its
+    board values are set from outside it, so the two constants below must exist
+    and must be spelled with the prefix the stripping in `stub_tracker` uses. A
+    rename would otherwise leave the template driven with no project at all,
+    and every board assertion about it passing on a board it never touched.
+    """
+    assert set(TEMPLATE_CONSTANTS) >= {"PROJECT", "STATUS_OPTION"}, \
+        sorted(TEMPLATE_CONSTANTS)
+    assert SYNC_VARIABLE_PREFIX.startswith("L5_")
+    for name in ("PROJECT", "STATUS_OPTION"):
+        assert TEMPLATE_CONSTANTS[name][0].startswith(SYNC_VARIABLE_PREFIX), name
+    assert PROJECT_SUBCOMMANDS, "the script invokes no project subcommand"
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_an_entry_filed_with_a_project_configured_lands_on_the_board(
+        script, tmp_path):
+    """The item exists and its Status is the configured option."""
+    environment, ledger = stub_tracker(tmp_path)
+    result = sync_to_the_board(script, tmp_path, environment, key="k-board")
+
+    assert result.returncode == 0, result.stderr
+    url = result.stdout.strip().splitlines()[-1]
+    assert url.startswith("https://tracker.invalid/")
+
+    items = board_items(ledger)
+    assert len(items) == 1, items
+    assert items[0]["url"] == url
+    assert items[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+@pytest.mark.parametrize("subcommand", PROJECT_SUBCOMMANDS)
+def test_every_failure_after_the_issue_exists_is_transient(
+        subcommand, script, tmp_path):
+    """The issue is the record and the board is a view of it.
+
+    Each project call the script makes is failed in turn, and each must exit 75
+    rather than 0 or 1: a zero would report an entry as landed with the board
+    call lost, and a non-zero that is not 75 would fail the entry terminally
+    and lose it. The issue is filed either way, which is what makes the retry
+    the next sweep performs find it rather than create a second one.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = sync_to_the_board(script, tmp_path, environment, key="k-fails",
+                               breaking={FAIL_VARIABLE: subcommand})
+
+    assert result.returncode == TRANSIENT_EXIT, (result.returncode, result.stderr)
+    assert len(ledger_state(ledger)["issues"]) == 1
+    assert project_calls(ledger, subcommand), \
+        f"the script never invoked project {subcommand}"
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_board_failure_leaves_the_entry_pending_with_no_item(
+        script, tmp_path):
+    """The first half of the retry, stated on its own.
+
+    The control is the test above it: the same script, the same stub and the
+    same entry with nothing broken files an item — so "no item" here is the
+    board call having failed rather than a board nothing ever reaches.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = sync_to_the_board(script, tmp_path, environment, key="k-retry",
+                               breaking={FAIL_VARIABLE: "item-add"})
+
+    assert result.returncode == TRANSIENT_EXIT, result.stderr
+    assert len(ledger_state(ledger)["issues"]) == 1
+    assert board_items(ledger) == []
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_the_next_sweep_reaches_the_board_for_an_issue_already_created(
+        script, tmp_path):
+    """The repair, driven rather than read.
+
+    One key, two invocations, the board failing on the first and answering on
+    the second. The second invocation's search finds the issue the first one
+    created, and the whole claim is that it goes on to do the board work
+    anyway: a script whose found-existing path answers and returns leaves the
+    board empty here forever.
+
+    The absence — no second issue — is controlled beside itself: a third
+    invocation under a *different* key does create one, so the count staying at
+    one is idempotency rather than a stub that stopped filing.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+
+    failed = sync_to_the_board(script, tmp_path, environment, key="k-twice",
+                               breaking={FAIL_VARIABLE: "item-add"})
+    assert failed.returncode == TRANSIENT_EXIT, failed.stderr
+    assert board_items(ledger) == []
+    created = ledger_state(ledger)["issues"][0]["url"]
+
+    retried = sync_to_the_board(script, tmp_path, environment, key="k-twice")
+    assert retried.returncode == 0, retried.stderr
+    assert retried.stdout.strip().splitlines()[-1] == created
+
+    assert len(ledger_state(ledger)["issues"]) == 1, "a second issue was created"
+    items = board_items(ledger)
+    assert len(items) == 1, items
+    assert items[0]["url"] == created
+    assert items[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+    other = sync_to_the_board(script, tmp_path, environment, key="k-a-different-one")
+    assert other.returncode == 0, other.stderr
+    assert len(ledger_state(ledger)["issues"]) == 2
+    assert len(board_items(ledger)) == 2
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_an_item_whose_status_the_board_reports_is_left_where_it_is(
+        script, tmp_path):
+    """Nothing moves an item out of the column a human put it in.
+
+    The write and its absence are driven in one test so each controls the
+    other: the first invocation finds an empty Status and writes, which is
+    observed both in the item and in the `item-edit` the stub recorded; a human
+    then moves the item; and the second invocation over the same entry makes no
+    `item-edit` at all and leaves the value alone.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    first = sync_to_the_board(script, tmp_path, environment, key="k-settled")
+    assert first.returncode == 0, first.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert len(project_calls(ledger, "item-edit")) == 1
+
+    state = ledger_state(ledger)
+    project = state["projects"][
+        f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}"]
+    project["items"][0]["status"] = A_COLUMN_A_HUMAN_MOVED_IT_TO
+    state["calls"] = []
+    ledger.write_text(json.dumps(state), encoding="utf-8")
+
+    again = sync_to_the_board(script, tmp_path, environment, key="k-settled")
+    assert again.returncode == 0, again.stderr
+    assert board_items(ledger)[0]["status"] == A_COLUMN_A_HUMAN_MOVED_IT_TO
+    assert project_calls(ledger, "item-edit") == []
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_an_item_the_listing_did_not_report_is_a_failure_to_know(
+        script, tmp_path):
+    """A listing that did not return the item is not an empty Status.
+
+    The stub reports a project with no items in it while the item is in fact
+    there, which is what a listing bounded too short or a tracker answering
+    partially looks like. Read as an empty Status it would be overwritten; read
+    as a failure to know it is answered transiently and left alone.
+
+    The control is the same drive with the listing answering, below the
+    assertion: there the `item-edit` is made and the Status is written, so the
+    absence here is the guard and not a write that never happens.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    blind = sync_to_the_board(script, tmp_path, environment, key="k-unlisted",
+                              breaking={OMIT_VARIABLE: "1"})
+
+    assert blind.returncode == TRANSIENT_EXIT, (blind.returncode, blind.stderr)
+    items = board_items(ledger)
+    assert len(items) == 1, items
+    assert "status" not in items[0], items[0]
+    assert project_calls(ledger, "item-edit") == []
+
+    seeing = sync_to_the_board(script, tmp_path, environment, key="k-unlisted")
+    assert seeing.returncode == 0, seeing.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert len(project_calls(ledger, "item-edit")) == 1
+
+
+@needs_jq
+def test_the_installed_copy_files_to_this_targets_board_with_nothing_set(
+        tmp_path):
+    """This deployment's own wiring, rather than the test's environment.
+
+    Nothing named with the sync scripts' variable prefix is in the environment
+    this runs under — asserted, not assumed — so the project and the column the
+    item lands in can only have come out of `.harness/sync/github.sh` itself.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    assert [name for name in environment
+            if name.startswith(SYNC_VARIABLE_PREFIX)] == []
+
+    result = run_the_sync(INSTALLED_SYNC, tmp_path, environment,
+                          key="k-this-target", payload=AN_ENTRY)
+    assert result.returncode == 0, result.stderr
+
+    projects = ledger_state(ledger)["projects"]
+    landed = projects[
+        f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}"]["items"]
+    assert len(landed) == 1, landed
+    assert landed[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+def test_the_template_with_no_project_configured_files_exactly_as_before(
+        tmp_path):
+    """A target that configures no project must file as it always has.
+
+    The template is run with nothing set, which is what every other target gets
+    until it edits its installed copy: the issue is filed, the reference is
+    named, and the board is not touched at all. The control is the same
+    template under the two values above, which does add an item.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = run_the_sync(TEMPLATE_SYNC, tmp_path, environment,
+                          key="k-no-project", payload=AN_ENTRY)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1].startswith(
+        "https://tracker.invalid/")
+    assert len(ledger_state(ledger)["issues"]) == 1
+    assert project_calls(ledger) == []
+    assert board_items(ledger) == []
+
+    configured = sync_to_the_board(TEMPLATE_SYNC, tmp_path, environment,
+                                   key="k-with-a-project")
+    assert configured.returncode == 0, configured.stderr
+    assert len(board_items(ledger)) == 1
+
+
+# --------------------------------------------------------------------------
+# The template carries no value particular to this deployment
+# --------------------------------------------------------------------------
+
+
+def test_the_template_names_no_project_and_no_status_option():
+    """A shipped artifact and the subject: what the template carries.
+
+    A template carrying a project number would file another repository's briefs
+    onto this board. The owner is allowed the generic default it ships with;
+    the project and the column must both default to empty, and the column this
+    target files into must not appear anywhere in the file.
+
+    The control is the same extraction and the same search over the installed
+    copy, which does name both — so the emptiness here is the template's rather
+    than a parse that stopped matching anything.
+    """
+    template = TEMPLATE_SYNC.read_text(encoding="utf-8")
+    installed = sync_constants(INSTALLED_SYNC.read_text(encoding="utf-8"))
+
+    assert TEMPLATE_CONSTANTS["PROJECT"][1] == ""
+    assert TEMPLATE_CONSTANTS["STATUS_OPTION"][1] == ""
+    assert TEMPLATE_CONSTANTS["PROJECT_OWNER"][1] == THIS_TARGETS_PROJECT_OWNER
+    assert THIS_TARGETS_STATUS_OPTION not in template
+
+    assert installed["PROJECT"][1] == THIS_TARGETS_PROJECT
+    assert installed["STATUS_OPTION"][1] == THIS_TARGETS_STATUS_OPTION
+    assert THIS_TARGETS_STATUS_OPTION in \
+        INSTALLED_SYNC.read_text(encoding="utf-8")
+
+
+def lines_that_differ(left: str, right: str) -> list[str]:
+    """Every line one text has and the other does not, without its diff mark."""
+    return [line[1:] for line in difflib.unified_diff(
+        left.splitlines(), right.splitlines(), lineterm="", n=0)
+        if line[:1] in "+-" and not line.startswith(("---", "+++"))]
+
+
+def differences_that_are_not_constant_values(left: str, right: str) -> list[str]:
+    return [line for line in lines_that_differ(left, right)
+            if not CONSTANT_ASSIGNMENT.match(line)]
+
+
+def test_the_installed_copy_differs_from_its_template_only_in_constant_values():
+    """Both are shipped artifacts and both are the subject.
+
+    The split the story rests on is that the mechanics live in one file and the
+    values in the other, and this is what holds it: every line the two do not
+    share is one of the editable constant assignments at the top. Textual
+    identity is deliberately not asserted — the installed copy is *expected* to
+    differ in its values — so what is asserted is the shape of the difference.
+    """
+    template = TEMPLATE_SYNC.read_text(encoding="utf-8")
+    installed = INSTALLED_SYNC.read_text(encoding="utf-8")
+
+    assert installed != template, \
+        "the installed copy sets no value of its own, so it files nowhere"
+    assert differences_that_are_not_constant_values(template, installed) == []
+
+
+def test_that_comparison_reports_a_difference_that_is_not_a_constant(tmp_path):
+    """The control: the same predicate over a copy of the template whose
+    difference is a line of mechanics rather than a value.
+
+    Rendered here rather than written to the tree, so the control is about the
+    comparison and not about this repository.
+    """
+    template = TEMPLATE_SYNC.read_text(encoding="utf-8")
+    tampered = template.replace("fail_transient()", "fail_transient_renamed()")
+    assert tampered != template
+
+    reported = differences_that_are_not_constant_values(template, tampered)
+    assert reported, "the comparison sees no difference it should report"
+    assert any("fail_transient_renamed" in line for line in reported), reported
+
+
+# --------------------------------------------------------------------------
+# A sync command must not commit
+# --------------------------------------------------------------------------
+
+
+#: A `git` invoked as a command: at the start of a line or after a shell
+#: operator, rather than the word appearing inside a longer one or in the
+#: header paragraph that tells a script author not to add one.
+GIT_INVOCATION = re.compile(r'(?:^|[;&|(]|\$\()\s*git\s', re.MULTILINE)
+
+
+def git_invocations(text: str) -> list[str]:
+    return [line for line in text.splitlines()
+            if GIT_INVOCATION.search(line) and not line.lstrip().startswith("#")]
+
+
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_no_sync_script_invokes_git(script):
+    """The header says a sync command must not commit and nothing enforces it.
+
+    A shipped artifact and the subject. The control is below: the same scan
+    over a rendering of the same script with a commit added reports it, so
+    silence here is the file rather than a scan that matches nothing.
+    """
+    assert git_invocations(script.read_text(encoding="utf-8")) == []
+
+
+def test_that_scan_reports_a_commit_added_to_a_sync_script():
+    """The control, on a rendering rather than on the tree."""
+    committing = TEMPLATE_SYNC.read_text(encoding="utf-8").replace(
+        'echo "$url"', 'git commit -m "filed"\necho "$url"')
+    reported = git_invocations(committing)
+    assert reported, "the scan sees no git invocation in a script that has one"
+    assert any("git commit" in line for line in reported), reported
+
+
+# --------------------------------------------------------------------------
+# What the byte-identity assertion used to guarantee, asserted behaviourally
+# --------------------------------------------------------------------------
+
+
+@needs_jq
+def test_this_repositorys_own_pair_files_and_answers_through_its_configured_query(
+        tmp_path):
+    """The file this repository runs is the file its suite exercises.
+
+    This is what stands in place of the byte comparison the story falsified:
+    the installed sync script files a brief and the command this repository has
+    configured as its `filed_query_command` — read out of `.harness/config.yaml`
+    rather than named here — answers for it. Both halves are the installed
+    copies, so a deployment whose installed pair had drifted from what its
+    suite drives would fail here.
+
+    Nothing reaches a network: the stub `gh` this module wrote is first on PATH
+    for both halves, and the board it writes to is a file under `tmp_path`.
+    """
+    config = harness_config.load_config(REPO_ROOT)
+    assert COMMAND_KEY in config, \
+        f"this repository configures no {COMMAND_KEY}, so dedupe never runs"
+
+    brief = a_filed_brief()
+    environment, ledger = stub_tracker(tmp_path)
+    url = file_through_the_reference_sync(
+        tmp_path, environment, key="k-this-repositorys-own", payload=brief,
+        script=INSTALLED_SYNC)
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+    previous = dict(os.environ)
+    os.environ.update({name: environment[name]
+                       for name in ("PATH", LEDGER_VARIABLE)})
+    try:
+        answer = filed_query.query(ASKED, config, target_root=REPO_ROOT)
+        unrelated = filed_query.query(
+            ("src/nothing-is-filed-against-this.py",), config,
+            target_root=REPO_ROOT)
+        fetched = brief_fetch.fetch(url, config, target_root=REPO_ROOT,
+                                    harness_root=REPO_ROOT)
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
+
+    # A second inspection over the same paths recognises the first one's brief
+    # rather than refiling it, which is the whole point of turning the query
+    # side on.
+    assert answer.answered is True, answer.reason
+    assert [item.key for item in answer.items] == [url]
+    assert answer.items[0].title == brief["title"]
+    assert set(answer.items[0].paths) == set(ASKED)
+
+    # Nothing is filed against a path no marker was written for, and the pair
+    # says so as an answer rather than as a silence. Its control is the
+    # assertion above, where the same pair over the filed paths reports one.
+    assert unrelated.answered is True, unrelated.reason
+    assert unrelated.items == ()
+
+    # The payload comes back whole rather than as a title and a body, which is
+    # what the payload marker exists for: every field the brief was filed with
+    # is the field it is fetched with.
+    assert fetched.brief is not None, fetched.reason
+    assert fetched.brief == brief
+
+
+def test_this_repository_configures_its_query_command_at_its_installed_script():
+    """A shipped artifact and the subject: the one line of configuration.
+
+    The command the deployment actually files and asks through is the installed
+    script beside the installed sync one, and it is runnable. The key needed no
+    schema change — it was already declared — which is asserted here rather
+    than argued.
+    """
+    config = harness_config.load_config(REPO_ROOT)
+    configured = shlex.split(config[COMMAND_KEY])
+    assert len(configured) == 1, configured
+
+    command = (REPO_ROOT / configured[0]).resolve()
+    installed = (REPO_ROOT / ".harness" / QUERY_DIR).resolve()
+    assert command.parent == installed, command
+    assert command.name in REFERENCE_QUERY_SCRIPTS, command.name
+    assert command.is_file()
+    assert os.access(command, os.X_OK)
+
+    # Asked of the harness's own declaration reader rather than by opening the
+    # schema here, so this module resolves no live artifact of its own and the
+    # question is answered by the same route the pre-flight check asks it by.
+    assert COMMAND_KEY in harness_config.declared_config_keys()
 
 
 # --------------------------------------------------------------------------

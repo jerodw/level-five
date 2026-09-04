@@ -38,11 +38,28 @@
 # promise kept: the key goes into the issue body, and the issue is created
 # only when a search for the key finds nothing.
 #
-# ATOMICITY IS THIS COMMAND'S BUSINESS. Filing a finding here is three API
-# calls — create, label, add to a project board. The harness makes one
-# invocation and tracks no partial state. If a later call fails, exit 75 and
-# let the next sync re-run the whole thing; the search at the top is what
-# makes that safe.
+# ATOMICITY IS THIS COMMAND'S BUSINESS. Filing a finding here is several API
+# calls — create, label, add to a project board, set the board's Status. The
+# harness makes one invocation and tracks no partial state. If a later call
+# fails, exit 75 and let the next sync re-run the whole thing; the search at
+# the top is what makes that safe. That is why the two paths through the
+# search — an issue found, an issue created — converge on one url before the
+# board block rather than the found path answering and returning: an entry
+# whose issue was created by an earlier invocation and whose board call failed
+# must reach the board on the next sweep, and it can only do that if the
+# invocation that finds the issue goes on to do the board work.
+#
+# EVERYTHING AFTER gh issue create SUCCEEDS IS TRANSIENT. The issue is the
+# record and the board is a view of it, so a board that was briefly
+# unreachable must not lose the item: every failure below the creation exits
+# 75, the entry stays pending, and a later sweep runs this whole command again
+# and finds the issue rather than creating a second one.
+#
+# THE BOARD MECHANICS ARE GENERIC; THE VALUES ARE THE TARGET'S. This file
+# carries how a board is written to and no statement about which board: the
+# project, its owner and the Status option are the constants below, and a
+# target sets them in its installed .harness/sync/ copy. A template carrying a
+# project number would file another repository's briefs onto this board.
 #
 # THE QUERY SCRIPT IS THIS ONE'S PAIR. templates/query/github.sh asks what is
 # already filed against a set of paths, and it finds what this script wrote by
@@ -63,7 +80,23 @@ set -uo pipefail
 
 # --- what this target files against. Edit these. ------------------------
 LABEL="${L5_SYNC_LABEL:-l5}"
-PROJECT="${L5_SYNC_PROJECT:-}"   # a project number or URL; empty skips the board
+PROJECT="${L5_SYNC_PROJECT:-1}"   # a project number or URL; empty skips the board
+PROJECT_OWNER="${L5_SYNC_PROJECT_OWNER:-@me}"   # who owns that project
+# The board's Status field, by name, and the option a newly filed entry is put
+# in. An empty option means the item is added and its Status is left at
+# whatever the project's own default is, which is what a target whose board has
+# no such field gets — so the values below are the ones a target sets in its
+# installed copy, and the template carries none of them.
+STATUS_FIELD="${L5_SYNC_STATUS_FIELD:-Status}"
+STATUS_OPTION="${L5_SYNC_STATUS_OPTION:-Backlog}"
+
+# How much of the project's item listing is read when looking for the item this
+# invocation just added. Not an L5_SYNC_ constant, because it is a mechanic
+# rather than something this target files against: it bounds a read, and an
+# item the listing did not report is answered transiently rather than read as
+# an empty Status, so a bound that was too small costs a pending entry and
+# never an overwritten column.
+ITEM_LIST_LIMIT=5000
 
 # The searchable marker written once per path the payload carries.
 # templates/query/github.sh searches for exactly this prefix, and a test reads
@@ -137,23 +170,78 @@ existing="$(gh issue list --search "\"${marker}\"" --state all --limit 1 \
 
 if [ -n "$existing" ]; then
   # Already filed — by an earlier invocation whose response we lost, or by
-  # this one running twice. Answer with what the provider holds.
-  echo "$existing"
-  exit 0
+  # this one running twice. Take what the provider holds and fall through: the
+  # board work below is what the earlier invocation may have failed at, and it
+  # is only reachable on this path.
+  url="$existing"
+else
+  url="$(gh issue create --title "$title" --body "$body" --label "$LABEL" 2>&1)" \
+    || fail_transient "the issue could not be created: ${url}"
+
+  url="$(printf '%s\n' "$url" | grep -Eo 'https://[^[:space:]]+' | tail -1)"
+  [ -n "$url" ] || fail_transient "the issue was created but named no URL"
 fi
 
-url="$(gh issue create --title "$title" --body "$body" --label "$LABEL" 2>&1)" \
-  || fail_transient "the issue could not be created: ${url}"
-
-url="$(printf '%s\n' "$url" | grep -Eo 'https://[^[:space:]]+' | tail -1)"
-[ -n "$url" ] || fail_transient "the issue was created but named no URL"
-
+# --- the board -----------------------------------------------------------
+# The issue exists by here, whichever path we came down, so every failure
+# below is transient: a later sync re-runs this whole command, the search
+# finds the issue, and the board work is retried.
 if [ -n "$PROJECT" ]; then
-  # The issue exists now, so a board failure must not be terminal: a later
-  # sync re-runs this whole command, the search finds the issue, and the
-  # board call is retried.
-  gh project item-add "$PROJECT" --owner "@me" --url "$url" >/dev/null 2>&1 \
-    || fail_transient "the issue was created at ${url} but the project board could not be updated"
+  # item-add for an issue already on the board reports the existing item
+  # rather than adding a second one, which is what makes the retry safe. The
+  # item's id is what item-edit takes; it deals in ids and not in names.
+  added="$(gh project item-add "$PROJECT" --owner "$PROJECT_OWNER" --url "$url" \
+             --format json 2>/dev/null)" \
+    || fail_transient "the issue was created at ${url} but it could not be added to project ${PROJECT}"
+  item_id="$(printf '%s' "$added" | jq -r '.id // ""')" \
+    || fail_transient "the issue was added to project ${PROJECT} but the item id could not be read"
+  [ -n "$item_id" ] || fail_transient "the issue was added to project ${PROJECT} but it named no item"
+
+  if [ -n "$STATUS_OPTION" ]; then
+    # What the board already says about this item. An item the listing did not
+    # report is a failure to know rather than an empty Status: overwriting on
+    # the strength of a listing that did not mention the item would move an
+    # item out of the column a human put it in.
+    listed="$(gh project item-list "$PROJECT" --owner "$PROJECT_OWNER" \
+                --limit "$ITEM_LIST_LIMIT" --format json 2>/dev/null)" \
+      || fail_transient "the project ${PROJECT} listing failed, so the item's ${STATUS_FIELD} is unknown"
+    item="$(printf '%s' "$listed" \
+              | jq -c --arg id "$item_id" '[.items[]? | select(.id == $id)] | .[0] // empty')" \
+      || fail_transient "the project ${PROJECT} listing could not be read"
+    [ -n "$item" ] \
+      || fail_transient "item ${item_id} was not in the first ${ITEM_LIST_LIMIT} items of project ${PROJECT}, so its ${STATUS_FIELD} is unknown"
+    current="$(printf '%s' "$item" | jq -r --arg name "$STATUS_FIELD" \
+                 '[to_entries[] | select((.key | ascii_downcase) == ($name | gsub(" "; "") | ascii_downcase)) | .value] | .[0] // "" | tostring')" \
+      || fail_transient "the item's ${STATUS_FIELD} could not be read"
+
+    # Set it only where it is empty. A sweep re-running over an entry that
+    # landed long ago finds a value here and leaves it alone; this script puts
+    # an item into a column once and never moves it between columns.
+    if [ -z "$current" ]; then
+      project_id="$(gh project view "$PROJECT" --owner "$PROJECT_OWNER" --format json 2>/dev/null \
+                      | jq -r '.id // ""')" \
+        || fail_transient "project ${PROJECT} could not be read, so its ${STATUS_FIELD} was not set"
+      fields="$(gh project field-list "$PROJECT" --owner "$PROJECT_OWNER" --format json 2>/dev/null)" \
+        || fail_transient "the fields of project ${PROJECT} could not be read"
+      field_id="$(printf '%s' "$fields" | jq -r --arg name "$STATUS_FIELD" \
+                    '[.fields[]? | select(.name == $name) | .id] | .[0] // ""')" \
+        || fail_transient "the fields of project ${PROJECT} could not be read"
+      option_id="$(printf '%s' "$fields" | jq -r --arg name "$STATUS_FIELD" --arg option "$STATUS_OPTION" \
+                     '[.fields[]? | select(.name == $name) | .options[]? | select(.name == $option) | .id] | .[0] // ""')" \
+        || fail_transient "the options of ${STATUS_FIELD} could not be read"
+
+      # A name that resolves to no id is transient like everything else after
+      # the issue exists: a misconfigured field or option name costs a pending
+      # entry, and the alternative costs the item.
+      [ -n "$project_id" ] || fail_transient "project ${PROJECT} named no id"
+      [ -n "$field_id" ] || fail_transient "project ${PROJECT} has no field named ${STATUS_FIELD}"
+      [ -n "$option_id" ] || fail_transient "${STATUS_FIELD} in project ${PROJECT} has no option named ${STATUS_OPTION}"
+
+      gh project item-edit --id "$item_id" --project-id "$project_id" \
+        --field-id "$field_id" --single-select-option-id "$option_id" >/dev/null 2>&1 \
+        || fail_transient "the item is on project ${PROJECT} but its ${STATUS_FIELD} could not be set to ${STATUS_OPTION}"
+    fi
+  fi
 fi
 
 echo "$url"
