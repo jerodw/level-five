@@ -8,12 +8,19 @@ directory beside this script for the session rather than installing anything
 into the target repository. That is what makes a skill available in an assist
 session started in any target: the harness carries it, the session loads it,
 and the target is left exactly as it was.
+
+Its prompt is rendered rather than read raw, so the shared prose partial
+reaches it from the one file that holds it.
 """
 import os
 import sys
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import context_assembler  # noqa: E402
 
 #: The skills the harness ships to the sessions it starts. Loaded for the
 #: session with --plugin-dir, so nothing is installed into the target and a
@@ -27,7 +34,19 @@ HARNESS_ROOT_VARIABLE = "L5_HARNESS_ROOT"
 
 
 def main() -> None:
-    assist_prompt = (HARNESS_ROOT / "prompts" / "assist.md").read_text(encoding="utf-8")
+    # The assist agent is not a workflow stage, so no coordinator renders its
+    # template. Render it here through the same helper l5-plan and
+    # build_context share, so the shared prose partial reaches the agent the
+    # developer talks to most from the one file that holds it. The partial
+    # carries no placeholder of its own, which is what lets this context be as
+    # narrow as the planner's; an absent partial resolves to None and renders
+    # as the literal None, the optional-placeholder convention.
+    template = context_assembler.load_template(HARNESS_ROOT, "assist.md")
+    context: dict[str, str | None] = {}
+    context["prose_layer"] = context_assembler.resolved_partial(
+        HARNESS_ROOT, context_assembler.PROSE_LAYER, context
+    )
+    assist_prompt = context_assembler.render(template, context)
     args = [
         "claude",
         "--permission-mode",

@@ -469,18 +469,26 @@ def test_that_absence_is_about_the_planner_and_not_about_the_search(
     assert prose_partial() in planner_prompt
 
 
-def test_assist_receives_neither_partial(harness_root):
-    """The non-stage prompt no run renders keeps carrying neither, which the
-    story states as an unchanged fact rather than a new one."""
+def test_assist_receives_the_prose_partial_and_not_the_harness_one(
+        harness_root):
+    """The two partials still have different reach, and since story-104 the
+    assist template is on the prose side of it.
+
+    It mutates no tree, so it is given no blocked-path block; it writes prose a
+    human reads, so it carries the prose layer like every other prompt that
+    does.
+    """
     assist = context_assembler.load_template(harness_root, "assist.md")
     assert "{{harness_layer}}" not in assist
     assert "[Harness Layer]" not in assist
-    assert "{{prose_layer}}" not in assist
-    # Control: the templates that do carry them say so in the same spelling.
-    planner = context_assembler.load_template(harness_root, "planner.md")
-    assert "{{prose_layer}}" in planner
+    assert "{{prose_layer}}" in assist
+    # Control: a template that does carry the harness partial says so in the
+    # same spelling, so the absence above is the assist template's reach rather
+    # than a search looking for something nothing spells.
     assert "{{harness_layer}}" in context_assembler.load_template(
         harness_root, STAGE_TEMPLATES[0])
+    assert "{{prose_layer}}" in context_assembler.load_template(
+        harness_root, "planner.md")
 
 
 def test_one_file_edit_changes_the_prose_layer_of_every_prompt_carrying_it(

@@ -2238,6 +2238,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "beside the other inspection keys. Neither is a claim a fixture "
         "configuration could make, because both are claims about the files "
         "this repository ships",
+    "test_a_question_to_the_developer_is_about_consequences.py":
+        "what this repository ships is the whole of its subject: that "
+        "prompts/prose-layer.md carries the widened scope sentence, the "
+        "conversational entry and the worked pair that teaches it, that "
+        "prompts/assist.md carries the placeholder the partial lands in, and "
+        "that the two developer-facing launchers under scripts/ resolve that "
+        "one file through the one shared helper. A fixture layer would say "
+        "only what the module had just written into it, and a fixture launcher "
+        "would say nothing about what a developer is actually handed. Where a "
+        "prompts tree *is* an input — that editing the layer alone changes "
+        "both renders, and that a tree with no layer leaves both without it — "
+        "the module builds one under tmp_path and drives the real launcher "
+        "against that, rather than touching the shipped tree",
     "test_a_stage_cannot_edit_its_own_story.py":
         "its runs are driven against a workflow it builds and under execution "
         "rules of its own, because what a run does with a record naming a "
