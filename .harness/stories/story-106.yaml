@@ -1,0 +1,271 @@
+story:
+  id: story-106
+  title: A tester edit outside the test directory is governed, and a refused edit is reverted rather than escalated
+  description: |
+    The stage that writes the validation may edit the thing being validated,
+    and nothing watches it do so. One stage carries a path restriction and a
+    revert check; the tester carries neither. So a tester may change the
+    artifact its own assertions are about, and the run keeps no evidence of
+    what it changed. story-104's tester modified prompts/prose-layer.md - the
+    same file that story's assertions were about - and its verifier recorded
+    in `unverified` that it could not diff the change, because the stage
+    baseline covers the test directory alone. The edit was recoverable only
+    from a gitignored log.
+
+    This story gives the tester the mirror image of the restriction the code
+    stage carries, and changes what a refusal does.
+
+    THE DECLARATION. A new stage key, `may_only_change`, confines a stage's
+    repository writes to the prefixes it names. Outside them, a creation
+    escalates on the ownership check and a modification or deletion is decided
+    by the revert check, exactly as they are decided inside a `may_not_create`
+    prefix today. The tester declares `may_only_change: ["{{tests_dir}}"]` and
+    a revert check, and the revert check is what brings the stage baseline
+    with it - which is the half that closes the evidence gap, because the
+    tester's baseline then covers the tree it may not freely change.
+
+    ONE DERIVATION, NOT TWO. Plan time reads stage_restrictions(); run time
+    reads stage.get("may_not_create") at the enforcement site. Two readings of
+    one rule that can disagree, and adding a second sense would make it three.
+    So stage_restrictions stops returning bare (stage, prefix) pairs and
+    returns restrictions that carry their prefix, their sense, a governs(path)
+    predicate and their own wording. Ownership, the revert check, baseline
+    capture, the grant cross-check, both plan-time checks and the planner
+    injection all read that one derivation. No stage name and no sense
+    conditional enters the coordinator's enforcement path.
+
+    WHAT A REFUSAL DOES. Today a refused edit escalates and the run stops.
+    That is a stopped run over a case the harness has already proved harmless,
+    so this story changes the disposition: the coordinator restores the
+    offending paths from the stage's baseline, records what it undid and what
+    it discarded, and the run continues.
+
+    It is safe by construction rather than by judgement. A refusal means the
+    check built a clone with exactly those paths restored to what the stage
+    found and watched the suite pass. Reproducing that content in the working
+    tree reproduces the tree the proof was taken on, so the restore rule is
+    factored out of the clone builder and used by both - a path the baseline
+    holds is restored to that content, a governed path it does not hold is
+    removed - because two copies of that rule could leave a tree the proof
+    does not cover.
+
+    WHAT STILL STOPS A RUN. Two things, and they are different questions from
+    the one above. A check that reached no verdict - no baseline captured, the
+    clone could not be built - escalates as it does today: nothing was proved,
+    so nothing may be undone. And the ownership check on a created file
+    beneath a governed prefix escalates outright, unchanged: no suite has been
+    run against that file's absence, so there is no proof to act on.
+
+    ORDERING. The revert check runs at story_coordinator.py:7066, ahead of the
+    suite census at :7110 and the suite run at :7175. So a stage's recorded
+    suite result describes the reverted tree rather than one that no longer
+    exists, and this story keeps that order rather than establishing it.
+
+    THE DISCARDED WORK IS KEPT. The stage's own version of each reverted path
+    is written to a run-directory directory the declaration names, beside the
+    baseline directory, and the verifier is given the revert-check record - so
+    a verifier can see that a stage changed something outside its lane, and
+    what it said. The stage's changed-files record is left exactly as the
+    agent wrote it: an attestation is not rewritten behind its author, and the
+    revert record is the correction beside it rather than an edit to it.
+
+    THE SCOPE THIS WIDENS. The disposition is a property of the revert check
+    and not of a stage, so the code stage's existing check gets it too. That
+    is deliberate: the alternative is one verdict meaning two things depending
+    on who triggered it. The brief had ruled that check out of scope; the
+    developer widened it when the disposition question was put.
+
+    THE REFACTOR WORKFLOW IS UNTOUCHED, STRUCTURALLY. refactor-workflow.json
+    declares no revert check and no create restriction on any stage - its
+    implementer is governed by suite_census, a different check with a
+    different verdict, which this story does not touch. So there is nothing to
+    exclude and no workflow name in the coordinator: no declaration, no check,
+    no revert. The story asserts that both ways rather than assuming it.
+
+    ONE THING KNOWINGLY NOT DONE. The placeholder rendering the restriction
+    list is renamed, because it would otherwise render a confinement under a
+    creation label. The history fixtures under tests/history-fixtures/ that
+    carry the old name are frozen snapshots of past prompts and are left
+    exactly as they are; they are evidence of what a prompt once said, not
+    copies of the current template.
+  workflow: story-workflow
+
+tasks:
+  - Add a `may_only_change` key to the workflow stage vocabulary - a list of prefixes a stage's repository writes are confined to, where a path outside every named prefix is governed and a path at or beneath one of them is not.
+  - Change story_coordinator.stage_restrictions to return restrictions that carry their stage, their prefix, their sense and a predicate deciding whether they govern a given path, along with the wording that states the restriction in the workflow's own terms.
+  - Make the coordinator's enforcement site read that one derivation rather than reading the `may_not_create` key directly, so the ownership check, the revert check and the baseline capture are driven by the same restrictions plan time reads.
+  - Extend stage_baseline_requests so a confinement asks for a capture covering the repository outside the prefixes it names, and the paths the revert check restores from that capture stay narrowed to the edits the stage's own record declares.
+  - Factor the clone builder's restore rule into one function - a path the baseline holds is restored to that content, a governed path the baseline does not hold is removed - and have the clone build and the working-tree revert both call it.
+  - Change what a refused revert check does - restore the governed edits in the target working tree from the stage baseline, record the outcome, and let the run continue, in place of the escalation there today.
+  - Keep the stage's own version of each reverted path under a run-directory directory the revert-check declaration names, so what was discarded survives in the run's evidence.
+  - Leave the two escalations that remain - a check that reached no verdict, and a created file beneath a governed prefix - doing exactly what they do today.
+  - Extend plan_validation.assignment_problems so an entry naming a stage and a path that stage's confinement governs is refused unless a grant covers it, or the file exists and the entry declares the edit forced, with the fault and the resolutions stated in the restriction's own wording.
+  - Scope plan_validation.strictness_problems to creation-sense restrictions, so a story restating a confinement accurately is not reported as stating a restriction the workflow does not.
+  - Extend story_coordinator.stage_exception_problems so a grant is accepted when the stage's restriction governs the granted value, which accepts a path outside a confinement and refuses one inside it.
+  - Rename the injected restriction placeholder to a name that is true of both senses, render each restriction in its own wording, and update the surrounding prose in prompts/planner.md that says the workflow stops stages from creating files under paths.
+  - Add the rendered restriction list to prompts/story-tester.md with a sentence saying what governs an edit outside the prefixes it names and what happens to one the suite does not need.
+  - Give the verifier the revert-check record in prompts/story-verifier.md, so a reverted edit is visible to the stage that judges the run.
+  - Generalize the `create` field description in schemas/story.schema.json to say a granted value must be one its stage's restriction governs, rather than one at or beneath a `may_not_create` prefix.
+  - Declare `may_only_change` and a revert check on the tester in workflows/story-workflow.json, with the result artifact and the discarded-edits directory named there.
+  - Write the coverage for the confinement - a stage that writes only inside it is unaffected, a modification outside it whose reversion breaks the suite is permitted, a creation outside it escalates, and a grant naming an outside path exempts it from both checks.
+  - Write the coverage for the new disposition - a refused edit leaves the working tree at the content the baseline held, the run continues past the stage, the discarded version is kept, and a suite run recorded after the check describes the reverted tree.
+  - Write the coverage for the refactor workflow being unaffected - its definition declares neither key, and a run of a fixture workflow declaring neither reverts nothing when a stage edits outside its lane.
+  - Adapt the existing plan-time, ownership, revert-check and injection tests that the changed derivation and the renamed placeholder falsify, leaving the history fixtures under tests/history-fixtures/ exactly as they are.
+  - Record in .harness/docs/ARCHITECTURE.md what the confinement declares, what a refused edit now does and why that is safe, what still escalates, and where the discarded content is kept.
+
+acceptance_criteria:
+  - A stage declaring `may_only_change` with a prefix is governed on every repository path outside that prefix and on no path at or beneath it, and a stage declaring the key nowhere is governed exactly as it is today.
+  - A stage that creates a file outside its confinement escalates the run, naming the file and the confinement, and the working tree is left as the stage left it.
+  - A stage that modifies a file outside its confinement where reverting that modification makes the suite fail is permitted, the file keeps the stage's content, and the run continues.
+  - A stage that modifies a file outside its confinement where reverting it leaves the suite passing does not escalate the run - the file holds the content the stage baseline captured, the run proceeds to the next stage, and the outcome is recorded.
+  - The same refusal on a stage governed by a create restriction rather than a confinement has the same disposition - the file is restored, the run continues, and no run stops on a verdict the check proved harmless.
+  - The stage's own version of every reverted path is readable from the run directory after the revert, at the content the stage left, under the directory the revert-check declaration names.
+  - The stage's changed-files record after a revert is byte-identical to what the stage wrote, so the record of what an agent did is not edited behind it.
+  - A revert check that reaches no verdict - no baseline captured for the stage - still escalates the run, and reverts nothing.
+  - A file deleted by a stage outside its confinement, where the deletion is refused, is present again in the working tree at the content the baseline held.
+  - A governed path the stage baseline does not hold is removed rather than restored, and the working-tree revert and the clone build decide that from one function, so a test changing that decision changes both.
+  - A suite run the coordinator records after a revert reports on the reverted tree - the revert happens before the suite census and before the suite run at the same stage.
+  - stage_restrictions returns, for a workflow declaring both senses, one restriction per declared prefix carrying the stage, the prefix, its sense, and a wording that states it as the workflow declares it.
+  - A plan entry naming a stage and a file outside that stage's confinement is refused at plan time unless a grant covers it, or the target root holds the file and the entry declares the edit forced - the same three ways out, in the confinement's wording rather than the creation wording.
+  - A plan entry naming a stage and a file at or beneath that stage's confinement is not refused.
+  - A story sentence restating a confinement accurately - naming the stage together with the prefix it is confined to - is not reported by the strictness check.
+  - The strictness check still reports a sentence that states a create restriction as an unscoped one, unchanged in what it reports and in the words it reports it with.
+  - A stage_exceptions grant naming a path a stage's confinement governs is accepted, and one naming a path at or beneath the confinement is refused as granting nothing.
+  - A granted path outside a confinement is exempt from the ownership check and from the revert check both, decided by the same function the create-restriction grants are decided by.
+  - The rendered restriction list carries one line per declared restriction in that restriction's own wording, so a create restriction and a confinement are distinguishable in a rendered prompt.
+  - prompts/planner.md, prompts/story-tester.md and prompts/story-verifier.md render with no unresolved placeholder against the shipped workflow.
+  - workflows/story-workflow.json declares a confinement and a revert check on the tester, and the confinement names the configured test location rather than a literal path.
+  - workflows/refactor-workflow.json declares no create restriction, no confinement and no revert check on any stage.
+  - A coordinator run of a fixture workflow whose stages declare neither a create restriction nor a confinement reverts nothing and escalates nothing when a stage edits a file outside the test location.
+  - The behavioural tests are driven against a workflow definition the test builds, and the shipped definitions are read only to assert which keys they declare.
+  - The files under tests/history-fixtures/ are unchanged.
+
+technical_plan:
+  implementation_steps:
+    - Introduce the restriction object in story_coordinator - stage, prefix, sense, governs(path) and wording - and rebuild stage_restrictions on it, keeping its position as the one derivation both plan time and run time read.
+    - Add a per-stage accessor over the same object so the enforcement site stops reading the may_not_create key directly, and point _ownership_violation and governed_edits at restrictions rather than at bare prefixes.
+    - Teach stage_baseline_requests to translate a confinement into the capture it needs, covering the repository outside the named prefixes, and leave the restore set narrowed to the stage's declared edits as it is today.
+    - Factor the restore rule out of _build_clone into a function both it and the new working-tree revert call, so the tree left after a revert is the tree the clone proof was taken on.
+    - Replace the escalation on a refused revert check with the revert - restore the governed paths from the baseline, write the stage's discarded versions under the directory the declaration names, record the outcome in the revert-check result, append an event, and fall through to the rest of the stage's post-checks.
+    - Leave the no-verdict escalation and the ownership escalation exactly where they are, and make the difference between them and the refusal explicit in the comment at the enforcement site.
+    - Extend assignment_problems to decide by restriction.governs rather than by prefix match, and build the fault and resolution wordings from the restriction so the confinement case does not read as a creation one.
+    - Filter strictness_problems to creation-sense restrictions, stating in its docstring why a confinement has no over-strict restatement to report.
+    - Extend stage_exception_problems to accept a grant the stage's restriction governs, keeping the existing message for a grant that grants nothing.
+    - Rename the placeholder in context_assembler and prompts/planner.md, render each restriction's own wording, and rewrite the planner prose around it that describes only the creation sense.
+    - Add the restriction list and its explanation to prompts/story-tester.md, and the revert-check record to prompts/story-verifier.md.
+    - Generalize the stage_exceptions create description in schemas/story.schema.json to the governed-value rule.
+    - Declare may_only_change and revert_check on the tester in workflows/story-workflow.json.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The restriction object and derivation, the enforcement site, baseline requests, the factored restore rule, the working-tree revert, and the grant cross-check all live here.
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: assignment_problems decides by the restriction predicate and states the confinement wording; strictness_problems narrows to creation-sense restrictions.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: The injected restriction list is renamed and renders each restriction in its own wording.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The tester gains the confinement and the revert check, with the result artifact and discarded-edits directory named there.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The placeholder is renamed and the prose around it describes only the creation sense.
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: The tester is told what it is confined to and what governs an edit outside it.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The verifier is given the revert-check record so a reverted edit is visible to the stage that judges the run.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: The stage_exceptions create description states the may_not_create rule and must state the governed-value rule instead.
+    - file: tests/test_confined_stage_edits.py
+      stage: tester
+      reason: New module for the confinement - unaffected inside, permitted, refused, created, and granted, driven against a built workflow.
+    - file: tests/test_refused_edit_is_reverted.py
+      stage: tester
+      reason: New module for the disposition - the tree after a revert, the run continuing, the kept discarded version, the untouched changed-files record, and the two escalations that remain.
+    - file: tests/test_revert_check.py
+      stage: tester
+      reason: Its existing assertions on the escalation a refusal produces are falsified by the new disposition.
+    - file: tests/test_stage_output_ownership.py
+      stage: tester
+      reason: The ownership check now decides by restriction rather than by prefix, and gains the confinement's creation case.
+    - file: tests/test_stage_baseline.py
+      stage: tester
+      reason: The capture a confinement asks for is new behaviour of stage_baseline_requests.
+    - file: tests/test_plan_assignment_refusal.py
+      stage: tester
+      reason: The confinement's refusal, its three ways out, and its wording are new plan-time behaviour.
+    - file: tests/test_plan_time_validation.py
+      stage: tester
+      reason: The strictness check narrows to creation-sense restrictions and a confinement restatement must not be reported.
+    - file: tests/test_planner_injection.py
+      stage: tester
+      reason: The placeholder is renamed and the rendered list carries two wordings.
+    - file: tests/conftest.py
+      stage: tester
+      reason: Shared fixtures name the injected placeholder and build the workflow definitions these tests drive.
+    - file: tests/test_refactor_workflow.py
+      stage: tester
+      reason: The assertion that the refactor definition declares neither key, and that a run of a workflow declaring neither reverts nothing.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: The shipped story workflow gains two stage keys that must still validate.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The confinement, the new disposition and why it is safe, what still escalates, and where the discarded content is kept.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/plan_validation.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - prompts/planner.md
+    - prompts/story-tester.md
+    - prompts/story-verifier.md
+    - schemas/story.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/refactor-workflow.json
+    - tests/history-fixtures/
+    - .harness/config.yaml
+    - templates/
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+    - prompts/documenter.md
+    - prompts/story-implementer.md
+    - orchestration/inspection.py
+    - orchestration/outbox.py
+
+verification_requirements:
+  - Confirm that a stage's confinement governs every path outside its prefixes and no path at or beneath them, shown by a run of a workflow the test builds rather than by reading the shipped definition.
+  - Confirm that a refused edit leaves the working tree holding the baseline's content for that path, that the run reaches the next stage, and that the run does not escalate.
+  - Confirm that the stage's discarded version of a reverted path is readable from the run directory afterwards, and that the stage's changed-files record is unchanged by the revert.
+  - Confirm that a revert check reaching no verdict still escalates, and that a creation beneath a governed prefix still escalates.
+  - Confirm that the working-tree revert and the clone build decide the restore-or-remove question from one function, so a governed path absent from the baseline is removed in both.
+  - Confirm that the refactor workflow's definition declares no create restriction, no confinement and no revert check, and that a run of a workflow declaring none of them reverts nothing.
+  - Confirm that the plan-time refusal for a confinement offers the grant and the forced-adaptation declaration as ways out, that a grant covering the path suppresses it, and that a path at or beneath the confinement is not refused.
+  - Confirm that a story sentence restating a confinement is not reported by the strictness check while an unscoped restatement of a create restriction still is.
+  - Confirm that every prompt this story edits renders against the shipped workflow with no unresolved placeholder.
+  - Confirm that the files under tests/history-fixtures/ are unchanged.
+  - Confirm that no stage name and no repository prefix is written into the coordinator's enforcement path, the plan-time checks or the injection - all of them come off the loaded workflow definition and the target configuration.
+
+constraints:
+  - The tester's `may_not_run_suite` declaration keeps its meaning - the stage does not run the suite, and the suite the revert check runs is the coordinator's, in a clone, as it is for the check that exists today.
+  - The revert check keeps its nomination short-circuit - a stage nominating a test that fails without its change is decided by that test rather than by the whole suite, and the new disposition applies to the verdict however it was reached.
+  - The confinement names the configured test location through the same substitution the existing declaration uses, so a target configuring a different location is governed at that location with no workflow edit.
+  - The order of the post-stage checks is unchanged - ownership, then the revert check, then the suite census, then the suite run.
+  - A stage's changed-files record is never rewritten by the coordinator.
+  - The clone build's behaviour is unchanged by the factoring - the same paths are restored and removed as before, and the extraction is a refactor with no behavioural difference of its own.
+  - Every escalation the coordinator raises today for a reason other than a refused revert check still escalates for that reason.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-04 15:07:04
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
