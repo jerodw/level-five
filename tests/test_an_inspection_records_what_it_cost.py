@@ -56,15 +56,24 @@ Every absence asserted here carries a demonstration that it can fail:
     planted assignment, which the same scan reports;
   * "the record commit staged nothing else" sits beside a file the fake
     inspector really did change, which must be left in the working tree;
-  * "this story changed no ceiling declaration" sits beside a constructed story
-    that did change one, which the same predicate reports.
+  * "no recorded cost is ordered against anything" sits beside a planted
+    comparison the same scan reports, and beside the same scan asking after the
+    allowance field on the shipped coordinator, where the run ceiling it really
+    does enforce is reported.
+
+That last pair is how "no ceiling changed" is held here. The ceiling *values* a
+deployment declares are not this module's subject — pinning them would make an
+operator retuning one red — so what is asserted instead is the behaviour those
+values buy, which this story had to leave alone: a run at the edge of its
+declared ceiling completes and is inspected, the same ceiling still stops a run
+whose stages cross it, and the recorded figure is compared against nothing.
 
 Nothing here reaches a model: `agent_runner.run_agent` is replaced for every
 test in this module by a fake that fails the test if it is called without
-having been installed deliberately. The only history resolved out of this
-repository's own commit graph is the one assertion whose subject *is* this
-repository — that this story moved no ceiling declaration — and it goes
-through the shared baseline resolution rather than through a second one.
+having been installed deliberately. Nothing here resolves this repository's own
+commit graph either: every subject is a target built under `tmp_path` or a
+shipped source read as source, so no assertion moves when a commit is made,
+squashed or rebased.
 """
 from __future__ import annotations
 
@@ -1129,36 +1138,76 @@ def test_a_cost_record_that_cannot_be_appended_costs_the_run_nothing(
 # ==========================================================================
 
 
-#: Where every ceiling this harness declares is written: the workflow
-#: definitions carry the run and per-execution ceilings, and the configuration
-#: files below them carry the inspection allowance.
-CEILING_DECLARATIONS = ["workflows/", ".harness/config.yaml",
-                        "templates/config.yaml"]
+def ordered_against(source: str, name: str) -> list[int]:
+    """Line numbers where `source` orders something called `name` against
+    something else.
 
-
-def test_this_story_changed_no_ceiling_declaration():
-    """No ceiling is retuned here: there is no corpus yet, and this story is
-    what starts one.
-
-    Bounded at this module's own story range through the shared resolution, so
-    the answer survives the commit this story is about to make rather than
-    going vacuously green on it.
+    Ordering rather than every comparison, because ordering is the shape a
+    ceiling is enforced by — the coordinator's own `>=` against the allowance —
+    while `is None` on the same field is the presence check the whole recording
+    path is made of, and a scan that forbade that would forbid the story.
     """
-    for declaration in CEILING_DECLARATIONS:
-        assert conftest.story_diff([declaration],
-                                   validation_file=Path(__file__)) == "", \
-            declaration
+    ordering = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Compare):
+            continue
+        if not any(isinstance(op, ordering) for op in node.ops):
+            continue
+        for operand in (node.left, *node.comparators):
+            named = (operand.id if isinstance(operand, ast.Name)
+                     else operand.attr if isinstance(operand, ast.Attribute)
+                     else None)
+            if named == name:
+                found.append(node.lineno)
+                break
+    return found
 
 
-def test_the_same_predicate_reports_a_story_that_did_change_one(tmp_path):
-    """The control for that emptiness, constructed rather than recalled: a
-    story that really did edit a ceiling declaration is reported by the same
-    reading, so the empty diffs above are the story rather than a resolution
-    that has stopped comparing."""
-    root = conftest.constructed_story(
-        tmp_path, respected=CEILING_DECLARATIONS[1:],
-        violated=[CEILING_DECLARATIONS[0]])
+#: The field an inspection's record carries its cost under.
+RECORDED_COST_FIELD = "cost_usd"
 
-    for untouched in CEILING_DECLARATIONS[1:]:
-        assert conftest.constructed_story_diff(root, [untouched]) == "", untouched
-    assert conftest.constructed_story_diff(root, [CEILING_DECLARATIONS[0]]) != ""
+#: Where a recorded cost could be read back into a decision: the two modules
+#: that produce the record, and the coordinator that routes every run.
+DECIDING_MODULES = (*PRODUCING_MODULES, "orchestration/story_coordinator.py")
+
+
+def test_the_routed_declaration_carries_the_cost_under_the_scanned_name():
+    """The scan below looks for a field that exists.
+
+    Without this, a declaration that renamed the field would leave the scan
+    hunting for a name no source could carry, and its emptiness would say
+    nothing at all.
+    """
+    for log, declaration in routed_logs().items():
+        assert RECORDED_COST_FIELD in declaration["properties"], log
+
+
+@pytest.mark.parametrize("relative", DECIDING_MODULES)
+def test_no_recorded_inspection_cost_is_compared_against_anything(relative):
+    """Nothing reads the new record back into a decision.
+
+    History is evidence, never state: the figure this story starts recording is
+    compared against no ceiling, no budget and no threshold anywhere on the
+    path that produces it or on the path that routes runs.
+    """
+    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    assert ordered_against(source, RECORDED_COST_FIELD) == [], relative
+
+
+def test_the_same_scan_reports_the_ceiling_the_coordinator_really_enforces():
+    """The control for that emptiness, in two halves.
+
+    A planted comparison of the recorded field is reported, so the scan sees
+    the shape it is looking for; and the same scan over the shipped coordinator
+    asking after the *allowance* field reports the run ceiling it really does
+    enforce, so the emptiness above is this field being uncompared rather than
+    a scan that has stopped reading shipped source.
+    """
+    planted = (f"def a(record, ceiling):\n"
+               f"    return record.{RECORDED_COST_FIELD} > ceiling\n")
+    assert ordered_against(planted, RECORDED_COST_FIELD) == [2]
+
+    coordinator = (REPO_ROOT / "orchestration" / "story_coordinator.py"
+                   ).read_text(encoding="utf-8")
+    assert ordered_against(coordinator, ALLOWANCE_FIELD) != []

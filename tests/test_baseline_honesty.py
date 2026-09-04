@@ -3024,16 +3024,6 @@ PENDING = "pending conversion"
 #: An empty pending class is a state this list can be in, not a state it has
 #: retired into.
 DECLARED_HISTORY_READERS = {
-    "test_an_inspection_records_what_it_cost.py":
-        "its subject includes what story-101 itself left alone: that no "
-        "ceiling declaration this repository ships — the workflow definitions "
-        "carrying the run and per-execution ceilings, and the configuration "
-        "files carrying the inspection allowance — was edited by the story "
-        "that recorded what an inspection costs. A story recording a figure "
-        "and retuning nothing is a claim about this repository's own change, "
-        "which no constructed repository can answer; the control that the "
-        "same reading still reports a story which did edit one is built under "
-        "tmp_path rather than looked for here",
     "test_baseline_honesty.py":
         "its regression set is committed evidence rather than a constructed "
         "fixture: the five known vacuous assertions are recovered from this "
