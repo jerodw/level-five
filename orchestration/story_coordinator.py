@@ -1300,7 +1300,15 @@ def branch_behind(target_root: Path, branch: str, base: str) -> int | None:
 
 def _checkout_story_branch(
     target_root: Path, branch: str, start_point: str | None = None
-) -> None:
+) -> list[str]:
+    """Stand the run on its branch, reporting what git refused rather than raising.
+
+    Returns the problems git named, one per line of its own message, and the
+    empty list when the checkout was made. That shape is the one
+    `base_problems` and `prune_history`'s `problems` already use, so the caller
+    refuses through the shared `refuse()` like every neighbouring pre-flight
+    rather than letting a `RuntimeError` out of a run that has already begun.
+    """
     exists = _git(target_root, "rev-parse", "--verify", branch).returncode == 0
     if exists:
         args = ["checkout", branch]
@@ -1310,8 +1318,14 @@ def _checkout_story_branch(
         # what establishes that HEAD is the base.
         args = ["checkout", "-b", branch] + ([start_point] if start_point else [])
     result = _git(target_root, *args)
-    if result.returncode != 0:
-        raise RuntimeError(f"Could not check out branch {branch}: {result.stderr.strip()}")
+    if result.returncode == 0:
+        return []
+    # Git's own words, split into one problem per line so the refusal lists the
+    # paths it named the way every other refusal lists what it found. A git
+    # that said nothing still reports something, because a refusal with no
+    # problems under it would say only that something went wrong.
+    problems = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    return problems or ["git refused the checkout without saying why"]
 
 
 def _blocked_violation(run_dir: Path, record_name: str, blocked: list[str]) -> str | None:
@@ -5180,6 +5194,14 @@ def unchanged_since_escalation(
     move HEAD, so a shared-root comparison of it always differs and the guard
     can never refuse.
 
+    The branch comparison resolves `state.branch~1` rather than `HEAD~1`,
+    because the story branch is what it means and HEAD is only the same thing
+    when the developer happens to be standing on it. The `status --porcelain`
+    leg beside it needs no such repointing and keeps its current meaning: the
+    working tree is one tree whatever branch is checked out, and the dirty-tree
+    pre-flight above this guard has already refused for every status that could
+    reach it, so what it establishes is unchanged by where the run is standing.
+
     A tree hash over the harness's own source directories was considered and
     not taken. It is a second definition of "has the harness changed" living
     beside the branch comparison that already answers it, and it would have to
@@ -5212,9 +5234,16 @@ def unchanged_since_escalation(
     # of its sha is committed on top of it, because a commit cannot carry its
     # own sha. A branch a developer has committed on since therefore fails this
     # comparison, which is what it is for.
+    #
+    # Resolved against `state.branch` rather than HEAD, because the story
+    # branch is what the comparison means and HEAD is only the same thing when
+    # the developer happens to be standing on it. The guard runs above the
+    # checkout — it refuses, so it stays above every act — so an off-branch
+    # resume asked about HEAD could never establish sameness and could never
+    # refuse.
     if (
         not state.escalation_commit
-        or _revision(target_root, "HEAD~1") != state.escalation_commit
+        or _revision(target_root, f"{state.branch}~1") != state.escalation_commit
     ):
         return []
     porcelain = _git(target_root, "status", "--porcelain")
@@ -5491,6 +5520,24 @@ def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
         f"not establish that what it commits is what it produced:",
         paths,
         "Commit or stash them, then run the story again.",
+    )
+
+
+def _refuse_checkout(branch: str, problems: list[str]) -> int:
+    """Refuse a run that cannot stand on its story branch.
+
+    The checkout is the run's first act, so a checkout git will not make is
+    refused the way every neighbouring pre-flight refuses rather than raising
+    out of a run: exit 1, the branch named, one line per path git named, and
+    guidance saying what clears them. Thin, like every other caller of
+    `refuse`.
+    """
+    return refuse(
+        f"Branch {branch} could not be checked out, so this run cannot stand "
+        f"on the branch it would write to:",
+        problems,
+        f"Commit or stash the paths above, or check out {branch} by hand, then "
+        f"run the story again. Nothing was created and no agent was invoked.",
     )
 
 
@@ -6139,10 +6186,6 @@ def run_story(
         if dirty:
             return _refuse_dirty_tree(target_root, dirty)
 
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "verification").mkdir(exist_ok=True)
-    log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
-
     if state and state.status == "completed":
         # Name the branch as well as the run directory. _checkout_story_branch
         # reuses an existing branch rather than resetting it, so deleting only
@@ -6160,6 +6203,101 @@ def run_story(
             file=sys.stderr,
         )
         return 1
+    # A resume is handled in two passes, and the checkout goes between them.
+    # This is the first: the decisions, every one of which is a refusal, made
+    # here so that the ordering the harness already keeps — every refusal above
+    # every act — survives the checkout becoming the run's first act. It reads
+    # `attempt_dir` and `entry_dir` for existence only, which needs no run
+    # directory, and mutates nothing. The second pass, below the checkout,
+    # performs what these decisions permitted.
+    #
+    # A paused run takes no decision here because it takes none of those acts:
+    # it is continued rather than re-entered, so there is nothing for a
+    # collision to collide with and no escalation for the guard to establish
+    # sameness against.
+    resume_attempt: int | None = None
+    resume_entry: int | None = None
+    if state and state.status != "paused":
+        if state.status == "escalated" and not state.stopped_on_cost:
+            # Resuming is inferred from the recorded status and from nothing
+            # else. What the guard adds is a refusal in the one case where a
+            # resume is knowably pointless: the story, the tree and the harness
+            # are all establishably what they were when the run escalated.
+            #
+            # A run stopped on a cost ceiling is exempted here, at the call
+            # site, rather than inside the guard: the guard keeps saying only
+            # what it establishes, and what it establishes is true of a budget
+            # stop — nothing has changed, and nothing needs to have. Resuming
+            # such a run is the decision to fund another allowance, which is
+            # precisely the resume this ceiling exists to allow, so refusing it
+            # on the guard's evidence would refuse the only useful response to
+            # the stop.
+            evidence = unchanged_since_escalation(
+                state, story_text, target_root, harness_root
+            )
+            if evidence:
+                print(
+                    _resume_refusal(story_path, run_dir, state, evidence),
+                    file=sys.stderr,
+                )
+                return 1
+        # The interrupted attempt is archived below under the attempt number it
+        # was written with, and the entry directory this re-entry opens is
+        # written there too. Both are refused rather than written over — the
+        # archive and the entry are the evidence a resume exists to preserve —
+        # and both are decided here, above every act, so a refused resume
+        # archives nothing, moves nothing and resets nothing.
+        resume_attempt = state.retry_count + 1
+        destination = attempt_dir(run_dir, resume_attempt)
+        if destination.exists():
+            print(
+                f"{destination} already holds an archived attempt, and "
+                f"resuming {story_id} would write attempt {resume_attempt} over "
+                f"it. Move or remove it if that attempt is not worth "
+                f"keeping, then run the story again.",
+                file=sys.stderr,
+            )
+            return 1
+        resume_entry = state.resume_count + 1
+        opened = entry_dir(run_dir, resume_entry)
+        if opened.exists():
+            print(
+                f"{opened} already holds an archived entry, and resuming "
+                f"{story_id} would open entry {resume_entry} over it. Move or "
+                f"remove it if that entry is not worth keeping, then run the "
+                f"story again.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # The checkout, and it is the run's first act: nothing the run writes —
+    # tracked or gitignored — happens above this line. It used to sit below the
+    # run directory, the history prune and every re-entry mutation a resume
+    # makes, so those writes landed on whatever branch the developer typed
+    # l5-run from and a tracked cross-run history that differs between branches
+    # made git refuse the checkout after the run had already archived an entry,
+    # zeroed its counters and appended three history records.
+    #
+    # Every check that can be made without standing here stays above it, so a
+    # checkout git will not make refuses the way its neighbours refuse rather
+    # than raising. The branch name comes from the loaded state on a resume and
+    # from the configured prefix on a fresh run, which is the same expression
+    # the base check above already resolved.
+    #
+    # A declared base is where the new branch is cut from. Undeclared, the
+    # start point stays HEAD exactly as it was, and the pre-flight above is
+    # what establishes HEAD is the base.
+    start_point = resolved_base if base is not None else None
+    checkout_problems = _checkout_story_branch(
+        target_root, story_branch_name, start_point
+    )
+    if checkout_problems:
+        return _refuse_checkout(story_branch_name, checkout_problems)
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "verification").mkdir(exist_ok=True)
+    log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
+
     # The cross-run history, established once for the whole run rather than
     # handed to each append_event call: a keyword argument with a default can
     # be omitted at one call site and silently drop a record, which is the one
@@ -6170,6 +6308,11 @@ def run_story(
     # announced point and leaves the append path itself append-only. It refuses
     # rather than repairs: a line it cannot parse stops it and refuses the run,
     # with nothing discarded and nothing rewritten around.
+    #
+    # Below the checkout, so the file it reads and rewrites is the story
+    # branch's own rather than the base's. That follows from the move rather
+    # than being a second decision: what the prune does is unchanged, and only
+    # where it runs moved.
     history_directory = harness_config.history_dir(target_root, config)
     set_history_dir(history_directory)
     pruned = prune_history(history_directory, config)
@@ -6228,29 +6371,10 @@ def run_story(
         # execution-history.json, events.log, state.json, the escalation
         # summary — together with every stage artifact the resumed stage reads
         # as input, whose names no counter keys.
-        if state.status == "escalated" and not state.stopped_on_cost:
-            # Resuming is inferred from the recorded status and from nothing
-            # else. What the guard adds is a refusal in the one case where a
-            # resume is knowably pointless: the story, the tree and the harness
-            # are all establishably what they were when the run escalated.
-            #
-            # A run stopped on a cost ceiling is exempted here, at the call
-            # site, rather than inside the guard: the guard keeps saying only
-            # what it establishes, and what it establishes is true of a budget
-            # stop — nothing has changed, and nothing needs to have. Resuming
-            # such a run is the decision to fund another allowance, which is
-            # precisely the resume this ceiling exists to allow, so refusing it
-            # on the guard's evidence would refuse the only useful response to
-            # the stop.
-            evidence = unchanged_since_escalation(
-                state, story_text, target_root, harness_root
-            )
-            if evidence:
-                print(
-                    _resume_refusal(story_path, run_dir, state, evidence),
-                    file=sys.stderr,
-                )
-                return 1
+        #
+        # This is the second pass. Every refusal a resume makes — the unchanged
+        # guard, the attempt collision and the entry collision — was made above
+        # the checkout; what is left here is what those decisions permitted.
         if start_stage:
             state.current_stage = start_stage
         # A resumed stage starts with its full self-route budget. The count is
@@ -6273,38 +6397,14 @@ def run_story(
         # parses, validates or repairs an archived artifact.
         #
         # What does not generalize with it is the state transition below and
-        # the unchanged guard above. A crashed run is already running, so
-        # assigning that status would state a transition that did not happen;
-        # and a crashed run has no escalation commit to compare against, so
-        # unchanged_since_escalation could establish nothing and its refusal
-        # would be meaningless.
-        attempt = state.retry_count + 1
-        destination = attempt_dir(run_dir, attempt)
-        if destination.exists():
-            print(
-                f"{destination} already holds an archived attempt, and "
-                f"resuming {story_id} would write attempt {attempt} over "
-                f"it. Move or remove it if that attempt is not worth "
-                f"keeping, then run the story again.",
-                file=sys.stderr,
-            )
-            return 1
-        # The entry directory this re-entry opens, refused rather than written
-        # over for the archive's own reason: it is where the previous entry's
-        # evidence goes, so writing over it would destroy exactly what the move
-        # exists to keep. Decided here, above the archive and the move, so a
-        # refused resume archives nothing, moves nothing and resets nothing.
-        entry = state.resume_count + 1
+        # the unchanged guard above the checkout. A crashed run is already
+        # running, so assigning that status would state a transition that did
+        # not happen; and a crashed run has no escalation commit to compare
+        # against, so unchanged_since_escalation could establish nothing and its
+        # refusal would be meaningless.
+        attempt = resume_attempt
+        entry = resume_entry
         opened = entry_dir(run_dir, entry)
-        if opened.exists():
-            print(
-                f"{opened} already holds an archived entry, and resuming "
-                f"{story_id} would open entry {entry} over it. Move or remove "
-                f"it if that entry is not worth keeping, then run the story "
-                f"again.",
-                file=sys.stderr,
-            )
-            return 1
         archive_attempt(
             run_dir,
             interrupted_attempt_artifacts(stages, attempt, run_dir=run_dir),
@@ -6431,11 +6531,11 @@ def run_story(
     # first stage invocation. Every check above this point refuses — the
     # undeclared configuration key, the bad pause wait, the unreadable story,
     # the unresolved mandate, the unknown workflow, the finished branch, the
-    # bad base, the dirty tree, the unparseable history, and the two resume
-    # collisions — so a run refused for any of those reasons leaves the queue
-    # exactly as it was. It sits below the workflow announcement and the
-    # mandate note for story-072's reason: the first thing a run says is still
-    # which workflow is executing for which story.
+    # bad base, the dirty tree, the two resume collisions, the refused
+    # checkout and the unparseable history — so a run refused for any of those
+    # reasons leaves the queue exactly as it was. It sits below the workflow
+    # announcement and the mandate note for story-072's reason: the first thing
+    # a run says is still which workflow is executing for which story.
     #
     # **This one must not refuse, and that is the whole reason it is a
     # different function from the one l5-sync calls.** Restoring consistency
@@ -6449,12 +6549,6 @@ def run_story(
     # this run's events.log, which is safe here and is not safe after the
     # completion commit — see the sweep at the end of `_complete`.
     outbox_sweep.sweep(target_root, config, harness_root, run_dir=run_dir)
-
-    # A declared base is where the new branch is cut from. Undeclared, the
-    # start point stays HEAD exactly as it was, and the pre-flight above is
-    # what establishes HEAD is the base.
-    start_point = resolved_base if base is not None else None
-    _checkout_story_branch(target_root, state.branch, start_point)
 
     # A branch that already existed was cut from the base as it stood then, and
     # the base has moved since or it has not. Say so once, as a note: what to
