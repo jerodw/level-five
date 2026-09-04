@@ -5185,14 +5185,23 @@ def unchanged_since_escalation(
     The third comparison has two forms, decided by whether the harness and the
     target are one checkout. When they are separate — the deployment the guard
     was written for — it is the recorded-revision comparison, unchanged. When
-    they are one tree, deferring to the branch comparison is what is sound:
-    leg two has already established that the branch is exactly the escalation
-    commit with nothing uncommitted, and under one tree that covers every
-    change to the harness source, so the recorded revision would answer a
-    question already answered. It could not answer it anyway — the revision is
-    recorded as the first act of `_escalate`, before the two escalation commits
-    move HEAD, so a shared-root comparison of it always differs and the guard
-    can never refuse.
+    they are one tree, what leg two established covers the harness source only
+    while the working tree is standing on the branch it spoke about: leg two
+    says that branch is exactly the escalation commit, and the `status
+    --porcelain` leg beside it says the tree is clean, not that it is that
+    branch's tree. So the shared-checkout form requires the tree to resolve to
+    `state.branch`, and standing anywhere else it establishes nothing and the
+    resume proceeds. The recorded revision cannot be reached for instead — it
+    is recorded as the first act of `_escalate`, before the two escalation
+    commits move HEAD, so a shared-root comparison of it always differs and the
+    guard could never refuse.
+
+    What that gives up is deliberate and chosen: under one checkout an
+    off-branch resume with genuinely nothing changed is no longer refused,
+    because the guard cannot tell that case from a harness fixed on the base
+    without a second definition of "has the harness changed". Permitting a
+    pointless resume is the direction the guard's one-directional bias already
+    takes; refusing a needed one is not.
 
     The branch comparison resolves `state.branch~1` rather than `HEAD~1`,
     because the story branch is what it means and HEAD is only the same thing
@@ -5254,18 +5263,32 @@ def unchanged_since_escalation(
         f"{state.escalation_commit[:12]}, with nothing uncommitted"
     )
 
-    # Under one checkout the branch comparison above is the harness comparison:
-    # it established that the branch is exactly the escalation commit with
-    # nothing uncommitted, which covers every change to the harness source. The
-    # recorded revision cannot serve here — it is recorded before the escalation
-    # commits move HEAD, so it always differs — and a tree hash over the
-    # harness's source directories was rejected rather than reached for: it is a
-    # second definition of "has the harness changed" beside the one already
+    # Under one checkout the branch comparison above stands for the harness
+    # comparison only while the working tree is standing on the branch it spoke
+    # about. Leg two established that `state.branch` is exactly the escalation
+    # commit, and the `status --porcelain` leg beside it established that the
+    # tree is clean — neither says the tree is *that* branch's, so a developer
+    # who checked out the base and committed a harness fix there is standing in
+    # a tree the two legs above have said nothing about. Standing anywhere else
+    # this leg therefore establishes nothing and the resume proceeds, which
+    # permits a pointless resume where nothing changed rather than refusing a
+    # needed one where the harness did.
+    #
+    # Both revisions go through `_revision`, so one that cannot be read is ""
+    # and falls to the not-established answer the rest of the guard gives.
+    # The recorded revision cannot serve here — it is recorded before the
+    # escalation commits move HEAD, so it always differs — and a tree hash over
+    # the harness's source directories was rejected rather than reached for: it
+    # is a second definition of "has the harness changed" beside the one already
     # answering it, and it would have to choose which directories count.
     if same_repository(target_root, harness_root):
+        standing = _revision(target_root)
+        if not standing or standing != _revision(target_root, state.branch):
+            return []
         evidence.append(
-            "the harness is the same checkout as the target, so it is covered "
-            "by the branch comparison above"
+            f"the harness is the same checkout as the target and the working "
+            f"tree is standing on {state.branch}, so it is covered by the "
+            f"branch comparison above"
         )
         return evidence
 
