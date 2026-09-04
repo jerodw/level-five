@@ -974,6 +974,18 @@ def test_this_repository_carries_the_installed_script_and_both_live_keys():
 
     The reference implementation is exercised by the repository that ships it,
     which is what stops the template being a file nobody ever runs.
+
+    The installed sync script was held to its template's bytes here until this
+    deployment gave the script a project to file against. A project number is
+    exactly what a template must not carry — it would file another
+    repository's briefs onto this board — so the installed copy now differs
+    from its template in the values of the constants at the top of it, and the
+    byte comparison is false of a tree the story intends. What is asserted of
+    it here instead is that it is present and runnable. What the comparison
+    guaranteed, that the file this repository runs is the file its suite
+    exercises, is not dropped: it is asserted behaviourally in
+    tests/test_filed_query.py, where the installed copy is driven end to end
+    through the same stub tracker the template is driven through.
     """
     config = harness_config.load_config(REPO_ROOT)
     assert config["sync_command"]
@@ -985,7 +997,7 @@ def test_this_repository_carries_the_installed_script_and_both_live_keys():
     assert os.access(command, os.X_OK)
     for name in REFERENCE_SCRIPTS:
         installed = REPO_ROOT / ".harness" / SYNC_DIR / name
-        assert installed.read_bytes() == (TEMPLATES / SYNC_DIR / name).read_bytes()
+        assert installed.is_file()
         assert os.access(installed, os.X_OK)
 
 

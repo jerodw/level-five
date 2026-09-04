@@ -115,6 +115,7 @@ from test_filed_query import (  # noqa: F401 - shared fixtures and idioms
     file_through_the_reference_sync,
     fixture_command,
     fixture_file,
+    ledger_state,
     needs_jq,
     planted_root,
     prints_prose_beside_the_document,
@@ -1012,10 +1013,13 @@ def test_an_item_carrying_no_payload_answers_that_the_key_did_not_resolve(
     marker = declared_payload_marker(script_text(SYNC_DIR))
     assert any(marker in body for body in bodies(ledger))
 
-    filed = json.loads(ledger.read_text(encoding="utf-8"))
-    stripped = [line for line in filed[0]["body"].splitlines()
+    # Read and written back through the shared shape rather than as a bare
+    # list, because the stub's ledger now holds a board beside the issues.
+    filed = ledger_state(ledger)
+    issue = filed["issues"][0]
+    stripped = [line for line in issue["body"].splitlines()
                 if marker not in line]
-    filed[0]["body"] = "\n".join(stripped)
+    issue["body"] = "\n".join(stripped)
     ledger.write_text(json.dumps(filed), encoding="utf-8")
 
     answer = with_the_reference_command(
