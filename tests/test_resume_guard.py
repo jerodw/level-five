@@ -424,9 +424,13 @@ def executable_source(text: str) -> str:
 #: removal really does reconstruct it is
 #: `test_removing_the_shared_root_leg_reproduces_the_pre_story_guard`.
 SHARED_ROOT_LEG = """    if same_repository(target_root, harness_root):
+        standing = _revision(target_root)
+        if not standing or standing != _revision(target_root, state.branch):
+            return []
         evidence.append(
-            "the harness is the same checkout as the target, so it is covered "
-            "by the branch comparison above"
+            f"the harness is the same checkout as the target and the working "
+            f"tree is standing on {state.branch}, so it is covered by the "
+            f"branch comparison above"
         )
         return evidence
 

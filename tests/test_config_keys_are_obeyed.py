@@ -242,8 +242,18 @@ DEFAULT_SWEEP_MAX_ENTRIES = outbox_sweep.DEFAULT_MAX_ENTRIES
 #: killed at the configured bound, and under the default it would finish and
 #: answer. So a harness that stopped reading the key fails the second half in
 #: seconds rather than after half a minute of waiting.
-FILED_QUERY_TIMEOUT = 1.7
-QUERY_SLEEPS_PAST_THE_BOUND = 4
+#:
+#: The first half is a wall-clock race the fixture cannot win by being fast: a
+#: command that only prints a document still has to be spawned, and this suite
+#: runs its modules in parallel while several of them spawn whole nested pytest
+#: runs. A bound tight enough to be quick was reached by that spawn under load
+#: and killed a command that had nothing to wait for, so the bound carries
+#: enough headroom that only a command deliberately sleeping past it is killed.
+#: Both sides are pinned exactly as before, and
+#: `test_no_proof_value_is_a_default_or_this_repositorys_own_configured_value`
+#: holds the ordering the two numbers must keep.
+FILED_QUERY_TIMEOUT = 6.5
+QUERY_SLEEPS_PAST_THE_BOUND = 12
 
 #: How many items the fixture allows one answer to carry. A bound no harness
 #: would pick: the default written in harness source is fifty and this
