@@ -1,0 +1,180 @@
+story:
+  id: story-105
+  title: The outbox reaches the project board
+  description: |
+    This deployment has a GitHub project — "Level Five", number 1, owned by
+    @me — and briefs sitting pending in the outbox that reach nothing. The
+    sync command is configured and the query command is not, so filing goes
+    nowhere useful and dedupe never runs; both post-story inspections so far
+    report that dedupe did not run and refile what they found last time.
+
+    This story wires the deployment to that board: a filed entry lands as an
+    item in Backlog, and the query side is turned on so a second inspection
+    stops refiling what the first one filed. No new script is written and no
+    new configuration key is added. What is added is the board mechanics in
+    the template, this target's values in the installed copy, one repair, and
+    one line of configuration.
+
+    THE REPAIR THIS STORY CANNOT SKIP. templates/sync/github.sh searches for
+    an existing issue at :134 and, where it finds one, answers and returns at
+    :138-142 — above the board block at :151. So the sequence that block's own
+    comment describes cannot happen: an entry whose issue was created and
+    whose board call failed is never added to the board, and the next sweep
+    reports it landed. Adding a Status call in the same place inherits the
+    same hole. The two paths — issue found, issue created — must converge on
+    one url before the board block runs.
+
+    THE SPLIT IS THE DESIGN. The board mechanics are generic and belong in
+    templates/sync/github.sh, driven by the editable constants at the top of
+    that file. The values — project 1, the Status option named Backlog — are
+    this target's and belong in .harness/sync/github.sh. A template carrying a
+    project number would file another repository's briefs onto this board.
+
+    WHAT THE TESTS ACTUALLY COVER. tests/test_filed_query.py drives
+    templates/sync/github.sh against a stub gh; the file that actually files
+    this deployment's briefs is .harness/sync/github.sh. Those two are
+    byte-identical today, so testing one tests the other, and this story is
+    what ends that. The property is preserved behaviourally rather than
+    textually: the installed copy is driven end to end through the same stub
+    tracker as the template, so what this repository runs is what its suite
+    exercises. Textual parity is deliberately not asserted — the installed
+    copy is expected to differ in its values, and holding the pair to the same
+    bytes is the open request 08's business for its own file pair.
+
+    A PREREQUISITE ALREADY SATISFIED. The sync script passes --label "$LABEL"
+    at :145, gh issue create fails on an unknown label, and :146 classes that
+    failure as transient — so a missing l5 label means every sweep retries
+    forever and nothing lands. The brief that asked for this story recorded
+    the label as absent when it was filed on 2026-09-03. It exists now, in
+    this repository, as "l5 — Filed by the l5 harness", created by the
+    developer since. This story therefore does not create it. The note is
+    kept because it is the condition the whole mechanism silently depends on:
+    a deployment whose label is deleted files nothing and says nothing, and
+    the next person reading this file is the one who will be looking for why.
+  workflow: story-workflow
+
+tasks:
+  - Add the board constants to templates/sync/github.sh beside LABEL and PROJECT, in the same ${L5_SYNC_...:-default} form the existing constants use, so the template's board path can be driven by environment without an installed copy - an owner, the Status field name, and the Status option name, with an empty option name meaning the field is left at whatever the project's own default is.
+  - Repair the retry hole in templates/sync/github.sh so the found-existing and just-created paths converge on one url before the board block, and the board call is reached on a later sync for an issue an earlier invocation created.
+  - Add the board mechanics to templates/sync/github.sh - add the item to the project, resolve the Status field id and the option id by the configured names, read the item's current Status, and set it to the configured option only where it is currently empty.
+  - Set this target's values in .harness/sync/github.sh - project 1 and the Status option Backlog - changing nothing else in that file, so the installed copy differs from its template only in what this target files against.
+  - Configure filed_query_command in .harness/config.yaml to the installed .harness/query/github.sh, with a comment in that file's own voice saying what turning the query side on buys and what a failure there costs.
+  - Adapt the one existing assertion that the story's change falsifies - the byte-identity of this repository's installed sync script against its template in tests/test_filed_query.py - to what remains true, leaving the query half of that assertion as it is.
+  - Extend the stub gh in tests/test_filed_query.py to answer exactly the project invocations the repaired script makes, so nothing here reaches a network.
+  - Add the board coverage - an entry reaches the board in Backlog, a board failure leaves the entry pending, and an entry whose issue exists and whose board call failed reaches the board on the next sweep without a second issue being created.
+  - Add the behavioural parity coverage - the installed .harness/sync/github.sh driven end to end through the same stub tracker as the template, and shown to file against this target's own project with no environment set.
+  - Record in .harness/docs/ARCHITECTURE.md what the board block does, that everything after the issue is created is transient, and that the installed copy is held to its template behaviourally rather than by bytes.
+
+acceptance_criteria:
+  - An entry filed through the sync script with a project configured is added to that project as an item, and the item's Status is the configured option.
+  - The Status call is made only where the item's Status is currently empty - an item whose Status the tracker already reports is left at the value it has, so a sweep re-running over a landed entry does not move an item out of the column a human put it in.
+  - An item that the tracker's listing does not report at all is distinguished from an item whose Status is empty - a listing that did not return the item is a failure to know, answered transiently, and never read as an empty Status to be overwritten.
+  - Every failure after gh issue create has succeeded exits 75, so the entry stays pending and a later sweep retries it - the issue is the record and the board is a view of it, and a board that was briefly unreachable must not lose the item.
+  - The board block is reached on an invocation whose search found an existing issue - an entry whose issue was created by an earlier invocation and whose board call failed is added to the board by the next sweep, and no second issue is created for it.
+  - A test drives the sync script twice for one key against the stub tracker with the board failing on the first invocation and succeeding on the second, and shows one issue and one board item at the end.
+  - templates/sync/github.sh names no project number, no project owner other than the generic default, and no Status option value - the values this target files against appear only in .harness/sync/github.sh.
+  - .harness/sync/github.sh differs from templates/sync/github.sh only in the values of the constants at the top of the file.
+  - The installed .harness/sync/github.sh is driven end to end through the same stub gh the template is driven through, and files an entry to the board in Backlog with no L5_SYNC_ variable set - so the wiring under test is the target's own values rather than the test's environment.
+  - The end-to-end board assertions are parameterized over both copies, or otherwise applied to both, so a mechanic that works in one and not the other is a failing test rather than an unnoticed divergence.
+  - The existing assertion that a freshly initialized target's installed scripts are byte-identical to the templates still holds and is unchanged - l5-init copies verbatim, and that is still true.
+  - The byte-identity assertion this repository's own .harness/ was held to for the sync script is replaced rather than deleted - what it guaranteed, that the file this repository runs is the file its suite exercises, is asserted behaviourally in its place, and the query script's half of that assertion is left as it was.
+  - filed_query.load and the harness's dedupe path answer for a brief this deployment filed, driven against the installed query script and the stub tracker, so a second inspection over the same paths reports that dedupe ran.
+  - The two markers stay identical across the sync and query pair, which the existing test already asserts and which this story must not break.
+  - The sync script contains no git invocation.
+  - No new key is added to schemas/harness-config.schema.json, and .harness/config.yaml gains filed_query_command and nothing else.
+
+technical_plan:
+  implementation_steps:
+    - Add to the editable constants block of templates/sync/github.sh, in the ${L5_SYNC_...:-default} form the two constants there already use - a project owner defaulting to @me, a Status field name defaulting to Status, and a Status option name defaulting to empty. Empty option means the board item is added and its Status left alone, which is what a target with no such field gets. Say in the comments that a target sets the values in its installed copy and that the template carries none.
+    - Restructure the idempotency section so both paths reach the board. Where the search finds an existing issue, set url from it and fall through instead of echoing and exiting; where it finds nothing, create the issue and set url from that. One echo and one exit 0 at the end of the file, below the board block. Keep the comment explaining why a board failure must not be terminal, which now describes what the control flow does.
+    - Add the item to the project as the block already does, but keep the item's id - gh project item-add reports it, and item-edit takes ids and not names. item-add for an issue already on the board reports the existing item rather than adding a second, which is what makes the retry safe. A failure here is transient.
+    - Where a Status option is configured, read the item's current Status from the project's item listing. Bound the listing so the item is actually in it, and treat an item the listing did not report as a failure to know - transient - rather than as an empty Status. Where the Status is already set to anything, print the url and exit 0 without touching it.
+    - Where the Status is empty, resolve the ids - the project's node id, the Status field's id, and the option id for the configured option name, from gh project view and gh project field-list - and set the field with gh project item-edit. A name that resolves to no id is transient like everything else after the issue exists - a misconfigured option name costs a pending entry, and the alternative costs the item.
+    - Copy the same file to .harness/sync/github.sh and set exactly two constants - the project to 1 and the Status option to Backlog. Nothing else in the installed copy differs from the template.
+    - Add filed_query_command to .harness/config.yaml pointing at .harness/query/github.sh, with a comment in the surrounding voice - what the query command is asked, that a failure there costs dedupe and blocks no run, and that it is the sync command's pair and must agree with it about the markers.
+    - In tests/test_filed_query.py, adapt test_this_repository_carries_the_installed_query_script to what remains true - the installed sync script is present and executable, the installed query script is still byte-identical to its template - and leave the freshly-initialized-target assertion beside it alone. This is the one test edit the implementer makes and it exists because the story falsifies the assertion; the coverage that replaces the property is the tester's.
+    - In tests/test_filed_query.py, extend STUB_GH with the project invocations the repaired script makes - view, field-list, item-add, item-list, item-edit - modelling a board in the same ledger the issues live in - project ids, a Status field with the options this project has, items carrying an issue url and a status that starts empty. item-add for a url already on the board reports the existing item and adds nothing, which is the behaviour the retry depends on. Read the script to see which invocations it makes rather than guessing; the stub implements exactly those and exits non-zero on anything else, as it does today.
+    - Add the board tests, driving the sync script through the stub - an entry lands as an item whose status is Backlog; an entry whose board call fails leaves exit 75 and one issue with no item; the same entry filed again reaches the board and creates no second issue; an item whose status the stub already reports as something else is left at that value.
+    - Parameterize the end-to-end board tests over both templates/sync/github.sh and .harness/sync/github.sh, and add one test that drives the installed copy with no L5_SYNC_ variable in its environment and asserts the item lands in Backlog on project 1 - which is the assertion that this deployment's own wiring works.
+    - Add the dedupe test - a brief filed through the installed sync script, then asked for through the installed query script as the configured filed_query_command, with the answer showing the item against the paths it was filed under.
+    - Update .harness/docs/ARCHITECTURE.md where the outbox and the reference sync and query pair are described.
+  likely_file_changes:
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: The board mechanics, the new constants, and the repair to the control flow that makes the board call reachable on a retry.
+    - file: .harness/sync/github.sh
+      stage: implementer
+      reason: The same file with this target's values - project 1 and the Status option Backlog.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: filed_query_command, so dedupe runs.
+    - file: tests/test_filed_query.py
+      stage: implementer
+      reverting_breaks_the_suite: >-
+        test_this_repository_carries_the_installed_query_script asserts that
+        this repository's installed .harness/sync/github.sh is byte-identical
+        to templates/sync/github.sh. Setting the project number in the
+        installed copy is the story's deliberate change and falsifies it, so
+        reverting this edit leaves that assertion failing against a tree the
+        story intends. It is the minimum adaptation - the assertion is not
+        deleted, and the property it held is re-established behaviourally by
+        the tester in the same story.
+      reason: The one existing assertion the story's change falsifies, adapted to what remains true.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: The stub gh extended with the project invocations, the board and retry-hole coverage, the behavioural parity of the installed copy against the template, and the dedupe answer.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: What the board block does, why everything after the issue exists is transient, and how the installed copy is held to its template.
+
+scope:
+  modify:
+    - templates/sync/github.sh
+    - .harness/sync/github.sh
+    - .harness/config.yaml
+    - tests/test_filed_query.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - orchestration/brief_fetch.py
+    - schemas/harness-config.schema.json
+    - schemas/filed-items.schema.json
+    - schemas/fetched-brief.schema.json
+    - templates/query/github.sh
+    - .harness/query/github.sh
+    - .harness/outbox/
+    - scripts/l5-init
+
+verification_requirements:
+  - Confirm the board block is reached on an invocation whose search found an existing issue, by reading the control flow and by the test that drives the same key twice with the board failing first.
+  - Confirm every exit after gh issue create succeeds is 75, and that no path after it exits 1 or 0 without the board having been attempted.
+  - Confirm the Status write is conditional on the item's Status being empty, and that an item the listing did not report is answered transiently rather than treated as empty.
+  - Confirm templates/sync/github.sh carries no project number and no Status option value, and that .harness/sync/github.sh differs from it only in constant values - diff the two and check every differing line is a constant assignment.
+  - Confirm the installed .harness/sync/github.sh is exercised end to end by the suite and not merely read, and that it files to the board with no L5_SYNC_ variable set.
+  - Confirm the byte-identity assertion for the installed sync script was replaced and not deleted - the behavioural coverage that stands in its place exists and fails if the installed copy stops behaving like the template.
+  - Confirm the freshly-initialized-target assertion is unchanged and still passing.
+  - Confirm no test reaches a network - every gh invocation in the new tests goes to the stub this module writes.
+  - Confirm filed_query_command is set in .harness/config.yaml and that the dedupe answer comes back for a brief filed through the pair.
+  - Confirm no git invocation was added to either sync script.
+  - Confirm the files in do_not_modify are unchanged.
+
+constraints:
+  - A sync command must not commit. The header says so and the harness cannot enforce it; do not add a git call to either sync script.
+  - The transport contract is unchanged - the entry on stdin, the key in L5_SYNC_KEY, the reference as the last non-empty line of stdout, exit 0 landed, exit 75 transient, anything else terminal.
+  - The command stays idempotent given the key. The search before creating is what makes a lost response safe to retry, and every call added after it must be safe to make twice.
+  - No new configuration key. The project number is a constant in the installed script by the developer's decision, not a config value.
+  - The two markers - PATH_MARKER_PREFIX and PAYLOAD_MARKER_PREFIX - keep the same value in all four scripts.
+  - The template is what l5-init installs into every other target. It must carry no value particular to this deployment, and a target that configures no project must file exactly as it does today.
+  - Nothing moves an item between columns after it lands. This story writes Backlog where the Status is empty and nothing else; transitions at other invocation points are a separate brief.
+  - The entries already pending in the outbox are not edited, reordered or triaged. They file when the queue next drains.
+  - The stub gh implements exactly the invocations the reference scripts make and exits non-zero on anything else, which is what keeps it a fake tracker rather than a second implementation.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-04 13:07:49
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
