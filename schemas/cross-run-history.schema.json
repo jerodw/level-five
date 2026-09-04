@@ -55,10 +55,10 @@
     },
     "inspection-log.jsonl": {
       "type": "array",
-      "description": "One record per inspection a completed run made of what its story changed. Written to .harness/history/inspection-log.jsonl, one JSON object per line, appended as the inspection ends. It exists because the run directory is gitignored and reaches no clone: an inspection reporting only into that run's events.log would leave no evidence in the repository that any inspection had ever run. A record is a summary and never a copy — what was found, filed and dropped is here as three counts, and which finding went which way is in the run's own events.log and in the outbox entries the inspection wrote. The inspection is a total function that may not block, delay or refuse a run, so a record here is also what a configuration it could not obey is named in: an inspection that was not made because the file cap was unusable leaves a line saying so with its counts at zero, because naming the problem is the only thing a function that cannot refuse can do about it.",
+      "description": "One record per inspection, in either mode: the narrow one a completed run makes of what its story changed, and the broad one an l5-inspect invocation makes of a part of the tree. Written to .harness/history/inspection-log.jsonl, one JSON object per line, appended as the inspection ends. It exists because the run directory is gitignored and reaches no clone: an inspection reporting only into that run's events.log would leave no evidence in the repository that any inspection had ever run, and a broad-mode inspection has no run directory to report into at all. A record is a summary and never a copy — what was found, filed and dropped is here as three counts, and which finding went which way is in the run's own events.log and in the outbox entries the inspection wrote. Both modes carry the same fields, so one read of one file answers what inspection has cost across both without walking any run directory. The inspection is a total function that may not block, delay or refuse a run, so a record here is also what a configuration it could not obey is named in: an inspection that was not made because the file cap was unusable leaves a line saying so with its counts at zero, because naming the problem is the only thing a function that cannot refuse can do about it.",
       "items": {
         "type": "object",
-        "required": ["story_id", "timestamp"],
+        "required": ["timestamp"],
         "properties": {
           "event": {
             "type": "string",
@@ -67,7 +67,24 @@
           },
           "story_id": {
             "type": "string",
-            "description": "The story whose completed run made this inspection, derived from the run directory's own name."
+            "description": "The story whose completed run made this inspection, derived from the run directory's own name. Absent for a broad-mode inspection, which is not made by a run and has no story to name: it is outside this log's required list for that reason alone, and a narrow-mode record carries it exactly as it always has."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Which inspection made this record. 'broad' is an l5-inspect invocation over a part of the tree; 'narrow' is the inspection a completed run makes of what its story changed. It is here because the two modes run at different frequencies against different scopes — narrow mode fires on every completed story, several times a day — so a corpus that could not separate them could not be used to tune either.",
+            "enum": ["broad", "narrow"]
+          },
+          "cost_usd": {
+            "type": "number",
+            "description": "What this inspection's invocations reported spending, in US dollars, summed across them. Carried and never computed: it is the figure the runner's own result reported, and nothing re-derives it by reading an agent log back. Absent where no invocation reported a cost, rather than written as zero — a zero would be indistinguishable from an inspection that genuinely cost nothing and would corrupt any average taken over this log later."
+          },
+          "scope_files": {
+            "type": "integer",
+            "description": "How many files this inspection had in scope, summed across its invocations. What a cost means depends on how much was read, so the two are recorded together."
+          },
+          "invocations": {
+            "type": "integer",
+            "description": "How many agent invocations the recorded cost covers. Broad mode makes one per scope and narrow mode makes one, so a cost read without this could not be read as a per-invocation figure."
           },
           "timestamp": {
             "type": "string",

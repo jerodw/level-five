@@ -106,10 +106,38 @@ LONGER_THAN_ANY_BOUND = 45
 KILL_BOUND_SECONDS = 1.0
 PATIENCE_SECONDS = 20.0
 
-#: How long the control's child sleeps before it writes its marker. Longer
-#: than the moment its leader is killed, so a marker that appears can only
-#: have been written by a child that outlived the leader.
-CHILD_SLEEP_SECONDS = 3
+#: The bound the process-group tests give the command they kill. Larger than
+#: the one above because it is asked for something more: those tests require
+#: the command to have *got somewhere* — to have started an interpreter and
+#: backgrounded a child — before the kill arrives, where a bound that only has
+#: to be exceeded is satisfied by a command that never started at all. The
+#: suite runs its workers in parallel and each one spawns processes of its own,
+#: so a second is not reliably enough for an interpreter to reach its first
+#: line on a loaded machine, and a test that times out before the thing it is
+#: about has happened fails saying nothing about the group.
+SPAWN_BOUND_SECONDS = 5.0
+
+#: How long the child sleeps before it writes its marker. Longer than the
+#: moment its leader is killed, so a marker that appears can only have been
+#: written by a child that outlived the leader.
+CHILD_SLEEP_SECONDS = 8
+
+
+def test_the_bounds_the_process_group_tests_rest_on_are_ordered():
+    """The ordering the separately declared bounds above have to keep.
+
+    Each of the process-group assertions is decided by where the kill lands
+    between the two sleeps, and nothing else states that arrangement: the
+    child's sleep has to outlast the bound or a surviving child would be
+    indistinguishable from a killed one, and the leader's has to outlast both
+    or the command would finish rather than be killed. Written here so that
+    retuning one of them for a slower machine reddens this rather than
+    quietly turning the tests below into ones that pass for another reason.
+    """
+    assert SPAWN_BOUND_SECONDS < CHILD_SLEEP_SECONDS < LONGER_THAN_ANY_BOUND
+    # And the control waits for a marker the child writes after that sleep,
+    # so its patience has to outlast the sleep it is waiting through.
+    assert CHILD_SLEEP_SECONDS < PATIENCE_SECONDS
 
 
 # --------------------------------------------------------------------------
@@ -533,7 +561,7 @@ def test_the_kill_reaches_the_process_group_and_not_only_the_command(
     command = spawns_a_child(commands, child_pid, marker)
 
     entry = filed_through(queue, transport_for(command,
-                                               timeout=KILL_BOUND_SECONDS))
+                                               timeout=SPAWN_BOUND_SECONDS))
     assert entry["state"] == outbox.PENDING
 
     assert child_pid.exists(), (

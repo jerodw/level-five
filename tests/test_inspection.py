@@ -1155,10 +1155,21 @@ def test_the_query_is_asked_about_the_scopes_paths_and_its_answer_is_injected(
         **{filed_query.COMMAND_KEY: recording_query(tmp_path, transcript,
                                                     item)}))
 
-    assert question_paths(transcript) == list(
-        inspection.scope_paths(found.target,
-                               inspection.Scope(path="", kind=SOURCE),
-                               inspection.blocked_prefixes(found.harness)))
+    # The inspection commits its own record into the target, so the tracked
+    # set *afterwards* carries a file that did not exist when the question was
+    # asked. Subtracting exactly that file — named by the same derivation the
+    # record's own commit stages by, rather than spelled here — keeps this
+    # comparing the question against the scope rather than against a moment.
+    # In a deployment the subtraction is empty: the shipped execution rules
+    # block the history directory, so the record never enters a scope at all.
+    recorded = set(inspection.record_paths(found.target, configuration()))
+    assert question_paths(transcript) == [
+        path
+        for path in inspection.scope_paths(
+            found.target, inspection.Scope(path="", kind=SOURCE),
+            inspection.blocked_prefixes(found.harness))
+        if path not in recorded
+    ]
     prompt = found.prompt(0)
     assert item["key"] in prompt
     assert item["title"] in prompt

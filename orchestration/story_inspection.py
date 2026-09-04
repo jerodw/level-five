@@ -28,6 +28,20 @@ expansion is computed here, before any agent is invoked, so it is testable and
 its cost is known in advance — which is also why the cap is applied to a list
 this module built rather than to whatever an invocation happened to read.
 
+**What it cost is recorded twice, and neither recording enforces anything.**
+The figure the invocation reported goes into the cross-run inspection log
+beside the mode, the scope size and the three counts, so one read of one file
+answers what inspection has cost; and it is appended to that run's own
+cost.json beside the stage invocations, because the inspection is part of that
+run's life. It is deliberately never added to `state.entry_cost_usd`, which is
+the live allowance `max_run_cost_usd` is compared against: this spend happens
+after the completion commit, when the run's work is done and committed, and
+charging it there could push a completed run over a cap it had already
+honoured. The figure is carried and never computed — nothing here reads an
+agent log back — and an invocation that reported no cost records that it
+reported none rather than recording a zero that would corrupt an average taken
+over the corpus later.
+
 **The record is committed.** The run directory is gitignored and reaches no
 clone, and the tracked cross-run logs are deliberately summaries, so an
 inspection reporting only into events.log would leave no evidence that any
@@ -43,18 +57,28 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import harness_config
 import inspection
 
 #: The maximum number of files one post-story inspection may take into scope
 #: after the expansion below. Its absence disables the whole mechanism.
 MAX_FILES_KEY = "inspect_after_story_max_files"
 
-#: The kind the record is appended under. Which cross-run log that reaches —
-#: one, and only the one whose declaration names this kind — is the cross-run
-#: history declaration's to say rather than this module's, so no log filename
-#: is written here.
-INSPECTION_EVENT = "inspection-completed"
+#: The kind the record is appended under, and which mode this producer is.
+#: Which cross-run log the kind reaches — one, and only the one whose
+#: declaration names it — is the cross-run history declaration's to say rather
+#: than this module's, so no log filename is written here. Both names are
+#: `inspection`'s, reached through here rather than respelled, so this mode's
+#: record and the broad mode's are one vocabulary: a reader querying the log
+#: for either is querying for the value both producers write.
+INSPECTION_EVENT = inspection.INSPECTION_EVENT
+MODE = inspection.MODE_NARROW
+
+#: What a post-story inspection's cost is recorded as in that run's cost.json.
+#: It is not an attempt at a stage, so it carries no attempt number of its own
+#: and is recorded at attempt 0; the stage name says what the invocation was
+#: rather than naming a stage the workflow declares.
+COST_STAGE = "inspection"
+COST_ATTEMPT = 0
 
 #: The question this mode asks, supplied from here because it is this caller's
 #: question. Broad mode's is `inspection.BROAD_FRAMING` and is supplied from
@@ -280,8 +304,17 @@ def cap_paths(found: Expansion, cap: int):
 
 
 def _say(run_dir: Path, message: str, *, findings: int | None = None,
-         filed: int | None = None, dropped: int | None = None) -> None:
+         filed: int | None = None, dropped: int | None = None,
+         cost_usd: float | None = None, scope_files: int | None = None,
+         invocations: int | None = None) -> None:
     """Append the inspection's record through the coordinator's shared append.
+
+    Every value goes through that one call, so events.log, the run's structured
+    history and the cross-run log stay one write path and not three. The cost,
+    the scope size and the invocation count are passed beside the three counts
+    and are omitted when absent on exactly the terms those three already are —
+    which is how an invocation that reported no cost records that it reported
+    none rather than recording a zero.
 
     Imported inside the body, the idiom the queue module already uses for its
     own coordinator import: the coordinator imports this module, and a
@@ -295,8 +328,47 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
         append_event(
             Path(run_dir), message, kind=INSPECTION_EVENT,
             findings=findings, filed=filed, dropped=dropped,
+            mode=MODE, cost_usd=cost_usd, scope_files=scope_files,
+            invocations=invocations,
         )
     except Exception:  # noqa: BLE001 - reporting may not become the failure
+        pass
+
+
+def record_cost(run_dir: Path, cost: float | None) -> None:
+    """Append what the inspection cost to that run's cost.json, and only there.
+
+    The inspection is part of that run's life, so its spend belongs in the run's
+    own record beside the stage invocations. It is deliberately **not** added to
+    `state.entry_cost_usd`: that is the live allowance the run ceiling is
+    compared against, and this spend happened after the completion commit, when
+    the run's work is done and committed. Charging it there could push a
+    completed run over a cap it had already honoured, for money spent after the
+    thing the cap protects. Recording and enforcing are different jobs, and this
+    is the recording one.
+
+    The entry index is the one the run records for the entry now running, read
+    off state.json, so the entry a reader sees beside the stage invocations is
+    the entry that made them. An invocation that reported no cost adds no entry
+    at all, rather than an entry of zero.
+
+    Guarded like everything here: a cost that cannot be recorded costs the
+    record and nothing else, and never the run.
+    """
+    if cost is None:
+        return
+    try:
+        from story_coordinator import append_cost_record, load_state
+
+        state = load_state(Path(run_dir))
+        append_cost_record(
+            Path(run_dir),
+            stage=COST_STAGE,
+            entry=state.resume_count if state is not None else 0,
+            attempt=COST_ATTEMPT,
+            cost=cost,
+        )
+    except Exception:  # noqa: BLE001 - recording may not become the failure
         pass
 
 
@@ -306,20 +378,14 @@ def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
     Asked of the same projection the append took, the shape
     `plan_mandate._logs_holding` established: a declaration that stops routing
     this kind stops staging the file, with no edit here.
+
+    The derivation is `inspection.record_paths`, reached through here rather
+    than copied, because both modes write a record of the same kind and two
+    derivations of which logs that kind reaches are two answers that can
+    disagree. The guard stays here, because this producer may not raise.
     """
     try:
-        from story_coordinator import history_log_declarations, history_record
-
-        directory = harness_config.history_dir(target_root, config)
-        logs = [
-            log for log, declaration in history_log_declarations().items()
-            if history_record(
-                {"event": INSPECTION_EVENT, "timestamp": ""}, [], "", declaration
-            ) is not None
-        ]
-        return tuple(sorted(
-            str((directory / log).relative_to(target_root)) for log in logs
-        ))
+        return inspection.record_paths(target_root, config)
     except Exception:  # noqa: BLE001 - the totality is the guarantee
         return ()
 
@@ -469,6 +535,7 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
                 f"post-story inspection of {story_id}: it could not run: "
                 f"{error}",
                 findings=0, filed=0, dropped=0,
+                scope_files=0, invocations=0,
             )
             commit_record(target_root, config, story_id)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
@@ -486,7 +553,8 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
             # the status it would have had with the key unset, which is what a
             # total function's answer to a bad bound has to be.
             _say(run_dir, f"post-story inspection of {story_id}: {problem}",
-                 findings=0, filed=0, dropped=0)
+                 findings=0, filed=0, dropped=0,
+                 scope_files=0, invocations=0)
             commit_record(target_root, config, story_id)
         # An absent key is the mechanism switched off: no invocation, no event,
         # no commit, and an events.log byte-for-byte what it was.
@@ -505,6 +573,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
             f"post-story inspection of {story_id}: nothing the story changed "
             f"is in an inspected scope, so no inspection was made",
             findings=0, filed=0, dropped=0,
+            scope_files=0, invocations=0,
         )
         commit_record(target_root, config, story_id)
         return
@@ -512,7 +581,8 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     bound, bound_problem = inspection.bounds(config)
     if bound is None:
         _say(run_dir, f"post-story inspection of {story_id}: {bound_problem}",
-             findings=0, filed=0, dropped=0)
+             findings=0, filed=0, dropped=0,
+             scope_files=0, invocations=0)
         commit_record(target_root, config, story_id)
         return
 
@@ -549,10 +619,22 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         filed=filed,
         dropped=tuple(result.dropped) + tuple(over),
         dedupe=(result.dedupe,) if result.dedupe is not None else (),
+        cost_usd=result.cost_usd,
+        scope_files=result.scope_files,
     )
     findings, filed_count, dropped_count = _counts(report)
     _say(
         run_dir, _summary(story_id, report, excluded, trimmed),
         findings=findings, filed=filed_count, dropped=dropped_count,
+        # Carried from the invocation's own result through the scope result,
+        # never re-derived: nothing here reads an agent log back for it. None
+        # where the invocation reported nothing, which is how the record says
+        # it was told no figure rather than saying the inspection was free.
+        cost_usd=result.cost_usd, scope_files=result.scope_files,
+        invocations=1,
     )
+    # Beside the stage invocations in that run's own cost.json, and never added
+    # to the allowance the ceiling reads. See `record_cost` for why the two are
+    # different jobs.
+    record_cost(run_dir, result.cost_usd)
     commit_record(target_root, config, story_id)

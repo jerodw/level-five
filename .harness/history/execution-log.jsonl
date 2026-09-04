@@ -18,7 +18,10 @@
 {"story_id": "story-098", "status": "completed", "retry_count": 0, "timestamp": "2026-09-01 19:33:59"}
 {"story_id": "story-099", "status": "completed", "retry_count": 0, "timestamp": "2026-09-01 21:30:19"}
 {"story_id": "story-100", "status": "completed", "retry_count": 1, "timestamp": "2026-09-02 00:20:08"}
+{"story_id": "story-101", "status": "escalated", "retry_count": 0, "timestamp": "2026-09-02 12:32:48"}
 {"story_id": "story-101", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-03 16:45:38"}
 {"story_id": "story-102", "status": "escalated", "retry_count": 0, "timestamp": "2026-09-03 18:06:27"}
 {"story_id": "story-102", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-03 21:17:55"}
 {"story_id": "story-102", "status": "completed", "retry_count": 0, "timestamp": "2026-09-03 21:34:07"}
+{"story_id": "story-101", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-03 22:27:09"}
+{"story_id": "story-101", "status": "completed", "retry_count": 0, "timestamp": "2026-09-03 22:55:00"}

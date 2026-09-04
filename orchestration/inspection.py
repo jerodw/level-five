@@ -59,6 +59,19 @@ invisible to it, so it can miss a duplicate the query would catch. That is why
 it is an addition rather than a replacement, and why `Report.dedupe_ran` remains
 a statement about the filed query alone.
 
+**What an inspection cost is carried, never re-derived.** The runner's own
+result already reports what its invocation spent, so that figure is kept rather
+than dropped on the floor and nothing anywhere reads an agent log back to
+recover it. An invocation that reported nothing yields None rather than zero,
+which is the distinction the record turns on: a zero is what an inspection that
+genuinely cost nothing would carry, and conflating the two corrupts every
+average taken from the corpus later. An inspection writes one line to the
+declared cross-run log carrying that cost, which mode it was, how large its
+scope was and how many findings came back and were filed, and commits it — by
+name, never with `git add -A` — so the record does not sit in the working tree
+as a dirty tree the next run's pre-flight refuses. Both halves are guarded: a
+record that cannot be written costs the record and nothing else.
+
 **No silent bound.** Every way of dropping a finding is named in the report with
 what it excluded: already filed by the tracker, already filed by this harness,
 already queued, malformed, an unknown workflow, past the cap, lost by the queue.
@@ -70,6 +83,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -131,6 +145,22 @@ DELIVERY_TOOL = "Write"
 SOURCE = "source"
 TESTS = "tests"
 CHANGE = "change"
+
+#: The kind an inspection's record is appended under, and the two modes that
+#: appear on one. Which cross-run log the kind reaches is the cross-run history
+#: declaration's to say and not this module's, so no log filename is written
+#: here. Both spellings live here rather than one per producer, so the narrow
+#: mode's record and the broad mode's are one vocabulary and a reader querying
+#: the log for either is querying for the value both producers write.
+INSPECTION_EVENT = "inspection-completed"
+MODE_BROAD = "broad"
+MODE_NARROW = "narrow"
+
+#: The subject the broad-mode record's commit carries. It leads with the
+#: harness and carries no completion marker, so it matches neither the
+#: completion shape `completion_commits` reads nor the escalation and pause
+#: shapes beside it.
+COMMIT_SUBJECT = "l5 recorded an inspection"
 
 #: The question broad mode asks. Supplied by `scopes` below rather than left to
 #: default in the render, so that both modes' framings are values their own
@@ -516,6 +546,14 @@ class Report:
     #: stays constructible as the error paths above already construct it.
     local_index: LocalIndex = LocalIndex()
     dry_run: bool = False
+    #: What this inspection's invocations reported spending, summed, and None
+    #: where none of them reported anything. Carried from the runner's own
+    #: result and never re-derived, so a caller has the figure without a second
+    #: traversal and without a second parser of the harness's own output.
+    cost_usd: float | None = None
+    #: How many files were in scope across every invocation. What a cost means
+    #: depends on how much was read, so the two are reported together.
+    scope_files: int = 0
 
     def dropped_for(self, reason: str) -> tuple[Drop, ...]:
         """Everything dropped one way, so a caller can say each way once."""
@@ -543,11 +581,21 @@ class _Found:
 
 @dataclass
 class _ScopeResult:
-    """What one invocation produced: what it found and what it dropped."""
+    """What one invocation produced: what it found, dropped, and cost.
+
+    `cost_usd` is what the runner's own result reported, carried and never
+    computed — nothing here reads an agent log back to recover it. None is a
+    runner that returned nothing and a result carrying no cost alike: the
+    harness was told no figure, which is not the same as a figure of zero, and
+    keeping the two apart is what stops a zero nobody reported from being
+    averaged later as though it were one.
+    """
 
     found: list = field(default_factory=list)
     dropped: list = field(default_factory=list)
     dedupe: Dedupe = None
+    cost_usd: float | None = None
+    scope_files: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -732,6 +780,26 @@ def _describe(finding, fallback: str) -> str:
     return fallback
 
 
+def _reported_cost(invoked) -> float | None:
+    """What one invocation reported spending, or None if it reported nothing.
+
+    Read off the result the runner returns and off nothing else: `run_agent`
+    already parses `total_cost_usd` from the result event, so reading an agent
+    log back here would be a second parser of the harness's own output. A
+    runner that returns nothing — which every fake runner in the suite that
+    predates this is free to do — and a result whose cost is absent both yield
+    None, because the harness was told no figure. None is not zero: an
+    inspection that reported no cost records none, where a zero would be
+    indistinguishable from one that genuinely cost nothing.
+    """
+    reported = getattr(invoked, "cost_usd", None)
+    if reported is None or isinstance(reported, bool):
+        return None
+    if not isinstance(reported, (int, float)):
+        return None
+    return float(reported)
+
+
 def _severity(finding) -> int | None:
     """A finding's severity where it has a readable one, for the drop report."""
     if isinstance(finding, dict):
@@ -763,6 +831,7 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
     """
     result = _ScopeResult()
     paths = scope.paths or scope_paths(target_root, scope, blocked)
+    result.scope_files = len(paths)
     answer = filed_query.query(paths, config, target_root, harness_root)
     result.dedupe = Dedupe(
         scope=scope.label,
@@ -789,7 +858,7 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
         granted = list(config.get("allowed_tools") or ())
         if DELIVERY_TOOL not in granted:
             granted.append(DELIVERY_TOOL)
-        runner(
+        invoked = runner(
             _render(harness_root, target_root, config, scope, paths, answer,
                     artifact),
             stage=f"inspector:{scope.label}",
@@ -803,6 +872,12 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
             # per scope; the report says how many invocations were made.
             max_budget_usd=bound.max_cost_usd,
         )
+        # The figure the invocation itself reported, kept rather than dropped
+        # on the floor. It is read off the result the runner already returns —
+        # the same event the result text is read off — so nothing anywhere
+        # parses an agent log back to recover it. A runner that returns nothing
+        # and a result carrying no cost both leave it None.
+        result.cost_usd = _reported_cost(invoked)
         document, problem = _read_findings(artifact, harness_root)
     finally:
         artifact.unlink(missing_ok=True)
@@ -939,6 +1014,120 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
     return tuple(filed), dropped
 
 
+def reported_total(costs) -> float | None:
+    """The sum of what a set of invocations reported, or None if none did.
+
+    None rather than zero where nothing was reported, which is the distinction
+    this whole record turns on: a zero is what an inspection that genuinely
+    cost nothing would carry, and averaging one over the other corrupts every
+    figure taken from the corpus later.
+    """
+    reported = [one for one in costs if one is not None]
+    return sum(reported) if reported else None
+
+
+def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
+    """The repository-relative record paths a broad-mode commit stages.
+
+    Asked of the same projection the append took, the shape
+    `plan_mandate._logs_holding` established: a declaration that stops routing
+    this kind stops staging the file, with no edit here and no log filename
+    written at any call site.
+    """
+    import story_coordinator
+
+    directory = harness_config.history_dir(target_root, config)
+    logs = [
+        log for log, declaration in
+        story_coordinator.history_log_declarations().items()
+        if story_coordinator.history_record(
+            {"event": INSPECTION_EVENT, "timestamp": ""}, [], "", declaration
+        ) is not None
+    ]
+    return tuple(sorted(
+        str((directory / log).relative_to(target_root)) for log in logs
+    ))
+
+
+def record(target_root: Path, config: dict, report: Report) -> None:
+    """Write one line for this inspection and commit it, or cost only the line.
+
+    The record goes through the coordinator's own per-log append with the
+    history directory resolved exactly as a run resolves it and passed
+    explicitly, because a broad-mode inspection has no run directory to resolve
+    one from — the shape `plan_mandate.record` established. What reaches which
+    log is read off the cross-run history declaration: this builds an entry
+    carrying the kind that declaration names and hands it over, so no condition
+    here decides where it goes. It names no work item, because a broad-mode
+    inspection is not made by a run and has none.
+
+    It is committed because the cross-run history is versioned, so a record left
+    in the working tree is a dirty tree the next run's pre-flight refuses on.
+    The declared paths are staged **by name** and never with `git add -A`, so a
+    file the inspection agent changed elsewhere is left in the working tree
+    rather than folded into a commit this module made.
+
+    Both halves are guarded, and separately: a history directory that cannot be
+    written and a git call that fails each cost the record and nothing else.
+    The inspection has already happened and has already filed what it found, and
+    a failure to write down what that cost may not undo any of it.
+
+    The imports are inside the body, the idiom the queue module already uses for
+    its own coordinator import: the coordinator reaches this module through
+    `story_inspection`, and a module-scope import would close the cycle.
+    """
+    import story_coordinator
+
+    try:
+        entry = {
+            "event": INSPECTION_EVENT,
+            "timestamp": time.strftime(
+                story_coordinator.HISTORY_TIMESTAMP_FORMAT
+            ),
+            "mode": MODE_BROAD,
+            "findings": len(report.filed) + len(report.dropped),
+            "filed": len(report.filed),
+            "dropped": len(report.dropped),
+            "scope_files": report.scope_files,
+            "invocations": report.invocations,
+        }
+        if report.cost_usd is not None:
+            # Absent where nothing was reported, rather than zero: the same
+            # distinction the schema states, made here by not writing the key.
+            entry["cost_usd"] = report.cost_usd
+        story_coordinator.append_history_records(
+            harness_config.history_dir(target_root, config), entry, "", []
+        )
+    except Exception:  # noqa: BLE001 - a record that cannot be written costs
+        return                                   # the record and nothing else
+
+    try:
+        paths = record_paths(target_root, config)
+        if not paths:
+            return
+        argv = ["git", "-C", str(target_root)]
+        added = subprocess.run(  # noqa: S603 - a fixed argument list
+            [*argv, "add", "--", *paths], capture_output=True, text=True
+        )
+        if added.returncode != 0:
+            return
+        staged = subprocess.run(  # noqa: S603 - a fixed argument list
+            [*argv, "diff", "--cached", "--quiet", "--", *paths],
+            capture_output=True, text=True,
+        )
+        if staged.returncode == 0:
+            # Nothing of ours is staged, so there is nothing to commit: an
+            # empty commit here would be a commit about a record that is not
+            # there.
+            return
+        subprocess.run(  # noqa: S603 - a fixed argument list
+            [*argv, "commit", "-m", COMMIT_SUBJECT, "--", *paths],
+            capture_output=True, text=True,
+        )
+    except Exception:  # noqa: BLE001 - the commit is the record's durability,
+        return                                       # never the inspection's
+
+
 def inspect(target_root: Path, config: dict, harness_root: Path, *,
             arguments=(), dry_run: bool = False,
             runner=agent_runner.run_agent) -> Report:
@@ -974,6 +1163,8 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
     found: list = []
     dropped: list = []
     dedupe: list = []
+    costs: list = []
+    scope_files = 0
     invocations = 0
     for scope in covered:
         result = inspect_scope(
@@ -984,13 +1175,15 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         found.extend(result.found)
         dropped.extend(result.dropped)
         dedupe.append(result.dedupe)
+        costs.append(result.cost_usd)
+        scope_files += result.scope_files
 
     filed, over = file_findings(
         target_root, found, bound.max_findings, dry_run=dry_run
     )
     dropped.extend(over)
 
-    return Report(
+    report = Report(
         scopes=covered,
         invocations=invocations,
         filed=tuple(filed),
@@ -998,4 +1191,17 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         dedupe=tuple(dedupe),
         local_index=index,
         dry_run=dry_run,
+        cost_usd=reported_total(costs),
+        scope_files=scope_files,
     )
+    # Written last, and not by a dry run. Two reasons, and the second is the
+    # one that decides it. A dry run's filed count is zero because filing was
+    # switched off rather than because nothing survived, so a line carrying it
+    # describes an inspection that never existed and is indistinguishable in
+    # the log from one that found nothing worth filing. And the record is
+    # committed, which is a change to the repository a developer asking for a
+    # dry run has not asked for. The cost of leaving it out is one real spend
+    # missing from the corpus, which is the cheaper of the two.
+    if not dry_run:
+        record(target_root, config, report)
+    return report
