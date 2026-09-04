@@ -23,11 +23,11 @@ The story-workflow runs are the controls for the refactor one. Without them
 coordinator that had stopped enforcing anything at all.
 
 Every other absence carries a control too: "the refactor workflow declares no
-tester stage" is paired with the workflow that does; "its implementer declares
-neither of the two keys" with the implementer that declares both; "the
+tester stage" is paired with the workflow that does; "no stage of it declares a
+key that governs where it writes" with the workflow whose stages do; "the
 story-workflow prompts are unchanged" with the prompts this story added; and
-"the two lookups are identical across this story" with a mutated copy of the
-same text, which the same comparison reports.
+"the declaration lookup is identical across this story" with a mutated copy of
+the same text, which the same comparison reports.
 
 `.harness/docs/ARCHITECTURE.md` and `README.md` are not asserted on: this
 story's plan assigns both to the documenter, which has not run when this module
@@ -105,16 +105,43 @@ def test_it_declares_no_stage_that_authors_validation():
     assert "tester" not in REFACTOR_NAMES
 
 
-def test_the_refactor_implementer_declares_neither_of_the_two_dropped_keys():
-    """The two declarations that rest on the assumption a refactor breaks.
+#: Every key that governs where a stage may write, together with the key that
+#: turns the check deciding an edit outside it on. Read off the coordinator's
+#: own vocabulary rather than spelled here, so a sense added to it is a sense
+#: the assertion below covers rather than one it silently stops watching.
+GOVERNING_KEYS = (story_coordinator.CREATE_RESTRICTION,
+                  story_coordinator.CONFINEMENT, "revert_check")
 
-    The control is story-workflow's implementer, which declares both: if the
-    lookup below had stopped reading a stage at all, the pair would look
-    identical and the absence would mean nothing."""
-    assert "may_not_create" in STORY_WRITER
-    assert "revert_check" in STORY_WRITER
-    assert "may_not_create" not in REFACTOR_WRITER
-    assert "revert_check" not in REFACTOR_WRITER
+
+def test_no_refactor_stage_declares_any_key_that_governs_where_it_writes():
+    """The declarations that rest on the assumption a refactor breaks.
+
+    Over every stage rather than the implementer alone, and over every sense
+    the vocabulary has rather than the one this module's story knew about: a
+    confinement is the mirror image of a create restriction, and a refactor
+    stage confined to the tests directory would be governed everywhere else,
+    which is exactly the guard this workflow exists to drop.
+
+    The control is story-workflow, which declares each of them somewhere: if
+    the reading had stopped seeing a declaration at all, the two definitions
+    would look identical and the absence would mean nothing.
+    """
+    assert not [(stage["name"], key) for stage in REFACTOR_STAGES
+                for key in GOVERNING_KEYS if key in stage]
+    for key in GOVERNING_KEYS:
+        assert [stage["name"] for stage in STORY_WORKFLOW["stages"]
+                if key in stage], key
+
+
+def test_no_refactor_stage_is_governed_anywhere_by_the_shared_derivation():
+    """The same absence asked of the derivation the coordinator enforces from.
+
+    Reading the keys is a statement about the file; this is a statement about
+    what a run would enforce, which is what the criterion is about. Its control
+    is the shipped story workflow, whose stages do derive restrictions.
+    """
+    assert story_coordinator.stage_restrictions(REFACTOR_STAGES) == []
+    assert story_coordinator.stage_restrictions(STORY_WORKFLOW["stages"]) != []
 
 
 def test_the_refactor_implementer_declares_the_census_and_the_suite_run():
@@ -510,12 +537,18 @@ def test_a_modification_whose_reversion_leaves_the_suite_green_is_still_refused(
         tmp_path, deployed_harness):
     """The second control, and the one the refactor workflow exists for: an
     edit to an existing test that nothing forced, decided by reverting it and
-    running the suite."""
+    running the suite.
+
+    The verdict is what makes this a control for the pair below, and the
+    verdict is refused. What a refusal *does* is not this module's subject —
+    since story-106 the edit is undone and the run carries on rather than
+    stopping — so what is read is the record and the undoing, and the refactor
+    run beneath it writes no such record at all.
+    """
     target = build_target(tmp_path, STORY_WORKFLOW["name"])
     code, runner = run(target, deployed_harness, unforced_modification)
 
-    assert code == 2
-    assert runner.calls == ["implementer"]
+    assert code == 0
     record = json.loads(
         (run_dir_of(target) / STORY_WRITER["revert_check"]["result"]).read_text(
             encoding="utf-8"))
@@ -523,6 +556,7 @@ def test_a_modification_whose_reversion_leaves_the_suite_green_is_still_refused(
     assert record["permitted"] is False
     assert record["exit_code"] == 0
     assert record["paths"] == [f"{TESTS_DIR}test_extra.py"]
+    assert record["reverted"]["restored"] == [f"{TESTS_DIR}test_extra.py"]
 
 
 def test_the_refactor_workflow_permits_that_same_unforced_modification(
@@ -546,11 +580,17 @@ def test_the_refactor_workflow_permits_that_same_unforced_modification(
 # is absent, and neither line moved.
 # --------------------------------------------------------------------------
 
-#: The two lookups, each written as the whole line that performs it so a
-#: similar expression elsewhere in a five-thousand-line file cannot stand in
-#: for it.
+#: The lookup, written as the whole line that performs it so a similar
+#: expression elsewhere in a five-thousand-line file cannot stand in for it.
+#:
+#: There was a second, reading the create restriction off the stage the same
+#: way. story-106 replaced it: the restriction is now read through the one
+#: derivation both plan time and run time share, so the enforcement site reads
+#: no declaration key at all. That is a change this module's story did not
+#: predict and did not need — what it claimed is that *dropping* a key needs no
+#: coordinator change, and the behavioural assertion below is where that claim
+#: lives for both keys, unchanged in what it says.
 LOOKUPS = (
-    'enforced = list(stage.get("may_not_create", []))',
     'declaration = stage.get("revert_check") or {}',
 )
 
@@ -569,7 +609,7 @@ def lookup_lines(text: str) -> dict[str, list[str]]:
             for lookup in LOOKUPS}
 
 
-def test_both_lookups_read_the_same_line_before_and_after_this_story():
+def test_the_declaration_lookup_reads_the_same_line_before_and_after():
     before = repository_file_at(COORDINATOR_REL, validation_file=Path(__file__),
                                 bound=BASELINE)
     after = (REPO_ROOT / COORDINATOR_REL).read_text(encoding="utf-8")
@@ -578,25 +618,31 @@ def test_both_lookups_read_the_same_line_before_and_after_this_story():
 
 
 def test_the_comparison_reports_a_lookup_that_did_change():
-    """The control for the assertion above. Green there says the two lookups
-    are untouched only if the comparison can go red, so the same before-text is
-    mutated at one lookup and handed to the same comparison."""
+    """The control for the assertion above. Green there says the lookup is
+    untouched only if the comparison can go red, so the same before-text is
+    mutated at it and handed to the same comparison."""
     before = repository_file_at(COORDINATOR_REL, validation_file=Path(__file__),
                                 bound=BASELINE)
-    mutated = before.replace(LOOKUPS[1],
+    mutated = before.replace(LOOKUPS[0],
                              'declaration = stage.get("revert_check", {})', 1)
     assert mutated != before
     assert lookup_lines(before) != lookup_lines(mutated)
 
 
-def test_each_lookup_yields_nothing_when_the_declaration_is_absent():
+def test_each_check_yields_nothing_when_the_declaration_is_absent():
     """Why no coordinator change was needed, stated as behaviour: a stage that
-    declares neither key answers both lookups with an empty value, which is
-    what makes each check a no-op under a workflow that drops it."""
-    assert REFACTOR_WRITER.get("may_not_create", []) == []
+    declares none of the keys answers every reader with an empty value, which
+    is what makes each check a no-op under a workflow that drops it.
+
+    The restriction half is read through `stage_restrictions`' per-stage
+    accessor rather than off a declaration key, because that is what the
+    enforcement site reads since story-106 — and it answers for every sense the
+    vocabulary has rather than for the one this module's story knew about.
+    """
+    assert story_coordinator.restrictions_on(REFACTOR_WRITER) == []
     assert (REFACTOR_WRITER.get("revert_check") or {}) == {}
     # The control: story-workflow's implementer answers both with something.
-    assert STORY_WRITER.get("may_not_create", []) != []
+    assert story_coordinator.restrictions_on(STORY_WRITER) != []
     assert (STORY_WRITER.get("revert_check") or {}) != {}
 
 

@@ -45,6 +45,7 @@ import conftest
 
 import context_assembler
 import harness_config
+import story_coordinator
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = REPO_ROOT / "orchestration"
@@ -114,7 +115,13 @@ WORKFLOW = conftest.build_workflow(
     conftest.workflow_stage(
         outputs=(conftest.DOCUMENTATION_REPORT,
                  conftest.DOCUMENTER_CHANGED_FILES),
-        changed_files=conftest.DOCUMENTER_CHANGED_FILES),
+        changed_files=conftest.DOCUMENTER_CHANGED_FILES,
+        # A confinement beside the two create restrictions above, so the
+        # renders below inject both senses and an assertion that the rendered
+        # list distinguishes them has something to distinguish. The prefix is
+        # one no template of this repository names, which is what lets the
+        # "states no prefix of its own" assertion above stay a real check.
+        may_only_change=("packaged-modules/",)),
     conftest.workflow_stage(
         name=conftest.VERIFYING_STAGE,
         outputs=(conftest.VERIFICATION_RESULT,),
@@ -495,9 +502,17 @@ def test_every_committed_story_artifact_still_parses():
 # ==========================================================================
 
 
+#: The placeholder carrying the restrictions is named for what a restriction
+#: *is* rather than for one of its senses: the workflow declares two, and
+#: rendering a confinement under a creation label would state the rule wrongly
+#: to every agent that reads the prompt. Derived nowhere — this is the name the
+#: template and the assembler have to agree on, and the two assertions below
+#: are what holds them to it.
+RESTRICTIONS_PLACEHOLDER = "{{stage_path_restrictions}}"
+
 NEW_PLACEHOLDERS = (
     "{{workflow_stages}}",
-    "{{stage_create_restrictions}}",
+    RESTRICTIONS_PLACEHOLDER,
     "{{blocked_paths}}",
 )
 
@@ -528,12 +543,16 @@ def stage_names() -> list[str]:
     return [stage["name"] for stage in workflow()["stages"]]
 
 
-def declared_restrictions() -> list[tuple[str, str]]:
-    return [
-        (stage["name"], prefix)
-        for stage in workflow()["stages"]
-        for prefix in stage.get("may_not_create", [])
-    ]
+def declared_restrictions() -> list:
+    """Every path restriction the built workflow declares, of either sense.
+
+    Read through `story_coordinator.stage_restrictions` — the one derivation
+    the injection itself reads — rather than by matching a declaration key
+    here, so a module asserting that a restriction reached the prompt is asking
+    the same question the assembler answered. A restriction carries its own
+    wording, which is what the assertions below look for in a rendered line.
+    """
+    return story_coordinator.stage_restrictions(workflow()["stages"])
 
 
 def full_context() -> dict:
@@ -569,9 +588,16 @@ def missing_stage_names(rendered: str, names: list[str] | None = None) -> set[st
 
 
 def missing_restrictions(
-    rendered: str, restrictions: list[tuple[str, str]] | None = None,
-) -> set[tuple[str, str]]:
-    """(stage, prefix) pairs no single line of the rendered prompt states.
+    rendered: str, restrictions: list | None = None,
+) -> set[str]:
+    """The wordings of restrictions no single line of the prompt states.
+
+    A restriction is looked for as the sentence it states — its stage, its
+    prefix and the words of its sense together on one line — rather than as a
+    (stage, prefix) coincidence, because the two senses differ in nothing else:
+    a stage confined to a directory and a stage forbidden to create in it name
+    the same pair and mean opposite things. Answering in wordings is what makes
+    the assertions below able to tell them apart.
 
     Lines belonging verbatim to an injected schema file are not counted: a
     schema description that happens to mention a stage beside a prefix (the
@@ -589,9 +615,9 @@ def missing_restrictions(
     lines = [line for line in rendered.splitlines() if line not in schema_lines]
     declared = declared_restrictions() if restrictions is None else restrictions
     return {
-        (stage, prefix)
-        for stage, prefix in declared
-        if not any(stage in line and prefix in line for line in lines)
+        restriction.wording
+        for restriction in declared
+        if not any(restriction.wording in line for line in lines)
     }
 
 
@@ -627,7 +653,13 @@ def test_the_workflow_defines_the_four_expected_stages():
     assert len(stage_names()) == 4
     assert len(set(stage_names())) == len(stage_names())
     assert declared_restrictions()
-    assert all(stage in stage_names() for stage, _ in declared_restrictions())
+    assert all(restriction.stage in stage_names()
+               for restriction in declared_restrictions())
+    # Both senses are declared, so a rendered list that collapsed them would
+    # be caught below rather than passing on a workflow that only ever states
+    # one of them.
+    assert {restriction.sense for restriction in declared_restrictions()} == {
+        story_coordinator.CREATE_RESTRICTION, story_coordinator.CONFINEMENT}
     assert rules()["blocked_paths"] == [
         ".git/", ".harness/runs/", ".harness/history/", ".harness/stories/",
         "rules/"]
@@ -635,9 +667,11 @@ def test_the_workflow_defines_the_four_expected_stages():
     deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
     assert [stage["name"] for stage in deployed["stages"]] == [
         "implementer", "tester", "documenter", "verifier"]
-    assert [(stage["name"], prefix) for stage in deployed["stages"]
-            for prefix in stage.get("may_not_create", [])] == [
-        ("implementer", "tests/")]
+    assert [(restriction.stage, restriction.sense, restriction.prefix)
+            for restriction in story_coordinator.stage_restrictions(
+                deployed["stages"])] == [
+        ("implementer", story_coordinator.CREATE_RESTRICTION, "tests/"),
+        ("tester", story_coordinator.CONFINEMENT, "tests/")]
 
 
 def test_the_template_names_no_workflow_stage_of_its_own():
@@ -646,16 +680,57 @@ def test_the_template_names_no_workflow_stage_of_its_own():
         assert not re.search(rf"\b{name}\b", text), name
 
 
-def test_the_template_names_no_may_not_create_prefix_of_its_own():
+def test_the_template_names_no_restricted_prefix_of_its_own():
     text = PLACEHOLDER.sub("", planner_template())
-    for _, prefix in declared_restrictions():
-        assert prefix not in text, prefix
+    for restriction in declared_restrictions():
+        assert restriction.prefix not in text, restriction.prefix
 
 
 def test_the_template_carries_the_three_workflow_placeholders():
     text = planner_template()
     for placeholder in NEW_PLACEHOLDERS:
         assert placeholder in text, placeholder
+
+
+#: What the restrictions placeholder was called before a second sense of
+#: restriction arrived. The field name rather than the braced form, because a
+#: snapshot of a *template* carries it braced and a snapshot of a module
+#: carries it bare, and what both are being read for is the name.
+RETIRED_PLACEHOLDER = "stage_create_restrictions"
+
+#: The committed snapshots of past prompts that carry the retired name. They
+#: are evidence of what a prompt once said rather than copies of the current
+#: template, so a rename of the placeholder leaves them exactly as they are.
+FIXTURES_CARRYING_THE_RETIRED_NAME = (
+    "prompts-planner.at-story-023-baseline.md.txt",
+    "prompts-planner.at-story-025-baseline.md.txt",
+    "test_story_009_validation.py.txt",
+)
+
+
+def test_the_retired_placeholder_name_is_gone_from_the_template():
+    """The rename, read off the shipped template.
+
+    Its control is the test below, which finds the retired name still present
+    where it belongs — so this absence is the template having been renamed
+    rather than a search that stopped matching anything.
+    """
+    assert RETIRED_PLACEHOLDER not in planner_template()
+    assert RESTRICTIONS_PLACEHOLDER in planner_template()
+
+
+@pytest.mark.parametrize("name", FIXTURES_CARRYING_THE_RETIRED_NAME)
+def test_the_frozen_snapshots_still_carry_the_name_they_were_written_with(name):
+    """A history fixture is not updated when the thing it snapshots changes.
+
+    These are committed records of what a prompt once said. Renaming the
+    placeholder inside one would destroy the evidence and make the fixture a
+    stale copy of the current template instead — so each is asserted to carry
+    the retired name still, beside the shipped template above, which does not.
+    """
+    text = conftest.history_fixture(name)
+    assert RETIRED_PLACEHOLDER in text
+    assert RESTRICTIONS_PLACEHOLDER not in text
 
 
 def test_the_skeleton_stage_field_description_stays():
@@ -721,7 +796,8 @@ def test_the_workflow_fact_coverage_comes_from_the_injection_not_leftover_prose(
         stripped = stripped.replace(placeholder, "")
     rendered = context_assembler.render(stripped, full_context())
     assert missing_stage_names(rendered) != set()
-    assert missing_restrictions(rendered) == set(declared_restrictions())
+    assert missing_restrictions(rendered) == {
+        restriction.wording for restriction in declared_restrictions()}
 
     aliased = blocked_paths_the_template_names_itself()
     # The collapse has to be real: some blocked path must go missing, or the
@@ -744,21 +820,44 @@ def test_workflow_context_renders_a_workflow_the_code_has_never_seen():
         unseen_workflow, {"blocked_paths": ["vendored/"]}
     )
     assert context["workflow_stages"] == "- alpha\n- beta"
-    lines = context["stage_create_restrictions"].splitlines()
-    assert len(lines) == 2
+    lines = context["stage_path_restrictions"].splitlines()
     assert all("beta" in line for line in lines)
     assert "docs/" in lines[0] and "src/" in lines[1]
-    assert "alpha" not in context["stage_create_restrictions"]
+    assert "alpha" not in context["stage_path_restrictions"]
     assert context["blocked_paths"] == "- vendored/"
+
+
+def test_workflow_context_renders_each_sense_in_its_own_wording():
+    """One line per declared restriction, and the two senses are distinguishable.
+
+    The same stage and the same prefix under each key, so nothing but the sense
+    differs between the two lines: if the rendering read a prefix rather than
+    the restriction, the two would come out identical and this could not tell
+    them apart. Neither wording is spelled here — both are the restriction's
+    own, read through the derivation the assembler reads.
+    """
+    unseen_workflow = {"stages": [
+        {"name": "alpha", "may_not_create": ["shared/"]},
+        {"name": "beta", "may_only_change": ["shared/"]},
+    ]}
+    lines = context_assembler.workflow_context(
+        unseen_workflow, {}
+    )["stage_path_restrictions"].splitlines()
+    wordings = [restriction.wording for restriction
+                in story_coordinator.stage_restrictions(
+                    unseen_workflow["stages"])]
+    assert len(lines) == len(wordings)
+    assert [line.removeprefix("- ") for line in lines] == wordings
+    assert wordings[0] != wordings[1]
 
 
 def test_workflow_context_renders_absent_declarations_as_none():
     context = context_assembler.workflow_context(
         {"stages": [{"name": "solo"}]}, {}
     )
-    assert context["stage_create_restrictions"] is None
+    assert context["stage_path_restrictions"] is None
     assert context["blocked_paths"] is None
-    rendered = context_assembler.render("{{stage_create_restrictions}}", context)
+    rendered = context_assembler.render(RESTRICTIONS_PLACEHOLDER, context)
     assert rendered == "None"
 
 
@@ -860,11 +959,8 @@ def test_l5_plan_injects_the_workflow_facts_into_the_session_prompt(
     # render against what the run actually had to inject.
     deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
     deployed_names = [stage["name"] for stage in deployed["stages"]]
-    deployed_restrictions = [
-        (stage["name"], prefix)
-        for stage in deployed["stages"]
-        for prefix in stage.get("may_not_create", [])
-    ]
+    deployed_restrictions = story_coordinator.stage_restrictions(
+        deployed["stages"])
     assert deployed_names and deployed_restrictions      # the control
     assert missing_stage_names(prompt, deployed_names) == set()
     assert missing_restrictions(prompt, deployed_restrictions) == set()

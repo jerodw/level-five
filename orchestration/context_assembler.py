@@ -115,18 +115,29 @@ def retry_routes(stages: list[dict]) -> list[RetryRoute]:
 def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
     """Map the workflow's stage facts to injectable placeholder names.
 
-    The stage list, each stage's may_not_create prefixes, the rules'
+    The stage list, each stage's declared path restrictions, the rules'
     repository-wide blocked_paths, and the declared retry routes are
     injected rather than restated in prose, so the facts an agent is told
     are the definitions the coordinator enforces. l5-plan calls this for
     the planner template, which no coordinator renders; build_context
     merges it for every workflow stage.
+
+    The restrictions are read through story_coordinator.stage_restrictions and
+    rendered in each restriction's own wording, so a create restriction and a
+    confinement are distinguishable in a rendered prompt and neither sense is
+    spelled here. The placeholder is named for what a restriction is rather
+    than for one of its senses, because rendering a confinement under a
+    creation label would state the rule wrongly to every agent that reads it.
     """
+    # Imported in the body rather than at module scope: the coordinator imports
+    # this module, so a module-scope import back would close a cycle. It is the
+    # placement outbox_sweep already uses to reach the coordinator's own event
+    # append, and it costs a caller that never renders a workflow nothing.
+    from story_coordinator import stage_restrictions
+
     stages = workflow["stages"]
     restrictions = [
-        f"{stage['name']} may not create files under {prefix}"
-        for stage in stages
-        for prefix in stage.get("may_not_create", [])
+        restriction.wording for restriction in stage_restrictions(stages)
     ]
     routes = [
         f"{route.category} -> {route.stage}: {route.when}"
@@ -134,7 +145,7 @@ def workflow_context(workflow: dict, rules: dict) -> dict[str, str | None]:
     ]
     return {
         "workflow_stages": _dashed_lines([stage["name"] for stage in stages]),
-        "stage_create_restrictions": _dashed_lines(restrictions),
+        "stage_path_restrictions": _dashed_lines(restrictions),
         "blocked_paths": _dashed_lines(rules.get("blocked_paths")),
         "retry_routes": _dashed_lines(routes),
     }
@@ -219,6 +230,7 @@ def build_context(
     self_route_result: str | None = None,
     correction_pass_result: str | None = None,
     suite_run_result: str | None = None,
+    revert_check_result: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -281,6 +293,14 @@ def build_context(
         # documenter's work. Absent renders as None, which is what a stage
         # running before the check does.
         "claim_support_result": _read(run_dir / "claim-support-result.json"),
+        # What the revert check decided about each stage's edits outside its
+        # lane, including the ones it refused and therefore undid. Passed in
+        # rather than read here, because the artifact each declaring stage
+        # writes is named by the workflow rather than by the harness, and this
+        # module names no workflow-declared artifact. Optional and keyword-only
+        # for the reason the self-route record beside it is: a call that omits
+        # it renders exactly what it rendered before the argument existed.
+        "revert_check_result": revert_check_result,
         # A self-routed stage has no agent-authored guidance behind it — the
         # stage failed mechanically and no verifier saw the work — so the
         # coordinator's own statement of why it is running again is passed in

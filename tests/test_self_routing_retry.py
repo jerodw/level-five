@@ -1685,13 +1685,19 @@ def test_the_revert_check_still_decided_against_that_baseline(
     crashed_then_re_ran,
 ):
     """The reading a developer takes from the run: the re-run's unforced
-    coverage was escalated on, which is what the check says about an edit the
-    stage's original baseline shows nothing forced."""
+    coverage was refused, which is what the check says about an edit the
+    stage's original baseline shows nothing forced.
+
+    The verdict is what this module is about. Since story-106 a refusal undoes
+    the edit and the run carries on rather than stopping, so the verdict is
+    read off the check's own record and the undoing beside it.
+    """
     target_root, code, _ = crashed_then_re_ran
-    assert code == 2
-    reason = escalation_reason(target_root)
-    assert "reverted" in reason
-    assert "tests/test_app.py" in reason
+    assert code == 0
+    record = revert_result_of(target_root)
+    assert record["permitted"] is False
+    assert "tests/test_app.py" in record["paths"]
+    assert "tests/test_app.py" in record["reverted"]["restored"]
     # And the self-route did happen, so this is the re-run being decided.
     assert len(self_route_records(target_root)) == 1
 
@@ -1722,10 +1728,24 @@ def owned_by_no_one(run_dir: Path) -> None:
                                   "created": [f"{prefix}test_new.py"]})
 
 
+def ownership_wording() -> str:
+    """The words the workflow's own restriction is stated in.
+
+    The escalation names the restriction in the terms the definition declares
+    it, and those terms are derived from the definition rather than copied
+    here — so a restriction whose sense or prefix changes moves this phrase
+    with it instead of leaving a literal that no longer appears in any
+    escalation.
+    """
+    (restriction,) = story_coordinator.stage_restrictions(
+        [declaration_of(BUDGETED)])
+    return restriction.wording
+
+
 BOUNDARY_CASES = [
     ("schema-violation", invalid_schema, "wrote an invalid artifact"),
     ("blocked-path", blocked_path, "modified blocked path"),
-    ("stage-output-ownership", owned_by_no_one, "must not create"),
+    ("stage-output-ownership", owned_by_no_one, ownership_wording()),
 ]
 
 
@@ -2272,7 +2292,7 @@ def test_a_capture_that_admitted_nothing_new_would_have_deleted_that_path(
     The same run, through a coordinator whose call site accounts for nothing,
     hands the check a baseline without the created path — so the clone deletes
     it instead of restoring it, the suite passes without it, and the repair the
-    real coordinator permits is escalated on.
+    real coordinator permits is refused and undone.
     """
     mutant = load_mutant(
         COORDINATOR_PATH,
@@ -2283,9 +2303,11 @@ def test_a_capture_that_admitted_nothing_new_would_have_deleted_that_path(
     code, _ = drive_with(mutant, suite_target, harness_root,
                          verdicts=[failing(1), PASS], tree=BETWEEN_INVOCATIONS)
 
-    assert code == 2
+    assert code == 0
     assert not (baseline_of(suite_target) / NEW_TEST_PATH).exists()
-    assert NEW_TEST_PATH in escalation_reason(suite_target)
+    record = revert_result_of(suite_target)
+    assert record["permitted"] is False
+    assert NEW_TEST_PATH in record["paths"]
 
 
 def test_admitting_every_new_path_would_have_admitted_the_crash_leftover(
@@ -2304,8 +2326,11 @@ def test_admitting_every_new_path_would_have_admitted_the_crash_leftover(
     """
     mutant = load_mutant(
         COORDINATOR_PATH,
-        [("            if recapture and rel not in accounted_for:\n"
-          "                continue\n", "")],
+        # Re-indented by story-106, which made the capture take one listing
+        # over every pathspec instead of one per pathspec, dedenting the loop
+        # body by a level. The line removed is the same line.
+        [("        if recapture and rel not in accounted_for:\n"
+          "            continue\n", "")],
         name="mutant_coordinator_admitting_everything", tmp_path=tmp_path)
 
     drive_with(mutant, suite_target, harness_root, {BUDGETED: [CRASH]},

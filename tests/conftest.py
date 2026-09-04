@@ -76,6 +76,41 @@ def repointed_at_todays_signature(source: str) -> str:
     return source
 
 
+#: Where today's coordinator states the one derivation of a stage's declared
+#: path restrictions: the two declaration keys, the restriction object, the
+#: per-stage accessor and the whole-workflow reader. Bounded by the definition
+#: that follows it rather than by a line count, so the slice moves with the
+#: source instead of going quietly wrong when something is added between them.
+RESTRICTION_DERIVATION_OPENS = "#: The workflow key declaring what a stage may not"
+RESTRICTION_DERIVATION_CLOSES = "def stage_exception_problems("
+
+
+def with_todays_restriction_derivation(source: str) -> str:
+    """Recovered coordinator source, given today's restriction derivation.
+
+    `context_assembler.workflow_context` reads a stage's restrictions through
+    the coordinator rather than off a declaration key, so a harness mixing
+    today's assembler with a coordinator recovered from before that derivation
+    existed dies on the import — and the recovered script then fails on the
+    import rather than on its own behaviour, which stops the comparison being
+    about its own subject. That is the hazard `HISTORICAL_WORKFLOW_LOADS`
+    repairs from the other direction, and this is the same repair.
+
+    The derivation is sliced verbatim out of today's module rather than
+    restated here, so nothing under tests/ carries a second copy of a rule the
+    coordinator owns; a recovered source that already defines it is returned
+    untouched, and everything else the revision carried stays byte for byte
+    what it was.
+    """
+    if "def stage_restrictions(" in source:
+        return source
+    today = (HARNESS_ROOT / "orchestration" / "story_coordinator.py").read_text(
+        encoding="utf-8")
+    opening = today.index(RESTRICTION_DERIVATION_OPENS)
+    closing = today.index(RESTRICTION_DERIVATION_CLOSES, opening)
+    return f"{source}\n\n{today[opening:closing].rstrip()}\n"
+
+
 def shipped_workflow(root: Path = HARNESS_ROOT,
                      name: str = "story-workflow") -> dict:
     """The named workflow under `root`, resolved against this repository's config.
@@ -1502,6 +1537,7 @@ def workflow_stage(*, name: str | None = None, prompt: str | None = None,
                    outputs: Sequence[str] | None = None,
                    changed_files: str | None = None,
                    may_not_create: Sequence[str] | None = None,
+                   may_only_change: Sequence[str] | None = None,
                    max_self_routes: object = None,
                    revert_check: dict | None = None,
                    clean_clone: dict | None = None,
@@ -1532,6 +1568,8 @@ def workflow_stage(*, name: str | None = None, prompt: str | None = None,
         declaration["changed_files"] = changed_files
     if may_not_create is not None:
         declaration["may_not_create"] = list(may_not_create)
+    if may_only_change is not None:
+        declaration["may_only_change"] = list(may_only_change)
     if max_self_routes is not None:
         declaration["max_self_routes"] = max_self_routes
     if revert_check is not None:
@@ -1626,11 +1664,12 @@ BUILT_PROMPT_FIELDS = (
     "story", "acceptance_criteria", "stage_exceptions", "run_dir",
     "test_command", "tests_dir", "repository_standards", "testing_standards",
     "architecture_docs", "architecture_doc_paths", "workflow_stages",
-    "stage_create_restrictions", "retry_routes", "blocked_paths",
+    "stage_path_restrictions", "retry_routes", "blocked_paths",
     "changed_files", "tester_changed_files", "documenter_changed_files",
     "implementation_summary", "documentation_report", "test_results",
     "verification_result", "latest_verifier_finding", "retry_guidance",
-    "clean_clone_result", "self_route_result", "retry_state",
+    "clean_clone_result", "revert_check_result", "self_route_result",
+    "retry_state",
 )
 
 #: The shared partial the assembler resolves before injecting it, mirrored here

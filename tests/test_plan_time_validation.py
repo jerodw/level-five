@@ -101,18 +101,35 @@ RESTRICTIONS = story_coordinator.stage_restrictions(STAGES)
 #: The stage/prefix pair the strictness check is about, and a stage the
 #: workflow defines but never restricted, which is what makes an over-broad
 #: stage_exceptions grant a grant of nothing.
-RESTRICTED_STAGE, RESTRICTED_PREFIX = RESTRICTIONS[0]
+#: Selected by its sense rather than by its position: the strictness check
+#: reports only the creation sense — a confinement has no over-strict
+#: restatement, since it governs everything outside its prefixes whatever the
+#: act — so the restriction these assertions are about has to be one of those.
+RESTRICTION = next(restriction for restriction in RESTRICTIONS
+                   if restriction.sense == story_coordinator.CREATE_RESTRICTION)
+RESTRICTED_STAGE, RESTRICTED_PREFIX = RESTRICTION.stage, RESTRICTION.prefix
 UNRESTRICTED_STAGE = next(
-    name for name in STAGE_NAMES if name not in {s for s, _ in RESTRICTIONS}
+    name for name in STAGE_NAMES
+    if name not in {restriction.stage for restriction in RESTRICTIONS}
 )
+
+#: The confinement beside it, for the assertions about what the strictness
+#: check leaves alone. Read off the same workflow, so a definition that stopped
+#: declaring one would fail the anchor below rather than pass vacuously.
+CONFINEMENT = next(restriction for restriction in RESTRICTIONS
+                   if restriction.sense == story_coordinator.CONFINEMENT)
 UNDEFINED_STAGE = "cartographer"
 
 
 def test_the_workflow_this_file_reads_still_has_something_to_say():
     """The derivations above are load-bearing; an empty one would go green."""
-    assert RESTRICTIONS, "the workflow declares no may_not_create restriction"
+    assert RESTRICTIONS, "the workflow declares no path restriction"
     assert UNDEFINED_STAGE not in STAGE_NAMES
     assert UNRESTRICTED_STAGE in STAGE_NAMES
+    # Both senses are declared, so the assertions that turn on the difference
+    # between them have a real difference to turn on.
+    assert RESTRICTION.sense != CONFINEMENT.sense
+    assert CONFINEMENT.stage in STAGE_NAMES
 
 
 # --------------------------------------------------------------------------
@@ -242,8 +259,9 @@ def pre_story_harness(tmp_path: Path) -> Path:
             continue
         os.symlink(module, root / "orchestration" / module.name)
     (root / "orchestration" / "story_coordinator.py").write_text(
-        conftest.repointed_at_todays_signature(
-            show("orchestration/story_coordinator.py")),
+        conftest.with_todays_restriction_derivation(
+            conftest.repointed_at_todays_signature(
+                show("orchestration/story_coordinator.py"))),
         encoding="utf-8")
     for script in ("l5-plan", "l5-run"):
         written = root / "scripts" / script
@@ -561,6 +579,91 @@ def test_a_workflow_that_restricts_nothing_reports_nothing():
     assert plan_validation.strictness_problems({"constraints": [entry]}, stages) == []
 
 
+# --------------------------------------------------------------------------
+# A confinement has no over-strict restatement, so none is reported
+#
+# The check reports a sentence that states a *create* restriction as an
+# unscoped one: a stage forbidden only to add files under a path may still
+# modify one there, so an unscoped sentence demands more than the workflow
+# does. A confinement makes no such distinction — it governs everything
+# outside the paths it names whatever the act — so a sentence naming the stage
+# together with the prefix it is confined to restates the rule accurately, and
+# reporting it would refuse a planner for writing down what the workflow says.
+#
+# The pair below is the whole of the difference, and it is driven against one
+# synthetic workflow declaring both senses over *the same prefix*: nothing but
+# the sense differs between the two sentences, so a check that had stopped
+# reading the sense would have to report both or neither.
+# --------------------------------------------------------------------------
+
+
+#: One stage confined to a prefix, and another forbidden to create under that
+#: same prefix. Neither name is one this repository deploys.
+BOTH_SENSES_STAGES = [
+    {"name": "cartographer", "may_only_change": ["atlas/"]},
+    {"name": "surveyor", "may_not_create": ["atlas/"]},
+]
+BOTH_SENSES = {restriction.sense: restriction for restriction
+               in story_coordinator.stage_restrictions(BOTH_SENSES_STAGES)}
+
+
+def unscoped(restriction) -> str:
+    """A sentence naming a restriction's stage beside its prefix, unscoped.
+
+    Composed from the restriction rather than written per sense, so the two
+    sentences differ in the stage the workflow attached each sense to and in
+    nothing else.
+    """
+    return f"the {restriction.stage} leaves {restriction.prefix} alone entirely"
+
+
+def test_the_synthetic_pair_differs_in_nothing_but_its_sense():
+    """The anchor: same prefix, two senses, two distinct stages."""
+    confinement = BOTH_SENSES[story_coordinator.CONFINEMENT]
+    creation = BOTH_SENSES[story_coordinator.CREATE_RESTRICTION]
+    assert confinement.prefix == creation.prefix
+    assert confinement.stage != creation.stage
+    assert confinement.stage not in STAGE_NAMES
+    assert creation.stage not in STAGE_NAMES
+
+
+def test_a_sentence_restating_a_confinement_accurately_is_not_reported():
+    confinement = BOTH_SENSES[story_coordinator.CONFINEMENT]
+    assert plan_validation.strictness_problems(
+        {"constraints": [unscoped(confinement)]}, BOTH_SENSES_STAGES) == []
+
+
+def test_the_same_sentence_about_a_create_restriction_is_still_reported():
+    """The control the absence above needs, and the criterion's second half.
+
+    Same shape of sentence, same prefix, same workflow — only the sense of the
+    restriction its stage carries differs — and this one is reported, in the
+    words it has always been reported with.
+    """
+    creation = BOTH_SENSES[story_coordinator.CREATE_RESTRICTION]
+    (problem,) = plan_validation.strictness_problems(
+        {"constraints": [unscoped(creation)]}, BOTH_SENSES_STAGES)
+
+    assert problem.startswith("$.constraints[0]:")
+    assert "states a restriction the workflow does not" in problem
+    assert "without scoping it to creation" in problem
+    # And the restriction is quoted in the workflow's own words.
+    assert creation.wording in problem
+
+
+def test_the_shipped_confinement_is_not_reported_either():
+    """The same absence against what this repository deploys.
+
+    Its control is the test above it, which reports the create-sense sentence
+    built the same way — so silence here is the sense being read rather than
+    the check having stopped seeing anything.
+    """
+    assert plan_validation.strictness_problems(
+        {"constraints": [unscoped(CONFINEMENT)]}, STAGES) == []
+    assert plan_validation.strictness_problems(
+        {"constraints": [unscoped(RESTRICTION)]}, STAGES) != []
+
+
 def test_the_module_names_no_stage_and_no_restricted_prefix():
     """Searched for, not inspected — docstring and comments included.
 
@@ -569,7 +672,8 @@ def test_the_module_names_no_stage_and_no_restricted_prefix():
     rather than the scanner looking for the wrong thing.
     """
     source = PLAN_VALIDATION.read_text(encoding="utf-8")
-    literals = STAGE_NAMES + [prefix for _, prefix in RESTRICTIONS]
+    literals = STAGE_NAMES + [restriction.prefix
+                              for restriction in RESTRICTIONS]
     found = [literal for literal in literals
              if re.search(re.escape(literal), source, re.IGNORECASE)]
     assert found == []

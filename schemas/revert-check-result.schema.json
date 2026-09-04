@@ -29,7 +29,7 @@
     },
     "permitted": {
       "type": "boolean",
-      "description": "Whether the edits are permitted. True when the suite failed with every path above reverted, which is what makes the set maintenance the change forced rather than validation the stage authored, or when the nomination below passed in a clone with the edits applied and failed in the clone with them reverted. False escalates the run immediately, without incrementing retry_count. Absent when the check reached no verdict, because a check that could not run permitted nothing and refused nothing; that is the only reading of its absence, and a fall-through is not one — a check that fell through ran the whole suite and records what the suite decided."
+      "description": "Whether the edits are permitted. True when the suite failed with every path above reverted, which is what makes the set maintenance the change forced rather than validation the stage authored, or when the nomination below passed in a clone with the edits applied and failed in the clone with them reverted. False does NOT stop the run: it is the one verdict the check has already proved harmless, because reaching it means a clone with exactly these paths restored to what the stage found was built and the suite passed in it, so the coordinator reproduces that content in the working tree, records what it undid in reverted below, and the run continues. Absent when the check reached no verdict, which does stop the run — nothing was proved, so nothing may be undone. That is the only reading of its absence, and a fall-through is not one: a check that fell through ran the whole suite and records what the suite decided."
     },
     "clone_path": {
       "type": "string",
@@ -54,6 +54,32 @@
     "reason": {
       "type": "string",
       "description": "Why the check reached no verdict, naming what stopped it. Absent whenever a verdict was reached, whether the whole suite reached it or the nomination did. Why a nomination did not short-circuit is not this field: that is a fall-through rather than a failure to decide, and it is recorded in the nomination block below."
+    },
+    "reverted": {
+      "type": "object",
+      "description": "What a refused verdict undid in the target working tree, and what it kept. Present only when permitted above is false and the refusal was acted on, so its absence is the ordinary case — a permitted check undoes nothing and has nothing to say here. Every path is one of the paths above: restored names those the stage baseline held, put back to the content it holds, and removed names those it did not hold, deleted because a path absent from the baseline did not exist when the stage started. That restore-or-remove decision is made by the same function the clone build makes it with, so the tree left after a revert is the tree the proof was taken on. kept names the paths whose stage-written version was copied into the discarded directory before anything was undone; a path the stage deleted has no version in the tree to keep and is absent from it. This block is the correction BESIDE the stage's changed-files record and never an edit to it: that record still names the edit exactly as the stage wrote it, because an attestation is not rewritten behind its author.",
+      "required": ["restored", "removed", "kept"],
+      "properties": {
+        "restored": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The reverted paths the stage baseline held, each put back to the content it holds there — what the tree held when the stage started."
+        },
+        "removed": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The reverted paths the stage baseline did not hold, deleted from the working tree rather than skipped, because absent from the baseline means the path did not exist when the stage started. Skipping would leave a tree the check's own proof does not cover."
+        },
+        "kept": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The paths whose stage-written version was copied into the discarded directory before the revert, so the work a refusal discards survives in the run's evidence. A path the stage deleted has no version in the tree to keep and is absent here while still appearing above."
+        },
+        "discarded": {
+          "type": "string",
+          "description": "The run-directory directory the stage's own versions were written under, named by the stage's revert_check declaration in the workflow rather than by the coordinator. Absent when the declaration names none, in which case kept is empty and the discarded work does not survive."
+        }
+      }
     },
     "nomination": {
       "type": "object",

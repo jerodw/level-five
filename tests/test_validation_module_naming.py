@@ -623,12 +623,21 @@ def test_dropping_the_origin_is_a_refusal_rather_than_a_wrong_answer(name: str):
 
 
 #: The stage a plan may assign a file under tests/ to. Read off the loaded
-#: workflow rather than written as a literal: the implementer is restricted
-#: from creating files there, and an entry naming it would be refused by the
-#: assignment check instead of by the one these tests are about.
-BARRED_FROM_TESTS = {stage for stage, prefix
-                     in story_coordinator.stage_restrictions(STAGES)
-                     if "tests/".startswith(prefix)}
+#: workflow rather than written as a literal: a stage some restriction governs
+#: there would have the entry refused by the assignment check instead of by the
+#: one these tests are about.
+#:
+#: Whether a stage is barred is the restriction's own decision rather than a
+#: prefix comparison written here, because the two senses answer it opposite
+#: ways over the same prefix: the stage forbidden to *create* under tests/ is
+#: governed there, and the stage *confined* to tests/ is governed everywhere
+#: else and so is exactly the stage this may be assigned to.
+UNDER_TESTS = "tests/"
+BARRED_FROM_TESTS = {
+    stage["name"] for stage in STAGES
+    if any(restriction.governs(UNDER_TESTS)
+           for restriction in story_coordinator.restrictions_on(stage))
+}
 TESTS_STAGE = next(stage["name"] for stage in STAGES
                    if stage["name"] not in BARRED_FROM_TESTS)
 

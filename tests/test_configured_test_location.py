@@ -131,16 +131,27 @@ def config_with(tests_dir: str | None) -> dict:
 
 
 def restrictions_under(tests_dir: str | None,
-                       harness_root: Path = REPO_ROOT) -> list[tuple[str, str]]:
+                       harness_root: Path = REPO_ROOT) -> list:
     """What the coordinator would enforce for a target configured this way.
 
     Read through `story_coordinator.stage_restrictions`, which is the one
     derivation every reader of a loaded workflow goes through, rather than out
-    of the definition file — where the value is not written at all.
+    of the definition file — where the value is not written at all. Every
+    restriction it returns is included whatever its sense: the shipped
+    definition resolves the configured location under more than one
+    declaration key, and reading only one of them would leave the others
+    unwatched by exactly the assertions that exist to watch them.
     """
     workflow = harness_config.load_workflow(harness_root, WORKFLOW_NAME,
                                             config_with(tests_dir))
     return story_coordinator.stage_restrictions(workflow["stages"])
+
+
+def prefixes_under(tests_dir: str | None,
+                   harness_root: Path = REPO_ROOT) -> list[str]:
+    """Just the prefixes of the above, for an assertion about the value alone."""
+    return [restriction.prefix
+            for restriction in restrictions_under(tests_dir, harness_root)]
 
 
 DEFINITION_TEXT = (REPO_ROOT / "workflows" / f"{WORKFLOW_NAME}.json").read_text(
@@ -155,16 +166,34 @@ DEFINITION_TEXT = (REPO_ROOT / "workflows" / f"{WORKFLOW_NAME}.json").read_text(
 def test_a_configured_location_is_the_restriction_the_coordinator_enforces():
     """The definition names no directory, so the pair can only have come from
     the configuration."""
-    assert restrictions_under(CONFIGURED) == [("implementer", CONFIGURED)]
+    assert set(prefixes_under(CONFIGURED)) == {CONFIGURED}
+    assert prefixes_under(CONFIGURED)          # and the list is not empty
     assert CONFIGURED not in DEFINITION_TEXT
     assert "{{tests_dir}}" in DEFINITION_TEXT
+
+
+def test_every_declaration_naming_the_test_location_moves_with_the_config():
+    """Not the create restriction alone.
+
+    The shipped definition names the configured location under more than one
+    declaration key, and each of them has to resolve through the same
+    substitution — a target configuring a different location must be governed
+    there under all of them with no workflow edit. So the assertion is over the
+    senses the definition declares rather than over one of them, and the senses
+    are read off the load rather than named here.
+    """
+    for location in ("spec/", "__tests__/"):
+        restrictions = restrictions_under(location)
+        assert {restriction.prefix for restriction in restrictions} == {location}
+        assert {restriction.sense for restriction in restrictions} == {
+            restriction.sense for restriction in restrictions_under(CONFIGURED)}
 
 
 def test_a_different_configured_location_moves_the_restriction_with_it():
     """The same definition, a different config, a different restriction — with
     nothing on disk changed between the two loads."""
-    assert restrictions_under("spec/") == [("implementer", "spec/")]
-    assert restrictions_under("__tests__/") == [("implementer", "__tests__/")]
+    assert set(prefixes_under("spec/")) == {"spec/"}
+    assert set(prefixes_under("__tests__/")) == {"__tests__/"}
 
 
 def test_a_target_declaring_no_test_location_carries_no_create_restriction():
@@ -188,7 +217,7 @@ def test_the_unset_key_removes_the_entry_rather_than_emptying_the_list_item():
 
 @pytest.mark.parametrize("tests_dir", [CONFIGURED, "spec/", None])
 def test_no_resolved_restriction_is_ever_the_empty_string(tests_dir):
-    assert "" not in [prefix for _, prefix in restrictions_under(tests_dir)]
+    assert "" not in prefixes_under(tests_dir)
 
 
 def test_a_resolver_that_emptied_the_entry_is_reported_by_the_same_check(tmp_path):
@@ -208,7 +237,8 @@ def test_a_resolver_that_emptied_the_entry_is_reported_by_the_same_check(tmp_pat
         name="harness_config_emptying_the_entry", tmp_path=tmp_path)
 
     workflow = mutant.load_workflow(REPO_ROOT, WORKFLOW_NAME, config_with(None))
-    prefixes = [p for _, p in story_coordinator.stage_restrictions(workflow["stages"])]
+    prefixes = [restriction.prefix for restriction
+                in story_coordinator.stage_restrictions(workflow["stages"])]
 
     assert "" in prefixes, prefixes
     # And that is what makes it wrong rather than merely odd.
@@ -894,8 +924,10 @@ def literal_stages(prefix: str) -> list[dict]:
     """
     definition = raw_definition()
     for stage in definition["stages"]:
-        if "may_not_create" in stage:
-            stage["may_not_create"] = [prefix]
+        for key in (story_coordinator.CREATE_RESTRICTION,
+                    story_coordinator.CONFINEMENT):
+            if key in stage:
+                stage[key] = [prefix]
     return definition["stages"]
 
 
@@ -1001,8 +1033,9 @@ def test_this_repository_declares_the_directory_the_workflow_used_to_name():
     location = conftest.repository_config()["tests_dir"]
     assert location == ASSUMED
     assert (REPO_ROOT / location).is_dir()
-    assert story_coordinator.stage_restrictions(
-        conftest.shipped_workflow()["stages"]) == [("implementer", location)]
+    assert {restriction.prefix for restriction
+            in story_coordinator.stage_restrictions(
+                conftest.shipped_workflow()["stages"])} == {location}
 
 
 def test_a_newly_initialized_target_declares_a_location_too():
