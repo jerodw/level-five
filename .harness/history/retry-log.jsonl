@@ -19,3 +19,6 @@
 {"story_id": "story-099", "timestamp": "2026-09-01 21:10:54", "stage": "tester", "retry_stage": "tester"}
 {"story_id": "story-100", "timestamp": "2026-09-01 23:46:11", "stage": "tester", "retry_stage": "tester"}
 {"story_id": "story-100", "timestamp": "2026-09-02 00:00:38", "stage": "verifier", "retry_decision": "retry", "retry_category": "implementation", "retry_stage": "implementer"}
+{"story_id": "story-102", "timestamp": "2026-09-03 17:48:45", "stage": "tester", "retry_stage": "tester"}
+{"story_id": "story-102", "timestamp": "2026-09-03 17:50:16", "stage": "tester", "retry_stage": "tester"}
+{"story_id": "story-102", "timestamp": "2026-09-03 17:57:07", "stage": "tester", "retry_stage": "tester"}

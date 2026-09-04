@@ -325,7 +325,8 @@ def test_the_read_is_written_above_the_run_directory_and_the_checkout():
     call = source.index("reading = read_story(")
     assert call < source.index("run_dir.mkdir(")
     # The checkout *call* in run_story, not the helper's definition above it.
-    assert call < source.rindex("_checkout_story_branch(target_root")
+    # The call's arguments are wrapped, so the name alone is what is matched.
+    assert call < source.rindex("_checkout_story_branch(")
 
 
 def test_the_one_read_happens_before_any_run_state_or_branch_exists(
