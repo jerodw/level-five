@@ -1,0 +1,213 @@
+story:
+  id: story-103
+  title: The harness leg checks the tree the run will read the harness from
+  description: |
+    `unchanged_since_escalation` refuses a resume when three comparisons all
+    establish sameness: the story artifact against the recorded digest, the
+    story branch against the escalation commit with a clean working tree, and
+    the harness against what the run recorded of it. The third has two forms,
+    and the shared-checkout form makes no comparison at all: it appends "the
+    harness is the same checkout as the target, so it is covered by the branch
+    comparison above" and returns the evidence.
+
+    That deferral was sound while the branch comparison resolved `HEAD~1`,
+    because HEAD is the tree the harness is read from. story-102 repointed it
+    at `state.branch~1` so an off-branch resume could be refused, and the
+    premise stopped holding: `state.branch~1` says nothing about the tree the
+    developer is standing in, and the `status --porcelain` leg beside it says
+    that tree is clean, not that it is the same tree.
+
+    The failure it produces in this repository, where the harness is its own
+    target: a story escalates, the developer checks out the base — the very act
+    the escalation exists to make safe — commits a fix to `orchestration/`
+    there and re-runs `l5-run`. The digest matches, `state.branch~1` is still
+    the escalation commit, the tree is clean, so the guard returns evidence and
+    the resume is refused with "nothing establishably changed", telling the
+    developer to update the harness they have just updated. A separate-checkout
+    deployment reaches the recorded-revision comparison and answers correctly,
+    so the two deployments now disagree about one situation.
+
+    This story makes the shared-checkout form say something about the tree it
+    is claiming for. Leg two's establishment covers the harness source only
+    when the working tree is standing on the branch it spoke about, so that is
+    what the leg now requires; standing anywhere else it establishes nothing
+    and the resume proceeds. The cost is deliberate and chosen: under one
+    checkout an off-branch resume with genuinely nothing changed is no longer
+    refused, because the guard cannot tell that case from the one above it
+    without a second definition of "has the harness changed". Permitting a
+    pointless resume is the direction the guard's one-directional bias already
+    takes; refusing a needed one is not.
+
+    Neither the `status --porcelain` leg nor the separate-checkout form is
+    touched, and the branch comparison keeps resolving `state.branch~1`.
+  workflow: story-workflow
+
+tasks:
+  - Condition the shared-checkout form of the harness comparison in
+    `unchanged_since_escalation` on the working tree standing on
+    `state.branch`, returning no evidence when it is not, and say in the
+    evidence line where the tree is standing.
+  - Rewrite the docstring paragraph and the comment at the leg so neither
+    claims that the branch comparison covers the harness source outright, and
+    both record what the shared-checkout form now establishes and what it
+    gives up.
+  - Update the `SHARED_ROOT_LEG` literal in `tests/test_resume_guard.py`,
+    which is a copy of that leg's source used to reconstruct the pre-story-034
+    guard and whose anchor `conftest.load_mutant` asserts is present.
+  - Write a standing test module covering the shared-checkout guard from the
+    base: the harness fix committed there, the on-branch resume that is still
+    refused, and the separate-checkout form as the control that this story
+    narrowed one form only.
+  - Record the change in the architecture document, where the deferral and its
+    evidence line are written out.
+
+acceptance_criteria:
+  - With the harness and the target one checkout, a resume invoked while
+    standing on the base — with a harness fix committed there since the
+    escalation, the story artifact unamended and the story branch untouched —
+    reaches its stage rather than being refused.
+  - With the harness and the target one checkout and the working tree standing
+    on the story branch, a resume with nothing changed is still refused, and
+    the refusal still names three pieces of evidence whose third describes the
+    shared checkout rather than a recorded revision.
+  - The shared-checkout form of the harness comparison returns no evidence
+    whenever the working tree resolves to a revision other than
+    `state.branch`, and a mutant of today's coordinator without that condition
+    returns evidence in the same situation.
+  - With the harness and the target separate checkouts, an off-branch resume
+    with nothing changed is still refused on the recorded-revision comparison,
+    unchanged by this story.
+  - The docstring and the comment at the leg no longer state that the branch
+    comparison covers every change to the harness source, and say instead what
+    the leg requires of the working tree.
+  - The escalation-commit comparison still resolves `state.branch~1`, and the
+    `status --porcelain` leg is unchanged.
+
+technical_plan:
+  implementation_steps:
+    - In `unchanged_since_escalation`, guard the `same_repository` branch on
+      the working tree's revision equalling `state.branch`'s, resolved through
+      the existing `_revision` helper so an unreadable revision falls to the
+      not-established answer the rest of the guard already gives. Return the
+      empty list when they differ, and append the evidence when they do not.
+    - Word the evidence line so it names the branch the tree is standing on,
+      keeping "the same checkout as the target" in it — that phrase is what
+      the separate-checkout control in `tests/test_resume_guard.py`
+      distinguishes the two forms by.
+    - Rewrite the docstring paragraph describing the two forms and the comment
+      above the leg. The claim to remove is that one clean tree at the
+      escalation commit covers every change to the harness source; the claim to
+      write is that it covers it only while the tree is that branch, together
+      with what a resume from elsewhere now does and why permitting it is the
+      chosen direction. Keep the two rejected alternatives already recorded
+      there — the recorded revision, which cannot serve, and the tree hash,
+      which is a second definition.
+    - Update `SHARED_ROOT_LEG` in `tests/test_resume_guard.py` to the leg's new
+      text, so `pre_story_coordinator` still reconstructs the pre-story-034
+      guard by deleting it. `conftest.load_mutant` asserts each anchor occurs,
+      so a stale literal fails the module rather than silently mutating
+      nothing.
+    - Run the modules this change touches — `tests/test_resume_guard.py`,
+      `tests/test_a_run_stands_on_its_branch_first.py`,
+      `tests/test_escalation_resume.py`, `tests/test_cost_ceiling.py` and
+      `tests/test_capacity_pause.py`.
+    - Write the standing module. Build one repository serving as both roots,
+      escalate a run on it, check out the base, commit a change under
+      `orchestration/` there, and resume — asserting the run reaches its stage.
+      Control it with a mutant of today's coordinator whose standing condition
+      is removed, which refuses the same resume. Pair it with the on-branch
+      resume that is still refused and with the separate-checkout off-branch
+      resume that is still refused on the recorded revision.
+    - Update the architecture document's account of the shared-root deferral,
+      including the quoted evidence line, and say what a shared-checkout
+      deployment gives up.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: |
+        `unchanged_since_escalation` holds the leg, its evidence line, the
+        docstring paragraph describing the two forms and the comment stating
+        the deferral.
+    - file: tests/test_resume_guard.py
+      stage: implementer
+      reverting_breaks_the_suite: |
+        `SHARED_ROOT_LEG` is a verbatim copy of the leg's source, and
+        `conftest.load_mutant` asserts that anchor occurs in today's
+        coordinator. Once the leg's text changes, the old literal no longer
+        occurs and every test building `pre_story_coordinator` fails; reverting
+        this file while keeping the coordinator change leaves the suite red.
+      reason: |
+        The copied leg source must track the leg. Only that literal is
+        expected to change; the module's assertions about the shared-checkout
+        refusal hold as they stand, because those tests resume while standing
+        on the story branch.
+    - file: tests/test_the_harness_leg_checks_the_tree_it_will_run.py
+      stage: tester
+      reason: |
+        The standing module for the rule: the shared-checkout resume from the
+        base with the harness fixed there, its mutant control, the on-branch
+        resume still refused, and the separate-checkout form as the control for
+        what this story left alone.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: |
+        "When the harness is its own target" states the deferral, quotes its
+        evidence line and argues its soundness from leg two; all three change.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/harness_config.py
+    - orchestration/outbox_sweep.py
+    - workflows/
+    - schemas/
+    - prompts/
+    - bin/
+    - scripts/
+
+verification_requirements:
+  - Confirm that with one checkout serving as both roots, a resume invoked
+    from the base after a harness fix committed there reaches its stage, and
+    that the same resume against a coordinator without the new condition is
+    refused.
+  - Confirm that with one checkout serving as both roots and the tree standing
+    on the story branch, a resume with nothing changed is still refused and its
+    third evidence line still describes the shared checkout.
+  - Confirm the separate-checkout form and the `status --porcelain` leg are
+    unchanged, both from the source and from a resume that exercises each.
+  - Confirm the docstring and the comment at the leg describe what the code
+    now does, with no remaining claim that the branch comparison covers every
+    change to the harness source.
+  - Confirm every assertion the new module makes is paired with a control
+    demonstrating it can report the situation it exists to catch.
+  - Confirm the suite passes whole, including the modules that build mutants
+    from copied coordinator source.
+
+constraints:
+  - The escalation-commit comparison keeps resolving `state.branch~1`. This
+    story changes the harness comparison only.
+  - The `status --porcelain` leg keeps its current meaning and its current
+    text.
+  - The separate-checkout form of the harness comparison — the
+    `state.harness_revision` comparison and its evidence line — is unchanged
+    character for character.
+  - The guard keeps returning evidence only when every comparison is
+    establishable and identical, and keeps counting anything it cannot
+    establish as not-the-same.
+  - No tree hash, digest or second definition of "has the harness changed" is
+    introduced; the leg asks where the working tree is standing and nothing
+    more.
+  - No flag, environment variable or configuration key skips or weakens the
+    guard.
+  - The recording of `state.harness_revision` in `_escalate`, both escalation
+    commits, and the refusal message's guidance are untouched.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-04 08:01:59
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
