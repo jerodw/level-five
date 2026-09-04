@@ -445,6 +445,19 @@ BUDGET_LEG = """    if state.self_route_count:
 """
 
 
+#: The escalation-commit comparison, repointed from HEAD at the story branch
+#: after story-034. It is undone beside the two deletions above and for their
+#: reason: the reconstruction's claim is about the text of a past function, and
+#: this expression is one of the changes standing between today's text and that
+#: one. Undoing it is not a claim that HEAD is the right revision to resolve —
+#: it is not, which is why the working tree resolves the branch — only that the
+#: baseline resolved it.
+BRANCH_COMPARISON = (
+    '_revision(target_root, f"{state.branch}~1")',
+    '_revision(target_root, "HEAD~1")',
+)
+
+
 def pre_story_coordinator(tmp_path: Path):
     """Today's coordinator with the additions since story-034 removed.
 
@@ -455,7 +468,8 @@ def pre_story_coordinator(tmp_path: Path):
     which is why `conftest.load_mutant` takes a working-tree path.
     """
     return load_mutant(COORDINATOR_PATH,
-                       [(SHARED_ROOT_LEG, ""), (BUDGET_LEG, "")],
+                       [(SHARED_ROOT_LEG, ""), (BUDGET_LEG, ""),
+                        BRANCH_COMPARISON],
                        name="coordinator_before_story_034", tmp_path=tmp_path)
 
 
