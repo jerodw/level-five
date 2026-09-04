@@ -1,0 +1,301 @@
+story:
+  id: story-104
+  title: A question to the developer is about consequences
+  description: |
+    The planner interviews the developer and the assist agent explains the
+    harness to them, and both do it in the vocabulary of the code: function
+    names, module paths, line numbers. The developer is not reading the code
+    while answering. They are being asked to decide something, and a question
+    they cannot evaluate without opening three files gets a guess for an
+    answer.
+
+    Nothing governs this today. `prompts/prose-layer.md` is the shared layer
+    for writing and its opening sentence scopes it to "every word you write
+    that a human later reads — a comment, a docstring, a schema description, a
+    story artifact, a report, a document". Every one of those is an artifact,
+    so a question asked in an interview and an explanation printed in a
+    terminal fall outside the one place this rule would live.
+    `prompts/planner.md` says which questions to ask and nothing about what a
+    question should contain. `scripts/l5-assist` appends `prompts/assist.md`
+    and nothing else, where `scripts/l5-plan` resolves and injects the prose
+    partial into the planner — so the agent the developer talks to most is the
+    one governed least.
+
+    This story widens the prose layer to cover what an agent says to a person
+    in a session, adds an entry there stating the standard, and makes
+    `scripts/l5-assist` render its template through the same
+    `context_assembler.resolved_partial` helper `l5-plan` and `build_context`
+    already share, with `prompts/assist.md` carrying `{{prose_layer}}` for it
+    to land in. The assist agent is then held to the whole layer, count rule
+    included, which it should already have been: it files briefs, and a brief
+    is prose a human reads.
+
+    The standard is about altitude, not detail and not length. What a decision
+    changes belongs in the question; where the change lives belongs beneath it
+    or on request. A rule pushing either agent toward vagueness would be worse
+    than the defect it repairs, because a plan built on a woolly answer is a
+    plan no stage can execute, and a developer who asks "where is that" must
+    still get the path and the line. The entry says both halves.
+
+    The entry names the act rather than the agent — asking the developer to
+    decide something, explaining something to them in a session — so a stage
+    that does neither has nothing to apply, and a conversational agent added
+    later is governed the day it is wired to the layer, with no edit to the
+    entry and nobody having to remember it exists. That is what makes one
+    widened layer the right shape rather than a third partial reaching only
+    the two agents that converse today: the seam a split would draw falls
+    straight through the assist agent's own briefs, which are written
+    artifacts whose audience is a developer choosing what to plan, and every
+    conversational agent that follows needs both rules and would cost two
+    injections instead of one. The price, chosen deliberately, is that stages
+    holding no conversations carry the entry too.
+
+    What this story cannot do is check that the standard is obeyed. Nothing
+    mechanical reads the altitude of a sentence, and this repository has
+    recorded injected written rules failing to hold more than once. The tests
+    hold that the text exists, that it reaches both agents, and that removing
+    it reddens something. The reason to expect this one to hold where a
+    louder paragraph would not is that it teaches by a worked pair — one
+    explanation as it was actually given beside the same explanation pitched
+    at the decision — which is the shape the layer's existing entry already
+    uses, and the developer is the reader who notices immediately when it is
+    ignored.
+  workflow: story-workflow
+
+tasks:
+  - Widen the prose layer's opening scope sentence so it covers what an agent
+    says to a person in a session as well as what it writes for one to read
+    later, keeping the existing count entry and its exception and habit
+    unchanged.
+  - Add the conversational entry to `prompts/prose-layer.md`: the act it
+    governs, what a question must carry to be answerable from itself, where
+    the citation goes instead, and the two limits — precision is not lost and
+    identifiers are not banned.
+  - Give the entry a worked pair, one explanation as it was given beside the
+    same one pitched at the decision, in the shape the count entry uses.
+  - Add `{{prose_layer}}` to `prompts/assist.md` at the position the other
+    carrying templates put it.
+  - Make `scripts/l5-assist` resolve the shared partial through
+    `context_assembler.resolved_partial` and render the assist template
+    against it before handing the result to `--append-system-prompt`.
+  - Update the assertions in `tests/test_harness_layer_extraction.py` and
+    `tests/test_the_assist_agent_files_a_brief.py` that state assist carries
+    no prose partial and that the launcher appends the template verbatim.
+  - Write a standing test module covering the rendered planner prompt, the
+    rendered assist prompt, the launcher's injection with a control, and the
+    presence of the worked pair.
+  - Record the layer's widened scope and its new reach in the architecture
+    document.
+
+acceptance_criteria:
+  - The prose layer's opening scope sentence covers what an agent says to a
+    person in a session, and the count entry, its exception and its habit are
+    present and unchanged.
+  - The prose layer carries an entry naming the act it governs — asking the
+    developer to decide something, or explaining something to them in a
+    session — rather than naming the planner or the assist agent, so no agent
+    is identified by role anywhere in it.
+  - That entry states what a question must carry to be answerable from itself,
+    says where the citation goes instead of the lead, and states both limits:
+    that precision is not to be traded away, and that a developer who asks
+    where something is gets the path and the line.
+  - That entry carries a paired example — one explanation as it was given and
+    the same explanation pitched at the decision — and a test asserts both
+    halves are present, so neither can be quietly dropped later.
+  - `prompts/assist.md` carries `{{prose_layer}}`, and the prompt
+    `scripts/l5-assist` hands to `--append-system-prompt` contains the
+    resolved partial's text and no unresolved `{{placeholder}}`.
+  - A launcher that reads the template without resolving the partial fails the
+    assertion above, so it reports the injection rather than the file's mere
+    existence.
+  - The rendered planner prompt still carries the partial, and the widened
+    text reaches it and the assist prompt from the one file: editing
+    `prompts/prose-layer.md` changes both rendered prompts.
+  - `scripts/l5-assist` still loads the shipped plugin directory, still
+    exports the harness-root variable, and still passes a command-line
+    question through to the session.
+  - `prompts/assist.md` still carries no `{{harness_layer}}` and no harness
+    layer text, and the harness partial's reach is otherwise unchanged.
+
+technical_plan:
+  implementation_steps:
+    - Widen the first paragraph of `prompts/prose-layer.md` to name both what
+      is written for a human to read later and what is said to one in a
+      session. Leave the count entry, its exception and its habit as they
+      stand; `tests/test_harness_layer_extraction.py` asserts their order and
+      their key words.
+    - Write the conversational entry beneath them. Open by naming the act, not
+      the role. State what the question carries: what is being decided, what
+      each option costs or risks, and what will happen by default if the
+      developer has no preference. State where the citation goes — beneath the
+      question or on request — and state the two limits, so the entry cannot
+      be read as a licence for vagueness or as a ban on identifiers.
+    - Write the worked pair from the exchange the brief records: an escalation
+      explained as a failure at a named function and line, beside the same
+      escalation explained as what the run will do next and what it costs the
+      developer to choose either way. Keep the pair short enough to read at a
+      glance, which is what makes the count entry's pair work.
+    - Add `{{prose_layer}}` to `prompts/assist.md`, placed as the other
+      carrying templates place it.
+    - In `scripts/l5-assist`, import `context_assembler` the way the other
+      entry points reach the orchestration package, resolve the partial with
+      `context_assembler.resolved_partial(HARNESS_ROOT,
+      context_assembler.PROSE_LAYER, context)` against a context this launcher
+      assembles, and render the loaded template against it. The partial
+      carries no placeholder of its own, so the context it renders against can
+      stay as narrow as the planner's. An absent partial resolves to `None`
+      and renders as the literal `None`, which is the optional-placeholder
+      convention every other injection already follows.
+    - Adapt `tests/test_harness_layer_extraction.py`. The assertion that
+      assist carries no `{{prose_layer}}` inverts; the control beside it moves
+      to the harness partial, which assist still receives none of.
+    - Adapt `tests/test_the_assist_agent_files_a_brief.py`, whose launcher
+      assertion compares the appended prompt to `prompts/assist.md` read
+      verbatim. It becomes a comparison against the rendered template. The
+      plugin-directory, harness-root and command-line assertions beside it are
+      untouched.
+    - Run the modules this change touches — `tests/test_harness_layer_extraction.py`,
+      `tests/test_the_assist_agent_files_a_brief.py`,
+      `tests/test_planner_injection.py` and `tests/test_context_assembler.py`.
+    - Write the standing module: the rendered planner prompt and the prompt
+      the launcher would have appended both carry the resolved partial;
+      removing the partial from a copied prompts tree reddens each; the worked
+      pair's two halves are present; and the launcher's other decisions are
+      unchanged. Drive the launcher by intercepting `execvp`, which is the
+      seam `tests/test_the_assist_agent_files_a_brief.py` already uses.
+    - Record in the architecture document that the prose partial's scope now
+      covers conversation and that its reach now includes `assist.md`, whose
+      previously stated exclusion from both partials is half wrong.
+  likely_file_changes:
+    - file: prompts/prose-layer.md
+      stage: implementer
+      reason: |
+        The scope sentence, the new entry and its worked pair. One file with
+        one home, which is what makes editing it change every prompt that
+        carries it.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: |
+        Gains `{{prose_layer}}` so the resolved partial has somewhere to land.
+    - file: scripts/l5-assist
+      stage: implementer
+      reason: |
+        Renders the template through the shared helper instead of reading it
+        raw, which is what makes the layer reach the assist agent at all.
+    - file: tests/test_harness_layer_extraction.py
+      stage: implementer
+      reverting_breaks_the_suite: |
+        `test_assist_receives_neither_partial` asserts `{{prose_layer}}` is
+        absent from `prompts/assist.md`. This story puts it there
+        deliberately, so that assertion is false the moment the template
+        changes; reverting this file while keeping the prompt change leaves
+        the suite red.
+      reason: |
+        The assist-reach assertion inverts and its control moves to the
+        harness partial. The rest of the module — the partial's placeholder
+        freedom, the entry-order assertion, the stage and planner reach —
+        holds as it stands.
+    - file: tests/test_the_assist_agent_files_a_brief.py
+      stage: implementer
+      reverting_breaks_the_suite: |
+        `test_the_launcher_still_appends_the_assist_prompt_it_appended`
+        asserts the appended prompt equals `prompts/assist.md` read verbatim.
+        Once the launcher renders the template that equality is false;
+        reverting this file while keeping the launcher change leaves the suite
+        red.
+      reason: |
+        One assertion compares the appended prompt to the unrendered template
+        and must compare it to the rendered one. The plugin, harness-root and
+        command-line assertions in the same module are untouched.
+    - file: tests/test_a_question_to_the_developer_is_about_consequences.py
+      stage: tester
+      reason: |
+        The standing module for the rule: the partial's reach into both
+        developer-facing prompts, the launcher's injection with a control
+        proving absence would be noticed, and the worked pair's presence.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: |
+        The "Prompts" section states the prose partial's scope, lists the
+        templates it is injected into, and records that `assist.md` receives
+        neither partial. The scope widens and that last claim becomes half
+        wrong.
+
+scope:
+  modify:
+    - prompts/prose-layer.md
+    - prompts/assist.md
+    - scripts/l5-assist
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/planner.md
+    - prompts/harness-layer.md
+    - prompts/inspector.md
+    - prompts/story-implementer.md
+    - prompts/story-tester.md
+    - prompts/story-verifier.md
+    - prompts/documenter.md
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+    - prompts/workflow-selector.md
+    - orchestration/
+    - scripts/l5-plan
+    - schemas/
+    - workflows/
+    - bin/
+
+verification_requirements:
+  - Confirm the prose layer's scope sentence covers conversation and that the
+    count entry, its exception and its habit survive unchanged.
+  - Confirm the conversational entry names the act it governs and identifies
+    no agent by role, states what a question must carry, says where the
+    citation goes, and states both limits.
+  - Confirm the worked pair is present in the layer with both halves, and that
+    a test would report its removal.
+  - Confirm the prompt `scripts/l5-assist` hands to `--append-system-prompt`
+    carries the resolved partial and no unresolved placeholder, and that a
+    launcher reading the template unrendered fails that check.
+  - Confirm the rendered planner prompt still carries the partial, and that
+    editing `prompts/prose-layer.md` alone changes both rendered prompts.
+  - Confirm `scripts/l5-assist` still loads the shipped plugin directory,
+    still exports the harness-root variable and still passes a command-line
+    question through.
+  - Confirm `prompts/assist.md` receives no harness layer, and that the
+    harness partial's reach over the stage templates is unchanged.
+  - Confirm every assertion the new module makes is paired with a control
+    demonstrating it can report the situation it exists to catch.
+  - Confirm the suite passes whole.
+
+constraints:
+  - The count entry, its exception and its habit keep their current text and
+    their current order. This story adds beside them and widens the sentence
+    above them.
+  - The prose partial keeps carrying no `{{placeholder}}` of its own, because
+    the planner and the launcher both render it against a narrower context
+    than a stage's, where a placeholder would resolve to the literal None.
+  - The conversational entry names no agent by role, so a conversational agent
+    added later is governed with no edit to it.
+  - The entry is not a ban on identifiers and does not ask either agent to be
+    less precise or shorter; it says where the citation goes, not whether to
+    have one.
+  - No second shared partial is introduced and no constant beside
+    `PROSE_LAYER` is added; the layer stays one file with one home.
+  - `prompts/assist.md` receives no harness layer, and the harness partial's
+    resolution and reach are untouched.
+  - The stage prompts, `prompts/planner.md`, `prompts/inspector.md` and
+    `prompts/workflow-selector.md` are not edited; they receive the widened
+    layer through the injection they already have.
+  - `scripts/l5-assist` keeps loading the shipped plugin directory for the
+    session, keeps exporting the harness-root variable, keeps passing a
+    command-line question through, and keeps replacing its process with
+    `execvp`.
+  - Nothing about the story brief's shape or the story artifact's shape
+    changes; both keep citing evidence exactly.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-04 09:47:25
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
