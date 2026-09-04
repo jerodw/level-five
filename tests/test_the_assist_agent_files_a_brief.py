@@ -74,6 +74,7 @@ import pytest
 from conftest import load_mutant, load_script
 
 import brief_filing
+import context_assembler
 import filed_query
 import harness_config
 import harness_source
@@ -1177,8 +1178,18 @@ def test_the_launcher_still_appends_the_assist_prompt_it_appended(monkeypatch):
 
     assert "--append-system-prompt" in args, args
     appended = args[args.index("--append-system-prompt") + 1]
-    assert appended == (REPO_ROOT / "prompts" / "assist.md").read_text(
-        encoding="utf-8")
+    # Since story-104 the launcher renders the template rather than reading it
+    # raw, so what it appends is that template with its shared partial
+    # resolved. Comparing against the rendering rather than the file is what
+    # keeps this an equality rather than a substring check. The template is
+    # read off the shipped path here rather than through the launcher's own
+    # loader, so the claim that the session is handed *this deployment's*
+    # assist prompt stays a read of that file — which is what this module's
+    # entry in the live-artifact declaration says it is.
+    assert appended == context_assembler.render(
+        (REPO_ROOT / "prompts" / "assist.md").read_text(encoding="utf-8"),
+        {"prose_layer": context_assembler.resolved_partial(
+            REPO_ROOT, context_assembler.PROSE_LAYER, {})})
 
 
 def test_the_launcher_tells_the_session_where_the_harness_it_started_from_is(
