@@ -2388,7 +2388,8 @@ NEW_FIELDS = {"story_digest", "escalation_commit", "harness_revision"}
 #: about. Named rather than tolerated silently: a later story adding a field
 #: records it here deliberately, so a field that appears without anyone
 #: noticing still turns the assertion below red.
-FIELDS_ADDED_SINCE = {"self_route_count", "guidance_in_force",
+FIELDS_ADDED_SINCE = {"self_route_count", "bookkeeping_self_route_count",
+                      "guidance_in_force",
                       "correction_pass_count", "resume_count",
                       "entry_cost_usd", "stopped_on_cost", "workflow",
                       "unshadowed_suite_failure"}

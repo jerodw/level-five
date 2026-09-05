@@ -1539,6 +1539,7 @@ def workflow_stage(*, name: str | None = None, prompt: str | None = None,
                    may_not_create: Sequence[str] | None = None,
                    may_only_change: Sequence[str] | None = None,
                    max_self_routes: object = None,
+                   max_bookkeeping_self_routes: object = None,
                    revert_check: dict | None = None,
                    clean_clone: dict | None = None,
                    retry_routing: dict | None = None,
@@ -1558,6 +1559,11 @@ def workflow_stage(*, name: str | None = None, prompt: str | None = None,
     `max_self_routes` is checked against a sentinel rather than against None
     because zero and False are both values a test builds deliberately, to
     drive the pre-flight that refuses a budget which is not a count.
+    `max_bookkeeping_self_routes` is checked on exactly those terms and for
+    exactly that reason, and the distinction matters more there: an absent
+    bookkeeping budget means the stage never opted into the split, while a
+    declared zero is a deliberate refusal of it, and the coordinator spends
+    the two differently. A stage built without it declares none.
     """
     declaration: dict = {"name": name} if name is not None else {}
     if prompt is not None:
@@ -1572,6 +1578,8 @@ def workflow_stage(*, name: str | None = None, prompt: str | None = None,
         declaration["may_only_change"] = list(may_only_change)
     if max_self_routes is not None:
         declaration["max_self_routes"] = max_self_routes
+    if max_bookkeeping_self_routes is not None:
+        declaration["max_bookkeeping_self_routes"] = max_bookkeeping_self_routes
     if revert_check is not None:
         declaration["revert_check"] = dict(revert_check)
     if clean_clone is not None:
