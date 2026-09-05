@@ -1,0 +1,130 @@
+story:
+  id: story-108
+  title: A forgotten file is not a failure
+  description: |
+    A stage that left the suite red and a stage that did the work and forgot to
+    write a JSON file cost the run the same thing. The coordinator already
+    records why it is re-entering a stage — the causes are named constants,
+    written into the self-route artifact under "failure" — but nothing
+    downstream reads that field, and every cause is spent at one site against
+    one counter.
+
+    It has ended a run. story-101 spent one self-route on a genuine suite
+    failure, spent the next on a turn that repaired those failures and left
+    test-results.json unwritten, and then met a load-sensitive flake in a
+    module the story does not touch with nothing left; it escalated at $23.88
+    with its work complete. story-096 carries the identical
+    stale-required-artifacts self-route on the same file.
+
+    This story splits the budget by cause. The bookkeeping causes —
+    missing-required-artifacts and stale-required-artifacts — spend a second
+    budget a stage declares for itself; suite-failed, agent-process-failed and
+    defective-retry-guidance keep spending max_self_routes. The classification
+    is a declared set held total against every cause, so a cause added later
+    must be classified rather than inheriting whichever branch it falls into.
+
+    This is story-067's argument one layer down: a correction pass costs a
+    correction rather than a retry, because the two are not the same kind of
+    failure. The harness caught the forgotten file correctly and charged for it
+    wrongly, and what it cost is the problem. Filed from the brief
+    a-forgotten-file-is-not-a-failure.
+  workflow: story-workflow
+
+tasks:
+  - Declare the classification in orchestration/story_coordinator.py as two named values beside the existing failure constants — the whole set of self-route causes, and the bookkeeping subset of it — so the failure kind reaches the spend decision as a value rather than as a condition written at the site.
+  - Add a bookkeeping_self_route_count field to RunState, documented in the register the fields beside it use, counting the subset of the current stage entry's re-entries that were bookkeeping. Zero it wherever self_route_count is already zeroed, so the two agree by construction.
+  - Change self_route() to spend the two budgets separately - the failure budget is compared against self_route_count minus bookkeeping_self_route_count, and the bookkeeping budget against bookkeeping_self_route_count alone.
+  - Make an absent max_bookkeeping_self_routes mean unsplit rather than zero - a bookkeeping cause under a stage that declares no bookkeeping budget increments self_route_count alone and is checked against max_self_routes, which is what the stage does today.
+  - Keep self_route_count the total re-entries of the stage entry, so every self-route and prompt filename keyed by the try number is written and discovered exactly as it is now.
+  - Name the budget that stopped the stage in the escalation reason and in the self-routed event, so a bookkeeping exhaustion and a failure exhaustion do not read as the same stop.
+  - Extend self_route_problems to hold max_bookkeeping_self_routes to the terms max_self_routes is already held to, so a definition that declares an unspendable budget is refused at pre-flight rather than discovered mid-run.
+  - Change the tester stage in workflows/story-workflow.json to declare max_self_routes 2 and max_bookkeeping_self_routes 2, and rewrite max_self_routes_reason so it describes the workflow after this story rather than the hedge that stood in for it.
+  - Write the tests that hold the split, the compatibility property, the stop, and the totality of the classification.
+  - Record the two-budget separation in .harness/docs/ARCHITECTURE.md where the self-route budget is described.
+
+acceptance_criteria:
+  - A stage re-entered for a stale or missing required artifact and then re-entered for a failed suite reaches the suite failure with the failure budget it would have had if the first re-entry had not happened, and a test drives story-101's sequence — stale artifact, then red suite — rather than an abstraction of it.
+  - A stage that declares no max_bookkeeping_self_routes spends every cause exactly as it spends them before this story - a bookkeeping cause increments self_route_count, is compared against max_self_routes, and escalates with the reason it escalates with today.
+  - A stage that never writes its required artifact still stops, and the escalation reason names the bookkeeping budget it exhausted rather than the failure budget it did not touch.
+  - The set of bookkeeping causes and its complement are together the whole set of self-route causes and share no member, asserted against the declared set rather than against a list written in the test, so a cause added later without being classified reddens the suite.
+  - A self-route record written after this story carries the same fields it carried before it, with the failure value it always carried, and no new value joins the failure enum in schemas/self-route-result.schema.json.
+  - A reader of state.json can say how many times the current stage has run without reading prose - self_route_count is the total re-entries of the stage entry and bookkeeping_self_route_count is the subset of them that were bookkeeping.
+  - A workflow definition declaring a max_bookkeeping_self_routes that is not a non-negative integer is refused at pre-flight, before any run state is created, and the refusal names the stage and the value in the register self_route_problems already uses for max_self_routes.
+  - Every self-route and prompt filename is written and discovered under the same try number it uses today, and a resume archives an interrupted attempt's self-route artifacts exactly as it does now.
+  - workflows/story-workflow.json's tester declares max_self_routes 2 and max_bookkeeping_self_routes 2, and no max_self_routes_reason in the file describes the budget as a hedge for a defect this story closes.
+
+technical_plan:
+  implementation_steps:
+    - Read the self-route section of orchestration/story_coordinator.py — the failure constants, self_route_statement, SelfRouteDecision and self_route — and the sites that zero self_route_count, so the new counter is zeroed at all of them.
+    - Declare the two sets beside the failure constants. One names every self-route cause; the other names the bookkeeping subset, which is missing-required-artifacts and stale-required-artifacts. Comment why agent-process-failed is not in the subset - a process that exited without completing produced no account of what it did, so re-entering it is not bookkeeping.
+    - Add bookkeeping_self_route_count to RunState with a comment in the register of the fields around it, saying it is live state scoped to the current stage, that it is the subset of self_route_count rather than a second total, and that an absent workflow budget leaves it at zero.
+    - Rework the budget comparison in self_route so the two budgets are read off the stage dict and spent according to whether the failure is in the bookkeeping subset and whether the stage declares a bookkeeping budget. Keep the increment of self_route_count unconditional so the try number stays the total.
+    - Give the exhaustion reason and the self-routed event text the name of the budget that governed, leaving the wording for an undeclared bookkeeping budget exactly as it is today so an unsplit stage's escalation does not change.
+    - Extend self_route_problems to check max_bookkeeping_self_routes on the same terms, in the same loop, producing a problem in the same shape.
+    - Update the tester stage in workflows/story-workflow.json - max_self_routes to 2, max_bookkeeping_self_routes 2 with a sibling reason of its own, and max_self_routes_reason rewritten to drop the third budget's justification and record that the split replaced it.
+    - Zero the new counter wherever self_route_count is zeroed, including the resume path.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The failure classification, the RunState field, the two-budget spend in self_route, the escalation and event wording, and the pre-flight check for the new key.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The tester declares max_self_routes 2 and max_bookkeeping_self_routes 2, and max_self_routes_reason is rewritten to describe the split rather than the hedge it replaced.
+    - file: tests/test_self_routing_retry.py
+      stage: tester
+      reason: The split, story-101's sequence, the compatibility property of an undeclared bookkeeping budget, the stop that names its budget, and the totality of the classification.
+    - file: tests/test_workflow_selection.py
+      stage: tester
+      reason: The pre-flight refusal of an uncountable max_bookkeeping_self_routes, beside the entry the self-route budget already has in the table of bad declarations.
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: The state contract gains bookkeeping_self_route_count.
+    - file: tests/test_escalation_resume.py
+      stage: tester
+      reason: The field added since the recorded baseline, and the resume that zeroes it.
+    - file: tests/conftest.py
+      stage: tester
+      reason: The stage-declaration helper takes a max_bookkeeping_self_routes on the same sentinel terms max_self_routes uses, so a fixture can declare it, declare it as zero, or leave it undeclared.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: What the two budgets bound, why an absent bookkeeping budget means unsplit rather than zero, and that the try number stays the total.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/self-route-result.schema.json
+    - schemas/execution-history.schema.json
+    - workflows/refactor-workflow.json
+    - prompts/
+    - execution-rules.json
+    - orchestration/agent_runner.py
+
+verification_requirements:
+  - Confirm the story-101 sequence is driven end to end by a test - a stage re-entered for a stale required artifact and then for a red suite reaches the suite failure with its failure budget untouched by the first re-entry.
+  - Confirm the compatibility property holds - a stage declaring no max_bookkeeping_self_routes escalates on a bookkeeping cause with the same reason, after the same number of re-entries, as it does before this story.
+  - Confirm a stage that never writes its required artifact stops, and read the escalation reason to confirm it names the bookkeeping budget.
+  - Confirm the classification is asserted total and disjoint against the declared set of causes rather than against a list repeated in the test.
+  - Confirm no new value joined the failure enum in schemas/self-route-result.schema.json and that a self-route record's fields are unchanged.
+  - Confirm max_bookkeeping_self_routes is validated at pre-flight and that the refusal names the stage and the offending value.
+  - Confirm the tester's declaration in workflows/story-workflow.json reads max_self_routes 2 and max_bookkeeping_self_routes 2, and that its reason strings describe the split rather than a hedge awaiting one.
+  - Confirm the run's suite is green and that the evidence for it is the coordinator's own record rather than an agent's account of one.
+
+constraints:
+  - max_retries and the retry budget are untouched. A retry follows a verdict and a self-route follows no verdict, and nothing in the self-route path may read or write retry_count or max_retries.
+  - The required-output freshness check itself is not changed. It caught what it was meant to catch, and this story changes only what being caught costs the run.
+  - Nothing here makes a re-entry cheaper in money. Replacing a whole stage turn with something narrower is a-stage-can-check-its-own-outputs and belongs to that story.
+  - self_route_count keeps meaning the total re-entries of the current stage entry, because it is the try number that names self-route records and re-run prompts and the number the resume archive discovers them by.
+  - A workflow declaring no max_bookkeeping_self_routes behaves exactly as it does today, so landing this change is nothing until a definition opts in.
+  - No stage name and no budget value is written in orchestration - both come off the loaded workflow definition, as they already do for max_self_routes.
+  - The coordinator stays deterministic and makes no model call, and both counters are on state.json so the routing decision is reconstructable from state.json and events.log.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-05 14:30:30
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
