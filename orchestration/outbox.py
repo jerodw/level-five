@@ -1,4 +1,17 @@
-"""A durable local queue for work the harness wants to file externally.
+"""A durable local queue for work the harness wants to file externally, and the
+permanent record of what has already been filed.
+
+**Two directories, because they are two kinds of object.** The queue holds what
+still has to be filed and drains to nothing in normal operation; the receipt
+index holds what was filed and never leaves, because it is what makes local
+dedupe work with no network. A landed entry is already a different kind of
+object — `_land` drops the payload and what remains is a key, an identity, a
+reference and two timestamps — so what the split moved is where a landed entry
+lives and nothing about what one means. Both readers of the queue paid for the
+mixture before it: a sweep opened and schema-validated every landed entry it
+could never file, and the Inspector's index read the whole directory the same
+way, at a cost growing with everything ever filed rather than with what is
+waiting to be filed.
 
 One guarantee holds the whole module up: **a failure to file never blocks a
 story, never delays a commit and never refuses a run**. Durability is
@@ -74,8 +87,25 @@ import schema_validator
 #: block would be the thing blocking.
 QUEUE_DIR = (".harness", "outbox")
 
+#: Where the receipt index lives beneath a target repository: the permanent
+#: record of what this harness has already filed, which is what makes local
+#: dedupe work with no network. A constant rather than a configured key for the
+#: reason QUEUE_DIR already records — nothing about where this lives is a
+#: target's choice, and the harness configuration gains no key for it.
+#:
+#: Gitignored, like the queue, and the cost is real and accepted: receipts do
+#: not survive a fresh clone, so a clone loses local dedupe until it files
+#: again. Sweeps run inside runs — the l5-run pre-flight and again after the
+#: completion commit — so a versioned index would write a new file into a
+#: tracked directory mid-run and the next run's clean-tree pre-flight would
+#: refuse it, which is exactly the blocking the queue is gitignored to avoid.
+RECEIPTS_DIR = (".harness", "receipts")
+
 #: The shape an entry is written in and read back against. One file, so what
-#: the outbox writes and what it decides is poisoned cannot drift.
+#: the outbox writes and what it decides is poisoned cannot drift. A receipt is
+#: the landed entry, under the same `<key>.json` name and validated by this
+#: same schema: what moved in story-107 is where a landed entry lives and
+#: nothing about what one means.
 ENTRY_SCHEMA = "outbox-entry"
 
 #: The three states, and what each one means. `pending` is written but not
@@ -107,8 +137,26 @@ UNRENDERABLE_IDENTITY = "<an identity that cannot be rendered>"
 
 
 def queue_dir(target_root: Path) -> Path:
-    """The queue directory beneath a target repository."""
+    """The queue directory beneath a target repository: what is still to file."""
     return target_root.joinpath(*QUEUE_DIR)
+
+
+def receipts_dir(target_root: Path) -> Path:
+    """The receipt index beneath a target repository: what was filed."""
+    return target_root.joinpath(*RECEIPTS_DIR)
+
+
+def receipts_beside(queue: Path) -> Path:
+    """The receipt index that belongs to a queue directory.
+
+    `sync` is handed a queue rather than a target root, so the index it moves a
+    landed entry into is derived from the queue it was given. That is a
+    derivation rather than a guess: QUEUE_DIR and RECEIPTS_DIR differ only in
+    their last component, so the index for a queue is its sibling, and a caller
+    that built the queue through `queue_dir` gets exactly the path
+    `receipts_dir` would have given it.
+    """
+    return queue.parent / RECEIPTS_DIR[-1]
 
 
 # --------------------------------------------------------------------------
@@ -207,6 +255,22 @@ def write_entry(queue: Path, entry: dict) -> Path:
         Path(temporary).unlink(missing_ok=True)
         raise
     return destination
+
+
+def relocate_entry(queue: Path, receipts: Path, entry: dict) -> None:
+    """Move an entry out of the queue and into the receipt index.
+
+    One helper rather than two call sites, so landing an entry and migrating
+    one a sweep still finds in the queue cannot drift about what the move is.
+
+    **Write first and unlink second**, through the atomic `write_entry` already
+    here. A process killed between the two leaves the key in both places, which
+    every reader sees as one landed key — the index answers for landed, and the
+    copy the queue still holds is relocated again by the next sweep that meets
+    it. The window is stated here rather than defended against.
+    """
+    write_entry(receipts, entry)
+    entry_path(queue, entry["key"]).unlink(missing_ok=True)
 
 
 def rendered_identity(identity) -> str:
@@ -358,6 +422,143 @@ def read_entry(path: Path, harness_root: Path | None = None):
 
 
 # --------------------------------------------------------------------------
+# What this harness has already filed
+# --------------------------------------------------------------------------
+#
+# One derivation, two readers. After the split the question has three answers
+# coming from two places — landed from the index, pending and failed from the
+# queue — and that rule is written once here rather than reached for separately
+# by an Inspector and a filing path, which would then have two chances to
+# disagree about it.
+
+
+@dataclass(frozen=True)
+class LocalIndex:
+    """What this harness has already filed, read once for a whole inspection.
+
+    This is the free tier of the dedupe: no network, no configuration, no
+    subprocess and nothing that can fail slowly — the same read `l5-status`
+    already makes, through `entry_files` and `read_entry` alone. It is consulted
+    on every inspection rather than only when the filed query fails, because
+    both answer the same question and both are asked.
+
+    **It is a subset of what the filed query answers**, and a reader must not
+    mistake it for a complete one. It knows only what this machine filed:
+    another machine's filings and anything filed by hand are invisible to it,
+    so an inspection whose query could not answer still reports that dedupe did
+    not run even where this was read successfully. Since the index is
+    gitignored it does not survive a fresh clone either, so a clone knows
+    nothing here until it files again.
+
+    `read` false is a directory that could not be listed, with `reason` saying
+    which one and why; that costs this tier and costs nothing else.
+    `unreadable` counts the files in either directory that could not be read as
+    entries — each contributes no key and stops nothing. The default is an index
+    that was read and held nothing, which suppresses nothing and claims no
+    failure.
+    """
+
+    read: bool = True
+    landed: frozenset = frozenset()
+    queued: frozenset = frozenset()
+    unreadable: int = 0
+    reason: str = ""
+
+
+def _keys_in(directory: Path, label: str, states: set,
+             harness_root: Path | None):
+    """The keys one directory holds in the states asked for.
+
+    Returns `(keys, unreadable, problem)`. A directory that cannot be listed is
+    nothing known rather than an error, the one-directional bias every other
+    total path here takes, and the problem names which directory it was. A
+    directory that does not exist needs no special case: `entry_files` already
+    answers it with no entries rather than an error.
+    """
+    try:
+        files = entry_files(directory)
+    except OSError as error:
+        return set(), 0, f"the {label} at {directory} could not be listed: {error}"
+
+    keys: set = set()
+    unreadable = 0
+    for path in files:
+        entry, _ = read_entry(path, harness_root)
+        if entry is None:
+            # A poisoned file contributes no key and stops nothing: the entries
+            # beside it in the same directory are indexed exactly as they would
+            # have been, and the count is reported.
+            unreadable += 1
+            continue
+        if entry["state"] in states:
+            keys.add(entry["key"])
+    return keys, unreadable, ""
+
+
+def local_index(target_root: Path,
+                harness_root: Path | None = None) -> LocalIndex:
+    """The keys this harness holds, by the state their entries are in.
+
+    Landed comes from the receipt index and pending from the queue, which is
+    the split: a landed entry is a receipt and a pending one is still work.
+
+    A failed entry contributes to neither set, deliberately. It is terminal: no
+    later sync will file it, so it is a finding that reached nobody, and
+    suppressing on it would lose that finding permanently with no signal.
+    Leaving it out means the finding is enqueued again and replaces the failed
+    entry at the same key with a pending one — the finding getting another
+    chance rather than a duplicate, since the key is derived from the identity
+    alone.
+
+    Read once for a whole inspection rather than once per scope, because
+    neither directory is scoped: they record what this harness filed, and every
+    scope asks them the same question.
+    """
+    landed, landed_unreadable, landed_problem = _keys_in(
+        receipts_dir(target_root), "receipt index", {LANDED}, harness_root)
+    queued, queued_unreadable, queued_problem = _keys_in(
+        queue_dir(target_root), "queue", {PENDING}, harness_root)
+
+    problems = [problem for problem in (landed_problem, queued_problem)
+                if problem]
+    if problems:
+        return LocalIndex(read=False, reason="; ".join(problems))
+
+    return LocalIndex(
+        read=True,
+        landed=frozenset(landed),
+        queued=frozenset(queued),
+        unreadable=landed_unreadable + queued_unreadable,
+    )
+
+
+def local_state(target_root: Path, key: str,
+                harness_root: Path | None = None) -> str:
+    """The state this harness holds one key in, or "" where it holds none.
+
+    The same rule `local_index` applies, asked about a single key: the index
+    first, where a landed entry now is, and the queue second. A key names its
+    own file in each, so this is two reads rather than an index of everything —
+    the question a single filing asks is about a single key.
+
+    A file that is not there is a key that location does not hold, and one that
+    cannot be read as an entry is that same answer rather than an error — a
+    poisoned entry stops nothing here, exactly as it stops nothing when the
+    Inspector indexes the two directories, and the brief is filed and replaces
+    it.
+    """
+    for directory in (receipts_dir(target_root), queue_dir(target_root)):
+        path = entry_path(directory, key)
+        if not path.is_file():
+            continue
+        entry, _ = read_entry(path, harness_root)
+        if entry is None:
+            continue
+        return entry.get("state", "")
+    return ""
+
+
+# --------------------------------------------------------------------------
 # What a sync did
 # --------------------------------------------------------------------------
 
@@ -451,7 +652,8 @@ class _Tally:
 
 
 def sync(queue: Path, transport=None, harness_root: Path | None = None,
-         now: float | None = None, *, limit: int | None = None) -> Summary:
+         now: float | None = None, *, limit: int | None = None,
+         receipts: Path | None = None) -> Summary:
     """Drain the queue through a transport, and never raise into the caller.
 
     Every path through this function returns a summary. A transport that is
@@ -476,8 +678,19 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
     is. Entries past the bound are left pending and unattempted, and the
     summary carries a note naming the limit and how many it left undone: a cap
     whose effect is not stated is a cap that reads as an empty queue.
+
+    **Only the queue is listed.** A landed entry lives in the receipt index and
+    reaches no transport, so opening one would be a read that grows with
+    everything ever filed rather than with what is waiting to be filed. A
+    landed entry a sweep still finds in the queue — this deployment's entries as
+    they stood before the split — is relocated into the index by the same move
+    `_land` makes, and is tallied as landed exactly as it was before. That is
+    the whole of the migration: no one-off command and no flag day, so a
+    deployment that never runs a migration step cannot silently lose dedupe.
     """
     tally = _Tally()
+    if receipts is None:
+        receipts = receipts_beside(queue)
     try:
         files = entry_files(queue)
     except OSError as error:
@@ -485,7 +698,8 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
         return tally.summary(transport is not None)
     for path in files:
         try:
-            _sync_one(queue, path, transport, tally, harness_root, now, limit)
+            _sync_one(queue, receipts, path, transport, tally, harness_root,
+                      now, limit)
         except Exception as error:  # noqa: BLE001 - the guarantee is the point
             tally.notes.append(f"{path.name}: {error}")
             tally.pending.append(path.stem)
@@ -515,8 +729,8 @@ def _counted(problems: list) -> list[tuple[str, int]]:
     return list(counts.items())
 
 
-def _sync_one(queue: Path, path: Path, transport, tally: _Tally,
-              harness_root: Path | None, now: float | None,
+def _sync_one(queue: Path, receipts: Path, path: Path, transport,
+              tally: _Tally, harness_root: Path | None, now: float | None,
               limit: int | None = None) -> None:
     entry, problems = read_entry(path, harness_root)
     if entry is None:
@@ -525,6 +739,18 @@ def _sync_one(queue: Path, path: Path, transport, tally: _Tally,
         return
     state = entry["state"]
     if state == LANDED:
+        # A landed entry in the queue is one filed before the split, and this
+        # is where it is migrated. Guarded, so a failure to move costs the
+        # migration and nothing else: the entry is still tallied as landed and
+        # the sweep carries on, because a sweep that raised would be the queue
+        # becoming the thing that stops a run.
+        try:
+            relocate_entry(queue, receipts, entry)
+        except OSError as error:
+            tally.notes.append(
+                f"{entry['key']}: could not be moved to the receipt index: "
+                f"{error}"
+            )
         tally.landed.append(entry["key"])
         return
     if state == FAILED:
@@ -543,11 +769,11 @@ def _sync_one(queue: Path, path: Path, transport, tally: _Tally,
         tally.pending.append(entry["key"])
         return
     tally.attempted += 1
-    _file_one(queue, entry, transport, tally, now)
+    _file_one(queue, receipts, entry, transport, tally, now)
 
 
-def _file_one(queue: Path, entry: dict, transport, tally: _Tally,
-              now: float | None) -> None:
+def _file_one(queue: Path, receipts: Path, entry: dict, transport,
+              tally: _Tally, now: float | None) -> None:
     """File one pending entry, resolving an ambiguous write by asking first."""
     if entry["attempts"]:
         # The entry has been offered to a provider before, so its absence
@@ -560,7 +786,7 @@ def _file_one(queue: Path, entry: dict, transport, tally: _Tally,
             # than being swallowed by the helper that met it.
             tally.notes.append(f"{entry['key']}: {problem}")
         if reference:
-            _land(queue, entry, reference, tally, now)
+            _land(queue, receipts, entry, reference, tally, now)
             return
     answer, problem = _file(transport, entry)
     if problem:
@@ -574,7 +800,7 @@ def _file_one(queue: Path, entry: dict, transport, tally: _Tally,
         # is the one case a reader is given a count and no cause.
         tally.transport_problems.append(problem)
     if answer.reference:
-        _land(queue, entry, answer.reference, tally, now)
+        _land(queue, receipts, entry, answer.reference, tally, now)
         return
     entry["attempts"] = entry["attempts"] + 1
     entry["last_error"] = answer.error or "the transport answered with nothing"
@@ -589,18 +815,23 @@ def _file_one(queue: Path, entry: dict, transport, tally: _Tally,
     tally.pending.append(entry["key"])
 
 
-def _land(queue: Path, entry: dict, reference: str, tally: _Tally,
-          now: float | None) -> None:
+def _land(queue: Path, receipts: Path, entry: dict, reference: str,
+          tally: _Tally, now: float | None) -> None:
     """Record the reference and drop the payload the entry no longer needs.
 
     The provider is authoritative for what was filed, so once it has named
     what it holds the local copy of the body is evidence of nothing.
+
+    What is recorded is unchanged — the state, the reference, the dropped
+    payload and the updated timestamp, in that same shape. What moved is where
+    the entry lands: into the receipt index, with the queue file for that key
+    removed, because a landed entry is no longer work waiting to be filed.
     """
     entry["state"] = LANDED
     entry["reference"] = reference
     entry.pop("payload", None)
     entry["updated_at"] = _now(now)
-    write_entry(queue, entry)
+    relocate_entry(queue, receipts, entry)
     tally.landed.append(entry["key"])
 
 

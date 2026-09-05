@@ -3032,8 +3032,9 @@ PENDING = "pending conversion"
 #: landed the mechanism and converted nothing, and writing a paragraph into a
 #: module it was not converting would have been an edit with no assertion
 #: behind it. story-053 then converted every pending entry, so what is left is
-#: four subject readers and their reasons — and `PENDING` stays, because the
-#: class it names is where the next module to take a history dependency lands.
+#: the subject readers below and their reasons — and `PENDING` stays, because
+#: the class it names is where the next module to take a history dependency
+#: lands.
 #: An empty pending class is a state this list can be in, not a state it has
 #: retired into.
 DECLARED_HISTORY_READERS = {
@@ -3074,6 +3075,18 @@ DECLARED_HISTORY_READERS = {
         "resolver is about — escalate and never resume, revert and restore, a "
         "hotfix that modifies rather than adds — is built under tmp_path there "
         "rather than looked for here",
+    "test_the_queue_holds_work_and_the_index_holds_receipts.py":
+        "its subject includes what story-107 itself left alone: that the "
+        "harness configuration schema and the target configuration template "
+        "carry no diff across that story's own commit range, and that the "
+        "shape declares today the keys it declared at that story's baseline. "
+        "Whether this repository's change added a configuration key is a claim "
+        "about this repository, and no constructed repository can answer it; "
+        "the diff of a path the story did rewrite is asserted non-empty beside "
+        "it, so an empty diff is about the two paths rather than about a "
+        "resolution that has stopped seeing anything. Everything else in the "
+        "module — the queue, the index, the sweep and the two readers — is "
+        "built under tmp_path",
     "test_validation_module_naming.py":
         "its subject is this repository's own module names and the origins "
         "declared for them: that every declared origin resolves to a commit in "

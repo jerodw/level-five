@@ -442,88 +442,16 @@ class Dedupe:
     excluded: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class LocalIndex:
-    """What the local outbox queue knows, read once for a whole inspection.
-
-    This is the free tier of the dedupe: no network, no configuration, no
-    subprocess and nothing that can fail slowly — the same read `l5-status`
-    already makes, through `outbox.entry_files` and `outbox.read_entry` alone.
-    It is consulted on every inspection rather than only when the filed query
-    fails, because both answer the same question and both are asked.
-
-    **It is a subset of what the filed query answers**, and a reader must not
-    mistake it for a complete one. It knows only what this machine filed:
-    another machine's filings and anything filed by hand are invisible to it,
-    so an inspection whose query could not answer still reports that dedupe did
-    not run even where this was read successfully.
-
-    `read` false is a queue that could not be listed, with `reason` saying why;
-    that costs this tier and costs nothing else. `unreadable` counts the files
-    in the queue that could not be read as entries — each contributes no key and
-    stops nothing. The default is an index that was read and held nothing, which
-    suppresses nothing and claims no failure.
-    """
-
-    read: bool = True
-    landed: frozenset = frozenset()
-    queued: frozenset = frozenset()
-    unreadable: int = 0
-    reason: str = ""
-
-
-def local_index(target_root: Path,
-                harness_root: Path | None = None) -> LocalIndex:
-    """The keys the local queue holds, by the state their entries are in.
-
-    Read once for a whole inspection rather than once per scope, because the
-    queue is not scoped: it is a record of what this harness filed, and every
-    scope asks it the same question.
-    """
-    queue = outbox.queue_dir(target_root)
-    try:
-        files = outbox.entry_files(queue)
-    except OSError as error:
-        # A queue that cannot be listed is nothing known rather than an error,
-        # the one-directional bias every other total path in this module takes.
-        # It costs this tier, it is reported, and nothing is raised out of here.
-        # A directory that does not exist needs no special case: `entry_files`
-        # already answers it with no entries rather than an error.
-        return LocalIndex(
-            read=False,
-            reason=f"the queue at {queue} could not be listed: {error}",
-        )
-
-    landed: set = set()
-    queued: set = set()
-    unreadable = 0
-    for path in files:
-        entry, _ = outbox.read_entry(path, harness_root)
-        if entry is None:
-            # A poisoned entry contributes no key and stops nothing: the
-            # entries beside it in the same queue are indexed exactly as they
-            # would have been, and the count is reported.
-            unreadable += 1
-            continue
-        state = entry["state"]
-        if state == outbox.LANDED:
-            landed.add(entry["key"])
-        elif state == outbox.PENDING:
-            queued.add(entry["key"])
-        # A failed entry is skipped deliberately and contributes to neither
-        # set. It is terminal: no later sync will file it, so it is a finding
-        # that reached nobody, and suppressing on it would lose that finding
-        # permanently with no signal. Leaving it out means the finding is
-        # enqueued again and replaces the failed entry at the same key with a
-        # pending one — the finding getting another chance rather than a
-        # duplicate, since the key is derived from the identity alone.
-
-    return LocalIndex(
-        read=True,
-        landed=frozenset(landed),
-        queued=frozenset(queued),
-        unreadable=unreadable,
-    )
+#: What this harness has already filed, derived in the one module where the two
+#: directories are defined. It moved there in story-107 because a filing path
+#: asks the same question, and two derivations of one rule are two answers that
+#: can disagree — with nothing local able to notice, since a landed entry drops
+#: the payload a comparison would have needed. The names this module already
+#: exposed resolve to the same objects, so every existing reader of
+#: `inspection.LocalIndex` and `inspection.local_index` reads what it read
+#: before.
+LocalIndex = outbox.LocalIndex
+local_index = outbox.local_index
 
 
 @dataclass(frozen=True)

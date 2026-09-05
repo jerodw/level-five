@@ -32,13 +32,16 @@ implementation. The subjects are kept apart deliberately:
     is filed under, because a key already on disk is matched only by an
     identity constructed exactly as the one that produced it.
 
-  * **the local queue as the other dedupe source.** Driven with no filed-query
+  * **the local index as the other dedupe source.** Driven with no filed-query
     command configured, which is the configuration this repository is in: a
     landed entry drops a finding naming that source, a pending one drops it
-    under a reason of its own, and a failed one drops nothing at all. The two
-    sources are shown to be a union in both directions in one inspection, and
-    the three already-filed reasons are shown to be counted apart and printed
-    apart.
+    under a reason of its own, and a failed one drops nothing at all. Since
+    story-107 those three live across two directories — landed in the receipt
+    index, pending and failed in the queue — so the fixture that plants one
+    derives from its state which directory it goes in, and the assertions are
+    unchanged. The two sources are shown to be a union in both directions in
+    one inspection, and the three already-filed reasons are shown to be
+    counted apart and printed apart.
 
   * **the bounds.** The cap across the whole inspection, the per-invocation
     cost allowance observed at the runner, and the two refusals `l5-inspect`
@@ -1102,15 +1105,18 @@ def test_the_module_reaches_the_queue_only_through_enqueue_and_hashes_nothing():
 
     The module derives no digest of its own, and the only queue operations it
     names are the key derivation, the write, where the queue lives, and — since
-    story-095 read the queue as a dedupe index — the two reads `l5-status`
-    already makes plus the two states it sorts entries by. Nothing here builds
-    a transport or spawns a subprocess for the queue. The controls are below.
+    story-107 moved the dedupe index into the module where both directories are
+    defined — the moved derivation itself. Where story-095 had this module read
+    the queue for itself, it now asks the outbox: the two directory reads and
+    the two states it sorted entries by are gone from here, which is what
+    "neither reader reaches the two directories on its own" means at the
+    source. Nothing here builds a transport or spawns a subprocess for the
+    queue. The controls are below.
     """
     source = (REPO_ROOT / "orchestration" / "inspection.py").read_text(
         encoding="utf-8")
     assert outbox_attributes(source) == {
-        "identity_key", "enqueue", "queue_dir",
-        "entry_files", "read_entry", "LANDED", "PENDING",
+        "identity_key", "enqueue", "queue_dir", "LocalIndex", "local_index",
     }
     assert "hashlib" not in source
     assert "sha256" not in source
@@ -1244,13 +1250,24 @@ def test_a_query_that_answered_is_reported_as_having_run(tmp_path):
 # --------------------------------------------------------------------------
 
 
+#: Which of the two directories story-107 keeps an entry in each state in.
+#: Derived from the state rather than written at each call site, so a fixture
+#: planting an entry puts it exactly where the reader under test looks for it —
+#: a landed entry is a receipt, and pending and failed are still work.
+def directory_for(target: Path, state: str) -> Path:
+    return outbox.receipts_dir(target) if state == LANDED \
+        else outbox.queue_dir(target)
+
+
 def planted(target: Path, finding: dict, state: str) -> str:
-    """One entry in a target's own queue, in `state`, under `finding`'s key.
+    """One entry beneath a target, in `state`, under `finding`'s key.
 
     Written through the queue's own writer and then moved into the state the
     assertion is about, in the shape a sync leaves each one: a landed entry
     records the provider's reference and drops the payload it no longer needs,
-    a failed one records what refused it and the attempt it cost.
+    a failed one records what refused it and the attempt it cost. A landed
+    entry is then relocated into the receipt index through the queue's own
+    move, which is where landing leaves one since story-107.
 
     It is read back through `outbox.read_entry` before it is returned, and the
     state it reads back as is asserted here. That is the control every
@@ -1273,6 +1290,11 @@ def planted(target: Path, finding: dict, state: str) -> str:
         entry["attempts"] = 1
         entry["last_error"] = "the tracker refused it on its own terms"
     path.write_text(json.dumps(entry, indent=2) + "\n", encoding="utf-8")
+
+    destination = directory_for(target, state)
+    if destination != queue:
+        outbox.relocate_entry(queue, destination, entry)
+        path = outbox.entry_path(destination, key)
 
     written, problems = outbox.read_entry(path)
     assert problems == [], problems
@@ -1650,19 +1672,62 @@ def test_dedupe_ran_stays_a_statement_about_the_filed_query_alone(tmp_path):
     assert known["slug"] in control.detail(ALREADY_FILED_LOCALLY)
 
 
+#: The two reads the local index makes, and the four operations it must not:
+#: nothing here drains, files, writes or moves anything. Read off the queue's
+#: own module so this file names no operation the queue does not define.
+INDEX_READS = {"entry_files", "read_entry"}
+INDEX_MUST_NOT_REACH = {"sync", "enqueue", "write_entry", "relocate_entry"}
+
+
+def outbox_names_called(source: str) -> set[str]:
+    """Every name a source calls that the queue's own module defines.
+
+    `outbox_attributes` above reads `outbox.<name>`, which is how a module
+    *outside* the queue reaches it. Since story-107 the derivation lives in
+    `orchestration/outbox.py` and calls its neighbours by their bare names, so
+    the same question needs asking of a source that is itself the queue. Both
+    spellings are collected, and the answer is narrowed to names the queue
+    actually defines, so a call to `sorted` or `len` is not read as one of its
+    operations.
+    """
+    called: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            called.add(node.func.id)
+        elif isinstance(node.func, ast.Attribute) \
+                and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id == outbox.__name__:
+            called.add(node.func.attr)
+    return called & set(vars(outbox))
+
+
+def the_local_index_derivation() -> str:
+    """The source the local index is derived in, wherever it now lives.
+
+    Two functions rather than one: story-107 moved the derivation into the
+    module where both directories are defined, and it does its reading in one
+    private helper shared with the single-key answer. A scan over the exposed
+    function alone would report neither read and pass for the wrong reason.
+    """
+    return (introspection.getsource(inspection.local_index)
+            + introspection.getsource(outbox._keys_in))
+
+
 def test_the_local_index_is_read_through_the_queues_two_reads_and_nothing_else():
     """No transport, no subprocess, and no filed-query command.
 
-    Read off the function this harness ships, which is the subject of the
-    claim. The controls are the two functions beside it in the same module: one
-    that legitimately spawns a subprocess and one that legitimately asks the
-    filed query, both of which the same three scans report — so the silences
-    above are facts about this function rather than scans that see nothing.
+    Read off the derivation this harness ships, which is the subject of the
+    claim. The controls are the two functions beside it in the Inspector's own
+    module — one that legitimately spawns a subprocess and one that
+    legitimately asks the filed query, both of which the same scans report —
+    and, for the operations, the planted source in the test below.
     """
-    source = introspection.getsource(inspection.local_index)
-    assert outbox_attributes(source) == {
-        "queue_dir", "entry_files", "read_entry", "LANDED", "PENDING",
-    }
+    source = the_local_index_derivation()
+    called = outbox_names_called(source)
+    assert INDEX_READS <= called, sorted(called)
+    assert called & INDEX_MUST_NOT_REACH == set(), sorted(called)
     assert script_attributes(source, "subprocess") == set()
     assert script_attributes(source, "filed_query") == set()
     assert filed_query.COMMAND_KEY not in source
@@ -1676,6 +1741,23 @@ def test_the_local_index_is_read_through_the_queues_two_reads_and_nothing_else()
     whole = (REPO_ROOT / "orchestration" / "inspection.py").read_text(
         encoding="utf-8")
     assert filed_query.COMMAND_KEY not in whole
+
+
+@pytest.mark.parametrize("operation", sorted(INDEX_MUST_NOT_REACH))
+def test_the_same_scan_reports_each_operation_the_index_must_not_reach(
+        operation):
+    """The control for the absence above, one operation at a time: a scan that
+    had stopped recognising a call would report an empty intersection whatever
+    the derivation did.
+
+    Both spellings are planted, because the derivation is inside the queue's
+    own module now and a reader of it may call either way.
+    """
+    for planted in (f"def derive(queue):\n    return {operation}(queue)\n",
+                    f"def derive(queue):\n"
+                    f"    return {outbox.__name__}.{operation}(queue)\n"):
+        assert outbox_names_called(planted) & INDEX_MUST_NOT_REACH == \
+            {operation}, planted
 
 
 #: A finding written out here rather than derived from the fixtures, and the

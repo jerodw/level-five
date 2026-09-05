@@ -319,7 +319,21 @@ def seeded(queue: Path, identity: dict = IDENTITY) -> str:
 
 
 def entry_of(queue: Path, key: str) -> dict:
-    return json.loads(outbox.entry_path(queue, key).read_text(encoding="utf-8"))
+    """The entry at `key`, from whichever of the two directories holds it.
+
+    story-107 split the queue in two, and a landed entry is now relocated into
+    the receipt index beside it. What this module asserts about is what the
+    transport's answer made of the entry — landed with its reference, pending
+    with the attempt counted, failed with what refused it — so it asks for the
+    entry rather than for a directory, in the index-first order the outbox's
+    own single-key read uses.
+    """
+    for directory in (outbox.receipts_beside(queue), queue):
+        path = outbox.entry_path(directory, key)
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise AssertionError(f"neither the queue at {queue} nor the index beside "
+                         f"it holds {key}")
 
 
 def drained(queue: Path, transport) -> outbox.Summary:

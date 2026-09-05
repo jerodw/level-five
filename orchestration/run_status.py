@@ -43,7 +43,10 @@ def tail_events(run_dir: Path, count: int = TAIL_LINES) -> list[str]:
 
 
 def format_queue(target_root: Path) -> list[str]:
-    """The outbox as it stands, read as data and nothing else.
+    """The outbox as it stands — both directories — read as data and nothing else.
+
+    The queue first, which is what still has to be filed, then the receipt
+    index beneath it through `format_receipts` below.
 
     l5-status stays instant and works offline, so this builds no transport,
     spawns no subprocess for the outbox and files nothing: it reads the queue
@@ -99,6 +102,45 @@ def format_queue(target_root: Path) -> list[str]:
     for key, last_error in failed:
         lines.append(f"  failed: {key}")
         lines.append(f"      {last_error or 'no error was recorded'}")
+    for entry in poisoned:
+        lines.append(f"  poisoned: {entry.path}")
+        for problem in entry.problems:
+            lines.append(f"      {problem}")
+    return lines + format_receipts(target_root)
+
+
+def format_receipts(target_root: Path) -> list[str]:
+    """The receipt index as it stands, beside the queue and read the same way.
+
+    The index is the other half of the outbox: the permanent record of what
+    this harness has already filed, which is what makes local dedupe work with
+    no network. It is read exactly as the queue above it is — through
+    `outbox.entry_files` and `outbox.read_entry` alone, no transport, no
+    subprocess and no configuration key — so naming it here costs the listing
+    nothing it was not already paying.
+
+    A poisoned file is named and counted here for the reason it is in the queue
+    section: it is left byte-for-byte as it is, and a reader is told it is
+    there rather than left to infer it from a count that does not add up.
+    """
+    receipts = outbox.receipts_dir(target_root)
+    try:
+        files = outbox.entry_files(receipts)
+    except OSError as error:
+        return [f"receipts: the index could not be read: {error}",
+                f"  at {receipts}"]
+
+    held = 0
+    poisoned: list[outbox.Poisoned] = []
+    for path in files:
+        entry, problems = outbox.read_entry(path)
+        if entry is None:
+            poisoned.append(outbox.Poisoned(path.name, tuple(problems)))
+            continue
+        held += 1
+
+    lines = [f"receipts: {held} held, poisoned {len(poisoned)}",
+             f"  at {receipts}"]
     for entry in poisoned:
         lines.append(f"  poisoned: {entry.path}")
         for problem in entry.problems:

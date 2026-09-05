@@ -13,3 +13,10 @@ __pycache__/
 # that was only untracked would dirty the tree and refuse the next run — the
 # mechanism whose whole purpose is never to block would be the thing blocking.
 .harness/outbox/
+# The receipt index, ignored for the queue's reason above and for one of its
+# own: a sweep runs inside a run — in the l5-run pre-flight and again after the
+# completion commit — so a versioned index would write a new file into a
+# tracked directory mid-run, and the next run's clean-tree pre-flight would
+# refuse it. The cost is accepted: receipts do not survive a fresh clone, so a
+# clone loses local dedupe until it files again.
+.harness/receipts/
