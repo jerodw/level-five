@@ -1,0 +1,333 @@
+story:
+  id: story-107
+  title: The queue holds work and the index holds receipts
+  description: |
+    `.harness/outbox/` holds two different kinds of object under one name: work
+    that has not been filed yet, and a permanent record of work that has. The
+    first drains to nothing in normal operation; the second never leaves,
+    because it is what makes local dedupe work with no network. As of
+    2026-09-04 the directory held eighteen entries, fifteen of them landed, and
+    within an hour the other three had landed too — so a directory called
+    `outbox` is, in steady state, entirely receipts.
+
+    Both readers pay for the mixture. `outbox.sync` opens and schema-validates
+    every file in the directory on every call, and `sweep_max_entries` bounds
+    filing attempts rather than entries read, so a landed entry reaches no
+    transport and is still parsed — twice per run and once per `l5-status`. The
+    Inspector's `local_index` reads the whole directory the same way. The cost
+    being removed is the read, not disk: it grows with the count of everything
+    ever filed rather than with what is waiting to be filed.
+
+    This story separates them. The queue keeps what still has to be filed; a
+    receipt index keeps what was. A landed entry is already a different kind of
+    object — `_land` drops the payload and what remains is a key, an identity,
+    a reference and two timestamps — so what moves is where a landed entry
+    lives and nothing about what one means.
+
+    Three decisions the brief left open were settled with the developer at
+    plan time and are recorded here rather than left to the implementer.
+
+    The index is gitignored, like the queue. The cost is real and accepted:
+    receipts do not survive a fresh clone, so a clone loses local dedupe until
+    it files again. The reason is that sweeps run inside runs — the l5-run
+    pre-flight and again after the completion commit — so a versioned index
+    would write a new file into a tracked directory mid-run and the next run's
+    clean-tree pre-flight would refuse it. That is exactly the blocking
+    story-089 gitignored the queue to avoid, and making receipts survive would
+    require the outbox to commit to git, which contradicts both "the outbox
+    never blocks a run" and "commit only what the run produced". Versioning the
+    index is a separate story that would need a commit seam this one does not
+    build.
+
+    Landed entries already in the queue are relocated when a sweep meets them.
+    The sweep reads every queue file today; meeting a landed one it moves it to
+    the index by the same move `_land` makes, and tallies it as landed exactly
+    as it does now. That costs one more full queue read, once, after which the
+    queue holds only pending and failed entries — which is the read-cost win
+    this story exists for. No one-off command and no flag day, so a deployment
+    that never runs a migration step cannot silently lose dedupe.
+
+    The derivation both readers share moves into `outbox.py`. `local_index`
+    leaves `inspection.py` and `local_state` leaves `brief_filing.py`, and both
+    live beside `entry_files` and `read_entry`, where the two directories are
+    defined. After the split the question "what has this harness already filed"
+    has three answers coming from two places — landed from the index, pending
+    and failed from the queue — and that rule is written once rather than
+    reached for separately by an Inspector and a filing path that would then
+    have two chances to disagree.
+  workflow: story-workflow
+
+tasks:
+  - Add the receipt index location to `orchestration/outbox.py` as a module
+    constant beside `QUEUE_DIR`, with a `receipts_dir(target_root)` accessor
+    beside `queue_dir`. It is a constant and not a configured key, for the
+    reason `QUEUE_DIR` already records: nothing about where this lives is a
+    target's choice to make, and the harness configuration gains no key.
+  - Change `outbox._land` so a landed entry is written into the receipt index
+    and the queue file for that key is removed, rather than the entry being
+    rewritten in place in the queue. What `_land` records is unchanged: the
+    state, the provider's reference, the dropped payload and the updated
+    timestamp, in that same shape.
+  - Relocate a landed entry the sweep still finds in the queue. `_sync_one`,
+    meeting an entry whose state is `landed`, moves it to the index by the same
+    move `_land` makes and tallies it as landed exactly as it does today. This
+    is the migration and it is the whole of it.
+  - Move `local_index` out of `orchestration/inspection.py` and into
+    `orchestration/outbox.py`, reading landed keys from the index and pending
+    keys from the queue, and keeping every property it has today: a directory
+    that cannot be listed is nothing known rather than an error, a poisoned
+    file contributes no key and stops nothing, and a failed entry contributes
+    to neither set.
+  - Move `local_state` out of `orchestration/brief_filing.py` and into
+    `orchestration/outbox.py`, answering for a single key from the same two
+    locations by the same rule, and keeping its properties: a key neither
+    location holds answers with the empty string, and an entry that cannot be
+    read as an entry is that same answer rather than an error.
+  - Leave the Inspector's three drop reasons and `brief_filing`'s three dedupe
+    outcomes exactly as they are, in their current modules, now reading their
+    answer from the moved derivation. Landed suppresses; pending is reported as
+    already queued; failed suppresses nothing.
+  - Make `outbox.sync` list only the queue, so a sweep opens only entries it
+    might file.
+  - Report the receipt index in `orchestration/run_status.py`, so `l5-status`
+    names the index and how many receipts it holds beside the queue it already
+    reports.
+  - Update `schemas/outbox-entry.schema.json` so its description says which of
+    the two directories an entry in each state lives in. The shape itself is
+    unchanged: a receipt is the landed entry, under the same `<key>.json` name
+    and validated by the same schema.
+  - Add `.harness/receipts/` to `.gitignore`, with the reason recorded beside
+    the queue's own entry.
+  - Write the standing regression module for the split, and adapt the existing
+    outbox, inspection, brief-filing and status tests to the new locations.
+  - Record the split in `.harness/docs/ARCHITECTURE.md`.
+
+acceptance_criteria:
+  - After an entry lands, the receipt index holds a file named for that key and
+    the queue does not.
+  - A pending entry and a failed entry are in the queue and not in the index.
+  - A finding whose identity matches a landed receipt is dropped by the
+    Inspector for the local-queue reason, with `filed_query_command` unset.
+  - A finding whose identity matches a pending queue entry is reported as
+    already queued, distinctly from one matching a landed receipt.
+  - A finding whose identity matches a failed queue entry is not dropped and is
+    filed.
+  - `brief_filing.file_brief` returns the already-filed-locally outcome for a
+    key the index holds landed, the already-queued outcome for a key the queue
+    holds pending, and files a brief whose key the queue holds failed.
+  - A sweep of a deployment holding many receipts and one pending queue entry
+    reads only the queue, so the receipts are not opened.
+  - Landed entries seeded in the old location — in the queue directory, as this
+    deployment holds them today — still answer dedupe after the change, and a
+    sweep relocates them into the index.
+  - A landed entry the sweep relocates is still counted as landed in the
+    summary that sweep returns.
+  - An index directory that cannot be listed costs the local dedupe tier and
+    nothing else: the inspection still runs, still files, and reports that the
+    local index could not be read.
+  - A poisoned file in either directory is named and counted and otherwise left
+    exactly as it is, and contributes no key.
+  - `l5-status` names the receipt index and how many receipts it holds, beside
+    the queue counts it reports today.
+  - The harness configuration gains no key: `schemas/harness-config.schema.json`
+    and the target configuration template are unchanged, and the declared-keys
+    scan reports what it reports today.
+  - `.gitignore` excludes the receipt index directory.
+  - A single function answers "what has this harness already filed" for both
+    readers, and it lives in `orchestration/outbox.py`; neither
+    `orchestration/inspection.py` nor `orchestration/brief_filing.py` reaches
+    the two directories on its own.
+
+technical_plan:
+  implementation_steps:
+    - In `orchestration/outbox.py`, add `RECEIPTS_DIR = (".harness",
+      "receipts")` beside `QUEUE_DIR`, with a comment saying why it is a
+      constant rather than a configured key and why it is gitignored, and add
+      `receipts_dir(target_root)` beside `queue_dir`.
+    - Add one private relocation helper that writes an entry into the index and
+      removes the queue file for its key, so landing and migrating cannot drift
+      about what the move is. Write first and unlink second, using the atomic
+      `write_entry` already there: a process killed between the two leaves the
+      key in both places, which every reader sees as one landed key, and that
+      is stated in the helper's docstring rather than defended against.
+    - Change `_land` to call that helper instead of writing the entry back into
+      the queue. Nothing else about `_land` changes.
+    - In `_sync_one`, the branch that meets a `landed` entry relocates it
+      through the same helper before tallying it. Guard the relocation so a
+      failure to move costs the migration and nothing else — the entry is still
+      tallied as landed and the sweep carries on, because a sweep that raised
+      would be the queue becoming the thing that stops a run.
+    - Move `LocalIndex` and `local_index` from `orchestration/inspection.py`
+      into `orchestration/outbox.py`, changing them to read landed keys from
+      the index and pending keys from the queue. A directory that cannot be
+      listed still answers `read=False` with a reason; the reason names which
+      directory it was.
+    - Move `local_state` from `orchestration/brief_filing.py` into
+      `orchestration/outbox.py`, looking the key up in the index first — where
+      a landed entry now is — and in the queue second.
+    - In `orchestration/inspection.py`, delete the moved definitions and import
+      them from `outbox`, leaving the drop constants, the drop reasons and the
+      report shape untouched. In `orchestration/brief_filing.py`, do the same
+      for `local_state`, leaving the three outcome constants and their wording
+      untouched.
+    - In `outbox.sync`, list only the queue directory. Leave `sweep_max_entries`
+      and what it bounds exactly as they are.
+    - In `orchestration/run_status.py`, read the index the way `format_queue`
+      already reads the queue — through `entry_files` and `read_entry` alone,
+      no transport and no subprocess — and add the receipt count and the index
+      path to what it prints.
+    - Update the description in `schemas/outbox-entry.schema.json` to say where
+      an entry in each state lives, and add `.harness/receipts/` to
+      `.gitignore` with its reason.
+    - Write `tests/test_the_queue_holds_work_and_the_index_holds_receipts.py`
+      as the standing module for the split, and adapt the existing tests that
+      assert a landed entry stays in the queue.
+    - Record the split in `.harness/docs/ARCHITECTURE.md`: the two directories,
+      which state lives where, that landed entries are relocated on sweep, and
+      that the index is gitignored and does not survive a clone.
+  likely_file_changes:
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: |
+        Gains the index location and accessor, the relocation helper, the
+        changed `_land` and `_sync_one`, the queue-only listing in `sync`, and
+        the two moved derivations that answer what this harness has filed.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: |
+        `LocalIndex` and `local_index` move out of it and are imported from
+        `outbox`. The drop constants, the drop reasons and the report shape are
+        untouched.
+    - file: orchestration/brief_filing.py
+      stage: implementer
+      reason: |
+        `local_state` moves out of it and is imported from `outbox`. The three
+        dedupe outcomes and their wording are untouched.
+    - file: orchestration/run_status.py
+      stage: implementer
+      reason: |
+        `l5-status` reports the receipt index beside the queue, read as data
+        the same way the queue already is.
+    - file: schemas/outbox-entry.schema.json
+      stage: implementer
+      reason: |
+        The description says which directory an entry in each state lives in.
+        The shape is unchanged: a receipt is a landed entry under the same name.
+    - file: .gitignore
+      stage: implementer
+      reason: |
+        The receipt index is excluded for the reason the queue is, so a receipt
+        written mid-run does not dirty the tree and refuse the next run.
+    - file: tests/test_the_queue_holds_work_and_the_index_holds_receipts.py
+      stage: tester
+      reason: |
+        The standing regression module for the split: which state lives where,
+        that the three states still decide suppression through the Inspector's
+        dedupe and `brief_filing`'s outcomes, that a sweep opens only what it
+        might file, and that entries seeded in the old location still answer
+        dedupe after a sweep relocates them.
+    - file: tests/test_outbox.py
+      stage: tester
+      reason: |
+        Existing tests assert a landed entry is rewritten in the queue; they
+        move to asserting it is written to the index and removed from the queue.
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: |
+        The tests that seed the local index seed it in the location the moved
+        derivation now reads landed keys from.
+    - file: tests/test_the_assist_agent_files_a_brief.py
+      stage: tester
+      reason: |
+        The tests that seed a landed entry for the already-filed-locally
+        outcome seed it in the index.
+    - file: tests/test_run_status.py
+      stage: tester
+      reason: |
+        `l5-status` now names the receipt index and its count.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: |
+        Records the two directories, which state lives where, the relocation on
+        sweep, and that the index is gitignored and does not survive a clone.
+
+scope:
+  modify:
+    - orchestration/outbox.py
+    - orchestration/inspection.py
+    - orchestration/brief_filing.py
+    - orchestration/run_status.py
+    - schemas/outbox-entry.schema.json
+    - .gitignore
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - orchestration/story_brief.py
+    - schemas/harness-config.schema.json
+    - schemas/story-brief.schema.json
+    - templates/config.yaml
+    - templates/sync/
+    - scripts/l5-sync
+    - workflows/
+
+verification_requirements:
+  - Confirm a landed entry is in the receipt index and not in the queue, and
+    that a pending entry and a failed entry are in the queue and not in the
+    index.
+  - Confirm the three states still decide suppression exactly as they do today,
+    driven through the Inspector's dedupe and `brief_filing`'s outcomes rather
+    than asserted about the files: landed suppresses, pending is reported as
+    already queued, failed suppresses nothing and is filed.
+  - Confirm the Inspector drops a finding matching a landed receipt with
+    `filed_query_command` unset, so the local tier is shown to answer on its
+    own.
+  - Confirm a sweep reads only what it might file: a deployment holding many
+    receipts and one pending queue entry does not open the receipts.
+  - Confirm the receipts this deployment already holds still answer dedupe
+    after the change — that landed entries seeded in the old queue location are
+    relocated by a sweep, are counted as landed in that sweep's summary, and
+    suppress afterwards.
+  - Confirm an index that cannot be listed costs the local dedupe tier and
+    nothing else, and is reported rather than raised.
+  - Confirm a poisoned file in either directory is named, counted, left exactly
+    as it is, and contributes no key.
+  - Confirm the harness configuration gained no key, by the declared-keys scan
+    and by `schemas/harness-config.schema.json` and the target configuration
+    template being unchanged.
+  - Confirm the single derivation: `orchestration/inspection.py` and
+    `orchestration/brief_filing.py` each reach the answer through
+    `orchestration/outbox.py` rather than reading the two directories
+    themselves.
+  - Confirm the new tests fail against the pre-change implementation, so what
+    they hold is shown rather than asserted.
+
+constraints:
+  - The outbox's standing guarantee holds unchanged: a failure to file never
+    blocks a story, never delays a commit and never refuses a run. `sync`
+    returns a summary on every path and raises into no caller, and a relocation
+    that fails costs the migration and nothing else.
+  - What an entry means does not change. Landed, pending and failed keep their
+    meanings and their consequences; a receipt is the landed entry, under the
+    same `<key>.json` name and the same `outbox-entry` schema.
+  - The identity derivation and the idempotency key are untouched, so every key
+    already on disk stays valid.
+  - No new harness configuration key. The index location is a module constant,
+    as the queue's already is.
+  - The transport contract, `sync_command`, `filed_query_command` and
+    `sweep_max_entries` are unchanged, and `sweep_max_entries` still bounds
+    filing attempts rather than entries read.
+  - `l5-status` reads the outbox as data only — `entry_files` and `read_entry`
+    alone, no transport and no subprocess — for the index as well as the queue.
+  - Retention and eviction of receipts are deliberately not decided here.
+  - Nothing here reads, writes, moves or renames anything under
+    `.harness/requests/`.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-05 12:32:26
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
