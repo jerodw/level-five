@@ -358,15 +358,18 @@ def test_the_filing_path_hashes_nothing_and_reaches_the_queue_one_way():
 
     Neither module derives a digest of its own, and the only queue operations
     the filing names are the key derivation, the single enqueue, where the
-    queue lives, the single-key read the local check makes, and the two states
-    that read is decided by. The controls are below.
+    queue lives, the moved single-key read, and the two states that read is
+    decided by. Since story-107 the read itself is the outbox's — the filing
+    path no longer opens a file in either directory, which is what
+    `entry_path` and `read_entry` leaving this set says. The controls are
+    below.
     """
     filing_source = Path(brief_filing.__file__).read_text(encoding="utf-8")
     identity_source = Path(story_brief.__file__).read_text(encoding="utf-8")
 
     assert producer.outbox_attributes(filing_source) == {
-        "identity_key", "enqueue", "queue_dir",
-        "entry_path", "read_entry", "LANDED", "PENDING",
+        "identity_key", "enqueue", "queue_dir", "local_state",
+        "LANDED", "PENDING",
     }
     assert producer.outbox_attributes(identity_source) == set()
     for source in (filing_source, identity_source):
@@ -514,12 +517,23 @@ def test_a_brief_about_a_different_file_is_a_different_entry(target, harness):
 
 
 def landed(target: Path, key: str) -> dict:
-    """The entry at `key`, moved to landed as a sync would leave it."""
+    """The entry at `key`, moved to landed as a sync would leave it.
+
+    Which since story-107 means into the receipt index and out of the queue,
+    through the queue's own move: a landed entry is a receipt, and the
+    already-filed-locally outcome is the index answering.
+    """
     queue = outbox.queue_dir(target)
     entry = json.loads(outbox.entry_path(queue, key).read_text(encoding="utf-8"))
     entry["state"] = LANDED
-    outbox.write_entry(queue, entry)
+    outbox.relocate_entry(queue, outbox.receipts_dir(target), entry)
     return entry
+
+
+def receipts(target: Path) -> list[dict]:
+    """Every receipt the target's index holds, read as the sweep reads them."""
+    return [json.loads(path.read_text(encoding="utf-8"))
+            for path in outbox.entry_files(outbox.receipts_dir(target))]
 
 
 def test_a_brief_a_tracker_reported_is_not_enqueued(tmp_path, target, harness):
@@ -561,8 +575,10 @@ def test_a_brief_the_local_queue_holds_pending_is_reported_as_already_queued(
     assert [entry["key"] for entry in entries(target)] == [first.key]
 
 
-def test_a_brief_the_local_queue_holds_landed_is_reported_as_filed_here(
+def test_a_brief_the_receipt_index_holds_landed_is_reported_as_filed_here(
         tmp_path, target, harness):
+    """The receipt is where the answer comes from, and the queue is left empty:
+    a landed entry is no longer work waiting to be filed."""
     answers = producer.answering_query(tmp_path)
     first = filing(a_brief(), target, harness, command=answers)
     before = landed(target, first.key)
@@ -570,7 +586,8 @@ def test_a_brief_the_local_queue_holds_landed_is_reported_as_filed_here(
     outcome = filing(a_brief(), target, harness, command=answers)
 
     assert outcome.outcome == ALREADY_FILED_LOCALLY
-    assert entries(target) == [before]
+    assert receipts(target) == [before]
+    assert entries(target) == []
 
 
 def test_a_brief_the_local_queue_holds_failed_is_filed_again(tmp_path, target,
@@ -896,8 +913,8 @@ def test_a_suppressed_filing_leaves_the_entry_it_was_suppressed_by_untouched(
     """Nothing here changes the status of anything already filed."""
     answers = producer.answering_query(tmp_path)
     first = filing(a_brief(), target, harness, command=answers)
-    entry_file = outbox.entry_path(outbox.queue_dir(target), first.key)
     landed(target, first.key)
+    entry_file = outbox.entry_path(outbox.receipts_dir(target), first.key)
     before = entry_file.read_bytes()
 
     assert filing(a_brief(), target, harness,

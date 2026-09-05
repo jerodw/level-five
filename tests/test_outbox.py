@@ -201,7 +201,23 @@ def queue(tmp_path: Path) -> Path:
 
 
 def entry_of(queue: Path, key: str) -> dict:
-    return json.loads(outbox.entry_path(queue, key).read_text(encoding="utf-8"))
+    """The entry at `key`, from whichever of the two directories holds it.
+
+    story-107 split the queue in two: what is still to be filed stays here, and
+    a landed entry is relocated into the receipt index beside it. The
+    assertions in this module are about what an entry *is* — its state, its
+    reference, its dropped payload — so they ask for the entry rather than for
+    a directory, in the index-first order the outbox's own single-key read
+    uses. Which directory holds which state is the subject of
+    `tests/test_the_queue_holds_work_and_the_index_holds_receipts.py`, where it
+    is asserted directly.
+    """
+    for directory in (outbox.receipts_beside(queue), queue):
+        path = outbox.entry_path(directory, key)
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise AssertionError(f"neither the queue at {queue} nor the index beside "
+                         f"it holds {key}")
 
 
 def seeded_pending(queue: Path, identity: dict = IDENTITY,

@@ -41,10 +41,11 @@ session can tell filed from not filed without reading prose.
 
 **Dedupe is the two sources the Inspector already consults**, asked about one
 key rather than about a scope. The filed query asks a tracker what it holds
-against this brief's paths; the local queue is asked directly for the entry
-this key would be written to, which is a single file read because a key names
-its own file. Which state that entry is in decides what it is evidence of: a
-landed entry means a provider named what it holds and suppresses; a pending one
+against this brief's paths; the receipt index and the local queue are asked
+directly for the entry this key would be written to, which is a file read
+apiece because a key names its own file in each. Which state that entry is in
+decides what it is evidence of: a landed receipt means a provider named what it
+holds and suppresses; a pending queue entry
 is written down here and seen by no tracker, so it is reported as already
 queued rather than already filed; a failed one is terminal and suppresses
 nothing, because it is a brief that reached nobody and suppressing on it would
@@ -152,23 +153,13 @@ def read_brief(path: Path):
     return document, ""
 
 
-def local_state(queue: Path, key: str, harness_root: Path | None = None) -> str:
-    """The state the local queue holds this key in, or "" where it holds none.
-
-    A key names its own file, so this is one read rather than an index of the
-    whole queue: the question a single filing asks is about a single key. A
-    file that is not there is a key the queue does not hold, and one that
-    cannot be read as an entry is the same answer rather than an error — a
-    poisoned entry stops nothing here, exactly as it stops nothing when the
-    Inspector indexes the queue, and the brief is filed and replaces it.
-    """
-    path = outbox.entry_path(queue, key)
-    if not path.is_file():
-        return ""
-    entry, _ = outbox.read_entry(path, harness_root)
-    if entry is None:
-        return ""
-    return entry.get("state", "")
+#: What this harness has already filed, for one key, derived in the one module
+#: where the queue and the receipt index are defined. It moved there in
+#: story-107 for the reason the Inspector's whole-directory index did: the
+#: Inspector and this filing path ask one question, and asking it in two places
+#: gives them two chances to disagree about which directory answers for which
+#: state. The name this module already exposed resolves to the same object.
+local_state = outbox.local_state
 
 
 def file_brief(brief: dict, config: dict, target_root: Path,
@@ -228,12 +219,11 @@ def file_brief(brief: dict, config: dict, target_root: Path,
                        "the filed query already reported it against these "
                        "paths", **asked)
 
-    queue = outbox.queue_dir(target_root)
-    state = local_state(queue, key, harness_root)
+    state = local_state(target_root, key, harness_root)
     if state == outbox.LANDED:
         return Outcome(ALREADY_FILED_LOCALLY,
-                       "the local queue holds it landed, so this harness filed "
-                       "it and a provider named what it holds", **asked)
+                       "the receipt index holds it landed, so this harness "
+                       "filed it and a provider named what it holds", **asked)
     if state == outbox.PENDING:
         return Outcome(ALREADY_QUEUED,
                        "the local queue holds it pending, so it is written "
@@ -245,7 +235,8 @@ def file_brief(brief: dict, config: dict, target_root: Path,
     # another chance rather than a duplicate, since the key is derived from the
     # identity alone.
 
-    written = outbox.enqueue(queue, story_brief.payload(brief), identity)
+    written = outbox.enqueue(outbox.queue_dir(target_root),
+                             story_brief.payload(brief), identity)
     if not written:
         return Outcome(LOST_BY_THE_QUEUE,
                        "the queue dropped the item, so nothing was filed",

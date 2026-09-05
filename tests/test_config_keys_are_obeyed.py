@@ -1548,12 +1548,25 @@ def swept(tmp_path: Path, *, sleeps: int = 0, **overrides: object) -> Sweep:
         harness_config.load_config(target), target)
     if transport is not None or not problem:
         outbox.sync(queue, transport)
-    return Sweep(
-        entry=json.loads(
-            outbox.entry_path(queue, key).read_text(encoding="utf-8")),
-        transport=transport,
-        problem=problem,
-    )
+    return Sweep(entry=entry_of(target, key), transport=transport,
+                 problem=problem)
+
+
+def entry_of(target: Path, key: str) -> dict:
+    """The entry at `key`, from whichever of the two directories holds it.
+
+    story-107 split the queue in two: what is still to be filed stays in the
+    queue, and a landed entry is relocated into the receipt index. What the
+    proofs below read off an entry is which command filed it, with what
+    reference and under what bound — a question about the entry rather than
+    about a directory — so this asks in the index-first order the outbox's own
+    single-key read uses.
+    """
+    for directory in (outbox.receipts_dir(target), outbox.queue_dir(target)):
+        path = outbox.entry_path(directory, key)
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise AssertionError(f"neither directory beneath {target} holds {key}")
 
 
 def test_sync_command_is_the_command_an_entry_is_filed_by_running(tmp_path):
@@ -1641,11 +1654,14 @@ def test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts(tmp_path):
     assert len(attempted) == SWEEP_MAX_ENTRIES
     assert len(set(attempted)) == SWEEP_MAX_ENTRIES, "one entry was filed twice"
     assert summary.landed == SWEEP_MAX_ENTRIES
-    # The rest are left pending and unattempted rather than dropped, so the
-    # queue still holds every entry it held.
+    # The rest are left pending and unattempted rather than dropped, and what
+    # landed became a receipt rather than being lost — so every entry seeded is
+    # still held, in one of the two directories story-107 split them across.
     left = SEEDED_PENDING_ENTRIES - SWEEP_MAX_ENTRIES
     assert summary.pending == left
-    assert len(outbox.entry_files(queue)) == SEEDED_PENDING_ENTRIES
+    assert len(outbox.entry_files(queue)) == left
+    assert len(outbox.entry_files(outbox.receipts_dir(target))) == \
+        SWEEP_MAX_ENTRIES
 
     stated = " ".join(summary.notes)
     assert str(SWEEP_MAX_ENTRIES) in stated, stated

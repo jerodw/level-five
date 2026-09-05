@@ -1189,6 +1189,25 @@ class RefusingTransport:
         return outbox.refused(self.error)
 
 
+def move_back_into_the_queue(queue: Path, key: str) -> None:
+    """Put a receipt where a landed entry sat before story-107 split the two.
+
+    The split moved a landed entry into the receipt index beside the queue, so
+    landing one no longer leaves anything here. What the assertions below are
+    about is an entry a *sweep reads and does not file* — which is exactly what
+    a landed entry in the queue is, and what every entry this deployment filed
+    before the split still is until a sweep relocates it.
+
+    The move is the module's own, run backwards, so the entry that ends up in
+    the queue is byte for byte the receipt landing produced and only where it
+    sits is composed here.
+    """
+    receipts = outbox.receipts_beside(queue)
+    entry, problems = outbox.read_entry(outbox.entry_path(receipts, key))
+    assert entry is not None, problems
+    outbox.relocate_entry(receipts, queue, entry)
+
+
 def seeded_queue(root: Path, *, pending: int = 0, landed: int = 0,
                  failed: int = 0, poisoned: int = 0) -> Path:
     """A queue holding the states the caller asked for, and nothing else.
@@ -1197,19 +1216,26 @@ def seeded_queue(root: Path, *, pending: int = 0, landed: int = 0,
     transitions rather than by writing files this module composed, so what they
     are is decided by the module under test.
 
-    The pending entries are written **last**, deliberately: a drain reaches
-    every pending entry in the queue, so seeding them before the two drains
-    below would land or fail the very entries the caller asked to be left
-    pending. Landed and failed entries are inert to a later drain, which is
-    what makes this order the one that produces what was asked for.
+    Two orderings are load-bearing. The pending entries are written **last**,
+    because a drain reaches every pending entry in the queue and seeding them
+    before the two drains below would land or fail the very entries the caller
+    asked to be left pending. And the landed entries are moved back into the
+    queue only **after the last drain this fixture makes**, because a sweep
+    relocates every landed entry it meets: put back any earlier, the next drain
+    would take them straight out again.
     """
     queue = outbox.queue_dir(root)
+    receipts: list[str] = []
     for ordinal in range(landed):
-        outbox.enqueue(queue, PAYLOAD, {"kind": "landed", "n": ordinal})
+        identity = {"kind": "landed", "n": ordinal}
+        outbox.enqueue(queue, PAYLOAD, identity)
         outbox.sync(queue, CountingTransport())
+        receipts.append(outbox.identity_key(identity))
     for ordinal in range(failed):
         outbox.enqueue(queue, PAYLOAD, {"kind": "failed", "n": ordinal})
         outbox.sync(queue, RefusingTransport())
+    for key in receipts:
+        move_back_into_the_queue(queue, key)
     for ordinal in range(poisoned):
         (queue / f"{ordinal}-{MALFORMED_NAME}").write_bytes(b'{"key": "half a ')
     for ordinal in range(pending):
