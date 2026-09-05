@@ -14,6 +14,16 @@ forced repair with added coverage is not caught at all. The record names the
 paths that were reverted, so a reader can see exactly what the decision
 covered. Reading the diff remains the verifier's job; this check bounds a
 class of edit, it does not audit one.
+
+Its refusal does not stop the run, and that is not leniency: reaching a
+refusal means the check built a clone with exactly those paths restored to
+what the stage found and watched the suite pass in it, so undoing them in the
+working tree reproduces a tree the harness has already proved good. The
+coordinator restores them, keeps the stage's own version of each in the run
+directory, records what it did, and the run continues. What still stops a run
+is a check that reached no verdict — nothing was proved, so nothing may be
+undone — and a file *created* under a governed path, against whose absence no
+suite has ever been run.
 """
 from __future__ import annotations
 
@@ -28,7 +38,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import agent_runner
@@ -368,19 +378,102 @@ def resolves_nothing(source: dict) -> dict | None:
     return None
 
 
-def stage_restrictions(stages: list[dict]) -> list[tuple[str, str]]:
-    """The workflow's (stage, prefix) create-restriction pairs, in declared order.
+#: The workflow key declaring what a stage may not *add* to. A path at or
+#: beneath one of its prefixes is governed; a path outside all of them is not.
+CREATE_RESTRICTION = "may_not_create"
 
-    The mapping from a stage to the prefixes it may not create under is
-    derived here and nowhere else, so the exception cross-check below and the
-    plan-time strictness check in plan_validation read one derivation rather
-    than two copies of it. No stage name and no prefix is written here; both
-    come off the loaded workflow definition.
+#: The workflow key confining a stage's repository writes to the prefixes it
+#: names. It is the mirror image of the key above: a path *outside* every named
+#: prefix is governed, and a path at or beneath one of them is not.
+CONFINEMENT = "may_only_change"
+
+
+@dataclass(frozen=True)
+class StageRestriction:
+    """One declared restriction on where a stage may write, and what it means.
+
+    A restriction carries its stage, the prefix it is named for, its sense, and
+    the predicate deciding whether it governs a given path — so every reader
+    asks `governs` rather than matching a prefix itself, and neither the
+    coordinator's enforcement path nor the plan-time checks need a conditional
+    on which sense they are looking at. Adding a sense is adding a member of
+    `_SENSES` below; no reader changes.
+
+    `prefixes` is the whole list the declaration this restriction came from
+    named, because a confinement is a statement about that list rather than
+    about any one of its members: a stage confined to two directories is
+    governed only outside *both*, while the restriction is still reported once
+    per declared prefix so a reader meets each one in its own wording.
+    """
+
+    stage: str
+    prefix: str
+    sense: str
+    prefixes: tuple[str, ...]
+
+    def governs(self, path: str) -> bool:
+        """Whether this restriction has anything to say about this path.
+
+        A create restriction speaks for its own prefix alone: a stage
+        restricted from two directories is governed beneath each of them
+        independently, and reading the group would make one prefix's
+        restriction claim a path only its sibling covers. A confinement is the
+        opposite and has to read the group, because being confined to two
+        directories means being governed only outside *both*.
+        """
+        if self.sense == CREATE_RESTRICTION:
+            return path.startswith(self.prefix)
+        return not any(path.startswith(prefix) for prefix in self.prefixes)
+
+    @property
+    def wording(self) -> str:
+        """The restriction stated as the workflow declares it, in one sentence.
+
+        Composed here so a prompt, a plan-time refusal and a run-time
+        escalation state the same restriction identically rather than in three
+        spellings that agree today.
+        """
+        return f"{self.stage} {_SENSES[self.sense]} {self.prefix}"
+
+
+#: How each sense reads in prose, keyed by the workflow key that declares it.
+#: The one place a restriction's words are written; `StageRestriction.wording`
+#: is its only reader.
+_SENSES = {
+    CREATE_RESTRICTION: "may not create files under",
+    CONFINEMENT: "may only change files under",
+}
+
+
+def restrictions_on(stage: dict) -> list[StageRestriction]:
+    """One stage's declared restrictions, in the order the senses are declared.
+
+    The per-stage accessor the coordinator's enforcement path reads, so the
+    ownership check, the revert check and the baseline capture are driven by
+    the same derivation plan time reads rather than by a second reading of a
+    declaration key at the call site.
     """
     return [
-        (stage["name"], prefix)
-        for stage in stages
-        for prefix in stage.get("may_not_create", [])
+        StageRestriction(stage["name"], prefix, sense, tuple(prefixes))
+        for sense in _SENSES
+        for prefixes in [stage.get(sense, [])]
+        for prefix in prefixes
+    ]
+
+
+def stage_restrictions(stages: list[dict]) -> list[StageRestriction]:
+    """The workflow's declared path restrictions, in declared order.
+
+    The mapping from a stage to what it may not write is derived here and
+    nowhere else, so the exception cross-check below, the coordinator's
+    enforcement path, the baseline capture, both plan-time checks in
+    plan_validation and the planner injection read one derivation rather than
+    several copies of it that can disagree. No stage name, no prefix and no
+    sense conditional is written in any of them; all of it comes off the loaded
+    workflow definition and travels in the restriction.
+    """
+    return [
+        restriction for stage in stages for restriction in restrictions_on(stage)
     ]
 
 
@@ -395,18 +488,25 @@ def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
     harmless one, so both refuse the run. Stage names and prefixes come from
     the workflow definition; none is named here.
 
-    A granted value is accepted when it *equals* one of that stage's declared
-    prefixes or falls *under* one of them, so a grant may name a single file,
-    or a directory, beneath a declared prefix rather than only the whole
-    prefix. Widening what is accepted narrows nothing: a whole-prefix grant
-    keeps its meaning and its effect on both checks. A value beneath no
-    declared prefix is still refused with the message it prints today — a
-    grant that is no subset of something the stage was restricted on grants
-    nothing — as is a stage the loaded workflow does not define.
+    A grant is accepted when one of that stage's restrictions *governs* the
+    granted value, which is the same question the ownership check and the
+    revert check ask of a path — so what a grant may name is decided by the
+    restriction rather than by a prefix comparison written here, and each sense
+    accepts what it governs: a create restriction accepts a value at or beneath
+    a declared prefix, so a grant may name a single file, or a directory,
+    beneath one rather than only the whole prefix; a confinement accepts a
+    value outside every prefix it names, which is where that stage's writes are
+    governed. Widening what is accepted narrows nothing: a whole-prefix grant
+    keeps its meaning and its effect on both checks. A value no restriction
+    governs is still refused with the message it prints today — a grant that
+    lifts nothing grants nothing — as is a stage the loaded workflow does not
+    define.
     """
-    restricted: dict[str, list[str]] = {stage["name"]: [] for stage in stages}
-    for name, prefix in stage_restrictions(stages):
-        restricted[name].append(prefix)
+    restricted: dict[str, list[StageRestriction]] = {
+        stage["name"]: [] for stage in stages
+    }
+    for restriction in stage_restrictions(stages):
+        restricted[restriction.stage].append(restriction)
     problems = []
     for index, exception in enumerate(story.get("stage_exceptions", [])):
         name, granted = exception["stage"], exception["create"]
@@ -416,8 +516,7 @@ def stage_exception_problems(story: dict, stages: list[dict]) -> list[str]:
                 f"loaded workflow does not define"
             )
         elif not any(
-            granted == prefix or granted.startswith(prefix)
-            for prefix in restricted[name]
+            restriction.governs(granted) for restriction in restricted[name]
         ):
             problems.append(
                 f"$.stage_exceptions[{index}]: grants '{granted}' to stage "
@@ -1340,14 +1439,27 @@ def _blocked_violation(run_dir: Path, record_name: str, blocked: list[str]) -> s
 
 @dataclass(frozen=True)
 class OwnershipViolation:
-    """A path a stage created under a prefix it declared it must not create."""
+    """A path a stage created that one of its own restrictions governs.
+
+    The restriction travels with the path rather than only its prefix, so the
+    escalation states the rule in the workflow's own terms and a confinement
+    does not have to be reported under a creation label.
+    """
 
     path: str
-    prefix: str
+    restriction: StageRestriction
+
+    @property
+    def prefix(self) -> str:
+        """The prefix the restriction is named for."""
+        return self.restriction.prefix
 
 
 def _ownership_violation(
-    run_dir: Path, record_name: str, prefixes: list[str], granted: list[str]
+    run_dir: Path,
+    record_name: str,
+    restrictions: list[StageRestriction],
+    granted: list[str],
 ) -> OwnershipViolation | None:
     """Hold a stage to the outputs it declared it does not own.
 
@@ -1357,18 +1469,22 @@ def _ownership_violation(
     own signature change broke, but validation it authors itself checks what
     it built rather than what was asked.
 
-    The enforced prefix list arrives whole; a path the story's grants cover is
-    exempted rather than the prefix being removed, so a grant naming one path
-    leaves every other path beneath the same prefix governed. Whether a grant
-    covers a path is grant_covers's decision and no other's.
+    The stage's restrictions arrive whole; a path the story's grants cover is
+    exempted rather than a restriction being dropped, so a grant naming one
+    path leaves every other path the same restriction governs governed.
+    Whether a grant covers a path is grant_covers's decision and no other's,
+    and whether a restriction governs a path is the restriction's — so this
+    check reads neither a declaration key nor a sense, and a creation outside a
+    confinement escalates here for the reason a creation beneath a
+    may_not_create prefix does.
     """
     changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     for path in changed.get("created", []):
         if grant_covers(granted, path):
             continue
-        for prefix in prefixes:
-            if path.startswith(prefix):
-                return OwnershipViolation(path, prefix)
+        for restriction in restrictions:
+            if restriction.governs(path):
+                return OwnershipViolation(path, restriction)
     return None
 
 
@@ -2114,6 +2230,54 @@ def suite_output_file(artifact: str) -> str:
     return f"{stem}-output.txt"
 
 
+@dataclass(frozen=True)
+class Restoration:
+    """Which of the restored-or-removed halves each path fell to.
+
+    Returned by the one function that makes the decision rather than recomputed
+    beside it, so what a revert *reports* it did and what it *did* cannot
+    disagree.
+    """
+
+    restored: tuple[str, ...]
+    removed: tuple[str, ...]
+
+
+def restore_from_baseline(
+    baseline: Path, tree: Path, paths: list[str] | tuple[str, ...]
+) -> Restoration:
+    """Put the named paths of a tree back to what the stage baseline holds.
+
+    The rule, written once: a path the baseline holds is restored to that
+    content, and a governed path the baseline does not hold is removed, because
+    a path absent from the baseline did not exist when the stage started.
+    Nothing here reverts to HEAD — a file an earlier stage of the same run
+    created has no HEAD version and its pre-stage state is knowable all the
+    same.
+
+    Two callers: the clone the revert check takes its proof on, and the working
+    tree that proof licenses reverting. They must decide restore-or-remove
+    identically, because reproducing the content the proof was taken on is the
+    whole of why reverting the working tree is safe — two copies of this rule
+    could leave a tree the proof does not cover.
+
+    The baseline is asserted to exist by the caller: this reports nothing and
+    decides nothing about a baseline that is not there.
+    """
+    restored, removed = [], []
+    for rel in paths:
+        source, destination = baseline / rel, tree / rel
+        if source.is_file():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            restored.append(rel)
+        else:
+            if destination.is_file():
+                destination.unlink()
+            removed.append(rel)
+    return Restoration(tuple(restored), tuple(removed))
+
+
 def _write_suite_output(destination: Path | None, output: str) -> str | None:
     """Write a suite run's whole combined output, and say where it went.
 
@@ -2237,13 +2401,7 @@ def _build_clone(
                 f"Could not revert {', '.join(revert)} in {clone}: no captured "
                 f"baseline to restore them from ({baseline})"
             )
-        for rel in revert:
-            source, destination = baseline / rel, clone / rel
-            if source.is_file():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
-            elif destination.is_file():
-                destination.unlink()
+        restore_from_baseline(baseline, clone, revert)
 
     _git(clone, "add", "-A")
     commit = _git(
@@ -2856,54 +3014,72 @@ def capture_stage_baseline(
     directory = stage_baseline_dir(run_dir, baseline, stage_name)
     recapture = directory.exists()
     directory.mkdir(parents=True, exist_ok=True)
-    for prefix in prefixes:
-        listed = _git(
-            target_root,
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            "--",
-            prefix,
-        ).stdout
-        for rel in filter(None, listed.split("\0")):
-            source = target_root / rel
-            if not source.is_file():
-                continue
-            destination = directory / rel
-            if destination.exists():
-                continue
-            if recapture and rel not in accounted_for:
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+    if not prefixes:
+        return directory
+    # One listing over every pathspec asked for, rather than one per pathspec
+    # whose results are unioned. For a set of plain prefixes the two are the
+    # same answer; for a confinement they are not, because its pathspecs are
+    # the whole tree and a subtraction from it, and a union would add back
+    # exactly what the subtraction removed.
+    listed = _git(
+        target_root,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        *prefixes,
+    ).stdout
+    for rel in filter(None, listed.split("\0")):
+        source = target_root / rel
+        if not source.is_file():
+            continue
+        destination = directory / rel
+        if destination.exists():
+            continue
+        if recapture and rel not in accounted_for:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
     return directory
 
 
 @dataclass(frozen=True)
 class GovernedEdits:
-    """The stage's own modifications and deletions under its governed prefixes.
+    """The stage's own modifications and deletions its restrictions govern.
 
     `created` is not collected: the ownership check has already escalated on
     it, so anything reaching here is an edit to something that already existed.
+
+    `wordings` states each restriction that matched in the workflow's own
+    terms, so what the check reports about a confinement does not have to be
+    read off a bare prefix. It carries a default because a caller with nothing
+    to report constructs an empty set of edits, which has no restriction to
+    word.
     """
 
     paths: tuple[str, ...]
     prefixes: tuple[str, ...]
+    wordings: tuple[str, ...] = ()
 
 
 def governed_edits(
-    run_dir: Path, record_name: str, prefixes: list[str], granted: list[str]
+    run_dir: Path,
+    record_name: str,
+    restrictions: list[StageRestriction],
+    granted: list[str],
 ) -> GovernedEdits:
     """Read a stage's record for the edits the revert check decides on.
 
-    Names no stage and no prefix; the caller passes the stage's enforced list
-    whole and, beside it, the values the story grants that stage. A path a
-    grant covers is skipped, so it is exempt from this check exactly as it is
-    exempt from the ownership check, and by the same decision — grant_covers,
-    which both read. Sorted, so the record and the escalation reason are
-    deterministic.
+    Names no stage, no prefix and no sense; the caller passes the stage's
+    restrictions whole and, beside them, the values the story grants that
+    stage. Whether a restriction governs a path is the restriction's decision,
+    so a confinement's edits reach this check by the same route a create
+    restriction's do. A path a grant covers is skipped, so it is exempt from
+    this check exactly as it is exempt from the ownership check, and by the
+    same decision — grant_covers, which both read. Sorted, so the record and
+    what the check reports are deterministic.
     """
     changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     paths, matched = set(), set()
@@ -2911,11 +3087,15 @@ def governed_edits(
         for path in changed.get(group, []):
             if grant_covers(granted, path):
                 continue
-            for prefix in prefixes:
-                if path.startswith(prefix):
+            for restriction in restrictions:
+                if restriction.governs(path):
                     paths.add(path)
-                    matched.add(prefix)
-    return GovernedEdits(tuple(sorted(paths)), tuple(sorted(matched)))
+                    matched.add(restriction)
+    return GovernedEdits(
+        tuple(sorted(paths)),
+        tuple(sorted(restriction.prefix for restriction in matched)),
+        tuple(sorted(restriction.wording for restriction in matched)),
+    )
 
 
 #: Where a nominated test is substituted into the target's configured
@@ -2975,6 +3155,34 @@ class Nomination:
 
 
 @dataclass(frozen=True)
+class RevertedEdits:
+    """What a refused verdict undid in the target working tree, and what it kept.
+
+    Present on the record only when a refusal was acted on, so its absence is
+    the ordinary case — a permitted check undoes nothing and has nothing to
+    say here. It is the correction *beside* the stage's changed-files record
+    rather than an edit to it: an attestation is not rewritten behind its
+    author, so what the stage said it changed still says exactly that and this
+    is where a reader learns which of those edits no longer stand.
+    """
+
+    restored: tuple[str, ...]
+    removed: tuple[str, ...]
+    discarded: str | None = None
+    kept: tuple[str, ...] = ()
+
+    def as_record(self) -> dict:
+        record: dict = {
+            "restored": list(self.restored),
+            "removed": list(self.removed),
+            "kept": list(self.kept),
+        }
+        if self.discarded is not None:
+            record["discarded"] = self.discarded
+        return record
+
+
+@dataclass(frozen=True)
 class RevertCheckResult:
     """What the revert check did, as it is recorded in the run directory.
 
@@ -2996,6 +3204,7 @@ class RevertCheckResult:
     permitted: bool | None
     baseline: str | None = None
     nomination: Nomination | None = None
+    reverted: RevertedEdits | None = None
 
     def as_record(self) -> dict:
         record = {"ran": self.result.ran, "paths": list(self.paths)}
@@ -3008,6 +3217,8 @@ class RevertCheckResult:
             record["baseline"] = self.baseline
         if self.nomination is not None:
             record["nomination"] = self.nomination.as_record()
+        if self.reverted is not None:
+            record["reverted"] = self.reverted.as_record()
         return record
 
 
@@ -3326,10 +3537,7 @@ def revert_check(
                 baseline=str(resolved),
                 nomination=decided_by_nomination,
             )
-            (run_dir / artifact).write_text(
-                json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
-            )
-            return decided
+            return _record_revert_check(run_dir, artifact, decided)
 
         _suite_rerun_started(
             run_dir,
@@ -3370,10 +3578,87 @@ def revert_check(
         baseline=str(resolved) if resolved is not None else None,
         nomination=decided_by_nomination,
     )
+    return _record_revert_check(run_dir, artifact, decided)
+
+
+def _record_revert_check(
+    run_dir: Path, artifact: str, decided: RevertCheckResult
+) -> RevertCheckResult:
+    """Write the revert check's record, and say what was written.
+
+    One writer, so the record the check leaves and the record a refusal
+    rewrites with what it undid are the same serialization rather than two.
+    """
     (run_dir / artifact).write_text(
         json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
     )
     return decided
+
+
+def revert_refused_edits(
+    run_dir: Path,
+    target_root: Path,
+    paths: tuple[str, ...],
+    baseline: Path,
+    discarded: str | None,
+) -> RevertedEdits:
+    """Undo a refused stage's governed edits in the target working tree.
+
+    Safe by construction rather than by judgement. A refusal means the check
+    built a clone with exactly these paths restored to what the stage found and
+    watched the suite pass there, so reproducing that content in the working
+    tree reproduces the tree the proof was taken on — which is why the restore
+    goes through restore_from_baseline, the same function the clone build
+    calls, rather than through a second copy of the rule that could leave a
+    tree the proof does not cover.
+
+    The stage's own version of each path is written under the run-directory
+    directory the declaration names before anything is undone, so the work a
+    refusal discards survives in the run's evidence and a reviewer can read
+    what the stage said. A path the stage deleted has no version in the tree to
+    keep, and is recorded as reverted without one.
+    """
+    kept: list[str] = []
+    if discarded is not None:
+        for rel in paths:
+            source = target_root / rel
+            if not source.is_file():
+                continue
+            destination = run_dir / discarded / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            kept.append(rel)
+    restoration = restore_from_baseline(baseline, target_root, paths)
+    return RevertedEdits(
+        restored=restoration.restored,
+        removed=restoration.removed,
+        discarded=discarded,
+        kept=tuple(kept),
+    )
+
+
+def _revert_check_reverted(
+    run_dir: Path,
+    stage_name: str,
+    artifact: str,
+    edits: GovernedEdits,
+    reverted: RevertedEdits,
+) -> None:
+    undone = ", ".join(edits.paths)
+    where = (
+        f", the stage's own versions kept under {reverted.discarded}"
+        if reverted.discarded
+        else ""
+    )
+    append_event(
+        run_dir,
+        f"{stage_name} edits governed by {'; '.join(edits.wordings)} were not "
+        f"needed: the suite passes with {undone} reverted, so they were "
+        f"reverted in the working tree{where}",
+        kind="revert-check-reverted",
+        stage=stage_name,
+        artifacts=[artifact],
+    )
 
 
 def _revert_check_permitted(
@@ -3381,8 +3666,8 @@ def _revert_check_permitted(
 ) -> None:
     append_event(
         run_dir,
-        f"{stage_name} edits under {', '.join(edits.prefixes)} permitted: the "
-        f"suite fails with {', '.join(edits.paths)} reverted",
+        f"{stage_name} edits governed by {'; '.join(edits.wordings)} permitted: "
+        f"the suite fails with {', '.join(edits.paths)} reverted",
         kind="revert-check-permitted",
         stage=stage_name,
         artifacts=[artifact],
@@ -3707,24 +3992,62 @@ def _record_census(run_dir: Path, artifact: str, decided: CensusResult) -> Censu
     return decided
 
 
+#: The pathspec naming the whole repository from its root, whatever directory
+#: the listing is run from. A confinement's capture opens with it and then
+#: subtracts, because git resolves a set of exclusions against a positive
+#: pathspec and answers nothing without one.
+_WHOLE_TREE = ":(top)"
+
+
+def baseline_pathspecs(restrictions: list[StageRestriction]) -> list[str]:
+    """The git pathspecs covering everything a stage's restrictions govern.
+
+    One list, so the capture makes one listing and the senses compose rather
+    than each getting a listing whose results would be unioned — a union is the
+    wrong operation for a confinement, whose whole content is a subtraction.
+    A create restriction contributes its prefix; a confinement contributes the
+    whole tree once and an exclusion per prefix it names, which is the same set
+    its `governs` reports and is why neither is written twice.
+    """
+    pathspecs: list[str] = []
+    for restriction in restrictions:
+        if restriction.sense == CREATE_RESTRICTION:
+            asked = [restriction.prefix]
+        else:
+            asked = [_WHOLE_TREE, f":(exclude,top){restriction.prefix}"]
+        for pathspec in asked:
+            if pathspec not in pathspecs:
+                pathspecs.append(pathspec)
+    return pathspecs
+
+
 def stage_baseline_requests(stage: dict) -> dict[str, list[str]]:
     """The baseline captures a stage's declarations between them ask for.
 
     Two declarations decide against what the stage first found — the revert
-    check, over the prefixes the stage may not create under, and the suite
+    check, over whatever that stage's restrictions govern, and the suite
     census, over the paths it declares. Both name the run-directory directory
     their baseline is kept in. They are collected into one capture per named
-    directory, with the union of the prefixes asked for it, because capturing
+    directory, with the union of the pathspecs asked for it, because capturing
     twice would make the second call a re-capture of the first's directory and
     narrow what it may admit for a reason that has nothing to do with the stage
     running again.
+
+    What the revert check asks for is the restriction's own answer rather than
+    its prefixes: a create restriction is governed at or beneath each prefix
+    and asks for that, while a confinement is governed everywhere *else* and
+    asks for the repository minus the prefixes it names. That is what brings
+    the baseline with the confinement — a stage confined to one directory has a
+    baseline covering the tree it may not freely change, which is the evidence
+    a revert needs and the half a create restriction's baseline never had to
+    cover.
 
     It names no stage, no prefix and no directory; all three come off the
     loaded workflow, and a stage carrying neither declaration asks for nothing.
     """
     requests: dict[str, list[str]] = {}
     asked = (
-        (stage.get("revert_check"), stage.get("may_not_create", [])),
+        (stage.get("revert_check"), baseline_pathspecs(restrictions_on(stage))),
         (stage.get("suite_census"), (stage.get("suite_census") or {}).get("paths", [])),
     )
     for declaration, prefixes in asked:
@@ -4098,8 +4421,11 @@ def _claim_support_recorded(
 # produce it next time. That is exactly the reasoning that does not apply to a
 # boundary violation, where retrying the same instructions would produce the
 # same violation again, so boundary violations still escalate — as do schema
-# violations, stage output ownership, the revert check's two escalations and
-# the clean-clone check's two.
+# violations, stage output ownership, the revert check's no-verdict escalation
+# and the clean-clone check's two. The revert check's *refusal* is not on that
+# list and never was a boundary violation of this kind: it is a verdict the
+# check has already proved harmless, so the edits are undone and the run
+# carries on rather than being routed anywhere.
 #
 # The global ceiling survives the exception, because a self-route cannot
 # alternate: when it succeeds the workflow advances, and the only way it
@@ -6672,6 +6998,22 @@ def run_story(
             if record.is_file():
                 suite_run_result = record.read_text(encoding="utf-8")
 
+        # What every revert check this run has reached decided, read back off
+        # the artifacts rather than passed along in memory, and named off each
+        # stage's own declaration wherever a stage carries one — so no stage
+        # name and no artifact name is written here and a workflow declaring no
+        # revert check renders None. A stage is named beside its record because
+        # more than one stage can declare the check and a reader has to be able
+        # to tell whose edits were undone.
+        revert_records = [
+            f"{stage_name}:\n{(run_dir / artifact).read_text(encoding='utf-8')}"
+            for stage_name, artifact in (
+                (declaring["name"], (declaring.get("revert_check") or {}).get("result"))
+                for declaring in stages
+            )
+            if artifact and (run_dir / artifact).is_file()
+        ]
+
         context = context_assembler.build_context(
             story_text=story_text,
             story=reading.parsed,
@@ -6688,6 +7030,7 @@ def run_story(
             self_route_result=self_route_result,
             correction_pass_result=correction_pass_result,
             suite_run_result=suite_run_result,
+            revert_check_result="\n".join(revert_records) or None,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
@@ -7021,11 +7364,14 @@ def run_story(
             # way blocked paths are read from the rules. A story may lift a
             # declared prefix for one stage; the grant is recorded so the
             # routing stays reconstructable from events.log.
-            # The enforced list stays whole; a grant is an exemption on the
-            # paths it covers rather than the removal of a prefix, so a story
-            # granting one file beneath a prefix leaves the rest of that
-            # prefix governed. One event per grant whatever its granularity.
-            enforced = list(stage.get("may_not_create", []))
+            # The stage's restrictions arrive whole, off the one derivation
+            # plan time reads, so no declaration key and no sense conditional
+            # is read here: whether a restriction governs a path is the
+            # restriction's decision. A grant is an exemption on the paths it
+            # covers rather than the removal of a restriction, so a story
+            # granting one file leaves the rest of what that restriction
+            # governs governed. One event per grant whatever its granularity.
+            enforced = restrictions_on(stage)
             exempt = granted_paths(reading.parsed, name)
             for granted in exempt:
                 append_event(
@@ -7039,8 +7385,8 @@ def run_story(
                 return _escalate(
                     run_dir,
                     state,
-                    f"{name} created {ownership.path}, which it declared it "
-                    f"must not create under {ownership.prefix}",
+                    f"{name} created {ownership.path}, which the workflow "
+                    f"does not permit: {ownership.restriction.wording}",
                     target_root=target_root,
                     harness_root=harness_root,
                     duration_seconds=elapsed(),
@@ -7061,7 +7407,7 @@ def run_story(
                 else GovernedEdits((), ())
             )
             if edits.paths:
-                prefixes = ", ".join(edits.prefixes)
+                governed = "; ".join(edits.wordings)
                 listed = ", ".join(edits.paths)
                 decided = revert_check(
                     run_dir,
@@ -7073,33 +7419,53 @@ def run_story(
                     stage_name=name,
                     nomination=nominated_test(run_dir, record_name),
                 )
-                # The escalation is on a check that reached no verdict, not on
-                # one that did not run: since the nomination can permit these
-                # edits without the configured test command being run at all,
-                # `ran` false is no longer the same question as "decided
-                # nothing", and reading it as one would escalate a permission.
+                # Two dispositions, and they answer different questions.
+                #
+                # A check that reached no verdict escalates: nothing was
+                # proved, so nothing may be undone. That is not the same
+                # question as a check that did not *run* — since the nomination
+                # can permit these edits without the configured test command
+                # being run at all, `ran` false would escalate a permission.
+                #
+                # A refusal does not escalate, because it is the one verdict
+                # the harness has already proved harmless: the check built a
+                # clone with exactly these paths restored to what the stage
+                # found and watched the suite pass there. Reproducing that
+                # content in the working tree reproduces the tree the proof was
+                # taken on, so the coordinator restores the offending paths
+                # from the stage's baseline, records what it undid and what it
+                # discarded, and the run continues. A stopped run over a case
+                # the harness has proved harmless is the failure; the record
+                # beside the stage's own attestation is the correction.
                 if decided.permitted is None:
                     return _escalate(
                         run_dir,
                         state,
-                        f"the revert check on {name}'s edits ({listed}) under "
-                        f"{prefixes} could not run: {decided.result.reason}",
+                        f"the revert check on {name}'s edits ({listed}), "
+                        f"governed by {governed}, could not run: "
+                        f"{decided.result.reason}",
                         target_root=target_root,
                         harness_root=harness_root,
                         duration_seconds=elapsed(),
                     )
                 if not decided.permitted:
-                    return _escalate(
+                    reverted = revert_refused_edits(
                         run_dir,
-                        state,
-                        f"{name} edited {listed} under {prefixes}, which it "
-                        f"declared it must not create under, and the suite "
-                        f"still passes with those edits reverted",
-                        target_root=target_root,
-                        harness_root=harness_root,
-                        duration_seconds=elapsed(),
+                        target_root,
+                        edits.paths,
+                        baseline_dir,
+                        declaration.get("discarded"),
                     )
-                _revert_check_permitted(run_dir, name, revert_artifact, edits)
+                    _record_revert_check(
+                        run_dir,
+                        revert_artifact,
+                        replace(decided, reverted=reverted),
+                    )
+                    _revert_check_reverted(
+                        run_dir, name, revert_artifact, edits, reverted
+                    )
+                else:
+                    _revert_check_permitted(run_dir, name, revert_artifact, edits)
 
         # The suite census, declared like the checks above it: one key names
         # the artifact and turns the check on, so no stage name appears here

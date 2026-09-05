@@ -240,8 +240,23 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
     names the offending clause, and states the restriction in the workflow's
     own words, so a planner repairing it can see both the sentence written and
     the rule it was reaching for.
+
+    Only creation-sense restrictions are scanned, because only they have an
+    over-strict restatement to report. What this reports is a sentence that
+    names a stage together with a prefix without scoping it to creation — a
+    stage restricted only from *creating* under a path may still modify one
+    there, so an unscoped sentence demands more than the workflow does. A
+    confinement makes no such distinction: it governs everything outside the
+    prefixes it names whatever the act, so a sentence naming the stage together
+    with the prefix it is confined to restates the rule accurately and has
+    nothing over-strict in it. Reporting one would refuse a planner for writing
+    down what the workflow says.
     """
-    restrictions = story_coordinator.stage_restrictions(stages)
+    restrictions = [
+        restriction
+        for restriction in story_coordinator.stage_restrictions(stages)
+        if restriction.sense == story_coordinator.CREATE_RESTRICTION
+    ]
     problems: list[str] = []
     for field in SCANNED_FIELDS:
         for index, entry in enumerate(story.get(field, [])):
@@ -249,7 +264,8 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
             for clause in _CLAUSE_BOUNDARY.split(entry):
                 if _CREATION.search(clause):
                     continue
-                for stage, prefix in restrictions:
+                for restriction in restrictions:
+                    stage, prefix = restriction.stage, restriction.prefix
                     if (stage, prefix) in reported:
                         continue
                     if prefix in clause and _names_stage(clause, stage):
@@ -259,8 +275,7 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
                             f"the workflow does not. The clause "
                             f"{clause.strip()!r} names {stage} together with "
                             f"{prefix} without scoping it to creation, while the "
-                            f"workflow declares only: {stage} may not create "
-                            f"files under {prefix}"
+                            f"workflow declares only: {restriction.wording}"
                         )
     return problems
 
@@ -285,9 +300,10 @@ _CREATION_FAULT = (
 #: reverting_breaks_the_suite and is accepted here without a grant.
 _MODIFICATION = (
     "The target root already holds that file, so the entry describes a "
-    "modification, which the revert check governs: it restores the stage's "
-    "edits beneath that prefix and re-runs the suite, and refuses them unless "
-    "reverting them breaks it. The entry declares no such forced adaptation."
+    "modification, which the revert check governs: it restores the edits that "
+    "restriction governs and re-runs the suite, and unless reverting them "
+    "breaks it, it undoes them in the working tree and the run carries on "
+    "without them. The entry declares no such forced adaptation."
 )
 
 #: Both wordings open with this clause, identically, and a refused
@@ -326,9 +342,15 @@ def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str
     say who was meant to write one. One problem per offending entry and
     restriction.
 
-    An entry offends when its file falls beneath a prefix the entry's own
-    stage is restricted under, no grant on that stage covers the file, and it
-    is not a modification the entry declares forced. The grant short-circuits
+    An entry offends when a restriction on the entry's own stage governs its
+    file, no grant on that stage covers the file, and it is not a modification
+    the entry declares forced. Whether a restriction governs a path is the
+    restriction's decision and no sense is read here, so an entry naming a file
+    outside the stage's confinement is refused for the reason one naming a file
+    beneath its may_not_create prefix is, with the same three ways out stated
+    in the confinement's own wording rather than the creation wording. An entry
+    naming a file *at or beneath* a confinement is not refused: that is where
+    the stage may write. The grant short-circuits
     above everything else here; the declaration is read only for a path the
     target root already holds, because a claim about reverting a file that is
     not there asserts nothing and the ownership check refuses a creation
@@ -372,21 +394,20 @@ def assignment_problems(story: dict, stages: list[dict], root: Path) -> list[str
             continue
         declared = entry.get("reverting_breaks_the_suite")
         declares = isinstance(declared, str) and declared.strip() != ""
-        for stage, prefix in restrictions:
-            if stage != name or not path.startswith(prefix):
+        for restriction in restrictions:
+            if restriction.stage != name or not restriction.governs(path):
                 continue
             present = (Path(root) / path).exists()
             if present and declares:
                 continue
             fault = _MODIFICATION if present else _CREATION_FAULT
-            resolutions = _RESOLUTIONS.format(path=path, stage=stage)
+            resolutions = _RESOLUTIONS.format(path=path, stage=restriction.stage)
             if present:
                 resolutions += _DECLARATION_RESOLUTION.format(path=path)
             problems.append(
                 f"$.technical_plan.likely_file_changes[{index}]: assigns "
                 f"'{path}' to stage '{name}', which the workflow declares: "
-                f"{stage} may not create files under {prefix}. {fault} "
-                + resolutions
+                f"{restriction.wording}. {fault} " + resolutions
             )
     return problems
 

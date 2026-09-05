@@ -397,17 +397,93 @@ def test_the_verifying_stage_is_the_name_the_coordinator_keys_on():
     assert conftest.VERIFYING_STAGE in SHIPPED_NAMES
 
 
+def raw_definition() -> dict:
+    """The shipped definition as it ships, references unresolved."""
+    return json.loads((REPO_ROOT / "workflows" / "story-workflow.json")
+                      .read_text(encoding="utf-8"))
+
+
+#: The token every declaration naming the test location is written as. One
+#: substitution, so a target configuring a different location is governed
+#: there under all of them with no workflow edit.
+TESTS_DIR_TOKEN = "{{tests_dir}}"
+
+
 def test_the_implementer_may_not_create_the_configured_tests_directory():
-    """The separation the two-stage split exists for, and the one declaration in
-    this workflow that references configuration: the restriction is written as
-    `{{tests_dir}}` and resolves to what this repository configures."""
+    """The separation the two-stage split exists for, and the one configuration
+    reference in this workflow: the restriction is written as `{{tests_dir}}`
+    and resolves to what this repository configures."""
     restrictions = story_coordinator.stage_restrictions(SHIPPED_STAGES)
     tests_dir = conftest.repository_config()["tests_dir"]
-    assert restrictions == [(SHIPPED_NAMES[0], tests_dir)]
+    creation = [restriction for restriction in restrictions
+                if restriction.sense == story_coordinator.CREATE_RESTRICTION]
+    assert [(restriction.stage, restriction.prefix)
+            for restriction in creation] == [(SHIPPED_NAMES[0], tests_dir)]
     # The token, not the value, is what the file says.
-    raw = json.loads((REPO_ROOT / "workflows" / "story-workflow.json")
-                     .read_text(encoding="utf-8"))
-    assert raw["stages"][0]["may_not_create"] == ["{{tests_dir}}"]
+    assert raw_definition()["stages"][0][
+        story_coordinator.CREATE_RESTRICTION] == [TESTS_DIR_TOKEN]
+
+
+def confined_stage_declaration(definition: dict) -> dict:
+    """The stage that writes the validation, out of a definition.
+
+    Found by the restriction that confines it rather than by its name, so this
+    names no stage of its own; the assertions below then read that stage's
+    other declarations.
+    """
+    confinements = [restriction for restriction
+                    in story_coordinator.stage_restrictions(SHIPPED_STAGES)
+                    if restriction.sense == story_coordinator.CONFINEMENT]
+    (confinement,) = confinements
+    return next(stage for stage in definition["stages"]
+                if stage["name"] == confinement.stage)
+
+
+def test_the_stage_that_writes_the_validation_is_confined_to_that_location():
+    """The mirror image of the restriction above, on the other stage.
+
+    Written as the same token, so the confinement moves with the configuration
+    exactly as the create restriction does — a target keeping its tests
+    elsewhere is governed there under both with no workflow edit.
+    """
+    confinement = next(
+        restriction for restriction
+        in story_coordinator.stage_restrictions(SHIPPED_STAGES)
+        if restriction.sense == story_coordinator.CONFINEMENT)
+
+    assert confinement.prefix == conftest.repository_config()["tests_dir"]
+    assert confinement.stage != SHIPPED_NAMES[0]
+    assert confined_stage_declaration(raw_definition())[
+        story_coordinator.CONFINEMENT] == [TESTS_DIR_TOKEN]
+
+
+def test_that_stage_declares_the_revert_check_the_confinement_needs():
+    """The confinement brings its baseline with it, and the baseline is the
+    revert check's.
+
+    Without the check there is no stage baseline over the tree outside the
+    confinement, and an edit made there could be neither judged nor undone —
+    which is the evidence gap the confinement exists to close. So the two are
+    asserted together, and the artifact and the directories the check names are
+    read off the declaration rather than spelled here.
+    """
+    declaration = confined_stage_declaration(raw_definition())["revert_check"]
+
+    assert declaration["result"]
+    assert declaration["baseline"]
+    assert declaration["discarded"]
+    # The result artifact is the stage's own, not shared with another stage's.
+    others = [stage["revert_check"]["result"]
+              for stage in raw_definition()["stages"]
+              if "revert_check" in stage
+              and stage["revert_check"]["result"] != declaration["result"]]
+    assert declaration["result"] not in others
+    # And so is the directory the discarded work is kept under, or one stage's
+    # refusal would overwrite another's evidence.
+    kept = [stage["revert_check"].get("discarded")
+            for stage in raw_definition()["stages"]
+            if "revert_check" in stage]
+    assert len(kept) == len(set(kept))
 
 
 def test_every_stage_that_writes_a_changed_files_record_declares_it_as_an_output():
@@ -897,13 +973,28 @@ def test_this_deployment_declares_a_clean_clone_check_and_a_revert_check():
     """From tests/test_clean_clone_check.py and tests/test_revert_check.py.
     Both modules assert that the coordinator *runs* the check a workflow
     declares, which a built workflow states. That this deployment turns both on
-    is the configuration half."""
+    is the configuration half.
+
+    The revert check is declared on every stage this deployment governs where
+    it writes, which is what makes an edit outside a stage's lane recoverable:
+    the check is what brings the stage baseline with it. So the two lists are
+    asserted to agree rather than the check being counted, and each declaring
+    stage is asserted to name a baseline of its own to restore from.
+    """
     clean_clone = [stage for stage in SHIPPED_STAGES if "clean_clone" in stage]
-    revert_check = [stage for stage in SHIPPED_STAGES if "revert_check" in stage]
     assert len(clean_clone) == 1, [stage["name"] for stage in clean_clone]
-    assert len(revert_check) == 1, [stage["name"] for stage in revert_check]
     assert clean_clone[0]["clean_clone"]["retry_stage"] in SHIPPED_NAMES
-    assert revert_check[0]["revert_check"]["baseline"]
+
+    declaring = [stage["name"] for stage in SHIPPED_STAGES
+                 if "revert_check" in stage]
+    governed = sorted({restriction.stage for restriction
+                       in story_coordinator.stage_restrictions(SHIPPED_STAGES)})
+    assert declaring, declaring
+    assert sorted(declaring) == governed
+    for stage in SHIPPED_STAGES:
+        declaration = stage.get("revert_check")
+        if declaration is not None:
+            assert declaration["baseline"], stage["name"]
 
 
 def test_this_deployment_documents_before_it_verifies():
@@ -1017,7 +1108,13 @@ def test_the_shipped_definition_is_the_json_this_repository_holds():
                      .read_text(encoding="utf-8"))
     assert raw["name"] == SHIPPED["name"]
     assert [stage["name"] for stage in raw["stages"]] == SHIPPED_NAMES
-    resolved_keys = {"may_not_create"}
+    # Every key whose value the loader resolves against the target's
+    # configuration, read off the coordinator's own vocabulary rather than
+    # listed here — a sense added there is a sense this comparison keeps
+    # skipping rather than one it starts reporting as a mismatch between the
+    # token and the value.
+    resolved_keys = {story_coordinator.CREATE_RESTRICTION,
+                     story_coordinator.CONFINEMENT}
     for raw_stage, loaded_stage in zip(raw["stages"], SHIPPED_STAGES):
         for key in raw_stage:
             if key not in resolved_keys:

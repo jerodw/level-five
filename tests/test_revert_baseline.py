@@ -714,32 +714,37 @@ def test_the_run_records_which_run_created_path_was_reverted_and_why(
     assert record_of(target)["output_tail"]
 
 
-def test_an_additive_edit_to_a_file_created_earlier_in_the_run_is_escalated(
+def test_an_additive_edit_to_a_file_created_earlier_in_the_run_is_refused(
     target, harness_root,
 ):
     """The other half of the same decision. The retry is identical; only what
-    the implementer did to the tester's file differs."""
+    the implementer did to the tester's file differs.
+
+    The verdict is the subject; since story-106 a refusal undoes the edit and
+    the run carries on rather than stopping, so the tree the run ends on holds
+    what the baseline held for that path — the version the tester left.
+    """
     code, runner = run(
         target, harness_root,
         {WRITING: [module_only, adds_to_the_new_test],
          VALIDATING: [creates_the_passing_new_test, unchanged]},
         [FAIL, PASS],
     )
-    assert code == 2
-    assert state_of(target)["status"] == "escalated"
-    assert runner.calls == [*STAGE_NAMES, WRITING]
+    assert code == 0
+    assert runner.calls == [*STAGE_NAMES, *STAGE_NAMES]
 
     record = record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is False
     assert record["exit_code"] == 0
     assert record["paths"] == ["tests/test_new.py"]
+    assert record["reverted"]["restored"] == ["tests/test_new.py"]
 
-    events, summary = evidence(target)
-    for text in (events, summary):
-        assert WRITING in text
-        assert PREFIX in text
-        assert "tests/test_new.py" in text
+    events = (run_dir_of(target) / "events.log").read_text()
+    reverting = [line for line in events.splitlines()
+                 if "tests/test_new.py" in line and "revert" in line]
+    assert reverting
+    assert any(WRITING in line and PREFIX in line for line in reverting)
 
 
 def test_the_baseline_of_the_retry_holds_the_file_the_tester_left(
@@ -783,14 +788,15 @@ def test_a_forced_edit_to_a_pre_existing_governed_path_is_still_permitted(
     assert record["paths"] == ["tests/test_app.py"]
 
 
-def test_an_additive_edit_to_a_pre_existing_governed_path_is_still_escalated(
+def test_an_additive_edit_to_a_pre_existing_governed_path_is_still_refused(
     target, harness_root,
 ):
     code, _ = run(target, harness_root, {WRITING: [added_coverage]})
-    assert code == 2
+    assert code == 0
     record = record_of(target)
     assert record["permitted"] is False
     assert record["paths"] == ["tests/test_app.py"]
+    assert record["reverted"]["restored"] == ["tests/test_app.py"]
 
 
 def test_a_pre_existing_path_is_restored_to_exactly_its_head_content(
@@ -849,10 +855,10 @@ def test_a_governed_path_absent_from_the_baseline_is_deleted_in_the_clone(
 def test_the_decision_that_deletion_reaches_is_a_real_one(target, harness_root):
     """A governed path the stage itself brought into existence, recorded as a
     modification so the ownership check lets it through, is decided: nothing
-    forced either edit, and the run escalates."""
+    forced either edit, and the check refuses them."""
     code, _ = run(target, harness_root,
                   {WRITING: [fixture_and_a_test_that_needs_it]})
-    assert code == 2
+    assert code == 0
     record = record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is False
@@ -882,7 +888,7 @@ def test_skipping_that_path_instead_would_have_reported_the_opposite(
         target, TEST_COMMAND, None, tmp_path / "skipping",
         revert=["tests/conftest.py"], baseline=baseline)
 
-    assert deleting.ran is True and deleting.exit_code == 0     # escalates
+    assert deleting.ran is True and deleting.exit_code == 0     # refuses
     assert skipping.ran is True and skipping.exit_code != 0     # would permit
 
 
@@ -1123,9 +1129,10 @@ def test_a_baseline_recaptured_after_the_edit_would_have_reversed_that(
 def test_removing_the_declaration_disables_the_capture_and_the_check(
     target, tmp_path,
 ):
-    """One key, both mechanisms, no code change: the record that escalates
-    against the shipped workflow completes against the same workflow with
-    `revert_check` removed, and no baseline is taken at all."""
+    """One key, both mechanisms, no code change: the record the check refuses
+    and reverts against the probe workflow is left entirely alone against the
+    same workflow with `revert_check` removed, and no baseline is taken at
+    all."""
     workflow = probe_workflow()
     for stage in workflow["stages"]:
         stage.pop("revert_check", None)
@@ -1138,15 +1145,16 @@ def test_removing_the_declaration_disables_the_capture_and_the_check(
     assert not (run_dir / BASELINE).exists()
 
 
-def test_with_the_declaration_the_same_run_captures_and_escalates(
+def test_with_the_declaration_the_same_run_captures_and_decides(
     target, harness_root,
 ):
     """The control for the removal above."""
     code, _ = run(target, harness_root, {WRITING: [added_coverage]})
-    assert code == 2
+    assert code == 0
     run_dir = run_dir_of(target)
     assert (run_dir / ARTIFACT).exists()
     assert (run_dir / BASELINE / WRITING).is_dir()
+    assert record_of(target)["permitted"] is False
 
 
 def test_moving_the_declaration_moves_the_capture_and_the_check(
@@ -1166,7 +1174,7 @@ def test_moving_the_declaration_moves_the_capture_and_the_check(
 
     code, _ = run(target, fake_root, {WRITING: [added_coverage],
                                       VALIDATING: [module_only]})
-    assert code == 2
+    assert code == 0
     run_dir = run_dir_of(target)
     assert (run_dir / BASELINE / VALIDATING).is_dir()
     assert not (run_dir / BASELINE / WRITING).exists()
@@ -1296,7 +1304,13 @@ def test_the_granularity_limit_is_unchanged_in_the_schema_and_the_docstring():
     the only edit that passes is one appending after it. It is not a
     relaxation of the subject — what this test is about is that the
     granularity limit reads as it read, and appending to a description cannot
-    change it."""
+    change it.
+
+    Story-106 did the same to the module docstring, stating what a refused
+    verdict now does in a paragraph after the granularity statement, so the
+    docstring half is narrowed the same way and for the same reason: every
+    byte of what this test is about is still asserted verbatim and in place.
+    """
     before = json.loads(pre_story("schemas/revert-check-result.schema.json"))
     now = schema()
     assert now["description"].startswith(before["description"])
@@ -1306,7 +1320,7 @@ def test_the_granularity_limit_is_unchanged_in_the_schema_and_the_docstring():
     module = ORCHESTRATION / "story_coordinator.py"
     pre_module = pre_story("orchestration/story_coordinator.py")
     assert ast.get_docstring(
-        ast.parse(module.read_text(encoding="utf-8"))) == pre_module
+        ast.parse(module.read_text(encoding="utf-8"))).startswith(pre_module)
 
 
 def test_the_baseline_field_is_optional_and_describes_what_it_names():

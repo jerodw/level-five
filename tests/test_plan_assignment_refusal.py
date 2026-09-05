@@ -115,6 +115,7 @@ import conftest
 # deployed workflow, which is this module's own subject.
 from test_revert_check import WRITING as WRITING_STAGE  # noqa: F401
 from test_revert_check import STAGE_NAMES as RUN_STAGE_NAMES  # noqa: F401
+from test_revert_check import record_of as revert_record_of  # noqa: F401
 from test_revert_check import (  # noqa: F401 - fixtures used by name
     APP_ADDITIVE,
     TEST_APP_AT_HEAD,
@@ -173,8 +174,15 @@ WORKFLOW = conftest.shipped_workflow(HARNESS_ROOT, "story-workflow")
 STAGES = WORKFLOW["stages"]
 STAGE_NAMES = [stage["name"] for stage in STAGES]
 RESTRICTIONS = story_coordinator.stage_restrictions(STAGES)
-RESTRICTED_STAGE, RESTRICTED_PREFIX = RESTRICTIONS[0]
-RESTRICTED_STAGES = {stage for stage, _ in RESTRICTIONS}
+
+#: The restriction this section's assertions are about: a creation-sense one,
+#: selected by its sense rather than by its position, because the workflow
+#: declares more than one sense and the wording each of them is refused in is
+#: its own. The confinement gets its own section further down.
+RESTRICTION = next(restriction for restriction in RESTRICTIONS
+                   if restriction.sense == story_coordinator.CREATE_RESTRICTION)
+RESTRICTED_STAGE, RESTRICTED_PREFIX = RESTRICTION.stage, RESTRICTION.prefix
+RESTRICTED_STAGES = {restriction.stage for restriction in RESTRICTIONS}
 UNRESTRICTED_STAGE = next(n for n in STAGE_NAMES if n not in RESTRICTED_STAGES)
 UNDEFINED_STAGE = "cartographer"
 RESTRICTED_DECLARATION = next(
@@ -212,8 +220,8 @@ def test_the_workflow_this_file_reads_still_has_something_to_say():
     assert STORY_031_FILE.startswith(RESTRICTED_PREFIX)
     assert not ABSENT_ROOT.exists()
     assert not OUTSIDE_EVERY_PREFIX.startswith(RESTRICTED_PREFIX)
-    for _, prefix in RESTRICTIONS:
-        assert not OUTSIDE_EVERY_PREFIX.startswith(prefix)
+    for restriction in RESTRICTIONS:
+        assert not OUTSIDE_EVERY_PREFIX.startswith(restriction.prefix)
 
 
 # --------------------------------------------------------------------------
@@ -307,10 +315,50 @@ def test_a_grant_on_another_stage_does_not_suppress_it():
     assert len(plan_validation.assignment_problems(other, STAGES, ABSENT_ROOT)) == 1
 
 
+def ungoverned_by(stage: str) -> str:
+    """A path in this repository no restriction on `stage` governs.
+
+    Chosen rather than written: "outside every prefix" used to be the same
+    answer for every stage, and a confinement makes it the opposite answer —
+    outside is exactly what a confinement governs. So each stage is asked which
+    of two candidate paths its own restrictions leave alone, and the pair is on
+    opposite sides of the declared prefixes so that one of them always is.
+    """
+    restrictions = story_coordinator.restrictions_on(
+        next(declared for declared in STAGES if declared["name"] == stage))
+    for candidate in (OUTSIDE_EVERY_PREFIX, STORY_031_FILE):
+        if not any(restriction.governs(candidate)
+                   for restriction in restrictions):
+            return candidate
+    raise AssertionError(
+        f"every candidate path is governed for {stage}, so this stage has no "
+        f"ungoverned assignment to make and the row below would be vacuous")
+
+
 @pytest.mark.parametrize("stage", STAGE_NAMES)
-def test_a_file_outside_every_declared_prefix_yields_nothing_whatever_the_stage(stage):
-    outside = plan(entry(OUTSIDE_EVERY_PREFIX, stage))
-    assert plan_validation.assignment_problems(outside, STAGES, ABSENT_ROOT) == []
+def test_a_file_no_restriction_on_that_stage_governs_yields_nothing(stage):
+    """One row per stage, each naming a file that stage's own restrictions
+    leave alone. The control is the row beneath, where the same stage is
+    assigned a file its restrictions do govern and is reported."""
+    ungoverned = plan(entry(ungoverned_by(stage), stage))
+    assert plan_validation.assignment_problems(
+        ungoverned, STAGES, ABSENT_ROOT) == []
+
+
+@pytest.mark.parametrize("stage", sorted(RESTRICTED_STAGES))
+def test_a_file_a_restriction_on_that_stage_governs_is_reported(stage):
+    """The control for the row above, over the stages that carry a
+    restriction: the same two candidate paths, and the one its own restriction
+    governs is the one that offends."""
+    restrictions = story_coordinator.restrictions_on(
+        next(declared for declared in STAGES if declared["name"] == stage))
+    governed = next(
+        candidate for candidate in (OUTSIDE_EVERY_PREFIX, STORY_031_FILE)
+        if any(restriction.governs(candidate) for restriction in restrictions))
+    problems = plan_validation.assignment_problems(
+        plan(entry(governed, stage)), STAGES, ABSENT_ROOT)
+    assert len(problems) == 1, problems
+    assert governed in problems[0]
 
 
 @pytest.mark.parametrize(
@@ -393,7 +441,8 @@ def literals_named(text: str) -> list[str]:
     """Every stage name and restricted prefix appearing in executable source."""
     body = executable_source(text)
     found = [name for name in STAGE_NAMES if name in body]
-    found += [prefix for _, prefix in RESTRICTIONS if prefix in body]
+    found += [restriction.prefix for restriction in RESTRICTIONS
+              if restriction.prefix in body]
     return found
 
 
@@ -790,24 +839,30 @@ def test_the_three_readers_all_go_through_the_one_matcher(monkeypatch,
     """
     granted = [FILE_GRANT]
     run_dir = changed_record(tmp_path, created=[FILE_GRANT], modified=[FILE_GRANT])
-    prefixes = [RESTRICTED_PREFIX]
+    # The two run-time readers take the stage's restrictions rather than bare
+    # prefixes, so the restriction is derived here through the same accessor
+    # the enforcement site reads — which is also what keeps this call the one
+    # the coordinator makes rather than a shape only this test uses.
+    restrictions = story_coordinator.restrictions_on(
+        {"name": RESTRICTED_STAGE,
+         story_coordinator.CREATE_RESTRICTION: [RESTRICTED_PREFIX]})
     granted_story = with_grant(plan(entry(FILE_GRANT, RESTRICTED_STAGE)), FILE_GRANT)
 
     # With the real matcher, all three say "covered".
     assert plan_validation.assignment_problems(granted_story, STAGES, ABSENT_ROOT) == []
     assert story_coordinator._ownership_violation(
-        run_dir, "changed-files.json", prefixes, granted) is None
+        run_dir, "changed-files.json", restrictions, granted) is None
     assert story_coordinator.governed_edits(
-        run_dir, "changed-files.json", prefixes, granted).paths == ()
+        run_dir, "changed-files.json", restrictions, granted).paths == ()
 
     monkeypatch.setattr(story_coordinator, "grant_covers",
                         lambda granted, path: False)
 
     assert plan_validation.assignment_problems(granted_story, STAGES, ABSENT_ROOT) != []
     assert story_coordinator._ownership_violation(
-        run_dir, "changed-files.json", prefixes, granted) is not None
+        run_dir, "changed-files.json", restrictions, granted) is not None
     assert story_coordinator.governed_edits(
-        run_dir, "changed-files.json", prefixes, granted).paths == (FILE_GRANT,)
+        run_dir, "changed-files.json", restrictions, granted).paths == (FILE_GRANT,)
 
 
 def test_the_retired_prefix_reader_is_gone_and_nothing_calls_it():
@@ -915,7 +970,8 @@ def test_a_path_level_grant_exempts_that_path_from_the_revert_check(
     """The run completes, and the granted path is never put to the check.
 
     The control is the next test: the very same edit, in the very same
-    fixture, with the grant removed — which escalates on this path.
+    fixture, with the grant removed — which puts this path to the check, is
+    refused, and has it undone.
     """
     grant(target, GRANTED_FILE)
 
@@ -926,16 +982,24 @@ def test_a_path_level_grant_exempts_that_path_from_the_revert_check(
     assert GRANTED_FILE not in reverted_paths(clone_calls)
 
 
-def test_the_same_edit_without_the_grant_escalates_on_the_revert_check(
+def test_the_same_edit_without_the_grant_is_refused_by_the_revert_check(
         target: Path, harness_root: Path, clone_calls):
-    """The control for the exemption above."""
+    """The control for the exemption above.
+
+    Without the grant the path is put to the check, the check refuses it, and
+    the coordinator undoes it — where with the grant no clone reverts it at
+    all. The verdict is what the exemption is a control against; that a
+    refusal no longer stops the run is story-106's disposition and is asserted
+    where that belongs.
+    """
     code, _ = run(target, harness_root, {WRITING_STAGE:
                                          unforced_edit_to_the_granted_file})
 
-    assert code != 0
-    reason = escalation_reason(target)
-    assert GRANTED_FILE in reason
-    assert "reverted" in reason
+    assert code == 0
+    record = revert_record_of(target)
+    assert record["permitted"] is False
+    assert GRANTED_FILE in record["paths"]
+    assert GRANTED_FILE in record["reverted"]["restored"]
     assert GRANTED_FILE in reverted_paths(clone_calls)
 
 
@@ -967,10 +1031,12 @@ def test_a_second_file_edited_beneath_the_same_prefix_is_still_reverted(
     code, _ = run(target, harness_root, {WRITING_STAGE:
                                          unforced_edits_to_both_files})
 
-    assert code != 0
-    reason = escalation_reason(target)
-    assert SECOND_FILE in reason
-    assert GRANTED_FILE not in reason
+    assert code == 0
+    record = revert_record_of(target)
+    assert record["permitted"] is False
+    assert record["paths"] == [SECOND_FILE]
+    assert GRANTED_FILE not in record["paths"]
+    assert record["reverted"]["restored"] == [SECOND_FILE]
     assert reverted_paths(clone_calls) == {SECOND_FILE}
 
 
@@ -1032,16 +1098,21 @@ def test_the_enforced_list_reaches_both_checks_unshortened(
     granted prefix outright — so a list that still holds it is this story's
     change and not an accident of the fixture.
     """
-    declared = list(RESTRICTED_DECLARATION["may_not_create"])
+    declared = list(RESTRICTED_DECLARATION[story_coordinator.CREATE_RESTRICTION])
     assert RESTRICTED_PREFIX in declared
     seen: list[tuple[str, list[str], list[str]]] = []
 
     for name in ("_ownership_violation", "governed_edits"):
         original = getattr(story_coordinator, name)
 
-        def spy(run_dir, record_name, prefixes, granted, _o=original, _n=name):
-            seen.append((_n, list(prefixes), list(granted)))
-            return _o(run_dir, record_name, prefixes, granted)
+        # The two readers take the stage's restrictions rather than bare
+        # prefixes since story-106, so what the spy records is the prefix each
+        # restriction is named for — which is the list this assertion has
+        # always been about, arriving inside the restriction that carries it.
+        def spy(run_dir, record_name, restrictions, granted, _o=original,
+                _n=name):
+            seen.append((_n, [r.prefix for r in restrictions], list(granted)))
+            return _o(run_dir, record_name, restrictions, granted)
 
         monkeypatch.setattr(story_coordinator, name, spy)
 
@@ -1097,8 +1168,17 @@ def test_the_planner_prompt_states_the_standing_test_module_convention():
 
 
 def test_the_planner_prompt_says_a_grant_may_name_a_single_path():
+    """The granularity a grant may be written at, and the advice to prefer it.
+
+    The sentence carrying the first half was rewritten when a second sense of
+    restriction arrived — a grant may now name a path outside a confinement as
+    well as one beneath a create restriction, and "beneath it" was no longer
+    true of both — so what is read for is the granularity rather than the old
+    spelling of where it sits. The claim is the one it always was: a grant may
+    name a single file or a single directory, not only the whole path.
+    """
     prompt = flowed(planner_prompt())
-    assert re.search(r"(?i)a single file or directory beneath it", prompt)
+    assert re.search(r"(?i)a single file or directory", prompt)
     assert re.search(r"(?i)narrowest grant", prompt)
 
 
@@ -1147,8 +1227,8 @@ def test_the_planner_prompt_still_names_no_stage_and_no_restricted_prefix():
 
     for name in STAGE_NAMES:
         assert not re.search(rf"\b{re.escape(name)}\b", prompt), name
-    for _, prefix in RESTRICTIONS:
-        assert prefix not in prompt, prefix
+    for restriction in RESTRICTIONS:
+        assert restriction.prefix not in prompt, restriction.prefix
 
     # Control: the same two readings over the same text with each planted.
     for planted in (RESTRICTED_STAGE, UNRESTRICTED_STAGE):
@@ -1244,13 +1324,13 @@ def test_the_clause_level_scan_is_untouched_by_this_story(tmp_path: Path):
 # story-057: the grant is required, and existence only words the message
 #
 # An entry beneath a prefix its own stage is restricted under, with no grant
-# covering it, is reported whatever the filesystem holds: both run-time checks
-# refuse the run it describes, the ownership check outright for a created file
-# and the revert check for a modification that reverts without breaking the
-# suite. What existence decides is which of those two faults the message
-# names. Every assertion below is one half of a matched pair: the same story,
-# the same entry, two roots that differ only in whether the named file is
-# there.
+# covering it, is reported whatever the filesystem holds: neither run-time
+# check lets the edit it describes stand, the ownership check by stopping the
+# run outright for a created file, and the revert check by undoing a
+# modification that reverts without breaking the suite. What existence decides
+# is which of those two faults the message names. Every assertion below is one
+# half of a matched pair: the same story, the same entry, two roots that differ
+# only in whether the named file is there.
 # ==========================================================================
 
 
@@ -1397,12 +1477,17 @@ def test_the_message_is_word_for_word_what_each_fault_says(
             "The target root holds no such file, so the entry describes a "
             "creation, which the stage output ownership check refuses outright."
         ),
+        # Reworded by story-106, which changed what a refusal *does*: the
+        # edits are undone in the working tree and the run carries on rather
+        # than stopping, and a planner reading this has to be told that an
+        # unpredicted edit of this kind is quietly lost rather than escalated.
         "modification": (
-            f"The target root already holds that file, so the entry describes "
-            f"a modification, which the revert check governs: it restores the "
-            f"stage's edits beneath that prefix and re-runs the suite, and "
-            f"refuses them unless reverting them breaks it. The entry declares "
-            f"no such forced adaptation."
+            "The target root already holds that file, so the entry describes "
+            "a modification, which the revert check governs: it restores the "
+            "edits that restriction governs and re-runs the suite, and unless "
+            "reverting them breaks it, it undoes them in the working tree and "
+            "the run carries on without them. The entry declares no such "
+            "forced adaptation."
         ),
     }
     declaring = {
@@ -1699,8 +1784,8 @@ def test_the_module_names_no_stage_and_no_prefix_in_its_prose_either():
 
     for name in STAGE_NAMES:
         assert not re.search(rf"\b{re.escape(name)}\b", module), name
-    for _, prefix in RESTRICTIONS:
-        assert prefix not in module, prefix
+    for restriction in RESTRICTIONS:
+        assert restriction.prefix not in module, restriction.prefix
 
     for planted in (RESTRICTED_STAGE, UNRESTRICTED_STAGE):
         assert re.search(rf"\b{re.escape(planted)}\b", module + f"\n{planted}\n")
@@ -2076,10 +2161,13 @@ FIXTURE_STAGES = [
     {"name": "draughtsman"},
 ]
 FIXTURE_RESTRICTIONS = story_coordinator.stage_restrictions(FIXTURE_STAGES)
-(FIXTURE_STAGE, FIXTURE_PREFIX), = FIXTURE_RESTRICTIONS
+FIXTURE_RESTRICTION, = FIXTURE_RESTRICTIONS
+FIXTURE_STAGE, FIXTURE_PREFIX = (FIXTURE_RESTRICTION.stage,
+                                 FIXTURE_RESTRICTION.prefix)
 FIXTURE_FREE_STAGE = next(
     stage["name"] for stage in FIXTURE_STAGES
-    if stage["name"] not in {name for name, _ in FIXTURE_RESTRICTIONS}
+    if stage["name"] not in {restriction.stage
+                             for restriction in FIXTURE_RESTRICTIONS}
 )
 
 #: A second fixture workflow, whose one stage is restricted under a prefix and
@@ -2149,9 +2237,9 @@ def test_the_fixture_workflow_is_one_this_repository_does_not_ship(tmp_path: Pat
     assert FIXTURE_RESTRICTIONS
     assert FIXTURE_STAGE not in STAGE_NAMES
     assert FIXTURE_FREE_STAGE not in STAGE_NAMES
-    for _, prefix in RESTRICTIONS:
-        assert not FIXTURE_PREFIX.startswith(prefix)
-        assert not prefix.startswith(FIXTURE_PREFIX)
+    for restriction in RESTRICTIONS:
+        assert not FIXTURE_PREFIX.startswith(restriction.prefix)
+        assert not restriction.prefix.startswith(FIXTURE_PREFIX)
     for path in (FIXTURE_FILE, FIXTURE_SIBLING, FIXTURE_SUBDIRECTORY,
                  FIXTURE_DEEP_FILE):
         assert path.startswith(FIXTURE_PREFIX)
@@ -2336,11 +2424,11 @@ def test_an_entry_offending_against_two_restrictions_is_reported_for_each(
                                                    root)
 
     assert len(problems) == 2, problems
-    declared = [prefix for _, prefix in
-                story_coordinator.stage_restrictions(FIXTURE_NESTED_STAGES)]
-    assert [fault_in(p, prefix) for p, prefix in zip(problems, declared)]
-    for problem, prefix in zip(problems, declared):
-        assert f"{FIXTURE_STAGE} may not create files under {prefix}" in problem
+    declared = story_coordinator.stage_restrictions(FIXTURE_NESTED_STAGES)
+    assert [fault_in(problem, restriction.prefix)
+            for problem, restriction in zip(problems, declared)]
+    for problem, restriction in zip(problems, declared):
+        assert restriction.wording in problem
 
     assert len(plan_validation.assignment_problems(
         story, FIXTURE_STAGES, root)) == 1

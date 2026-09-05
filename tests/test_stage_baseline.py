@@ -13,19 +13,22 @@ attempt-2 baseline already held attempt 1's edits, so reverting attempt 2 rolled
 the tree back only as far as attempt 1's and the suite passed.
 `pre_story_coordinator` reconstructs that code — today's coordinator with the
 attempt component and the capture-once-per-directory early exit put back — and
-`test_the_pre_story_code_escalates_on_the_same_run` drives the *identical* run
-through it and watches it escalate for exactly that reason. Every claim below
+`test_the_pre_story_code_refuses_the_same_run` drives the *identical* run
+through it and watches it refuse for exactly that reason. Every claim below
 about the two-attempt case being decided honestly is read against that
-reproduction.
+reproduction. What a refusal *does* moved with story-106 — the edit is undone
+in the working tree and the run carries on rather than stopping — so what is
+read of the pre-story reproduction is the verdict and what it threw away
+rather than an exit status.
 
 Every absence asserted here carries a control:
 
   * "the retry's edits are permitted" sits beside the same run through the
-    pre-story code, which escalates — so a check that permitted everything
-    could not produce both;
+    pre-story code, which refuses and undoes them — so a check that permitted
+    everything could not produce both;
   * "the fix did not blanket-permit retries" is its own run, in which the
     retry's unforced edit lands on a path the stage did *not* touch on attempt
-    1 and is escalated — so the permission above is about what the baseline
+    1 and is refused — so the permission above is about what the baseline
     holds, not about being on a retry;
   * "a capture does not overwrite what the baseline holds" sits beside a fresh
     capture into another run directory, which does see the edit, and beside a
@@ -562,13 +565,20 @@ OLD_CAPTURE_HEAD = """    directory = stage_baseline_dir(run_dir, baseline, stag
     directory.mkdir(parents=True)
 """
 
-NEW_FIRST_SEEN = """            destination = directory / rel
-            if destination.exists():
-                continue
-            if recapture and rel not in accounted_for:
-                continue
+#: Re-indented by story-106, which made the capture take one listing over
+#: every pathspec asked for instead of one listing per pathspec — a
+#: confinement's pathspecs are the whole tree and a subtraction from it, and
+#: unioning per-pathspec listings would add back exactly what the subtraction
+#: removed. The loop body lost a level of nesting with the outer loop, and the
+#: mutation's meaning is unchanged: it takes away the first-seen rule and the
+#: authorship narrowing this module's story added.
+NEW_FIRST_SEEN = """        destination = directory / rel
+        if destination.exists():
+            continue
+        if recapture and rel not in accounted_for:
+            continue
 """
-OLD_FIRST_SEEN = """            destination = directory / rel
+OLD_FIRST_SEEN = """        destination = directory / rel
 """
 
 #: Repointed by story-070, which moved the capture behind a comprehension
@@ -651,34 +661,39 @@ def test_reverting_only_the_second_attempts_edit_costs_nothing(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# The defect, reproduced: the pre-story code escalates on this run
+# The defect, reproduced: the pre-story code refuses this run's edit
 # --------------------------------------------------------------------------
 
 
-def test_the_pre_story_code_escalates_on_the_same_run(target, harness_root, tmp_path):
+def test_the_pre_story_code_refuses_the_same_run(target, harness_root, tmp_path):
     """story-036's failure, driven rather than argued.
 
     The attempt-2 capture holds attempt 1's edits, so reverting attempt 2's
     edit rolls the tree back only as far as attempt 1's, the suite passes, and
-    the run escalates on "the suite still passes with those edits reverted" —
-    unforced coverage the check never actually tested.
+    the check refuses forced work as unforced coverage it never actually
+    tested. The verdict is the defect; where the run goes afterwards is a
+    separate question this module has nothing to say about, and since
+    story-106 a refusal undoes the edit rather than stopping the run. What is
+    read here is therefore the verdict and the undoing, and the paired test
+    below is the identical run under today's capture, where the same edit is
+    permitted.
     """
     coordinator = pre_story_coordinator(tmp_path)
     code, runner = run(target, harness_root, TWO_ATTEMPT_SHAPE, [FAIL, PASS],
                        coordinator=coordinator)
 
-    assert code == 2
-    assert state_of(target)["status"] == "escalated"
-    assert runner.calls == [*STAGE_NAMES, WRITING]
+    assert code == 0
+    assert runner.calls == [*STAGE_NAMES, *STAGE_NAMES]
 
     record = record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is False
     assert record["exit_code"] == 0          # the suite passed with it reverted
     assert record["paths"] == ["tests/test_app.py"]
-
-    _, summary = evidence(target)
-    assert "still passes with those edits reverted" in summary
+    # And the forced work was thrown away: the tree holds what the wrong
+    # baseline said the stage started from.
+    assert record["reverted"]["restored"] == ["tests/test_app.py"]
+    assert (target / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
 
     # And the reason it asked the wrong question: two attempt-keyed
     # directories, the second already holding attempt 1's content.
@@ -735,7 +750,7 @@ def test_the_baseline_that_decision_was_made_against_holds_the_original_content(
         == TEST_APP_WITH_FREE_COVERAGE
 
 
-def test_a_retry_editing_a_path_it_did_not_touch_before_is_still_escalated(
+def test_a_retry_editing_a_path_it_did_not_touch_before_is_still_refused(
     target, harness_root,
 ):
     """The control for the permission above, and the reason it is not a
@@ -744,23 +759,23 @@ def test_a_retry_editing_a_path_it_did_not_touch_before_is_still_escalated(
     The same two-attempt run, with attempt 2's unforced edit landing on a
     governed path attempt 1 never touched. The baseline holds that path at what
     the stage first found it as — which is also what attempt 1 left it as — so
-    reverting costs nothing, the suite passes, and the run escalates. Being on
-    a retry buys nothing; what the baseline holds decides.
+    reverting costs nothing, the suite passes, and the edit is refused and
+    undone. Being on a retry buys nothing; what the baseline holds decides.
     """
     code, runner = run(target, harness_root,
                        {WRITING: [forced_repair, appends_an_unused_fixture]},
                        [FAIL, PASS])
 
-    assert code == 2
-    assert state_of(target)["status"] == "escalated"
-    assert runner.calls == [*STAGE_NAMES, WRITING]
+    assert code == 0
+    assert runner.calls == [*STAGE_NAMES, *STAGE_NAMES]
 
     record = record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is False
     assert record["paths"] == ["tests/conftest.py"]
-    _, summary = evidence(target)
-    assert "still passes with those edits reverted" in summary
+    assert record["reverted"]["restored"] == ["tests/conftest.py"]
+    assert (target / "tests" / "conftest.py").read_text() \
+        == TESTS_CONFTEST_AT_HEAD
 
 
 # --------------------------------------------------------------------------
@@ -966,6 +981,85 @@ def test_the_captured_set_is_still_tracked_plus_untracked_under_the_prefix(
 
 
 # --------------------------------------------------------------------------
+# What a confinement asks the capture for
+#
+# A create restriction is governed at or beneath each prefix and asks for
+# that. A confinement is governed everywhere *else* and asks for the
+# repository minus the prefixes it names — which is what brings a baseline
+# with it, and the half a create restriction's baseline never had to cover.
+#
+# The pair below is the whole of the difference: the same stage, the same
+# revert-check declaration, the same prefix, and the request under each sense
+# read off `stage_baseline_requests` rather than composed here.
+# --------------------------------------------------------------------------
+
+
+def declaring(sense: str, prefix: str = PREFIX) -> dict:
+    """A stage declaring the revert check and one restriction of `sense`."""
+    return {"name": WRITING, "revert_check": DECLARATION, sense: [prefix]}
+
+
+def test_a_confinement_asks_for_the_repository_outside_the_paths_it_names():
+    """Asserted against the create restriction's request, in the same test.
+
+    Neither pathspec list is written here — both are what the function
+    returned — so what this states is that the two senses ask for *different*
+    things and that the confinement's answer subtracts the prefix rather than
+    selecting it.
+    """
+    confined = story_coordinator.stage_baseline_requests(
+        declaring(story_coordinator.CONFINEMENT))[BASELINE]
+    creating = story_coordinator.stage_baseline_requests(
+        declaring(story_coordinator.CREATE_RESTRICTION))[BASELINE]
+
+    assert creating == [PREFIX]
+    assert confined != creating
+    assert any(PREFIX in pathspec and "exclude" in pathspec
+               for pathspec in confined)
+
+
+def test_the_capture_a_confinement_asks_for_holds_the_tree_outside_it(
+    target, tmp_path,
+):
+    """Driven through the real capture, not through the request alone.
+
+    The tree the fixture builds has files on both sides of the prefix, and the
+    capture is asserted to hold every one outside it and none inside — beside
+    the create restriction's capture over the same tree, which holds exactly
+    the opposite set. Two captures, one tree, and the sense is the only
+    difference between them.
+    """
+    def captured(sense: str) -> set[str]:
+        directory = story_coordinator.capture_stage_baseline(
+            tmp_path / sense, target, BASELINE, WRITING,
+            story_coordinator.stage_baseline_requests(
+                declaring(sense))[BASELINE],
+            accounted_for=set())
+        return set(contents_of(directory))
+
+    outside = captured(story_coordinator.CONFINEMENT)
+    inside = captured(story_coordinator.CREATE_RESTRICTION)
+
+    assert inside
+    assert outside
+    assert all(path.startswith(PREFIX) for path in inside)
+    assert not any(path.startswith(PREFIX) for path in outside)
+    # The tree really does hold files on both sides, so neither half above is
+    # an empty set agreeing with anything.
+    assert "src/app.py" in outside
+    assert outside & inside == set()
+
+
+def test_a_stage_declaring_neither_sense_asks_for_nothing():
+    """The control for both: the same declaration with no restriction on it
+    asks for an empty capture, so what the two above report is the restriction
+    and not the revert-check declaration alone."""
+    requests = story_coordinator.stage_baseline_requests(
+        {"name": WRITING, "revert_check": DECLARATION})
+    assert requests == {BASELINE: []}
+
+
+# --------------------------------------------------------------------------
 # A resumed run reuses the stage's stored baseline
 # --------------------------------------------------------------------------
 
@@ -1166,15 +1260,19 @@ def test_a_forced_edit_and_an_unforced_one_on_a_single_attempt_still_decide(
     assert record_of(target)["permitted"] is True
 
 
-def test_an_unforced_edit_on_a_single_attempt_is_still_escalated(
+def test_an_unforced_edit_on_a_single_attempt_is_still_refused(
     target, harness_root,
 ):
+    """The other half of the decision rule, at the same shape: refused exactly
+    when reverting leaves the suite passing — and then undone rather than
+    escalated, which is the disposition and not the verdict."""
     code, _ = run(target, harness_root,
                   {WRITING: [appends_an_unused_fixture]})
-    assert code == 2
+    assert code == 0
     record = record_of(target)
     assert record["permitted"] is False
     assert record["paths"] == ["tests/conftest.py"]
+    assert record["reverted"]["restored"] == ["tests/conftest.py"]
 
 
 # --------------------------------------------------------------------------

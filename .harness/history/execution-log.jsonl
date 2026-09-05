@@ -28,3 +28,7 @@
 {"story_id": "story-103", "status": "completed", "retry_count": 0, "timestamp": "2026-09-04 08:30:35"}
 {"story_id": "story-104", "status": "completed", "retry_count": 0, "timestamp": "2026-09-04 10:45:11"}
 {"story_id": "story-105", "status": "completed", "retry_count": 0, "timestamp": "2026-09-04 14:04:00"}
+{"story_id": "story-106", "status": "budget-stopped", "retry_count": 0, "timestamp": "2026-09-04 17:48:41"}
+{"story_id": "story-106", "status": "escalated", "retry_count": 0, "timestamp": "2026-09-04 17:48:41"}
+{"story_id": "story-106", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-04 21:13:29"}
+{"story_id": "story-106", "status": "completed", "retry_count": 0, "timestamp": "2026-09-04 21:19:18"}

@@ -222,6 +222,21 @@ run added to a configured architecture document makes about other stories,
 and whether anything the repository tracks could support them:
 {{claim_support_result}}
 
+Revert check result — the coordinator's record, one block per stage that
+declares the check, of what that stage changed outside the paths the workflow
+lets it write freely, and what the check decided. A `permitted` of true means
+the suite failed with those edits reverted, so the change forced them and they
+stand. A `reverted` block means the opposite: the suite passed without them,
+so the coordinator undid them in the working tree and the run carried on, and
+the tree you are judging does not hold them. The stage's own version of each
+undone path is kept in the run directory under the directory named there, and
+the stage's changed-files record still names the edit as the stage wrote it —
+that record is never rewritten, so a path named there and listed under
+`reverted` is one the run does not carry. Judge the tree, and treat a reverted
+edit as a fact about the run worth reporting rather than as a scope violation
+by the stage:
+{{revert_check_result}}
+
 Implementation summary:
 {{implementation_summary}}
 

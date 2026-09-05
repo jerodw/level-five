@@ -124,11 +124,15 @@ do_not_modify list need not repeat them:
 
 {{blocked_paths}}
 
-The workflow definition stops some stages from creating files under some
-paths, because new validation belongs to the stage that validates rather
-than the stage being validated:
+The workflow definition restricts where some stages may write, because new
+validation belongs to the stage that validates rather than the stage being
+validated, and because a stage that writes the validation should not quietly
+change the thing it is validating. Each line below states one restriction in
+the workflow's own words: one kind stops a stage creating files under a path,
+and another confines a stage's writes to the paths it names, so a path outside
+all of them is what that restriction governs:
 
-{{stage_create_restrictions}}
+{{stage_path_restrictions}}
 
 Restate an injected restriction exactly as the workflow declares it, or not
 at all. A task, acceptance criterion or verification requirement that
@@ -149,20 +153,24 @@ main change, so the stage that writes the code cannot run the new module
 itself; nothing enforces the convention, and what holds is the refusal
 below.
 
-A likely_file_changes entry naming a file beneath a restricted path,
-assigned to the very stage restricted there, needs something beside it saying
-what makes the run acceptable, and what that is depends on the file. Predict
-those edits rather than leaving them out; an entry carrying nothing is
-refused when the session ends, and the problem names the file, the stage, the
-prefix and the ways out.
+A likely_file_changes entry naming a file one of the restrictions above
+governs, assigned to the very stage that restriction is on, needs something
+beside it saying what makes the run acceptable, and what that is depends on
+the file. Predict those edits rather than leaving them out; an entry carrying
+nothing is refused when the session ends, and the problem names the file, the
+stage, the restriction in its own words and the ways out.
 
 If the file is not in the target repository, the entry describes a creation
 the stage may not make, and nothing rescues it: reassign the file to a stage
 that may own it, or declare a stage_exceptions grant naming it.
 
 If the file is already there, the entry describes a modification, which the
-revert check governs at run time: it reverts the stage's edits beneath that
-prefix, re-runs the suite, and permits them exactly when reverting breaks it.
+revert check governs at run time: it reverts the edits that restriction
+governs, re-runs the suite, and permits them exactly when reverting breaks it.
+Where reverting leaves the suite green the run is not stopped — the edits are
+simply undone in the working tree, the stage's own versions are kept in the
+run directory, and the run carries on without them, which means an
+unpredicted edit of this kind is silently lost rather than escalated.
 An implementation change, or a change to comments alone, never breaks it, so
 one of those needs a grant. A test adaptation forced by a deliberate change
 elsewhere in the same story does break it, and that entry needs no grant —
@@ -180,17 +188,18 @@ A stage_exceptions entry lifts one of those restrictions for one story,
 which is what a story whose own deliverable is a test suite needs.
 
 Do not add one without asking the developer first. The stage must be a
-stage the workflow defines, and the create path must be one that stage
-is actually restricted from creating — either the whole restricted path or
-a single file or directory beneath it. A grant naming one path exempts that
-path alone and leaves the rest governed, so prefer the narrowest grant that
-does the job. If the stage or the path is wrong, l5-run refuses to run the
-story at all. Use reason to say why this story needs the restriction
-lifted:
+stage the workflow defines, and the create path must be one that stage's own
+restriction actually governs — beneath a restricted path where the stage may
+not create there, or outside the paths it is confined to where it is confined
+— naming either the whole path or a single file or directory. A grant naming
+one path exempts that path alone and leaves the rest governed, so prefer the
+narrowest grant that does the job.
+If the stage or the path is wrong, l5-run refuses to run the story at all.
+Use reason to say why this story needs the restriction lifted:
 
 	stage_exceptions:
 	  - stage: <stage the exception applies to>
-	    create: <path prefix that stage is normally not allowed to create under>
+	    create: <path that stage's own restriction normally governs>
 	    reason: <why this story needs the restriction lifted>
 
 After writing the artifact, tell the developer the story id.

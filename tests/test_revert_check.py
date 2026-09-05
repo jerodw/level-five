@@ -346,6 +346,10 @@ class Runner:
         self.edits = edits
         self.records: dict[str, dict] = {}
         self.calls: list[str] = []
+        #: What each stage was actually handed, so an assertion about a
+        #: rendered prompt reads the run's own render rather than rebuilding
+        #: one beside it.
+        self.prompts: dict[str, str] = {}
 
     def _record(self, stage: str) -> dict:
         edit = self.edits.get(stage)
@@ -357,6 +361,7 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
         self.calls.append(stage)
+        self.prompts[stage] = prompt
         if stage == WRITING:
             write_json(self.run_dir / conftest.CHANGED_FILES, self._record(stage))
             write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
@@ -554,7 +559,14 @@ def test_the_added_test_passes_against_the_module_before_and_after(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# A forced edit is permitted; free coverage is escalated
+# A forced edit is permitted; free coverage is undone and the run carries on
+#
+# The refusal used to stop the run. It no longer does, and that is not
+# leniency: reaching a refusal means the check built a clone with exactly
+# those paths restored to what the stage found and watched the suite pass in
+# it, so undoing them in the working tree reproduces a tree the harness has
+# already proved good. What still stops a run is a check that reached no
+# verdict, which the section further down is about.
 # --------------------------------------------------------------------------
 
 
@@ -584,16 +596,65 @@ def test_the_run_records_why_the_forced_edit_was_permitted(target, harness_root)
     assert record_of(target)["output_tail"]
 
 
-def test_an_edit_that_only_adds_coverage_is_escalated(target, harness_root):
+def test_an_edit_that_only_adds_coverage_is_reverted_and_the_run_continues(
+    target, harness_root,
+):
+    """The refusal, and what it now does.
+
+    The verdict is unchanged — the suite passes with the edit reverted, so
+    nothing forced it — and the disposition is the whole of what moved: the
+    run reaches every later stage instead of stopping at the one that made the
+    edit. Its control is the permitted case above, which reaches the same
+    stages by having earned them.
+    """
     code, runner = run(target, harness_root, {WRITING: added_coverage})
-    assert code == 2
-    assert state_of(target)["status"] == "escalated"
-    assert runner.calls == [WRITING]
+    assert code == 0
+    assert state_of(target)["status"] == "completed"
+    assert runner.calls == STAGE_NAMES
 
     record = record_of(target)
     assert record["permitted"] is False
     assert record["exit_code"] == 0
     assert record["paths"] == ["tests/test_app.py"]
+
+
+def test_the_reverted_path_holds_what_the_stage_baseline_captured(target,
+                                                                  harness_root):
+    """The tree after the revert is the tree the proof was taken on.
+
+    Read off the working tree rather than off the record, and asserted against
+    the content the file held before the stage ran — which is what the clone
+    the check passed on carried. The ungoverned half of the same record is
+    asserted to have survived, so this is the governed paths being restored
+    rather than the whole change being thrown away.
+    """
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 0
+
+    assert (target / "tests" / "test_app.py").read_text(
+        encoding="utf-8") == TEST_APP_AT_HEAD
+    assert (target / "src" / "app.py").read_text(
+        encoding="utf-8") == APP_ADDITIVE
+
+
+def test_the_record_says_what_was_undone_and_the_stages_own_record_does_not(
+    target, harness_root,
+):
+    """The correction sits beside the attestation rather than inside it.
+
+    An attestation is not rewritten behind its author, so the stage's
+    changed-files record still names the edit exactly as the stage wrote it,
+    and the revert-check record is where a reader learns it no longer stands.
+    """
+    _, runner = run(target, harness_root, {WRITING: added_coverage})
+
+    reverted = record_of(target)["reverted"]
+    assert reverted["restored"] == ["tests/test_app.py"]
+    assert reverted["removed"] == []
+
+    written = json.loads(
+        (run_dir_of(target) / conftest.CHANGED_FILES).read_text())
+    assert written == runner.records[WRITING]
+    assert "tests/test_app.py" in written["modified"]
 
 
 def test_a_deleted_governed_path_the_change_broke_is_permitted(target, harness_root):
@@ -604,29 +665,43 @@ def test_a_deleted_governed_path_the_change_broke_is_permitted(target, harness_r
     assert record["paths"] == ["tests/test_app.py"]
 
 
-def test_deleting_a_governed_path_that_still_passes_is_escalated(target, harness_root):
+def test_a_refused_deletion_puts_the_file_back(target, harness_root):
+    """The deletion half of the disposition: restored, not merely un-refused."""
     code, _ = run(target, harness_root, {WRITING: deleted_passing_test})
-    assert code == 2
+    assert code == 0
     record = record_of(target)
     assert record["permitted"] is False
     assert record["paths"] == ["tests/test_extra.py"]
+    assert record["reverted"]["restored"] == ["tests/test_extra.py"]
+
+    restored = target / "tests" / "test_extra.py"
+    assert restored.is_file()
+    assert restored.read_text(encoding="utf-8") == TEST_EXTRA_AT_HEAD
 
 
-def test_the_escalation_names_the_stage_the_prefix_and_the_paths(target, harness_root):
-    assert run(target, harness_root, {WRITING: added_coverage})[0] == 2
-    events, summary = evidence(target)
-    for text in (events, summary):
-        assert WRITING in text
-        assert PREFIX in text
-        assert "tests/test_app.py" in text
+def test_the_revert_event_names_the_stage_the_restriction_and_the_paths(
+    target, harness_root,
+):
+    """What a reader of the event stream can see, without the run stopping.
+
+    The run completes, so there is no escalation summary to carry this — the
+    event log is the whole of the record, which is why all three are asserted
+    of it.
+    """
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 0
+    events = (run_dir_of(target) / "events.log").read_text()
+    reverting = [line for line in events.splitlines()
+                 if "tests/test_app.py" in line and "revert" in line]
+    assert reverting
+    assert any(WRITING in line and PREFIX in line for line in reverting)
 
 
-def test_the_escalation_does_not_increment_retry_count(target, harness_root):
-    """It escalates the way the ownership violation beside it does, not the
-    way a failed verification does."""
-    assert run(target, harness_root, {WRITING: added_coverage})[0] == 2
+def test_a_reverted_run_leaves_the_retry_count_where_it_was(target, harness_root):
+    """Nothing was retried and nothing failed: the stage's work stands minus
+    the part the suite did not need."""
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 0
     state = state_of(target)
-    assert state["status"] == "escalated"
+    assert state["status"] == "completed"
     assert state["retry_count"] == 0
 
 
@@ -665,8 +740,9 @@ def test_the_same_run_with_a_governed_path_does_build_a_clone_and_write_one(
 
 
 def test_removing_the_declaration_disables_the_check(target, tmp_path, clone_calls):
-    """The record that escalates against the shipped workflow completes
-    against the same workflow with one key removed - no code change."""
+    """The record the check refuses and reverts against the built workflow is
+    left entirely alone against the same workflow with one key removed — no
+    code change, no clone reverting anything, and no record written."""
     workflow = loaded_workflow()
     for stage in workflow["stages"]:
         stage.pop("revert_check", None)
@@ -695,16 +771,20 @@ def test_moving_the_declaration_moves_the_check(target, tmp_path):
     # edit under src/ is the one decided, and nothing forced it.
     code, runner = run(target, fake_root, {WRITING: added_coverage,
                                            VALIDATING: nothing_governed})
-    assert code == 2
-    assert runner.calls == [WRITING, VALIDATING]
+    assert code == 0
+    assert runner.calls == STAGE_NAMES
     record = record_of(target)
     assert record["permitted"] is False
+    # The path decided is the one the moved declaration governs, and the
+    # implementer's edit under the prefix the declaration left behind is not
+    # decided at all — which is the whole of "the check follows the
+    # declaration".
     assert record["paths"] == ["src/app.py"]
-    events, summary = evidence(target)
-    for text in (events, summary):
-        assert VALIDATING in text
-        assert "src/" in text
-        assert "src/app.py" in text
+    events = (run_dir_of(target) / "events.log").read_text()
+    reverting = [line for line in events.splitlines()
+                 if "src/app.py" in line and "revert" in line]
+    assert reverting
+    assert any(VALIDATING in line and "src/" in line for line in reverting)
 
 
 # --------------------------------------------------------------------------
@@ -923,9 +1003,19 @@ def test_a_story_granting_the_prefix_is_not_subject_to_the_check_on_it(
     assert clone_calls == [()]
 
 
-def test_without_the_grant_the_same_record_escalates(target, harness_root):
-    """The control for the grant: the story is the only difference."""
-    assert run(target, harness_root, {WRITING: added_coverage})[0] == 2
+def test_without_the_grant_the_same_record_is_checked_and_refused(target,
+                                                                  harness_root):
+    """The control for the grant: the story is the only difference.
+
+    A grant exempts the path from the check, so no record is written and no
+    clone reverting it is built. Without the grant the check runs, refuses,
+    and the edit is undone — which is a different outcome from the grant's
+    silence even though neither stops the run.
+    """
+    assert run(target, harness_root, {WRITING: added_coverage})[0] == 0
+    record = record_of(target)
+    assert record["permitted"] is False
+    assert record["reverted"]["restored"] == ["tests/test_app.py"]
 
 
 # --------------------------------------------------------------------------
@@ -1081,35 +1171,81 @@ def test_the_written_record_satisfies_the_schema(target, harness_root):
     assert schema_validator.validate(incomplete, schema) != []
 
 
-def test_nothing_in_orchestration_reads_the_record_back(target, harness_root):
-    """It is evidence, like clean-clone-result.json and retry-history.json.
-    The control is clean-clone-result.json, which orchestration *does* name -
-    so a scan that had stopped matching anything would fail here."""
+def test_no_module_in_orchestration_names_the_record(target, harness_root):
+    """The artifact's name is the workflow's, so no module may spell it.
+
+    The coordinator does now read the record back — a stage that judges the
+    run is given it — but it reaches it through the declaring stage's own
+    declaration rather than through a name written in the source, which is
+    what this scan is about. The control is clean-clone-result.json, which
+    orchestration *does* name, so a scan that had stopped matching anything
+    would fail here.
+    """
     named = {module.name: module.read_text(encoding="utf-8")
              for module in sorted(ORCHESTRATION.glob("*.py"))}
     assert not [name for name, text in named.items() if ARTIFACT in text]
     assert [name for name, text in named.items() if "clean-clone-result.json" in text]
 
 
-def test_the_record_is_not_injected_into_any_stage_prompt(target, harness_root):
-    """Routing and context are the two ways a record could become state."""
+def test_the_record_is_injected_only_where_the_coordinator_passes_it(target,
+                                                                     harness_root):
+    """The assembler reads no run-directory file for this one.
+
+    Every other record in the context is read off the run directory by a fixed
+    name; this one cannot be, because the file it lives in is named by the
+    workflow rather than by the harness. So the assembler takes it as an
+    argument, and a call that does not pass it renders nothing — which is what
+    the first half asserts, beside the same call passing one, which renders it.
+    The control beneath is the clean-clone record, read off the run directory
+    by its fixed name, so "not read here" is this record and not the reader
+    having stopped working.
+    """
     assert run(target, harness_root, {WRITING: forced_repair})[0] == 0
-    context = context_assembler.build_context(
-        story_text=STORY,
-        story={"acceptance_criteria": []},
-        run_dir=run_dir_of(target),
-        target_root=target,
-        harness_root=REPO_ROOT,
-        config=harness_config.load_config(target),
-        rules=harness_config.load_rules(REPO_ROOT),
-        workflow=WORKFLOW,
-        retry_count=0,
-    )
-    injected = {key: value for key, value in context.items()
-                if value and "revert" in str(value) and not key.endswith("_schema")}
-    assert injected == {}
-    # The control: the clean-clone record is injected, by the key that names it.
-    assert context["clean_clone_result"]
+    record = (run_dir_of(target) / ARTIFACT).read_text(encoding="utf-8")
+
+    def context_with(**extra) -> dict:
+        return context_assembler.build_context(
+            story_text=STORY,
+            story={"acceptance_criteria": []},
+            run_dir=run_dir_of(target),
+            target_root=target,
+            harness_root=REPO_ROOT,
+            config=harness_config.load_config(target),
+            rules=harness_config.load_rules(REPO_ROOT),
+            workflow=WORKFLOW,
+            retry_count=0,
+            **extra,
+        )
+
+    assert context_with()["revert_check_result"] is None
+    assert context_with(revert_check_result=record)["revert_check_result"] == record
+    # The control: the clean-clone record is read off the run directory.
+    assert context_with()["clean_clone_result"]
+
+
+def test_a_run_hands_the_record_to_the_stage_that_judges_it(target, harness_root):
+    """Observed on the prompt the run actually rendered, not on the assembler.
+
+    A reverted edit is a fact about the run the judging stage has to be able to
+    see, since the tree it judges no longer holds the edit the stage's own
+    changed-files record still names. Its control is the test beneath, which is
+    the same reading of the same prompt from a run where no path was governed
+    at all.
+    """
+    _, runner = run(target, harness_root, {WRITING: added_coverage})
+    assert record_of(target)["reverted"]["restored"] == ["tests/test_app.py"]
+
+    judged = runner.prompts[VERIFYING]
+    assert "restored" in judged
+    assert "tests/test_app.py" in judged
+
+
+def test_a_run_with_nothing_governed_hands_that_stage_no_record(target,
+                                                                harness_root):
+    """The control: no check ran, so there is no record and nothing rendered."""
+    _, runner = run(target, harness_root, {WRITING: nothing_governed})
+    assert not (run_dir_of(target) / ARTIFACT).exists()
+    assert "restored" not in runner.prompts[VERIFYING]
 
 
 # --------------------------------------------------------------------------
@@ -1518,22 +1654,24 @@ def test_a_refusal_is_still_a_refusal_and_no_nomination_makes_it_a_permission(
 
     This is the case the whole mechanism has to not break: added coverage,
     which reverting costs nothing, and a nomination that establishes nothing.
-    The suite passes with the edits reverted and the run escalates, exactly as
-    it does with no nomination at all.
+    The suite passes with the edits reverted and the edits are undone, exactly
+    as they are with no nomination at all — the disposition applies to the
+    verdict however the verdict was reached.
     """
     enable_selection(target)
     code, runner = run(target, harness_root,
                        {WRITING: with_nomination(added_coverage,
                                                  NOMINATION_UNTOUCHED)})
-    assert code == 2
-    assert state_of(target)["status"] == "escalated"
-    assert runner.calls == [WRITING]
+    assert code == 0
+    assert state_of(target)["status"] == "completed"
+    assert runner.calls == STAGE_NAMES
 
     record = record_of(target)
     assert record["ran"] is True
     assert record["exit_code"] == 0
     assert record["permitted"] is False
     assert record["nomination"]["short_circuited"] is False
+    assert record["reverted"]["restored"] == ["tests/test_app.py"]
 
 
 def test_a_nomination_that_fails_on_the_tree_the_stage_left_falls_through(

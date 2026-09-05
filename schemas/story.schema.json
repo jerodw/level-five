@@ -157,7 +157,7 @@
           },
           "create": {
             "type": "string",
-            "description": "A repository-relative path that stage may create, at or beneath one of the prefixes in that stage's may_not_create list. Naming the whole prefix exempts everything beneath it, exactly as it always has; naming a single file exempts that file alone, leaving every other path beneath the prefix governed. A value ending in a slash is read as a directory and covers every path beneath it; any other value covers exactly and only itself. A value beneath none of that stage's declared prefixes is refused, because it grants nothing."
+            "description": "A repository-relative path that stage may write, and it must be a value one of that stage's own path restrictions governs — which is the same question the ownership check and the revert check ask of a path, so a grant lifts exactly what those checks would otherwise decide. Under a may_not_create declaration that means a value at or beneath one of the prefixes it names; under a may_only_change declaration it means a value outside every prefix it names, which is where that stage's writes are governed. Naming the whole prefix exempts everything beneath it, exactly as it always has; naming a single file exempts that file alone, leaving every other path that restriction governs governed. A value ending in a slash is read as a directory and covers every path beneath it; any other value covers exactly and only itself. A value no restriction on that stage governs is refused, because it grants nothing."
           },
           "reason": {
             "type": "string",

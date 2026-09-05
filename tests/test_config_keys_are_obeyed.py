@@ -880,8 +880,16 @@ class RecordingRunner:
                 "status": "passed", "tests_written": 1, "tests_run": 1,
                 "tests_passed": 1, "tests_failed": 0, "failures": [],
             })
+            # Written at the location the *target* configures rather than at a
+            # literal, because that is where this stage may write: the workflow
+            # confines it to the configured test location, and a record naming
+            # somewhere else is governed. A fixture whose subject is some other
+            # configuration key would otherwise have its run stopped by a
+            # check it has nothing to say about.
+            location = harness_config.load_config(Path(cwd)).get(
+                "tests_dir", "tests/")
             _write_json(self.run_dir / "tester-changed-files.json",
-                        {"modified": [], "created": ["tests/test_app.py"],
+                        {"modified": [], "created": [f"{location}test_app.py"],
                          "deleted": []})
         elif stage == "verifier":
             _write_json(self.run_dir / "verification-result.json", PASS_VERDICT)
@@ -2192,8 +2200,10 @@ def test_tests_dir_is_the_location_the_workflow_and_the_prompt_are_governed_at(
     run = complete_run(tmp_path)
     workflow = harness_config.load_workflow(run.harness, FIXTURE_WORKFLOW,
                                             run.config)
-    assert story_coordinator.stage_restrictions(workflow["stages"]) == [
-        ("implementer", "xyzzy-checks/")]
+    restrictions = story_coordinator.stage_restrictions(workflow["stages"])
+    assert restrictions
+    assert {restriction.prefix for restriction in restrictions} == {
+        "xyzzy-checks/"}
     assert "xyzzy-checks/" in run.prompt_for("tester")
     # The definition itself names no directory: what the restriction resolves
     # to is the configuration's answer and nothing else.

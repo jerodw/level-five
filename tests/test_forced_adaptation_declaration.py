@@ -83,6 +83,7 @@ from test_revert_check import (  # noqa: F401 - fixtures used by name
     append_to_story,
     clone_calls,
     harness_root,
+    record_of,
     run,
     run_dir_of,
     target,
@@ -118,10 +119,13 @@ FIXTURE_STAGES = [
     {"name": "engraver"},
 ]
 FIXTURE_RESTRICTIONS = story_coordinator.stage_restrictions(FIXTURE_STAGES)
-(FIXTURE_STAGE, FIXTURE_PREFIX), = FIXTURE_RESTRICTIONS
+FIXTURE_RESTRICTION, = FIXTURE_RESTRICTIONS
+FIXTURE_STAGE, FIXTURE_PREFIX = (FIXTURE_RESTRICTION.stage,
+                                 FIXTURE_RESTRICTION.prefix)
 FIXTURE_FREE_STAGE = next(
     stage["name"] for stage in FIXTURE_STAGES
-    if stage["name"] not in {name for name, _ in FIXTURE_RESTRICTIONS}
+    if stage["name"] not in {restriction.stage
+                             for restriction in FIXTURE_RESTRICTIONS}
 )
 
 #: A path beneath the governed prefix that the holding root below carries, and
@@ -212,9 +216,9 @@ def test_the_fixture_workflow_is_one_this_repository_does_not_ship(tmp_path: Pat
     assert shipped_restrictions, "the shipped workflow declares no restriction"
     assert FIXTURE_STAGE not in shipped_names
     assert FIXTURE_FREE_STAGE not in shipped_names
-    for _, prefix in shipped_restrictions:
-        assert not FIXTURE_PREFIX.startswith(prefix)
-        assert not prefix.startswith(FIXTURE_PREFIX)
+    for restriction in shipped_restrictions:
+        assert not FIXTURE_PREFIX.startswith(restriction.prefix)
+        assert not restriction.prefix.startswith(FIXTURE_PREFIX)
 
     for path in (GOVERNED_FILE, UNWRITTEN_FILE):
         assert path.startswith(FIXTURE_PREFIX)
@@ -698,14 +702,12 @@ def test_story_056s_artifact_with_its_grants_stripped_is_still_reported(
         HARNESS_ROOT, RENDERED_AGAINST) == {}
 
     story = story_coordinator.read_story(without_grants(text)).parsed
-    restricted = {stage for stage, _ in
-                  story_coordinator.stage_restrictions(SHIPPED_STAGES)}
+    shipped = story_coordinator.stage_restrictions(SHIPPED_STAGES)
     governed = [item for item
                 in story["technical_plan"]["likely_file_changes"]
-                if item["stage"] in restricted
-                and any(item["file"].startswith(prefix) for stage, prefix
-                        in story_coordinator.stage_restrictions(SHIPPED_STAGES)
-                        if stage == item["stage"])]
+                if any(restriction.stage == item["stage"]
+                       and restriction.governs(item["file"])
+                       for restriction in shipped)]
     assert governed, "story-056 no longer carries the entries this is about"
     assert not any(item.get(FIELD) for item in governed)
 
@@ -912,7 +914,8 @@ def test_no_workflow_and_no_rule_file_names_the_field(tmp_path: Path):
 
 
 RUN_STAGES = RUN_WORKFLOW["stages"]
-(RUN_STAGE, RUN_PREFIX), = story_coordinator.stage_restrictions(RUN_STAGES)
+RUN_RESTRICTION, = story_coordinator.stage_restrictions(RUN_STAGES)
+RUN_STAGE, RUN_PREFIX = RUN_RESTRICTION.stage, RUN_RESTRICTION.prefix
 
 #: The two governed paths these runs use: one the target already holds and the
 #: unforced edit lands in, and one no commit holds, which the stage creates.
@@ -963,18 +966,22 @@ def story_of(target_root: Path) -> dict:
 
 @pytest.mark.parametrize("declaring", [True, False], ids=["declared",
                                                           "undeclared"])
-def test_an_unforced_edit_to_a_declared_path_is_reverted_and_escalates(
+def test_an_unforced_edit_to_a_declared_path_is_reverted_either_way(
         target: Path, harness_root: Path, clone_calls, declaring: bool):
     """The revert check governs a declared path exactly as an undeclared one.
 
-    Both rows assert the whole outcome — the run escalates, the escalation
+    Both rows assert the whole outcome — the check refuses the edit, the record
     names the path, and the path was put to the check — so the pair is a
     comparison of two complete answers rather than of one answer against a
-    silence.
+    silence. A run-time declaration buys the edit nothing, which is what this
+    module is about; what it is not about is what a refusal then does, and
+    since story-106 a refusal undoes the edit and lets the run finish rather
+    than stopping it, so the outcome asserted here is the verdict rather than
+    an exit code.
 
     The control that the declaration is real, and not an inert string that
-    could have been misspelled without anything noticing, is the last two
-    lines: at plan time this very story is accepted when it declares and
+    could have been misspelled without anything noticing, is the plan-time
+    pair: at plan time this very story is accepted when it declares and
     reported when it does not.
     """
     append_to_story(target, declared_plan(RUN_MODIFIED, declaring))
@@ -988,10 +995,10 @@ def test_an_unforced_edit_to_a_declared_path_is_reverted_and_escalates(
 
     code, _ = run(target, harness_root, {RUN_STAGE: added_coverage})
 
-    assert code != 0
-    reason = escalation_reason(target)
-    assert RUN_MODIFIED in reason
-    assert "reverted" in reason
+    assert code == 0
+    record = record_of(target)
+    assert record["permitted"] is False
+    assert record["paths"] == [RUN_MODIFIED]
     assert RUN_MODIFIED in {path for call in clone_calls for path in call}
 
 
@@ -1182,10 +1189,10 @@ def test_the_planner_prompt_still_names_no_stage_and_no_restricted_prefix():
 
     for name in shipped_names:
         assert not re.search(rf"\b{re.escape(name)}\b", prompt), name
-    for _, prefix in story_coordinator.stage_restrictions(SHIPPED_STAGES):
-        assert prefix not in prompt, prefix
+    for restriction in story_coordinator.stage_restrictions(SHIPPED_STAGES):
+        assert restriction.prefix not in prompt, restriction.prefix
 
     for planted in shipped_names:
         assert re.search(rf"\b{re.escape(planted)}\b", f"{prompt}\n{planted}\n")
-    for _, prefix in story_coordinator.stage_restrictions(SHIPPED_STAGES):
-        assert prefix in f"{prompt}\n{prefix}\n"
+    for restriction in story_coordinator.stage_restrictions(SHIPPED_STAGES):
+        assert restriction.prefix in f"{prompt}\n{restriction.prefix}\n"

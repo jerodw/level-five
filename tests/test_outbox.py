@@ -77,6 +77,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -658,10 +659,18 @@ def test_l5_sync_calls_the_shared_target_root_lookup():
 # --------------------------------------------------------------------------
 
 
+#: The queue's name where it is the whole name, so that naming the *seam* —
+#: whose name begins with the queue's — is not read as naming the queue. The
+#: seam is what a module is supposed to go through, and a module that mentions
+#: it has said the opposite of what this scan reports. `\b` does not fall
+#: between the queue's name and an underscore, so the pattern separates them.
+QUEUE_NAME = re.compile(rf"\b{outbox.__name__}\b")
+
+
 def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
     """Which of `sources` mentions the outbox module by name."""
     return sorted(name for name, text in sources.items()
-                  if outbox.__name__ in text)
+                  if QUEUE_NAME.search(text))
 
 
 #: The modules outside the queue that may name it, exempt by name and by
@@ -773,6 +782,29 @@ def test_the_scan_reports_a_planted_call_site():
                   if name not in MODULES_THAT_MAY_NAME_THE_QUEUE)
     sources[victim] += f"\nimport {outbox.__name__}\n"
     assert victim in modules_reaching_the_outbox(sources)
+
+
+def test_the_scan_separates_naming_the_queue_from_naming_the_seam():
+    """The other half of the same control, and the reason the scan matches a
+    whole name rather than a substring.
+
+    The seam's name begins with the queue's, so a scan looking for the
+    substring reports every module that points a reader at the seam — which is
+    the route the rule wants taken — as if it had reached past it. The pair is
+    asserted over one victim so the only difference between the two verdicts is
+    which of the two names was planted.
+    """
+    sources = orchestration_sources()
+    victim = next(name for name in sorted(sources)
+                  if name not in MODULES_THAT_MAY_NAME_THE_QUEUE)
+    naming_the_seam = {**sources,
+                       victim: f"{sources[victim]}\n# see {outbox_sweep.__name__}\n"}
+    naming_the_queue = {**sources,
+                        victim: f"{sources[victim]}\n# see {outbox.__name__}\n"}
+
+    assert outbox.__name__ in outbox_sweep.__name__
+    assert victim not in modules_reaching_the_outbox(naming_the_seam)
+    assert victim in modules_reaching_the_outbox(naming_the_queue)
 
 
 @pytest.mark.parametrize("name", MODULES_THAT_MAY_NAME_THE_QUEUE)

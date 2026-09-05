@@ -15,7 +15,8 @@
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=30, p50 $4.36, p90 $13.09, max $18.78. $30 is above the worst ever seen with room to spare, and the allowance is per invocation rather than cumulative, so a self-route that must redo the work is handed the whole allowance again rather than a remainder that would invite it to fail for a new reason. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
       "revert_check": {
         "result": "revert-check-result.json",
-        "baseline": "stage-baseline"
+        "baseline": "stage-baseline",
+        "discarded": "discarded-edits"
       },
       "schemas": {
         "changed-files.json": "changed-files"
@@ -26,6 +27,12 @@
       "prompt": "story-tester.md",
       "outputs": ["test-results.json", "tester-changed-files.json"],
       "changed_files": "tester-changed-files.json",
+      "may_only_change": ["{{tests_dir}}"],
+      "revert_check": {
+        "result": "tester-revert-check-result.json",
+        "baseline": "stage-baseline",
+        "discarded": "tester-discarded-edits"
+      },
       "may_not_run_suite": true,
       "max_self_routes": 3,
       "max_execution_cost_usd": 75,

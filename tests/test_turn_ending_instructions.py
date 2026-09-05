@@ -261,6 +261,16 @@ THE_CHECKS = (
 #: checks is the pair that goes stale, so here it is checked.
 WHOLE_SUITE_DECLARATIONS = ("revert_check", "suite_run", "clean_clone")
 
+#: Of those, the one a stage declares about its own writing: the revert check
+#: runs on the edits of the stage that declares it, only when that stage makes
+#: one, and the passage names it that way — "with *your* edits reverted". So
+#: the implementer's count carries the implementer's own and not another
+#: stage's, while `suite_run` and `clean_clone` put the whole tree, the
+#: implementer's work in it, to the suite wherever they are declared. Since
+#: story-106 a second stage declares a revert check, which is what makes the
+#: distinction load-bearing rather than academic.
+DECLARED_ABOUT_THE_DECLARING_STAGE = ("revert_check",)
+
 #: Enough number words to say what the count above comes to. A count that grew
 #: past this fails as a missing key rather than as a silent mismatch.
 NUMBER_WORDS = {1: "once", 2: "twice", 3: "three times", 4: "four times",
@@ -399,11 +409,29 @@ def test_the_rendering_states_as_many_whole_suite_runs_as_the_workflow_declares(
     with an assertion rather than with prose: a workflow that gained or lost a
     coordinator-run whole-suite check reddens here instead of leaving the
     prompt quietly claiming the old number.
+
+    A revert check declared on another stage is that stage's and is not
+    counted here — see `DECLARED_ABOUT_THE_DECLARING_STAGE` for why — so the
+    control that the exclusion is a rule and not a way of arriving at the
+    number already in the prose is the assertion beneath it: counting every
+    declaration wherever it sits comes to *more* than the passage names, so
+    the exclusion is subtracting something real. A deployment where it
+    subtracted nothing reddens there rather than passing as a rule that had
+    quietly stopped applying to anything.
     """
-    declared = sum(1 for stage in renderings.workflow["stages"]
-                   for key in WHOLE_SUITE_DECLARATIONS if key in stage)
+    stages = renderings.workflow["stages"]
+    implementing = next(stage for stage in stages
+                        if stage["prompt"] == IMPLEMENTER_TEMPLATE)
+    declared = sum(
+        1 for stage in stages for key in WHOLE_SUITE_DECLARATIONS
+        if key in stage and (key not in DECLARED_ABOUT_THE_DECLARING_STAGE
+                             or stage["name"] == implementing["name"]))
     assert declared == len(THE_CHECKS)
     assert f"runs {NUMBER_WORDS[declared]} after you" in implementer
+
+    everywhere = sum(1 for stage in stages
+                     for key in WHOLE_SUITE_DECLARATIONS if key in stage)
+    assert everywhere > declared
 
 
 def test_the_whole_suite_still_runs_after_the_stage_that_authors_validation(

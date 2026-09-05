@@ -1006,13 +1006,33 @@ def the_paragraph(text: str) -> str:
     return text[start:end if end != -1 else len(text)]
 
 
+def the_layer(text: str) -> str:
+    """The layer of the prompt the paragraph lives in.
+
+    Bounded by its own header and the next one, both of which the prompt's
+    structure supplies, so the region is found the way a reader finds it rather
+    than by a line number that an edit above it would move.
+    """
+    start = text.rfind("\n[", 0, text.index(PARAGRAPH_OPENING))
+    assert start != -1, "the paragraph is not inside a layer"
+    end = text.find("\n[", start + 1)
+    return text[start:end if end != -1 else len(text)]
+
+
 def test_the_paragraph_is_shorter_than_the_one_it_replaced_and_names_the_guard():
-    """AC11: the prompt did not grow, the paragraph shrank, and it points at
+    """AC11: the paragraph shrank, its layer shrank with it, and it points at
     what enforces the rule instead of arguing for it.
 
-    The whole file is measured beside the paragraph, because a paragraph that
-    shortened while the file grew would satisfy the narrow claim and break the
-    constraint the story states.
+    The layer is measured beside the paragraph, because a paragraph that
+    shortened while the text around it grew would satisfy the narrow claim and
+    break the constraint the story states. The layer rather than the whole
+    file: the file is where every later story that has something to tell this
+    stage adds it — story-106 added the passage on the paths this stage is
+    confined to — so a whole-file measurement stopped being a statement about
+    this paragraph's shortening and became one about the prompt never growing
+    again, which no story agreed to. What is given up with it is a relocation
+    out of this layer entirely, and what is kept is the one a shortening here
+    could actually be made of.
     """
     baseline = conftest.history_fixture(TESTER_PROMPT_BASELINE)
     today = (HARNESS_ROOT / TESTER_PROMPT_REL).read_text(encoding="utf-8")
@@ -1022,7 +1042,7 @@ def test_the_paragraph_is_shorter_than_the_one_it_replaced_and_names_the_guard()
     after = the_paragraph(today)
     assert len(after) < len(before)
     assert len(after.splitlines()) < len(before.splitlines())
-    assert len(today) < len(baseline)
+    assert len(the_layer(today)) < len(the_layer(baseline))
 
     assert "guard" in after
     assert "guard" not in before
@@ -1040,3 +1060,7 @@ def test_the_measurement_reports_a_paragraph_that_did_not_shorten():
     assert the_paragraph(restored) == the_paragraph(baseline)
     assert not len(the_paragraph(restored)) < len(the_paragraph(baseline))
     assert "guard" not in the_paragraph(restored)
+    # And the layer around it is measured over the same restoration, so the
+    # region the comparison narrowed to is one that can still report a
+    # paragraph put back rather than one that has stopped seeing the edit.
+    assert not len(the_layer(restored)) < len(the_layer(baseline))

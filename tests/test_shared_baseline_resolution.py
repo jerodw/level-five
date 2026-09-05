@@ -90,6 +90,13 @@ MERGE_RENAMES = {
             "test_the_workflow_fact_coverage_comes_from_the_injection_not_leftover_prose",
         "test_all_three_scripts_call_the_shared_lookup":
             "test_every_entry_point_resolving_a_target_calls_the_shared_lookup",
+        # story-106's, and a rename of the same kind: the injected list stopped
+        # carrying one sense of restriction and started carrying both, so a
+        # test named for the one sense named something the template no longer
+        # states. The subject — that the template writes no restricted prefix
+        # of its own — is the one it always had.
+        "test_the_template_names_no_may_not_create_prefix_of_its_own":
+            "test_the_template_names_no_restricted_prefix_of_its_own",
     },
     "tests/test_story_010_validation.py": {
         "test_attempt_1_archive_holds_the_six_artifacts_under_canonical_names":
@@ -110,7 +117,17 @@ def expected_test_names(current_rel: str) -> set[str]:
 
     The union across its origins, each mapped through the merge renames, so
     a merged module is held to *both* origins' full sets rather than to
-    either one — which a subset comparison would let through.
+    either one — which a subset comparison over the origins would let through.
+
+    What the callers ask of this set is that the module still carries all of
+    it, not that it carries nothing else. The claim is that nothing was
+    weakened, skipped or deleted, and a module that gained a test has done none
+    of those: `tests/test_planner_injection.py` gained coverage of the second
+    sense of restriction story-106 introduced, in the module whose subject that
+    injection is. Holding the two sets equal would have made this a rule that
+    those four modules may never be added to again, which no story stated and
+    which would push new coverage of their own subjects into modules named for
+    something else.
     """
     names: set[str] = set()
     for rel in origins_of(current_rel):
@@ -863,7 +880,7 @@ def test_no_repaired_assertion_changed_its_subject_or_its_strictness():
     for rel in REPAIRED:
         before = pre_repair_source(rel)
         after = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
-        assert expected_test_names(CURRENT[rel]) == _test_names(after), rel
+        assert expected_test_names(CURRENT[rel]) <= _test_names(after), rel
         assert _guarded_paths(before) <= _guarded_paths(after), rel
 
         filters = _diff_filters(after)
@@ -1328,6 +1345,26 @@ def test_the_suite_still_has_the_tests_the_repaired_files_shipped_with():
     """No test was weakened, skipped or deleted to make the repairs pass."""
     for rel in REPAIRED:
         after = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
-        assert expected_test_names(CURRENT[rel]) == _test_names(after), rel
+        assert expected_test_names(CURRENT[rel]) <= _test_names(after), rel
         assert "@pytest.mark.skip" not in after, rel
         assert "pytest.skip(" not in after, rel
+
+
+def test_that_comparison_reports_a_repaired_test_that_was_deleted():
+    """The control the containment above needs.
+
+    A containment passes when nothing is missing and passes just as happily
+    when the set it compares against has stopped being read, so here is the
+    loss it is meant to catch: one expected name renamed out of a module's
+    source, which the same comparison reports. Renamed rather than cut, so the
+    module still parses and the only difference between the two verdicts is
+    whether the name is there.
+    """
+    for rel in REPAIRED:
+        expected = expected_test_names(CURRENT[rel])
+        after = (REPO_ROOT / CURRENT[rel]).read_text(encoding="utf-8")
+        victim = sorted(expected)[0]
+        deleted = after.replace(f"def {victim}(", "def was_a_test_once(")
+
+        assert expected <= _test_names(after), rel
+        assert not expected <= _test_names(deleted), (rel, victim)

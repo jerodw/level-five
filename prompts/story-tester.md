@@ -19,6 +19,23 @@ Do not:
 
 New tests belong in {{tests_dir}} and become permanent repository assets.
 
+The workflow definition restricts where some stages may write, and each line
+below states one restriction in the workflow's own words:
+
+{{stage_path_restrictions}}
+
+A restriction confining a stage to the paths it names governs every repository
+path outside them: an edit you make outside the paths this stage is confined
+to is not forbidden, but it is watched. Creating a file there stops the run.
+Modifying or deleting one there is put to the revert check — your edits are
+undone in a clone and the suite is run again — and it stands only if the suite
+fails without it. If the suite does not need it, the run is not stopped: the
+edit is undone in the working tree, your own version is kept in the run
+directory as evidence, and the run carries on without it. So an edit you make
+outside those paths either earns its place by being necessary or quietly does
+not survive, and your changed-files record must name it either way — the
+record is left exactly as you wrote it and the revert is recorded beside it.
+
 Name a validation module for the behaviour it validates, so that a reader
 looking for that behaviour finds the module by its name rather than by
 searching for it.

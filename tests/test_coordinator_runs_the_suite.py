@@ -990,25 +990,93 @@ def suite_declarations_in(stages: list[dict]) -> dict[str, str]:
 #: declares all three, because that is the mechanism, not the deployment.
 SUITE_DECLARATION_KEYS = sorted(suite_declarations_in(ALL_THREE["stages"]))
 
+SHIPPED_SCHEMA_NAMES = schema_validator.shipped_schemas(REPO_ROOT)
+
+
+def describing_schema(stage: dict, artifact: str) -> str:
+    """The name of the schema describing an artifact a stage declares.
+
+    A schema names a *kind* of record and an artifact names one instance of
+    that kind, and the two coincide until two stages have to write the kind
+    into one run directory. Then the second is written with its stage's name in
+    front of the kind — `tester-changed-files.json` beside `changed-files`,
+    which is the convention this repository already ships and declares in the
+    stage's own `schemas` map — so a stem the manifest does not carry is
+    resolved by removing that prefix. The stage's name comes off the definition
+    and nothing is written here. A name that resolves to no shipped schema is
+    returned as it is, so the caller's assertion against the manifest reddens
+    rather than this quietly inventing an answer.
+    """
+    stem = Path(artifact).stem
+    prefix = f"{stage['name']}-"
+    if stem not in SHIPPED_SCHEMA_NAMES and stem.startswith(prefix):
+        return stem[len(prefix):]
+    return stem
+
+
+def shipped_schemas_for(key: str) -> list[str]:
+    """The distinct schemas describing the records the shipped stages declare
+    under one check.
+
+    More than one stage can declare the same check — the confinement this
+    repository puts on the stage that writes the validation brings a second
+    revert check with it — so the stages are collected rather than reduced to
+    whichever came last, which is what reading one artifact per key would do.
+    Two stages declaring the same kind resolve to one schema; two resolving to
+    different ones leave the collection longer than the keys, which the premise
+    below reports.
+    """
+    return list(dict.fromkeys(
+        describing_schema(stage, stage[key]["result"])
+        for stage in conftest.shipped_workflow()["stages"]
+        if isinstance(stage.get(key), dict)
+        and isinstance(stage[key].get("result"), str)))
+
+
 #: The schemas describing those records in this repository's own deployment.
 #: The keys come from the fixture; the artifact names come from what this
-#: repository ships, because a shipped schema is the subject here — and a
-#: schema's name is its artifact's name without the suffix.
+#: repository ships, because a shipped schema is the subject here.
 COORDINATOR_RECORD_SCHEMAS = [
-    Path(suite_declarations_in(conftest.shipped_workflow()["stages"])[key]).stem
-    for key in SUITE_DECLARATION_KEYS
+    stem for key in SUITE_DECLARATION_KEYS for stem in shipped_schemas_for(key)
 ]
 
 
 def test_the_derived_collection_names_the_three_shipped_records():
     """The premise the parametrization below rests on, so that a derivation
     collecting nothing — or collecting something this repository does not
-    ship — reddens here rather than quietly emptying the cases."""
+    ship — reddens here rather than quietly emptying the cases.
+
+    The collection is held to one schema per declaration key as well as to
+    three, because a reader downstream pairs the two collections positionally
+    and a key resolving to two schemas would pair them wrongly rather than
+    fail.
+    """
     assert len(COORDINATOR_RECORD_SCHEMAS) == 3
     assert len(set(COORDINATOR_RECORD_SCHEMAS)) == 3
-    shipped = schema_validator.shipped_schemas(REPO_ROOT)
+    assert len(COORDINATOR_RECORD_SCHEMAS) == len(SUITE_DECLARATION_KEYS)
     for stem in COORDINATOR_RECORD_SCHEMAS:
-        assert stem in shipped, stem
+        assert stem in SHIPPED_SCHEMA_NAMES, stem
+
+
+def test_the_resolution_reports_an_artifact_no_shipped_schema_describes():
+    """The control for the resolution above: stripping a stage's name off an
+    artifact must be able to arrive at nothing.
+
+    Without this, a prefix rule that stripped its way to any shipped name would
+    make the assertion above green for an artifact this repository describes
+    nowhere. The victim carries the stage's name and a kind the manifest does
+    not hold, and the resolution keeps the kind rather than inventing one.
+    """
+    stage = {"name": "some-stage"}
+    resolved = describing_schema(stage, "some-stage-a-kind-nobody-ships.json")
+    assert resolved == "a-kind-nobody-ships"
+    assert resolved not in SHIPPED_SCHEMA_NAMES
+    # And the prefix is only removed when the whole name is not itself shipped:
+    # a record whose name happens to start with its stage's is left alone.
+    shipped_kind = COORDINATOR_RECORD_SCHEMAS[0]
+    named_for_it = {"name": shipped_kind.split("-")[0]}
+    assert describing_schema(
+        named_for_it, f"{shipped_kind}.json") == shipped_kind
 
 
 @pytest.mark.parametrize("stem", COORDINATOR_RECORD_SCHEMAS)

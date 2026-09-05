@@ -2171,10 +2171,18 @@ def test_an_unforced_edit_still_reaches_the_refused_verdict(
 ):
     """The control for the verdict above: the same run, an edit nothing forced,
     and the opposite decision. A check that permitted everything would be no
-    check."""
+    check.
+
+    The verdict is what this asserts, and it is the verdict that differs — the
+    exit code no longer does. Since story-106 a refusal undoes the edits from
+    the stage baseline and lets the run continue, because the check has already
+    watched the suite pass on exactly that tree, so both rows here complete.
+    What the two runs differ in is `permitted`, which is where the check's
+    answer lives.
+    """
     code, _ = run(target, revert_harness_root, {REVERT_WRITING: [added_coverage]})
 
-    assert code == 2
+    assert code == 0
     record = revert_record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is False
