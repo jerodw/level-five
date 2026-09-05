@@ -193,9 +193,9 @@ restriction actually governs — beneath a restricted path where the stage may
 not create there, or outside the paths it is confined to where it is confined
 — naming either the whole path or a single file or directory. A grant naming
 one path exempts that path alone and leaves the rest governed, so prefer the
-narrowest grant that does the job. If the stage or the path is wrong, l5-run refuses to run the
-story at all. Use reason to say why this story needs the restriction
-lifted:
+narrowest grant that does the job.
+If the stage or the path is wrong, l5-run refuses to run the story at all.
+Use reason to say why this story needs the restriction lifted:
 
 	stage_exceptions:
 	  - stage: <stage the exception applies to>
