@@ -843,6 +843,14 @@ def _uncountable_self_route_budget(probe: dict) -> None:
     probe["stages"][0]["max_self_routes"] = "two"
 
 
+def _uncountable_bookkeeping_self_route_budget(probe: dict) -> None:
+    """The other half of the same pre-flight, since story-108 split the budget
+    by cause. A bookkeeping budget that is not a count cannot be spent any more
+    than a failure one can, and it is refused in the same loop — so it belongs
+    in this table beside the budget it sits next to in a declaration."""
+    probe["stages"][0]["max_bookkeeping_self_routes"] = "two"
+
+
 def _unenterable_correction_pass(probe: dict) -> None:
     judging = next(stage for stage in probe["stages"] if "on_failure" in stage)
     judging["correction_pass"] = {"stage": UNDEFINED,
@@ -865,6 +873,9 @@ def _unresolvable_token(probe: dict) -> None:
 DEFECTIVE = {
     "retry-routing": (_unroutable, "route"),
     "self-route-budget": (_uncountable_self_route_budget, "max_self_routes"),
+    "bookkeeping-self-route-budget": (
+        _uncountable_bookkeeping_self_route_budget,
+        "max_bookkeeping_self_routes"),
     "correction-pass-entry": (_unenterable_correction_pass, "correction_pass"),
     "cost-ceiling": (_unusable_cost_ceiling, "max_run_cost_usd"),
     "configuration-token": (_unresolvable_token, "no_such_setting"),

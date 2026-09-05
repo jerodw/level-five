@@ -175,6 +175,17 @@ def state_contract_problems(state: dict) -> list[str]:
         # live count for the current stage only; how many self-routes a run
         # took is read from the history.
         "self_route_count": int,
+        # story-108's bookkeeping subset of the count above: how many of the
+        # current stage entry's re-entries were taken because a required
+        # artifact was missing or stale rather than because the work or the
+        # judgement of it failed. Defaulted like the fields above, so a state
+        # file written before this story loads with a zero, which is also what
+        # a stage whose workflow declares no bookkeeping budget carries however
+        # it re-enters. It is a subset and never a second total: the failure
+        # budget is spent by the difference between the two, so a reader of
+        # state.json can say both how many times the stage has run and how many
+        # of those were bookkeeping.
+        "bookkeeping_self_route_count": int,
         # story-050's guidance in force: the entries of the retry guidance
         # directing the attempt now running, recorded so the check on the
         # next verdict reads state rather than retry-history.json or the

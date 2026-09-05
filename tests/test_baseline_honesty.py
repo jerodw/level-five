@@ -2263,6 +2263,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "this repository configures in .harness/config.yaml, because the "
         "claim is that this deployment's own story directory is the one the "
         "shipped rule set blocks, which a fixture's directory cannot say",
+    "test_bookkeeping_self_route_budget.py":
+        "every run it drives goes through a workflow it builds with "
+        "conftest.build_workflow, because the two budgets a stage declares and "
+        "the stage that declares them are inputs to what the split does with "
+        "them. The one artifact it resolves live is the one its criteria are "
+        "about: schemas/self-route-result.schema.json, whose failure enum the "
+        "story requires gained no value for the split and whose field list the "
+        "story requires a record still satisfies. A fixture schema would say "
+        "only what the module had just written into it, and the claim is about "
+        "what this repository ships. Both absences are controlled — the enum "
+        "comparison beside the same comparison against an enum with a value "
+        "added to it, the record's validation beside the same validation of "
+        "that record with each required field dropped",
     "test_brief_fetch.py":
         "the workflow set a brief may name is an input to it and is built, "
         "under a harness root the module materializes for itself. What it "

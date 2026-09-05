@@ -631,6 +631,109 @@ def test_nothing_in_the_harness_reads_a_recorded_reason():
     assert [key for key in reason_keys if key in planted] == [reason_keys[0]]
 
 
+# --------------------------------------------------------------------------
+# The split budget this deployment opted into
+#
+# story-108 split the self-route budget by cause, and made the split
+# opt-in: a stage declaring no bookkeeping budget spends max_self_routes on
+# everything, exactly as every stage did before. What this deployment declares
+# is therefore a fact about this deployment and not about the mechanism, and it
+# is asserted here — where the shipped definition is the subject — rather than
+# in the module that drives the mechanism against a workflow it builds.
+# --------------------------------------------------------------------------
+
+
+def test_this_deployment_splits_one_stages_self_route_budget_by_cause():
+    """The stage that opted into the split declares both budgets at the values
+    it intends, and every other stage declares only the failure budget.
+
+    Which stage that is comes off the definition rather than being written
+    here, so moving the split to another stage reddens on the values it
+    declares rather than on the name it is spelled with.
+    """
+    split = [stage for stage in SHIPPED_STAGES
+             if story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY in stage]
+    assert len(split) == 1, [stage["name"] for stage in split]
+    declaring = split[0]
+    assert declaring[story_coordinator.SELF_ROUTE_BUDGET_KEY] == 2
+    assert declaring[story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY] == 2
+
+
+def test_the_split_budget_is_recorded_where_a_reader_meets_the_number():
+    """The rule every other declared number here is held to, applied to the
+    budget story-108 added: a reason is present and states its own number.
+
+    Digits or the English word, as `test_a_recorded_reason_states_the_number_it
+    _is_explaining` allows, and for its reason: a sentence about a budget of two
+    reads better as "two" and either spelling states the number.
+    """
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+    key = story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY
+    declaring = [stage for stage in SHIPPED_STAGES if key in stage]
+    assert declaring, "this deployment declares no bookkeeping budget at all"
+    for stage in declaring:
+        reason = stage.get(key + REASON_SUFFIX, "")
+        assert reason.strip(), stage["name"]
+        budget = stage[key]
+        assert str(budget) in reason.lower() \
+            or words.get(budget, "\0") in reason.lower(), stage["name"]
+
+
+#: The vocabulary of a budget that stands in for a fix rather than being a
+#: judgement about the work. Present tense throughout, deliberately: a reason
+#: may record that a *former* budget was a hedge — that is history, and
+#: story-108's reason says exactly that about the third budget it removed —
+#: and may not describe the budget it currently explains as one. What the
+#: budget between story-101 and story-108 was is settled; what this deployment
+#: declares now has to be defensible on its own.
+STANDING_IN_FOR_A_FIX = ("is a hedge", "not the fix", "is not the fix",
+                         "pending a fix", "until that is fixed",
+                         "awaiting a fix")
+
+
+def reasons_standing_in_for_a_fix(stages: list[dict]) -> list[str]:
+    """Every recorded budget reason describing its own budget as a stand-in.
+
+    A function rather than a loop inside the test, so the same reading can be
+    made of a reason this file writes — which is the control the absence needs.
+    """
+    keys = (story_coordinator.SELF_ROUTE_BUDGET_KEY + REASON_SUFFIX,
+            story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY + REASON_SUFFIX)
+    found = []
+    for stage in stages:
+        for key in keys:
+            reason = str(stage.get(key, "")).lower()
+            for phrase in STANDING_IN_FOR_A_FIX:
+                if phrase in reason:
+                    found.append(f"{stage['name']} {key}: {phrase}")
+    return found
+
+
+def test_no_self_route_reason_this_deployment_ships_stands_in_for_a_fix():
+    """The defect story-108 closed was charged to a budget, and the budget's
+    own reason said so: it read "It is a hedge and not the fix" and named the
+    brief the fix was filed under. With the fix landed, no reason here may
+    still describe the budget it explains that way.
+
+    The control beside it is a reason this test writes carrying exactly the
+    sentence the shipped one used to carry, which the same reading reports — so
+    the empty result is a scan that can see one.
+    """
+    assert reasons_standing_in_for_a_fix(SHIPPED_STAGES) == []
+
+    planted = [{"name": "planted",
+                story_coordinator.SELF_ROUTE_BUDGET_KEY + REASON_SUFFIX: (
+                    "Three, where every other budget in this workflow is one. "
+                    "It is a hedge and not the fix: the budget spends the same "
+                    "whatever the cause.")}]
+    found = reasons_standing_in_for_a_fix(planted)
+    assert found
+    key = story_coordinator.SELF_ROUTE_BUDGET_KEY + REASON_SUFFIX
+    assert {entry.split(": ")[-1] for entry in found} == \
+        {"is a hedge", "not the fix"}
+    assert {entry.split(": ")[0] for entry in found} == {f"planted {key}"}
+
+
 def test_this_deployment_escalates_when_the_retry_ceiling_is_reached():
     assert SHIPPED["escalation_rules"]["max_retries_exceeded"]["action"] \
         == "escalate"

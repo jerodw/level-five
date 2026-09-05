@@ -80,6 +80,18 @@ class RunState:
     #: stage self-routed over the run is a query against the history, where
     #: one `self-routed` entry per self-route names its stage.
     self_route_count: int = 0
+    #: How many of those re-entries were bookkeeping — a required artifact
+    #: missing, or one the freshness check read as a previous attempt's. Live
+    #: state scoped by current_stage exactly as self_route_count is, and
+    #: zeroed wherever that one is, so the two agree by construction rather
+    #: than by two resets that match today. It is a *subset* of
+    #: self_route_count and never a second total: the failure budget is spent
+    #: by the difference between them, so a reader of state.json can say how
+    #: many times the stage has run without reading prose. A stage whose
+    #: workflow declares no bookkeeping budget leaves this at zero however it
+    #: re-enters, which is what makes such a stage spend every cause exactly
+    #: as it spent them before the split existed.
+    bookkeeping_self_route_count: int = 0
     #: The entries of the retry guidance directing the attempt now running:
     #: every current_focus focus and every preserve_behavior string of the
     #: guidance the attempt that just ended actually wrote. Set where a retry
@@ -586,6 +598,12 @@ def retry_routing_problems(stages: list[dict]) -> list[str]:
 def self_route_problems(stages: list[dict]) -> list[str]:
     """Check every declared self-route budget against what a budget can be.
 
+    Both budgets, on the same terms and in the same loop: a stage may declare
+    a bookkeeping budget beside its failure budget, and a bookkeeping budget
+    that is not a count cannot be spent any more than a failure one can, so a
+    definition declaring an unspendable one is refused at pre-flight rather
+    than discovered mid-run.
+
     Beside `retry_routing_problems` and for its reason: a budget that is not a
     count is a defect in the definition, every run under that definition has
     it, and discovering it at the first mechanical failure has already spent
@@ -601,14 +619,15 @@ def self_route_problems(stages: list[dict]) -> list[str]:
     """
     problems = []
     for stage in stages:
-        if "max_self_routes" not in stage:
-            continue
-        budget = stage["max_self_routes"]
-        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
-            problems.append(
-                f"stage '{stage['name']}' declares max_self_routes "
-                f"{budget!r}, which is not a non-negative integer"
-            )
+        for key in (SELF_ROUTE_BUDGET_KEY, BOOKKEEPING_SELF_ROUTE_BUDGET_KEY):
+            if key not in stage:
+                continue
+            budget = stage[key]
+            if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
+                problems.append(
+                    f"stage '{stage['name']}' declares {key} "
+                    f"{budget!r}, which is not a non-negative integer"
+                )
     return problems
 
 
@@ -4456,6 +4475,42 @@ STALE_REQUIRED_ARTIFACTS = "stale-required-artifacts"
 #: subprocess the coordinator owns — and not a judgement about the work.
 SUITE_FAILED = "suite-failed"
 
+#: Every cause a self-route can be taken for. Declared so the classification
+#: below is held *total* against it rather than against a list written at a
+#: call site or in a test: a cause added later and left unclassified is a
+#: cause on neither side of the split, which is a question the suite can ask
+#: and answer.
+SELF_ROUTE_FAILURES = (
+    AGENT_PROCESS_FAILED,
+    MISSING_REQUIRED_ARTIFACTS,
+    STALE_REQUIRED_ARTIFACTS,
+    DEFECTIVE_RETRY_GUIDANCE,
+    SUITE_FAILED,
+)
+
+#: The bookkeeping subset: the stage did the work and did not record it, or
+#: recorded it somewhere the freshness check reads as a previous attempt's.
+#: Nothing about the work is in question in either case, which is what makes
+#: spending a budget of its own the right price for them.
+#:
+#: agent-process-failed is deliberately not here. A process that exited
+#: without completing produced no account of what it did, so what is missing
+#: is not the bookkeeping but the whole turn: nobody can say whether the work
+#: was done, and re-entering it is not a correction pass over a known-good
+#: tree. suite-failed and defective-retry-guidance are not here for the
+#: plainer reason that each is a fact about the work or the judgement of it.
+BOOKKEEPING_SELF_ROUTE_FAILURES = (
+    MISSING_REQUIRED_ARTIFACTS,
+    STALE_REQUIRED_ARTIFACTS,
+)
+
+#: The declaration each budget is read off, and the name a stop is reported
+#: under. Written once so the key the workflow declares, the key the
+#: pre-flight refuses on and the name the escalation reason carries are one
+#: string rather than three that agree today.
+SELF_ROUTE_BUDGET_KEY = "max_self_routes"
+BOOKKEEPING_SELF_ROUTE_BUDGET_KEY = "max_bookkeeping_self_routes"
+
 
 def self_route_result_file(
     stage_name: str, attempt: int, try_number: int | str
@@ -4642,6 +4697,14 @@ def self_route(
     escalates with exactly the reason it escalated with before this existed,
     which is what makes landing this change nothing until a workflow opts in.
 
+    Two budgets are spent rather than one, and which of them a failure spends
+    is decided by the declared classification above rather than by a condition
+    written here. A stage declaring a bookkeeping budget spends it on the
+    bookkeeping causes and spends max_self_routes on the rest; a stage
+    declaring none spends max_self_routes on everything, which is what the
+    stage did before the split and is why landing it is nothing until a
+    definition opts in.
+
     When there is budget left the count is incremented, the coordinator's own
     evidence is written under a name keyed by stage, attempt and try, one
     `self-routed` event is appended, and the state is saved so a crash mid-stage
@@ -4650,17 +4713,53 @@ def self_route(
     budget value is written here.
     """
     name = stage["name"]
-    budget = stage.get("max_self_routes", 0)
-    if state.self_route_count >= budget:
-        if budget:
+    budget = stage.get(SELF_ROUTE_BUDGET_KEY, 0)
+    bookkeeping_budget = stage.get(BOOKKEEPING_SELF_ROUTE_BUDGET_KEY)
+    # An absent bookkeeping budget means *unsplit*, not zero: the stage has
+    # not opted in, so every cause spends max_self_routes and is reported the
+    # way it was reported before the split existed. Only a stage that declares
+    # one has its bookkeeping causes taken out of the failure budget.
+    bookkeeping = (
+        bookkeeping_budget is not None
+        and failure in BOOKKEEPING_SELF_ROUTE_FAILURES
+    )
+    if bookkeeping:
+        spent, governing = state.bookkeeping_self_route_count, bookkeeping_budget
+        governing_key = BOOKKEEPING_SELF_ROUTE_BUDGET_KEY
+    else:
+        # The failure budget is spent by the re-entries that were not
+        # bookkeeping, which is the difference between the total and the
+        # subset — so a stage re-entered for a forgotten file reaches a later
+        # suite failure with the failure budget it would have had.
+        spent = state.self_route_count - state.bookkeeping_self_route_count
+        governing, governing_key = budget, SELF_ROUTE_BUDGET_KEY
+    if spent >= governing:
+        if governing:
+            # An unsplit stage's escalation is worded exactly as it was, so
+            # landing the split changes nothing until a definition opts in. A
+            # split one names the budget that stopped it, so a bookkeeping
+            # exhaustion and a failure exhaustion do not read as one stop.
+            named_budget = (
+                "self-route"
+                if bookkeeping_budget is None
+                else governing_key
+            )
             return SelfRouteDecision(
                 False,
-                f"{reason}; {name} has exhausted its self-route budget of "
-                f"{budget}",
+                f"{reason}; {name} has exhausted its {named_budget} budget of "
+                f"{governing}",
             )
         return SelfRouteDecision(False, reason)
 
+    # The total is incremented for every cause, so the try number stays the
+    # count of this stage entry's re-entries and every self-route record and
+    # re-run prompt keyed by it is written and discovered exactly as it is.
     state.self_route_count += 1
+    if bookkeeping:
+        state.bookkeeping_self_route_count += 1
+        spent = state.bookkeeping_self_route_count
+    else:
+        spent = state.self_route_count - state.bookkeeping_self_route_count
     record: dict = {
         "stage": name,
         "attempt": attempt,
@@ -4677,10 +4776,16 @@ def self_route(
     (run_dir / self_route_result_file(name, attempt, state.self_route_count)).write_text(
         json.dumps(record, indent=2) + "\n", encoding="utf-8"
     )
+    # The same rule the escalation reason follows: an unsplit stage's event
+    # reads as it always did, and a split one says which budget it spent.
+    spend = (
+        f"self-route {state.self_route_count} of {budget}"
+        if bookkeeping_budget is None
+        else f"{governing_key} {spent} of {governing}"
+    )
     append_event(
         run_dir,
-        f"self-routed: {name} runs again in place ({reason}); self-route "
-        f"{state.self_route_count} of {budget}",
+        f"self-routed: {name} runs again in place ({reason}); {spend}",
         kind="self-routed",
         stage=name,
         # A self-route names its own stage: there is no other destination, and
@@ -5718,8 +5823,8 @@ def _refuse_bad_self_routes(workflow: dict, problems: list[str]) -> int:
         f"Workflow '{workflow['name']}' declares a self-route budget that "
         f"cannot be spent:",
         problems,
-        "Fix the workflow definition's max_self_routes before running a story "
-        "under it.",
+        "Fix the workflow definition's self-route budgets before running a "
+        "story under it.",
     )
 
 
@@ -6729,7 +6834,10 @@ def run_story(
         # A resumed stage starts with its full self-route budget. The count is
         # the live count for one stage invocation and nothing carries it across
         # a resume: the stage is being entered afresh, not re-running itself.
+        # The bookkeeping subset is zeroed with it, wherever it is zeroed, so
+        # the two cannot disagree about the same stage entry.
         state.self_route_count = 0
+        state.bookkeeping_self_route_count = 0
         # The interrupted attempt is archived before the resumed stage runs,
         # under the attempt number it was written with. This happens for both
         # resumed statuses: a crashed run stopped for a reason nobody recorded,
@@ -6943,6 +7051,7 @@ def run_story(
         state.current_stage = name
         if not self_routed:
             state.self_route_count = 0
+            state.bookkeeping_self_route_count = 0
         self_routed = False
         save_state(run_dir, state)
         stage_started_at = time.monotonic()
