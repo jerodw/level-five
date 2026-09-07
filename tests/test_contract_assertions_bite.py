@@ -72,7 +72,9 @@ def mutant_repo(tmp_path: Path, replacements: list[tuple[str, str]]) -> Path:
     shutil.copytree(REPO_ROOT / "orchestration", root / "orchestration",
                     ignore=shutil.ignore_patterns("__pycache__"))
     (root / "tests").mkdir()
-    for name in ("conftest.py", CONTRACT_FILE.name):
+    # `machine_load.py` alongside the shared module because `conftest.py`
+    # imports the inconclusive-result ceiling's hooks from it.
+    for name in ("conftest.py", "machine_load.py", CONTRACT_FILE.name):
         shutil.copy(TESTS_DIR / name, root / "tests" / name)
     # `.harness/` is not symlinked, so a run started in here cannot write into
     # the real one. Its config file is copied in all the same: a workflow

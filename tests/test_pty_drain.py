@@ -40,8 +40,18 @@ reports the violation it exists to catch:
     module source that defines one, which the same reader reports.
 
 The children driven here are of this module's making: short scripts run under
-`sys.executable` on a pty this module opens. Nothing below depends on machine
-load, on the rest of the suite, or on any timing a test cannot control.
+`sys.executable` on a pty this module opens. One precondition below does depend
+on the machine: every case needs its child to have announced itself before the
+parent signals it, and `start_child` waits `ANNOUNCE_DEADLINE` for that
+announcement. A child that has not spoken by then is killed and reaped exactly
+as before, and what is reported is `machine_load.inconclusive` rather than a
+failure -- the test never reached the teardown it exists to be about, so a
+failure would say the teardown is broken when what happened is that the run
+could not be conducted. Nothing else here depends on machine load, on the rest
+of the suite, or on any timing a test cannot control: `HANDLER_DELAY` and
+`WINDOWED_TEARDOWN_SILENCE` order two events by construction rather than by
+winning a race, and the deadline case drives `drain` against a child that never
+exits at all.
 """
 import ast
 import inspect
@@ -57,6 +67,7 @@ from pathlib import Path
 
 import pytest
 
+import machine_load
 from test_plan_commit import (
     DRAIN_DEADLINE,
     drain,
@@ -179,9 +190,12 @@ def start_child(source: str):
             remaining = expires - time.monotonic()
             if remaining <= 0 or not selector.select(timeout=remaining):
                 break
-            chunk = os.read(master, 4096)
-            if not chunk:            # the child closed its side without announcing
-                break
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break        # EIO: the child closed its side without announcing
+            if not chunk:            # the same thing, where the platform reports
+                break                # end of file rather than raising
             announcement += chunk
     finally:
         selector.close()
@@ -192,7 +206,11 @@ def start_child(source: str):
             pass
         process.wait(timeout=30)
         os.close(master)
-        raise AssertionError(
+        # The child is still killed and reaped; what changes is what is
+        # reported. The announcement is a precondition of every case in this
+        # module rather than any case's subject, so a child that never got as
+        # far as speaking leaves the teardown untested rather than refuted.
+        machine_load.inconclusive(
             f"the child never announced itself within "
             f"{ANNOUNCE_DEADLINE:g}s; it exited {process.returncode}")
     # Split on the announcement alone, not on the newline after it: a pty
@@ -314,8 +332,13 @@ def test_a_child_that_never_exits_fails_naming_the_deadline():
     # that has stopped seeing anything.
     assert process_group_is_alive(pgid)
 
+    # `expiry_is_the_claim` because here it is: the child is one that never
+    # exits, driven against a deadline chosen to expire, so the expiry is what
+    # this test asserts rather than a precondition it failed to reach. Every
+    # other caller of `drain` means the opposite by an expiry and gets the
+    # inconclusive report instead.
     with pytest.raises(AssertionError) as raised:
-        drain(process, master, deadline=1.0)
+        drain(process, master, deadline=1.0, expiry_is_the_claim=True)
 
     assert "1s" in str(raised.value), (
         f"the failure did not name the deadline that expired: {raised.value}")

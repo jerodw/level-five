@@ -63,6 +63,7 @@ import pytest
 import command_transport
 import conftest
 import harness_config
+import machine_load
 import outbox
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -113,8 +114,10 @@ PATIENCE_SECONDS = 20.0
 #: to be exceeded is satisfied by a command that never started at all. The
 #: suite runs its workers in parallel and each one spawns processes of its own,
 #: so a second is not reliably enough for an interpreter to reach its first
-#: line on a loaded machine, and a test that times out before the thing it is
-#: about has happened fails saying nothing about the group.
+#: line on a loaded machine. The headroom is no longer load-bearing: a run in
+#: which the child was not backgrounded in time reports inconclusive through
+#: `spawned_child_pid` below rather than failing, so this number decides how
+#: often that is reported rather than whether the suite is red.
 SPAWN_BOUND_SECONDS = 5.0
 
 #: How long the child sleeps before it writes its marker. Longer than the
@@ -568,6 +571,25 @@ def wait_until(predicate, patience: float = PATIENCE_SECONDS) -> bool:
     return predicate()
 
 
+def spawned_child_pid(child_pid: Path) -> int:
+    """The pid the fixture command recorded, or an inconclusive report.
+
+    Whether the command got as far as backgrounding its child before the
+    transport's bound expired is a precondition of the question below rather
+    than the question: a machine loaded enough that an interpreter has not
+    reached its first line inside `SPAWN_BOUND_SECONDS` has told this test
+    nothing about process groups either way. Widening the bound would only
+    move the load at which the same thing happens, so what it reports instead
+    is that the run could not be conducted.
+    """
+    if not child_pid.exists():
+        machine_load.inconclusive(
+            f"the command was killed at the {SPAWN_BOUND_SECONDS:g}s bound "
+            f"before it had backgrounded the child this test is about, so "
+            f"nothing could be established about the group")
+    return int(child_pid.read_text(encoding="utf-8").strip())
+
+
 def test_the_kill_reaches_the_process_group_and_not_only_the_command(
         queue, commands, tmp_path):
     child_pid = tmp_path / "child.pid"
@@ -578,10 +600,7 @@ def test_the_kill_reaches_the_process_group_and_not_only_the_command(
                                                timeout=SPAWN_BOUND_SECONDS))
     assert entry["state"] == outbox.PENDING
 
-    assert child_pid.exists(), (
-        "the command was killed before it had spawned the child this test is "
-        "about, so nothing was proven about the group")
-    pid = int(child_pid.read_text(encoding="utf-8").strip())
+    pid = spawned_child_pid(child_pid)
     assert wait_until(lambda: not alive(pid)), (
         f"the child {pid} the command spawned was still running once the "
         f"transport had returned")

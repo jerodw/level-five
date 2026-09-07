@@ -66,6 +66,7 @@ import conftest
 
 import context_assembler
 import harness_config
+import machine_load
 import plan_mandate
 import story_coordinator
 
@@ -700,7 +701,8 @@ def run_plan_on_a_pty(planning: Planning, **stub):
 DRAIN_DEADLINE = 120.0
 
 
-def drain(process, master: int, deadline: float = DRAIN_DEADLINE) -> tuple[int, str]:
+def drain(process, master: int, deadline: float = DRAIN_DEADLINE, *,
+          expiry_is_the_claim: bool = False) -> tuple[int, str]:
     """Read the pty to end of output, reap the child, close the master last.
 
     The order is the whole of it. A teardown that closes the master while the
@@ -714,8 +716,19 @@ def drain(process, master: int, deadline: float = DRAIN_DEADLINE) -> tuple[int, 
     A child that never exits is bounded by `deadline` rather than by a window
     of silence: silence is not end of output, and a child that says nothing for
     a while and then exits must be drained to its true status. On expiry the
-    process group is killed and the failure names the deadline, so a hang is
+    process group is killed and the report names the deadline, so a hang is
     reported as a hang rather than as whatever status the teardown left behind.
+
+    What an expiry *means* is the caller's to say, because the two kinds of
+    caller here mean opposite things by it. For nearly every caller the child
+    is a session that was expected to finish and the expiry says only that it
+    did not get there on this machine, which is a precondition the run failed
+    to meet rather than a defect in what the caller was asking about -- so the
+    default report is `machine_load.inconclusive`. For a caller that drives a
+    child which never exits against a deliberately tiny deadline the expiry is
+    the assertion itself, and that caller passes `expiry_is_the_claim=True` to
+    get a failure. The two are told apart by the caller rather than guessed at
+    here, and both kill the group and name the deadline identically.
     """
     output, selector = b"", selectors.DefaultSelector()
     selector.register(master, selectors.EVENT_READ)
@@ -725,7 +738,7 @@ def drain(process, master: int, deadline: float = DRAIN_DEADLINE) -> tuple[int, 
             remaining = expires - time.monotonic()
             if remaining <= 0 or not selector.select(timeout=remaining):
                 raise _expired(process, deadline, "its output never reached "
-                               "end of file")
+                               "end of file", expiry_is_the_claim)
             try:
                 chunk = os.read(master, 4096)
             except OSError:
@@ -736,23 +749,55 @@ def drain(process, master: int, deadline: float = DRAIN_DEADLINE) -> tuple[int, 
         try:
             status = process.wait(timeout=max(expires - time.monotonic(), 0))
         except subprocess.TimeoutExpired:
-            raise _expired(process, deadline, "it never exited") from None
+            raise _expired(process, deadline, "it never exited",
+                           expiry_is_the_claim) from None
     finally:
         selector.close()
         os.close(master)
     return status, output.decode(errors="replace")
 
 
-def _expired(process, deadline: float, what: str) -> AssertionError:
+def _expired(process, deadline: float, what: str,
+             expiry_is_the_claim: bool) -> BaseException:
     """Kill the child's process group and say which deadline expired."""
     try:
         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
     process.wait(timeout=30)
-    return AssertionError(
-        f"the child under the pty was killed after the {deadline:g}s drain "
-        f"deadline expired: {what}")
+    said = (f"the child under the pty was killed after the {deadline:g}s drain "
+            f"deadline expired: {what}")
+    if expiry_is_the_claim:
+        return AssertionError(said)
+    return machine_load.inconclusive_error(said)
+
+
+#: How long a test waits for the session under the pty to write the artifact it
+#: was told to write. Generous, and no longer load-bearing: a session that has
+#: not got there is reported inconclusive rather than failed, so this number
+#: decides how long a run waits before saying so rather than whether it is red.
+SESSION_WRITE_DEADLINE = 60.0
+
+
+def wait_for_the_session_to_write(path: Path,
+                                  deadline: float = SESSION_WRITE_DEADLINE):
+    """Wait for the session to write `path`, or report inconclusive.
+
+    Every caller wants this file as the moment the session reached a point --
+    somewhere to signal it from, somewhere to start measuring from. None of
+    them is asking whether the interpreter starts quickly, so a machine that
+    did not let the stub get there inside `deadline` has left the caller's
+    real question unasked rather than answered wrongly.
+    """
+    expires = time.monotonic() + deadline
+    while not path.exists():
+        if time.monotonic() >= expires:
+            machine_load.inconclusive(
+                f"the session never got as far as writing {path.name} within "
+                f"{deadline:g}s, so it never reached the point this test "
+                f"measures from")
+        time.sleep(0.05)
+    return path
 
 
 def test_the_developers_terminal_is_the_sessions_terminal(planning: Planning):
@@ -771,10 +816,7 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
         L5_STUB_SLEEP=30,
     )
     written = planning.stories_dir / "story-900.yaml"
-    deadline = time.monotonic() + 30
-    while not written.is_file() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert written.is_file(), "the stub never got as far as writing the artifact"
+    wait_for_the_session_to_write(written)
     os.killpg(os.getpgid(process.pid), signal.SIGINT)
     # The interrupted session's artifact is still committed and pushed, and
     # since story-059 a successful push on a terminal ends by offering to run

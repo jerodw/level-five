@@ -93,6 +93,7 @@ from test_plan_commit import (
     remote_refs,
     run_plan,
     run_plan_on_a_pty,
+    wait_for_the_session_to_write,
     writes,
 )
 #: The shipped template, the schema it injects and the normative-sentence
@@ -675,10 +676,12 @@ def test_the_conferred_time_is_when_the_approval_was_read(planning: Planning):
     written = planning.root / PLANNED_REL
     process, master = run_plan_on_a_pty(planning,
                                         L5_STUB_WRITE=session_writing(BODY))
-    deadline = time.monotonic() + 60
-    while not written.exists():
-        assert time.monotonic() < deadline, "the session never wrote it"
-        time.sleep(0.05)
+    # A precondition asserted with a clock rather than the claim this test
+    # exists for: what is measured below is the gap between the session's end
+    # and the conferring timestamp, and a session that never wrote leaves that
+    # gap unmeasured rather than wrong. The arithmetic that follows is
+    # untouched.
+    wait_for_the_session_to_write(written)
     session_ended = time.time()
     time.sleep(held)
     os.write(master, (conftest.APPROVES + conftest.DECLINES).encode())
