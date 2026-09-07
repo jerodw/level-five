@@ -105,7 +105,7 @@ class Runner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
         if stage == WRITING:
             _write(self.run_dir / conftest.CHANGED_FILES,

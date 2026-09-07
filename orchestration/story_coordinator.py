@@ -1902,6 +1902,109 @@ def stale_artifacts(
     )
 
 
+# --------------------------------------------------------------------------
+# The pre-stage output baseline
+#
+# The snapshot above is taken in memory and the coordinator decides its own
+# missing, stale and schema checks from it. A stage inside its own turn cannot
+# reach it, so it finds out it left a required output unwritten only after the
+# turn has ended and the coordinator re-enters it — a whole agent invocation
+# spent writing one JSON file.
+#
+# So the same snapshot is written to the run directory, where a stage may read
+# it. The written copy is a *report*, not a second source of truth: every
+# check the coordinator makes still reads the in-memory dict it already holds,
+# so a stage that rewrites this file changes what it is told about itself and
+# nothing about what the coordinator decides.
+
+OUTPUT_BASELINE = "output-baseline.json"
+
+
+def output_baseline_file(run_dir: Path) -> Path:
+    """Where the pre-stage snapshot is written for a stage to read."""
+    return run_dir / OUTPUT_BASELINE
+
+
+@dataclass(frozen=True)
+class OutputBaseline:
+    """What a stage's outputs looked like when its turn began."""
+
+    stage: str
+    signatures: dict[str, tuple]
+
+
+def write_output_baseline(
+    run_dir: Path, stage_name: str, signatures: dict[str, tuple]
+) -> None:
+    """Persist the snapshot the coordinator has just taken, for the stage to read."""
+    output_baseline_file(run_dir).write_text(
+        json.dumps(
+            {
+                "stage": stage_name,
+                "signatures": {
+                    name: list(signature)
+                    for name, signature in sorted(signatures.items())
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def read_output_baseline(run_dir: Path) -> OutputBaseline | None:
+    """The persisted snapshot, or None where there is none to read.
+
+    The signatures come back in the tuple form artifact_signatures produces,
+    because that is the form stale_artifacts compares against. JSON renders a
+    tuple as a list, and a reader that returned lists would find every
+    artifact changed, report no stale artifact at all, and tell a stage it was
+    complete in precisely the case this exists to catch.
+
+    An absent or unreadable file is None rather than an exception: the two
+    readers of this — a command a stage may run on itself and a hook that runs
+    at the end of its turn — each answer for that themselves, one by saying so
+    and one by deciding nothing.
+    """
+    try:
+        held = json.loads(
+            output_baseline_file(run_dir).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    if not isinstance(held, dict):
+        return None
+    signatures = held.get("signatures")
+    if not isinstance(signatures, dict):
+        return None
+    return OutputBaseline(
+        stage=str(held.get("stage") or ""),
+        signatures={
+            name: tuple(signature) for name, signature in signatures.items()
+        },
+    )
+
+
+def stage_allowed_tools(
+    *, allowed_tools: list[str] | None, harness_root: Path
+) -> list[str]:
+    """The target's grants, plus the grant for the stage's own output check.
+
+    The check is invited in every stage's prompt, so it has to be runnable
+    without a target repository editing its .harness/config.yaml or the
+    template every new target is created from. It is appended rather than
+    substituted: the configured grants arrive whole and unchanged, and this
+    adds one.
+
+    The module is imported here rather than at module scope because it imports
+    this one.
+    """
+    import output_check
+
+    return [*(allowed_tools or []), output_check.grant(harness_root)]
+
+
 def _retry_record_file(run_dir: Path) -> Path:
     return run_dir / "retry-history.json"
 
@@ -7442,6 +7545,15 @@ def run_story(
             if artifact and (run_dir / artifact).is_file()
         ]
 
+        # The grants this stage is invoked with: the target's own, plus the
+        # one that makes the output check it is invited to run permitted. One
+        # read of the configured key feeds both sites that pass them, so the
+        # rendered prompt lists exactly what the invocation permits.
+        stage_tools = stage_allowed_tools(
+            allowed_tools=config.get("allowed_tools"),
+            harness_root=harness_root,
+        )
+
         context = context_assembler.build_context(
             story_text=story_text,
             story=reading.parsed,
@@ -7454,11 +7566,12 @@ def run_story(
             retry_count=state.retry_count,
             retry_category=routed_category,
             retry_stage=routed_stage,
-            allowed_tools=config.get("allowed_tools"),
+            allowed_tools=stage_tools,
             self_route_result=self_route_result,
             correction_pass_result=correction_pass_result,
             suite_run_result=suite_run_result,
             revert_check_result="\n".join(revert_records) or None,
+            stage=name,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])
         prompt = context_assembler.render(template, context)
@@ -7483,6 +7596,11 @@ def run_story(
         conditional = conditional_artifacts(stage)
         required = required_artifacts(stage)
         artifacts_before = artifact_signatures(run_dir, conditional + required)
+        # The same snapshot, written where the stage can read it, so a stage
+        # can ask about its own outputs while its turn is still open. Every
+        # check below still reads the in-memory dict: this is what the stage
+        # is told, never what the coordinator decides.
+        write_output_baseline(run_dir, name, artifacts_before)
 
         # What the whole tree held before this stage ran, so the completeness
         # check below can say what the stage changed without asking the stage.
@@ -7608,7 +7726,8 @@ def run_story(
             log_path=log_path,
             permission_mode=config.get("permission_mode", "acceptEdits"),
             model=config.get("model"),
-            allowed_tools=config.get("allowed_tools"),
+            allowed_tools=stage_tools,
+            run_dir=run_dir,
             **budget,
             **no_suite,
         )

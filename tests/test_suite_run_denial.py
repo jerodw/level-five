@@ -711,7 +711,8 @@ class Runner:
         return next(suite for name, suite in self.suites if name == stage)
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None, **extra):
+                 permission_mode=None, model=None, allowed_tools=None,
+                 run_dir=None, **extra):
         ordinal = len(self.calls)
         self.calls.append(stage)
         self.extras.append((stage, dict(extra)))
@@ -741,7 +742,7 @@ class RunnerWithoutTheSuiteParameter(Runner):
     """
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None):
+                 permission_mode=None, model=None, allowed_tools=None, run_dir=None):
         return Runner.__call__(self, prompt, stage=stage, cwd=cwd,
                                log_path=log_path,
                                permission_mode=permission_mode, model=model,

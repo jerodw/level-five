@@ -386,7 +386,7 @@ class Runner:
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None,
-                 max_budget_usd=None, suite_command=None):
+                 max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
         if stage == "implementer":
             write_json(self.run_dir / conftest.CHANGED_FILES,

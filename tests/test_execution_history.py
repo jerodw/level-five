@@ -131,7 +131,7 @@ class HistoryRunner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None):
+                 allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         if self.delete_history_each_stage:
             history = self.run_dir / "execution-history.json"

@@ -298,7 +298,7 @@ class Inspector:
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode,
                  model, allowed_tools=None, max_budget_usd=None,
-                 suite_command=None):
+                 suite_command=None, run_dir=None):
         index = len(self.invocations)
         cost = self.cost_of(index)
         self.invocations.append({

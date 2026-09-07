@@ -2251,6 +2251,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "both renders, and that a tree with no layer leaves both without it — "
         "the module builds one under tmp_path and drives the real launcher "
         "against that, rather than touching the shipped tree",
+    "test_a_stage_can_check_its_own_outputs.py":
+        "every verdict it drives is taken against a workflow it builds with "
+        "conftest.build_workflow, in a run directory it writes for itself, "
+        "because the stage names, the required and conditional outputs and the "
+        "schemas they carry are all inputs to what the check does with them. "
+        "Two reads remain and both have what is shipped as their subject: "
+        "prompts/harness-layer.md, because the criterion is that the partial "
+        "this harness gives every stage carries the resolved command and calls "
+        "it optional, which a fixture partial could only say back what the "
+        "module had just written into it; and templates/config.yaml, because "
+        "the criterion is that no target has to declare the grant, and the "
+        "template every new target is created from is the file that claim is "
+        "about",
     "test_a_stage_cannot_edit_its_own_story.py":
         "its runs are driven against a workflow it builds and under execution "
         "rules of its own, because what a run does with a record naming a "

@@ -75,6 +75,7 @@ import inspection
 import machine_load
 import outbox
 import outbox_sweep
+import output_check
 import run_status
 import schema_validator
 import story_coordinator
@@ -875,7 +876,7 @@ class RecordingRunner:
         self.calls: list[dict] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append({
             "stage": stage, "prompt": prompt, "cwd": Path(cwd),
             "log_path": Path(log_path), "permission_mode": permission_mode,
@@ -1905,7 +1906,7 @@ class InspectingRunner:
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode,
                  model, allowed_tools=None, max_budget_usd=None,
-                 suite_command=None):
+                 suite_command=None, run_dir=None):
         first = not self.calls
         self.calls.append({"stage": stage, "prompt": prompt,
                            "max_budget_usd": max_budget_usd})
@@ -2028,7 +2029,7 @@ class PostStoryInspector:
         self.calls: list[dict] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append({"prompt": prompt, "stage": stage, "cwd": Path(cwd)})
         artifact, _ = inspection.findings_paths(
             Path(cwd), harness_config.load_config(Path(cwd)))
@@ -2542,7 +2543,12 @@ def test_allowed_tools_reaches_both_the_runner_and_the_rendered_prompt(tmp_path)
     of these two assertions, so both are here.
     """
     run = complete_run(tmp_path)
-    assert run.argument("allowed_tools") == [["Bash(xyzzy:*)"]] * len(run.stages)
+    # The configured grants arrive whole, with the grant for the output check
+    # every stage is invited to run appended: the coordinator adds one rather
+    # than substituting for what the target configured, so a site that stopped
+    # reading the key still fails this equality.
+    granted = ["Bash(xyzzy:*)", output_check.grant(run.harness)]
+    assert run.argument("allowed_tools") == [granted] * len(run.stages)
     assert "- Bash(xyzzy:*)" in run.prompt_for("implementer")
 
 

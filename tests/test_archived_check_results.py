@@ -327,7 +327,7 @@ class Runner:
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None,
-                 max_budget_usd=None):
+                 max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         if stage == WRITING:
             self.attempt = self.calls.count(stage)

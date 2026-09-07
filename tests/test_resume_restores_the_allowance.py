@@ -273,7 +273,7 @@ class Runner:
         return [text for name, text in self.prompts if name == stage][occurrence]
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
+                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         self.prompts.append((stage, prompt))
         self.states.append((stage, json.loads(

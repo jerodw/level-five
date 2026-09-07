@@ -474,7 +474,7 @@ class FakeRunner:
             json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None):
+                 allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         if stage == WRITING:
             self._write_json(conftest.CHANGED_FILES, {

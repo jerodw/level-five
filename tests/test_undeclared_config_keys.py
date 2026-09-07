@@ -121,7 +121,7 @@ class Runner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
         # Written exactly as the real runner writes it, so the stage log is
         # observable as a file rather than only as an argument nobody used.
@@ -929,7 +929,7 @@ def test_the_same_scan_reports_a_tie_planted_under_orchestration(tmp_path):
     assert [f.path for f in findings] == ["orchestration/planted.py"]
 
 
-def test_permanent_mentions_holds_eleven_and_none_is_harness_config():
+def test_permanent_mentions_holds_thirteen_and_none_is_harness_config():
     """Read off the list the other module owns, because this story's edit to
     it is one of its acceptance criteria.
 
@@ -943,9 +943,14 @@ def test_permanent_mentions_holds_eleven_and_none_is_harness_config():
     entry point this harness ships is a Python program and says so to the
     kernel. The last of them sits under `orchestration/` rather than under
     `scripts/`, which changes where it is and not what it is.
+
+    a-stage-can-check-its-own-outputs moved it by two, and one of those is the
+    first `hooks/` entry since the Bash guard: the turn-end check is a hook
+    rather than an entry point, and the entry point it shares a checker with is
+    the other. Both are the same growth as the four before them.
     """
     mentions = stack_module.PERMANENT_MENTIONS
-    assert len(mentions) == 11, sorted(mentions)
+    assert len(mentions) == 13, sorted(mentions)
     assert not [path for path, _ in mentions
                 if path == "orchestration/harness_config.py"]
     # The control for that absence: the same comprehension over the same list

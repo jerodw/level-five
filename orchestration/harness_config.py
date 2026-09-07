@@ -45,11 +45,27 @@ def undeclared_config_problems(
     ]
 
 
-def find_target_root(start: Path) -> Path:
+def target_root(start: Path) -> Path | None:
+    """The nearest ancestor holding .harness/config.yaml, or None.
+
+    The walk itself, made without a disposition: a caller that must stop says
+    so through `find_target_root` below, and a caller that must answer rather
+    than exit — a hook whose every failure path yields no decision — reads this
+    one. Two walks would be two answers to where a target begins, so there is
+    one, in the shape `build_transport`/`sweep` and `resolve_settings`/`query`
+    already take.
+    """
     for candidate in [start, *start.parents]:
         if (candidate / ".harness" / "config.yaml").is_file():
             return candidate
-    sys.exit("No .harness/config.yaml found here or above. Run l5-init first.")
+    return None
+
+
+def find_target_root(start: Path) -> Path:
+    found = target_root(start)
+    if found is None:
+        sys.exit("No .harness/config.yaml found here or above. Run l5-init first.")
+    return found
 
 
 def _unquote(value: str) -> str:

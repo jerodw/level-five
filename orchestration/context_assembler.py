@@ -168,6 +168,27 @@ def config_context(config: dict) -> dict[str, str | None]:
     }
 
 
+def output_check_command(
+    harness_root: Path, run_dir: Path, stage: str | None
+) -> str | None:
+    """The fully resolved command a stage may run to check its own outputs.
+
+    Composed rather than described: the entry point's absolute path, the run
+    directory and the stage name, so the stage has nothing to assemble. An
+    absent stage name renders the placeholder as None, the optional-placeholder
+    convention, so a caller that omits it renders exactly what it rendered
+    before this existed.
+
+    The module is imported here rather than at module scope: it imports the
+    coordinator, and the coordinator imports this module.
+    """
+    if not stage:
+        return None
+    import output_check
+
+    return output_check.command_line(harness_root, run_dir, stage)
+
+
 def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
@@ -231,6 +252,7 @@ def build_context(
     correction_pass_result: str | None = None,
     suite_run_result: str | None = None,
     revert_check_result: str | None = None,
+    stage: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
     standards = _read_files(
@@ -325,6 +347,11 @@ def build_context(
         "suite_run_result": suite_run_result,
         "retry_state": retry_state,
         "testing_standards": _read(standards_dir / "testing.md"),
+        # The command this stage may run to ask about its own required
+        # outputs, resolved here so the harness-layer partial can carry it.
+        # Absent stage name renders None, which is what a caller that omits
+        # the argument gets — exactly what it rendered before.
+        "output_check_command": output_check_command(harness_root, run_dir, stage),
     }
 
     context.update(schema_context(harness_root))

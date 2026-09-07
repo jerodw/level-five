@@ -251,7 +251,7 @@ class NoFindings:
         self.calls = 0
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls += 1
         artifact, _ = inspection.findings_paths(
             Path(cwd), harness_config.load_config(Path(cwd)))
@@ -323,7 +323,7 @@ class Runner:
         self.attempt = 1
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
         self.attempt = max(1, self.calls.count(RETRY_STAGE))
         if stage == WRITING:
