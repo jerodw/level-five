@@ -1,0 +1,251 @@
+story:
+  id: story-111
+  title: A stage records every file it touched
+  description: |
+    story-101's tester modified tests/test_command_transport.py and left it out
+    of tester-changed-files.json. Nothing caught it. The correction pass asked
+    the documenter to add it and the documenter refused, correctly: the record
+    is another stage's output under .harness/runs/, a blocked path for every
+    stage, and a documenter editing it would make the tester's account of its
+    own work into something the documenter wrote. The verifier accepted the
+    refusal and recorded the omission under `unverified`. The run ended with a
+    record known to be wrong and structurally unfixable.
+
+    A changed-files record is what the whole governance layer reads.
+    recorded_by_all_stages derives what a run touched from the records, which
+    since story-100 is the post-story inspection's scope; recorded_by_other_stages
+    derives from the same reading which stage created a governed path, which is
+    what the baseline merge and the revert check turn on. A file missing from a
+    record is a file the revert check does not consider governed, so an edit
+    under a restricted prefix escapes the check that exists to decide whether it
+    was forced; a file the post-story inspection never takes into scope; and a
+    file no reader of the run can see was touched at all.
+
+    This story makes an omission detectable and decides who repairs one. The
+    coordinator captures a signature of the target tree before each stage that
+    declares a changed-files record is invoked, compares it after that stage's
+    turn, and reports any path the stage changed that its record does not name.
+    An omission re-enters the stage that wrote the record — the only stage that
+    may amend it, which is what story-101 established — as a self-route on the
+    bookkeeping cause, so it spends the budget story-108 created for a turn that
+    did the work and did not record it rather than the budget for a turn that got
+    the work wrong.
+
+    Detection is placed before the blocked-path, ownership and revert checks
+    deliberately: all three read the record, and an omitted governed path is
+    exactly how an edit escapes the revert check.
+  workflow: story-workflow
+
+tasks:
+  - Capture a per-stage tree signature — a map from repository-relative path to
+    content hash over the tracked-plus-untracked file set — at the point the
+    stage baselines are captured, for every stage that declares a changed_files
+    record, written into the run directory so it survives a resume.
+  - Make the capture first-seen-wins per stage, so a re-entered stage is compared
+    against what it originally found rather than against its own uncorrected
+    edits, and narrow what a re-capture may admit by recorded_by_other_stages, so
+    a second stage's edits are not attributed to the first.
+  - Derive the paths a stage actually changed by comparing the signature against
+    the tree after that stage's turn, subtracting the repository-wide blocked
+    paths, and expressing the result in the modified/created/deleted groups the
+    changed-files schema already uses.
+  - Report as an omission every path the derivation names that the stage's record
+    does not, and report nothing when the record accounts for all of them.
+  - Declare a self-route cause for an incomplete record, add it to
+    SELF_ROUTE_FAILURES and to BOOKKEEPING_SELF_ROUTE_FAILURES, and give it its
+    own statement rather than letting it fall through to the stale-artifact
+    wording.
+  - Route an omission through self_route at the site, so a stage with unspent
+    bookkeeping budget runs again in place and a stage without one escalates with
+    the omitted paths named.
+  - Place the check inside the changed-files block after the schema check and
+    before the blocked-path, ownership and revert checks.
+  - Update the tester's max_bookkeeping_self_routes_reason, which today says the
+    budget is spent only on a required artifact that is missing or stale.
+  - Write the validation module, driven by a fake stage that omits deliberately
+    and by the same stage recording completely, so the check is shown to
+    discriminate rather than shown to fire.
+  - Record the mechanism in .harness/docs/ARCHITECTURE.md beside the existing
+    account of the changed-files records and their readers.
+
+acceptance_criteria:
+  - A stage that writes a file into the target tree and omits it from its
+    changed-files record is re-entered by the coordinator, and the self-route
+    artifact for that re-entry names the new cause under "failure".
+  - The same stage, with a record naming every path it changed, is not re-entered
+    and the run proceeds to the next stage.
+  - story-101's case is driven end to end: a stage edits a file under the
+    configured test location that scope.modify permits, records every other path
+    it changed, and the omitted path alone is reported.
+  - The new cause is a member of SELF_ROUTE_FAILURES and a member of
+    BOOKKEEPING_SELF_ROUTE_FAILURES, so a stage declaring a bookkeeping budget
+    spends that budget on an omission and leaves max_self_routes untouched.
+  - A stage that declares no bookkeeping budget spends max_self_routes on an
+    omission, which is the unsplit behaviour every other cause already has there.
+  - A stage whose bookkeeping budget is exhausted escalates rather than
+    re-entering, and the escalation reason names the omitted paths and the record
+    they are missing from.
+  - The statement the re-entered stage is given is its own text, distinct from
+    the missing-artifact and stale-artifact statements, and it names the record
+    and the omitted paths.
+  - A path that some other stage's changed-files record accounts for is not
+    reported against this stage, driven by a backward retry in which one stage
+    changes a file between two invocations of another.
+  - A stage re-entered for an omission is still shown the omission it made on its
+    first turn — the signature is not re-taken against its own edits — so a
+    re-entry that ignores the report is reported again rather than passing.
+  - A path beneath a repository-wide blocked path is not reported, so the
+    coordinator's own writes under .harness/history/ during a stage's turn do not
+    read as that stage's omission.
+  - A path git excludes as ignored is not reported, so a suite run inside a
+    stage's turn leaving __pycache__ or .pytest_cache behind does not read as an
+    omission.
+  - The check reports only omissions. A record naming a path the stage did not
+    change is not reported, and a test says so, because that is what keeps every
+    existing fake runner in tests/ green.
+  - The check is driven off stage.get("changed_files") alone: no stage name and
+    no artifact name is written at the check, and a stage with no such
+    declaration is not checked.
+  - The signature is written into the run directory under a name one function
+    shapes, so a coordinator process that exits and resumes compares against the
+    signature the first invocation took.
+  - The revert check, the ownership check and the blocked-path check all still
+    read the record after this check has run, and a run whose record was
+    completed by a re-entry has its completed record adjudicated by them.
+
+technical_plan:
+  implementation_steps:
+    - Add a tree-signature capture beside capture_stage_baseline in
+      orchestration/story_coordinator.py. The file set is
+      `git ls-files --cached --others --exclude-standard -z` over the target
+      root, which is the same set capture_stage_baseline and _build_clone use, so
+      gitignored paths are already out. Hash file content in Python rather than
+      shelling to git hash-object, so a path containing a newline cannot corrupt
+      the listing. The result is a path-to-hash mapping written as JSON.
+    - Shape the signature's filename in one function, in the idiom
+      self_route_result_file and prompt_file already establish, keyed by stage
+      name so a resume finds what the first invocation wrote.
+    - Make the capture first-seen-wins, mirroring capture_stage_baseline's rule
+      and for its reason: a signature re-taken at a self-route would hold the
+      stage's own uncorrected edits and the omission it exists to find would
+      become invisible. Narrow what a re-capture may admit by the accounted_for
+      set the baseline capture already receives — recorded_by_other_stages — so a
+      path another stage created between two invocations is admitted at its
+      current content and this stage's own crash leftovers are not.
+    - Capture at the point stage_baseline_requests is resolved, before the agent
+      is invoked, so the two baselines are taken from the same tree.
+    - Add a function that compares a signature against the tree as it now stands
+      and returns modified, created and deleted groups, subtracting the
+      repository-wide blocked paths from rules. Prefix matching for blocked paths
+      reuses the same reading _blocked_violation does rather than a second one.
+    - Add a function that takes those groups and a stage's record and returns the
+      paths the record does not name, sorted and grouped. Omission only — a path
+      the record names and the tree does not show as changed is not reported.
+    - Declare the new cause beside AGENT_PROCESS_FAILED and the two artifact
+      causes, add it to SELF_ROUTE_FAILURES and to
+      BOOKKEEPING_SELF_ROUTE_FAILURES, and document in the comment above
+      BOOKKEEPING_SELF_ROUTE_FAILURES why it belongs there: the stage did the
+      work and did not record it, which is the same fact the two artifact causes
+      state.
+    - Give the new cause a branch in self_route_statement. Restructure the
+      function so the stale-artifact text is reached by its own condition rather
+      than by falling off the end, otherwise a cause added later inherits the
+      stale wording silently.
+    - Wire the check into the stage loop inside the `if record_name:` block,
+      after _schema_violation and before _blocked_violation, routed through
+      self_route exactly as the missing-artifact and stale-artifact checks are:
+      re-enter the loop at this index when the decision is taken, escalate with
+      the decision's reason when it is not.
+    - Update max_bookkeeping_self_routes_reason in workflows/story-workflow.json,
+      which today describes the budget as spent only on a required artifact that
+      is missing or that the freshness check read as a previous attempt's, and is
+      false the moment a third cause joins the subset.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The signature capture, the comparison, the omission derivation, the
+        new self-route cause and its statement, and the check wired into the
+        stage loop.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: max_bookkeeping_self_routes_reason enumerates the causes the budget
+        is spent on and stops being true when this one joins them.
+    - file: tests/test_a_stage_records_every_file_it_touched.py
+      stage: tester
+      reason: The validation module for this story — a fake stage driven both
+        omitting and complete, story-101's case as the fixture, the attribution
+        and re-entry properties, and the omission-only property.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The account of the changed-files records and their readers now has
+        a completeness check in front of it, and the reason an omission is the
+        writing stage's to repair.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/
+    - schemas/
+    - orchestration/agent_runner.py
+    - orchestration/verification_runner.py
+    - scripts/
+
+verification_requirements:
+  - Confirm the check discriminates rather than fires: the module drives a stage
+    that omits and the same stage that does not, and the second is not
+    re-entered. A test that only shows the check firing has not shown it works.
+  - Confirm the omitted path in the story-101 fixture is under the configured
+    test location and permitted by scope.modify, so the case validated is a
+    bookkeeping omission and not a governance violation wearing its clothes.
+  - Confirm the new cause reaches the budget decision as a value: it is in both
+    declared tuples, and the parametrized tests in
+    tests/test_bookkeeping_self_route_budget.py that derive from those tuples
+    pick it up without being edited to name it.
+  - Confirm self_route_statement gives the new cause its own text, and that the
+    stale-artifact text is no longer the function's unconditional fall-through.
+  - Confirm the check runs before the blocked-path, ownership and revert checks
+    in the stage loop, by reading the order at the site.
+  - Confirm the signature is first-seen-wins by driving a stage re-entered for an
+    omission that does not correct it, and observing the omission reported again.
+  - Confirm no existing fake runner in tests/ was adapted by weakening what it
+    asserts. Where a fixture had to start accounting for a file it writes into
+    the target tree, that is the check working; where a fixture asserts less than
+    it did, that is the thing the testing standard forbids.
+  - Confirm the suite passes, and report any failure with its output rather than
+    summarising it.
+
+constraints:
+  - No stage may write another stage's changed-files record. The block on
+    .harness/runs/ stays, the documenter's refusal in story-101 was right, and
+    this story does not create a route around either.
+  - The coordinator does not amend a record. A record remains the writing stage's
+    own account of its own work; the coordinator reports an omission and re-enters
+    the stage, and that is the whole of what it does to a record.
+  - The check reads the stage's own signature rather than the run's start, so a
+    second stage's edits are never attributed to the first.
+  - No stage name, record name or prefix is written at the check. All three come
+    off the loaded workflow and the rules, as they do for every check beside it.
+  - A cause added to SELF_ROUTE_FAILURES later must still have to be classified
+    into or out of the bookkeeping subset rather than inheriting a branch by
+    omission. The totality assertions that hold this today stay standing.
+  - max_retries and the retry budget are untouched. This is re-entry with no
+    verdict, and the two ceilings stay separate.
+  - The existing readers of the records — recorded_by_all_stages,
+    recorded_by_other_stages, governed_edits, _ownership_violation,
+    _blocked_violation — keep their behaviour and their signatures. This story
+    puts a check in front of them and does not change what they do with what they
+    read.
+  - Nothing here decides whether an edit was permitted. That is the ownership
+    check and the revert check, and an omission is a record defect whether the
+    edit was governed or not.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 12:04:50
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
