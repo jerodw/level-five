@@ -1074,6 +1074,13 @@ class BreakingRunner(Runner):
         if (kwargs["stage"] == DECLARED_ENTRY
                 and self.calls.count(DECLARED_ENTRY) == 2):
             (self.target_root / BREAKAGE).write_text("", encoding="utf-8")
+            # And the record says so. A stage is answerable for every file it
+            # writes into the target tree, so a file written here and named
+            # nowhere would be an incomplete record — a different defect from
+            # the one this fixture is about, caught before the pass ever
+            # reaches the clean-clone check that is its subject.
+            write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
+                       {"modified": [], "created": [BREAKAGE], "deleted": []})
         return result
 
 

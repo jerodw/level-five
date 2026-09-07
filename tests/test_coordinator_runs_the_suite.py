@@ -331,8 +331,14 @@ class Runner:
 
         action = _nth(self.plan.get(stage, []), call - 1, REPAIR)
         changed: list[str] = []
-        if action == REPAIR and not self._repaired():
-            write(self.target_root / SENTINEL, f"{REPAIRED}\n")
+        if action == REPAIR:
+            if not self._repaired():
+                write(self.target_root / SENTINEL, f"{REPAIRED}\n")
+            # Named whether or not this invocation had to write it: the
+            # coordinator compares the tree the attempt began on against the
+            # tree the turn ended on, so an invocation that found the content
+            # it wanted already there is still the one whose record has to
+            # account for it.
             changed = [SENTINEL]
 
         verdict = conftest.answering_guidance(
