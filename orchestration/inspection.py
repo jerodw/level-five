@@ -424,6 +424,16 @@ class Filed:
     title: str
     severity: int
     scope: str
+    #: Whether the local queue held this brief's key in the terminal failed
+    #: state when the inspection began. Evidence that filing this identity has
+    #: been tried and keeps failing — `enqueue` overwrites the whole entry, so
+    #: the attempt count and the last error do not survive the refile and this
+    #: is the only place a developer meets that fact. It decides nothing: the
+    #: brief is filed either way, and the mark is taken from the index read
+    #: before any filing, so a key this same inspection just overwrote is still
+    #: reported as a refile. Defaulted so every existing construction stays
+    #: valid.
+    refiled_over_failure: bool = False
 
 
 @dataclass(frozen=True)
@@ -892,7 +902,7 @@ def capped(found: list, max_findings: int):
 
 
 def file_findings(target_root: Path, found: list, max_findings: int, *,
-                  dry_run: bool = False):
+                  dry_run: bool = False, failed: frozenset = frozenset()):
     """Apply the cap and file what survives it, reporting both.
 
     Returns `(filed, dropped)`. This is the whole of what a producer of
@@ -905,6 +915,13 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
     `dry_run` reports exactly what an ordinary call would file and enqueues
     nothing: the cap is applied identically and only the call into the queue is
     not made.
+
+    `failed` is the keys the local queue held in the terminal failed state when
+    the inspection began, and it only marks what it files — nothing here drops
+    a finding on it, and a caller that supplies none files exactly what it
+    filed before the field existed. It is read from before any filing rather
+    than as the queue now stands, so a key this call has just overwritten with
+    a pending entry is still reported as a refile.
     """
     kept, excluded = capped(found, max_findings)
     dropped = [
@@ -938,8 +955,26 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
             title=one.finding["title"],
             severity=one.finding["severity"],
             scope=one.scope.label,
+            refiled_over_failure=_held_failed(one.finding, failed),
         ))
     return tuple(filed), dropped
+
+
+def _held_failed(finding, failed: frozenset) -> bool:
+    """Whether the local queue held this finding's key in the failed state.
+
+    Derived rather than read off the key `enqueue` returned, because a dry run
+    returns no key and reports exactly what an ordinary call would file.
+    Guarded because this is a report and may not become the thing that stops a
+    filing: an identity `identity_key` cannot render is refused by `enqueue`,
+    which is where that decision belongs.
+    """
+    if not failed:
+        return False
+    try:
+        return outbox.identity_key(identity(finding)) in failed
+    except (TypeError, ValueError):
+        return False
 
 
 def reported_total(costs) -> float | None:
@@ -1107,7 +1142,10 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         scope_files += result.scope_files
 
     filed, over = file_findings(
-        target_root, found, bound.max_findings, dry_run=dry_run
+        target_root, found, bound.max_findings, dry_run=dry_run,
+        # The index read above every invocation, so a brief whose key this same
+        # inspection is about to overwrite is still reported as a refile.
+        failed=index.failed,
     )
     dropped.extend(over)
 
