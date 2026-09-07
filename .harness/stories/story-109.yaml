@@ -1,0 +1,150 @@
+story:
+  id: story-109
+  title: A test may not time the machine
+  description: |
+    Some tests in this suite assert that a real operation completes inside a
+    wall-clock bound. Under `-n auto` across the whole suite that is not a
+    claim about the code; it is a claim about how fast the machine is at that
+    moment, and the machine owes it nothing.
+
+    It has ended a run. story-101 arrived at
+    test_the_kill_reaches_the_process_group_and_not_only_the_command with its
+    work complete and its self-route budget spent, met the fixture command
+    failing to background a child before the kill arrived, and escalated at
+    $23.88 on a module its changed-files.json does not name. story-100's
+    verifier recorded test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to
+    failing in a parallel run and passing in isolation. story-083 falsified
+    tests/test_pty_drain.py's docstring claim that nothing in it depends on
+    machine load.
+
+    The distinction the story turns on is that each of these tests has two
+    halves and only one of them is load-sensitive. A half asserting that an
+    operation is killed for exceeding a bound is a claim about the harness: the
+    command sleeps past the timeout and must be reaped, and a loaded machine
+    only makes that more true. A half asserting that an operation completes
+    inside a bound is a claim about the machine. That is the half that flakes,
+    and it is the half this story converts.
+
+    Where the fast half can be proven without a deadline it loses the deadline.
+    Where a precondition genuinely cannot be guaranteed - the process-group
+    test needs a child to exist before it can ask whether the kill reached the
+    group - the test reports inconclusive rather than failed, which is what its
+    own failure message already says has happened. Widening a constant is not
+    the remedy: a bound widened to five seconds is the same defect with a
+    better constant, and two of the three constants have already been widened
+    once.
+
+    A test that can skip is a test that can go quietly missing, so the skip is
+    made expensive to hide. Every inconclusive result goes through one helper,
+    a standing rule holds that no other skip claims load, and a run reporting
+    more inconclusive results than a declared ceiling is red - a suite that
+    proved nothing because the machine was too loaded is a failure rather than
+    a pass. Filed from the brief a-test-may-not-time-the-machine.
+  workflow: story-workflow
+
+tasks:
+  - Add tests/machine_load.py declaring the distinction and the single route to it - a prefix constant and an inconclusive(reason) that skips carrying that prefix - so a precondition a run could not meet is reported in one shape from every site.
+  - Convert the precondition in test_the_kill_reaches_the_process_group_and_not_only_the_command in tests/test_command_transport.py, where the fixture command must have written its child's pid before the transport's timeout kill arrives, to report inconclusive rather than fail.
+  - Split and convert the two configured-bound proofs in tests/test_config_keys_are_obeyed.py so the half that reads the bound off the transport and the half that observes a command killed past it are their own tests that never skip, and only the half requiring a command to finish inside the configured bound reports inconclusive.
+  - Convert start_child in tests/test_pty_drain.py so a child that does not announce itself inside ANNOUNCE_DEADLINE is inconclusive rather than an AssertionError, and rewrite the module docstring sentence claiming nothing below depends on machine load to say which preconditions do and what happens when one is missed.
+  - Convert the deadlines in tests/test_plan_commit.py - drain's expiry and the wait for a file the session writes - so an expiry that means the child never got there is inconclusive, leaving every assertion about what a drained child returned exactly as it is.
+  - Convert the wait for the session to write in tests/test_the_approval_is_observed.py, which is a precondition asserted with a clock rather than the claim the test exists for.
+  - Add the ceiling to tests/conftest.py - a controller-side count of the inconclusive results a run reported, and a non-zero exit naming each of them when the count exceeds a declared maximum.
+  - Write tests/test_no_test_bounds_the_machine.py - the enumeration of every module that sleeps or reads a clock held against a declared classification in both directions, the rule that no module skips for load except through the helper, a demonstration that each converted site reports inconclusive when its precondition is deliberately missed, and the ceiling shown both firing and not firing.
+  - Record the distinction in .harness/standards/testing.md, reconciled with the standing rule that tests must not weaken or skip existing assertions to pass.
+
+acceptance_criteria:
+  - Each converted precondition reports inconclusive rather than failed, and each is demonstrated by a constructed case that misses the precondition deliberately - a command that never spawns its child, a child that never announces, a session that never writes - rather than by waiting for load to produce one.
+  - Every assertion that bounds how slow an operation may be is unchanged and still passes - the elapsed comparisons after a kill in tests/test_command_transport.py, tests/test_filed_query.py and tests/test_brief_fetch.py, and the polling waits that give a marker or a disappearing process generous patience.
+  - A missed precondition takes no load-independent assertion with it - the reading of the configured bound off the transport, and the observation of a command killed past that bound, are their own tests and neither can be skipped by the other's precondition.
+  - A run reporting more inconclusive results than the declared ceiling exits non-zero and names each inconclusive test and its reason; a run at or below the ceiling exits zero. Both are demonstrated by a suite this story builds and runs, not by an argument about the hook.
+  - The ceiling counts only the results the helper produced, so a test suppressed by a declared skip or skipif marker does not spend it, demonstrated by a run carrying both kinds.
+  - No module under tests/ calls pytest.skip for a machine-load reason except through tests/machine_load.py, and the rule that says so is shown reporting a module that does.
+  - The enumeration of clock-reading modules and the declared classification agree in both directions, so a module that starts sleeping or reading a clock without being classified reddens the suite, and a classification naming a module that no longer does reddens it too.
+  - Every module the enumeration reports is classified as bounding only slowness or as carrying preconditions routed through the helper, and no module is left pending - the sweep is total over what the enumeration finds.
+  - tests/test_pty_drain.py's docstring makes no claim that nothing in it depends on machine load, and states instead which preconditions do.
+  - The suite's census counters do not fall - this story removes deadline assertions and adds more than it removes, so unskipped_tests and assertions are both no smaller than at the tester's baseline.
+
+technical_plan:
+  implementation_steps:
+    - Read tests/machine_load.py's future callers first - the process-group test in tests/test_command_transport.py, the two configured-bound proofs in tests/test_config_keys_are_obeyed.py, start_child in tests/test_pty_drain.py, drain and the file wait in tests/test_plan_commit.py, and the session wait in tests/test_the_approval_is_observed.py - so the helper's signature is settled by what all of them need rather than by the first one converted.
+    - Write tests/machine_load.py. A prefix constant, an inconclusive(reason) raising pytest's skip carrying that prefix, and a docstring stating the rule - a test may bound how slow an operation is allowed to be and may not bound how slow the machine is allowed to be - and stating that a call here means the test never got to ask its question.
+    - Convert the process-group test. The transport is driven with SPAWN_BOUND_SECONDS as it is today; what changes is that a child_pid file the fixture never wrote is inconclusive naming the bound rather than an assertion failure. Leave SPAWN_BOUND_SECONDS, CHILD_SLEEP_SECONDS, LONGER_THAN_ANY_BOUND and the ordering test that holds them alone.
+    - Split test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to. The bound read off the built transport and the command killed past it become tests that cannot skip - and the killed half is the one that separates the configured value from the harness default, so the proof of the key survives a skip of the other. The remaining half, a command with no sleep that must land inside SYNC_TIMEOUT, reports inconclusive when its entry came back pending naming the bound.
+    - Do the same to the filed-query timeout proof, and rewrite the headroom sentences in both constants' comments - they justify a number chosen so the spawn would fit under load, and after this story the number does not have to fit.
+    - Convert start_child. A child that has not announced inside ANNOUNCE_DEADLINE is still killed and reaped exactly as it is now, and what the helper reports afterwards is inconclusive rather than an AssertionError. Every caller inherits it, which is the point - the announcement is a precondition of every case in that module.
+    - Convert drain's two expiries and the file wait in tests/test_plan_commit.py on the same terms, keeping the process-group kill and the message naming the deadline. test_a_child_that_never_exits_fails_naming_the_deadline drives drain with a deliberately tiny deadline against a child that never exits, and that case must still fail rather than skip, because there the expiry is the assertion - so the two callers are told apart rather than the helper guessing.
+    - Convert the session wait in tests/test_the_approval_is_observed.py, leaving the timing arithmetic that follows it untouched.
+    - Add the ceiling to tests/conftest.py. Accumulate the inconclusive reports in pytest_runtest_logreport, which the controller receives for every worker's report under xdist, and decide in pytest_sessionfinish guarded to the controller - a worker-side count would see only its own shard and a ceiling read per worker is not the ceiling this story declares. Declare the maximum as a named constant with the reasoning beside it - more than the two tight sites reporting at once means the machine was too loaded for the run to have proven anything.
+    - Write tests/test_no_test_bounds_the_machine.py. The enumeration is a source scan for sleeping and clock reading over the modules under tests/; the classification is a declared table naming each module and which of the two kinds it carries; the agreement is asserted in both directions. The single-route rule reads module source for skip calls and is shown reporting a constructed module that skips for load directly. The ceiling is demonstrated by nested runs over suites this module writes under tmp_path, in the shape tests/test_suite_census.py already uses for the shipped census.
+    - Demonstrate each converted site. A fixture command that backgrounds nothing, a child whose source never announces, a session stub that writes nothing, and a sync command that sleeps past the bound driven through the landing half - each run and each shown reporting inconclusive rather than failing.
+  likely_file_changes:
+    - file: tests/machine_load.py
+      stage: tester
+      reason: The prefix, the inconclusive() route, and the statement of the distinction the whole story turns on.
+    - file: tests/test_command_transport.py
+      stage: tester
+      reason: The process-group test's spawn precondition becomes inconclusive; the elapsed comparison after the kill and the ordering test over the bounds are unchanged.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The sync-timeout and filed-query-timeout proofs are split so the bound read off the transport and the kill past it cannot skip, and the headroom sentences in the two constants' comments are rewritten.
+    - file: tests/test_pty_drain.py
+      stage: tester
+      reason: start_child's announce precondition becomes inconclusive, and the docstring stops claiming nothing below depends on machine load.
+    - file: tests/test_plan_commit.py
+      stage: tester
+      reason: drain's expiries and the wait for a written file become inconclusive where they mean the child never got there, while the case that drives drain with a tiny deadline still fails.
+    - file: tests/test_the_approval_is_observed.py
+      stage: tester
+      reason: The clock-asserted wait for the session to write is a precondition rather than the claim the test exists for.
+    - file: tests/conftest.py
+      stage: tester
+      reason: The ceiling - the controller-side count of inconclusive results and the non-zero exit naming them when it is exceeded.
+    - file: tests/test_no_test_bounds_the_machine.py
+      stage: tester
+      reason: The enumeration and its classification, the single-route rule, the per-site demonstrations, and the ceiling shown firing and not firing.
+    - file: .harness/standards/testing.md
+      stage: documenter
+      reason: The rule a later author needs - what a test may bound, what it may not, that an unmet precondition is reported inconclusive through the one helper, and why that is not the skipping-to-pass the standard beside it forbids.
+
+scope:
+  modify:
+    - tests/
+    - .harness/standards/testing.md
+  do_not_modify:
+    - orchestration/
+    - workflows/
+    - schemas/
+    - prompts/
+    - .harness/config.yaml
+    - .harness/census.py
+    - execution-rules.json
+
+verification_requirements:
+  - Confirm each converted precondition is demonstrated reporting inconclusive by a constructed case that misses it deliberately, and that no demonstration waits for machine load to produce one.
+  - Confirm the ceiling is shown both firing and not firing by nested runs over suites the test module builds, and that the firing run's output names each inconclusive test and its reason.
+  - Confirm the ceiling counts only what the helper produced, by a run carrying a declared skip marker alongside an inconclusive result.
+  - Confirm the halves that bound how slow an operation may be are unchanged and still pass - read the elapsed comparisons in tests/test_command_transport.py, tests/test_filed_query.py and tests/test_brief_fetch.py against their pre-story form.
+  - Confirm the split leaves the configured-bound proofs decisive - the value is still read off the built transport, the command asked to sleep past it is still killed and its entry left pending naming the bound, and neither of those can be skipped.
+  - Confirm the enumeration and the classification are asserted to agree in both directions and that the classification leaves no module pending.
+  - Confirm the single-route rule is shown reporting a module that skips for load without the helper.
+  - Confirm tests/test_pty_drain.py no longer claims that nothing in it depends on machine load.
+  - Confirm the census counters at the end of the run are no smaller than at the tester's baseline, so no assertion count fell.
+  - Confirm the run's suite is green and that the evidence for it is the coordinator's own record rather than an agent's account of one.
+
+constraints:
+  - Nothing outside tests/ and .harness/standards/testing.md changes. The implementer owns no file in this story - every test in the suite is the tester's, and the standards line is the documenter's.
+  - orchestration/command_transport.py, orchestration/outbox.py and the timeout, kill and process-group behaviour they implement are untouched. Every one of these tests is right about what it is testing; what is wrong is what it demands of the machine while testing it.
+  - The harness's own bounds are untouched - command_transport.DEFAULT_TIMEOUT_SECONDS and every value in .harness/config.yaml. The constants this story reads are the tests' own.
+  - SPAWN_BOUND_SECONDS, FILED_QUERY_TIMEOUT, SYNC_TIMEOUT, ANNOUNCE_DEADLINE and DRAIN_DEADLINE keep the values they have. This story makes their headroom stop being load-bearing rather than adding more of it, and a constant widened again would be the defect this story exists to close.
+  - Suite parallelism is not touched. Running -n auto is story-079's deliberate choice and the reason the suite takes three minutes rather than twenty; removing it would trade the wrong thing.
+  - No existing assertion is deleted to make a test pass. A test whose precondition was not met reports inconclusive without having reached its assertions, which is a different act from removing one - and the census, which refuses a stage whose assertion count fell, is the check that holds the difference.
+  - The ceiling is decided once, on the controller, over every worker's reports. A count read per worker under -n auto is not the ceiling this story declares.
+  - Nothing here invokes a model, and no test added or changed by this story resolves anything out of this repository's commit graph.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 07:11:40
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
