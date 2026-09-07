@@ -1,0 +1,137 @@
+story:
+  id: story-110
+  title: A filed brief carries its classification
+  description: |
+    Every brief the Inspector files is classified -- a category, a severity, a
+    confidence, an effort and the workflow it should be planned under -- and none
+    of it reaches a person looking at the tracker. The classification is filed in
+    a base64 payload inside an HTML comment, where only l5-plan --brief reads it.
+    On the board a brief is prose and a single l5 label, so a developer choosing
+    what to plan next cannot see which briefs are correctness defects and which
+    are documentation drift, or which are severity 3, without opening each one.
+
+    This story puts the classification where the backlog is worked. The sync
+    script gains a category label beside the l5 label it already applies, and
+    sets five single-select project fields -- Category, Severity, Confidence,
+    Effort and Workflow -- from the values the payload already carries. Fields
+    sort, group and filter on the board and are invisible outside it; a label
+    travels with the issue and is searchable everywhere but has no order. The two
+    answer different questions and the story ships both.
+
+    The script enumerates no category, severity, effort or workflow anywhere. It
+    writes the values the entry carries, so the acceptable values remain the
+    brief schema's enums and the workflow definitions the harness holds, and a
+    category added to the schema later is a board option added rather than a
+    second list to keep in step. The payload blob is untouched: it is what the
+    brief fetch reads, and making the classification visible does not make it the
+    fetch's source.
+
+    Confidence ships as a field rather than being left out. The argument for
+    leaving it is that severity already carries the consequence and a brief may
+    not be severity 3 unless its confidence is high, so the two are correlated at
+    the top of the range where sorting matters most. The argument that won is
+    that a severity-2 guess and a severity-2 certainty are different things to
+    pick up next, which is exactly what a separate axis exists to say, and the
+    correlation the first argument rests on holds only at severity 3.
+
+    A category label that does not exist is created by the script before it is
+    applied, rather than being created by hand. gh can create a label and cannot
+    create a project field, so the two are treated differently on purpose: a new
+    category labels its first brief without anybody setting anything up, while a
+    field the board does not have costs that field and nothing else.
+  workflow: story-workflow
+
+tasks:
+  - Add the category label to what the sync script applies. The label is the configured prefix followed by the payload's category, applied beside the existing label rather than replacing it, and a payload carrying no category adds no label at all.
+  - Create the category label idempotently before applying it, so a category filed for the first time does not need the label to have been made by hand. A create that fails is transient like every other call made after the issue exists.
+  - Add five field-name constants to templates/sync/github.sh -- one each for Category, Severity, Confidence, Effort and Workflow -- each defaulting to empty, an empty name meaning that field is not written.
+  - Set those five fields on the board item from the payload's category, severity, confidence, effort and workflow, resolving each field and each option by name and editing the item by id, which is the shape the Status write already has.
+  - Read the project id, the project's field list and the project's item listing once per filing rather than once per field, so the six writes do not multiply the reads.
+  - Set each field only where the board reports it empty, so nothing overwrites a value a person edited, which is the rule the Status write already keeps.
+  - Make a field name or an option name that resolves to no id cost that field and nothing else -- said on stderr, with the remaining fields still written, the item still on the board and the entry still landed.
+  - Set the five field names in .harness/sync/github.sh to the fields on this deployment's board, leaving the template carrying the mechanism and no value.
+  - Extend the stub gh in tests/test_filed_query.py to record the labels an issue carries, to answer a label create, and to seed a board carrying the five fields and their options.
+  - Write the regression tests, deriving the drive cases from the brief schema's enums and from the workflow definitions the harness holds rather than from a list written in the test module.
+  - Record in .harness/docs/ARCHITECTURE.md what a filing now writes to the board and to the issue, and the two rules that differ between a missing label and a missing field.
+
+acceptance_criteria:
+  - A brief filed through the sync script produces an issue carrying the existing label and a second label that is the configured prefix followed by the brief's category.
+  - The label is created before it is applied, so a category whose label the repository does not yet have is filed with that label rather than failing or filing without it.
+  - An entry whose payload carries no category adds no label beyond the existing one and creates no label, so a non-brief entry files exactly as it did before this story.
+  - The board item for a filed brief carries the brief's category, severity, confidence, effort and workflow in the five configured fields.
+  - The severity written to the board is the payload's integer rendered as the option name, so a brief of severity 2 lands on the option named 2.
+  - A field the project does not have, and a field whose options do not include the payload's value, each cost that field alone: the issue is created, the item is on the board, the other four fields are written, the script exits 0 and the entry lands.
+  - A project call that fails after the issue exists exits 75 with the entry left pending, for every project subcommand the script invokes.
+  - A filing whose board work failed is retried by a later invocation that finds the existing issue, reaches the field work and the label work, and creates no second issue.
+  - A field the board reports as already carrying a value is left alone and no edit is made for it, while a field the board reports as empty is written.
+  - The project id, the field list and the item listing are each read no more than once per invocation of the script.
+  - The template names no field, so a target that has configured nothing files exactly as it does today: no field call is made and no project call is made at all when no project is configured.
+  - The installed copy differs from the template only in the values of the editable constants at the top.
+  - A test drives the filing over every category the brief schema declares, every severity, every confidence, every effort and every workflow the harness defines, taking those values from the schema and from the harness's own workflow listing rather than from a list written in the test module.
+  - The payload marker and everything the brief fetch reads back are unchanged: a brief filed by this script is still fetched whole and still equals the brief that was filed.
+
+technical_plan:
+  implementation_steps:
+    - In templates/sync/github.sh, add a constant for the category label prefix defaulting to a non-empty value, since it is a mechanic rather than a property of a particular board, and five field-name constants each defaulting to empty beside the existing STATUS_FIELD and STATUS_OPTION.
+    - Read the payload's category, severity, confidence, effort and workflow out of the entry with jq beside the existing title and body reads, treating an absent value as empty and writing nothing for it.
+    - Where the payload carries a category, create the label idempotently and add it to the issue after the issue exists, failing transiently if either call fails.
+    - Restructure the board block so the project id, the field list and the item listing are read once, before any field is written, and reused by the Status write and by all five field writes.
+    - Write each of the five fields through one helper that resolves the field id and the option id by name, skips with a message on stderr where either resolves to nothing, and edits the item by id otherwise -- and, like the Status write, only where the item's current value is empty.
+    - Keep the Status write exactly as it behaves today, including its transient exit on an option name that resolves to no id, so this story changes nothing about the column an item lands in.
+    - Set the five field names in .harness/sync/github.sh and change nothing else in it, so the two copies still differ only in constant values.
+    - Extend the stub gh in tests/test_filed_query.py to record an issue's labels, to answer label create and label list, and seed its board with the five fields and the options the brief schema declares.
+    - Add the regression tests over both copies of the script, parametrized as the existing board tests are, and update the existing item-edit count assertion, which now sees one edit per field written rather than one.
+    - Record the behaviour in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: The mechanism -- the label prefix constant, the five field-name constants, the label creation, the once-per-filing reads and the field-setting helper.
+    - file: .harness/sync/github.sh
+      stage: implementer
+      reason: This deployment's values -- the names of the five fields on its board -- and nothing else, so the two copies still differ only in constant values.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: The stub gh gains labels and label creation and a board carrying the five fields; the regression tests are added here beside the board tests they extend; the existing assertion that one item-edit is made now sees one per field written.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: What a filing now writes to the issue and to the board, and why a missing label is created while a missing field is skipped.
+
+scope:
+  modify:
+    - templates/sync/github.sh
+    - .harness/sync/github.sh
+    - tests/test_filed_query.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/story-brief.schema.json
+    - templates/query/github.sh
+    - .harness/query/github.sh
+    - orchestration/filed_query.py
+    - orchestration/brief_fetch.py
+    - prompts/inspector.md
+
+verification_requirements:
+  - Confirm the suite passes and that the tests added for this story fail against the sync scripts as they were before it.
+  - Confirm a filed brief's issue carries the category label and its board item carries the five field values, driven against the stub gh rather than against any live tracker.
+  - Confirm the field cases are derived from the brief schema's enums and from the harness's workflow listing, so a category added to the schema becomes a case here without the test module being edited.
+  - Confirm a missing field and a missing option each leave the filing landed with every other field written.
+  - Confirm every project call the script makes exits 75 when it fails, and that the retry finds the existing issue and reaches both the field work and the label work without creating a second issue.
+  - Confirm the installed copy and the template still differ only in the values of the constants at the top, and that the template carries no field name of this deployment's.
+  - Confirm no sync script invokes git.
+
+constraints:
+  - The payload marker and its encoding are unchanged, and a brief fetched back through the query script still equals the brief that was filed.
+  - The Status field and the Backlog placement behave exactly as they do today, including the transient exit on a Status option name that resolves to no id.
+  - Nothing moves an item between columns and nothing overwrites a field value the board already reports.
+  - Every failure after the issue is created stays transient, so the entry remains pending and a later sweep retries the whole command.
+  - A field name or option name that resolves to no id is not a failure: it is skipped, said on stderr, and the entry lands.
+  - The scripts enumerate no category, severity, confidence, effort or workflow: the values written are the ones the payload carries.
+  - The template carries the mechanism and no value particular to a board; the installed copy carries the values and no mechanic of its own.
+  - No sync script commits to the repository.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 08:33:09
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
