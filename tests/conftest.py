@@ -16,10 +16,28 @@ import pytest
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+# This directory too, explicitly rather than relied on: pytest prepends it when
+# it imports this file, but a nested run under a different import mode would
+# not, and a ceiling that silently failed to install is exactly the quiet
+# disappearance it exists to prevent.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import harness_config  # noqa: E402
 import plan_mandate  # noqa: E402
 import story_coordinator  # noqa: E402
+
+# --------------------------------------------------------------------------
+# The ceiling on inconclusive results.
+#
+# Imported by name rather than re-declared here, because pytest finds a hook by
+# looking for it as an attribute of this module and the bodies belong beside
+# the helper whose reports they count. Both are read on the controller: the
+# first accumulates every worker's report, the second decides the count once.
+# `tests/machine_load.py` says what the distinction is and why the ceiling is
+# not advisory; `tests/test_no_test_bounds_the_machine.py` shows it firing.
+# --------------------------------------------------------------------------
+from machine_load import (pytest_runtest_logreport,  # noqa: E402,F401
+                          pytest_sessionfinish)
 
 
 # --------------------------------------------------------------------------

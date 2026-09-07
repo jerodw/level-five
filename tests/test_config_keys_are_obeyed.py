@@ -72,6 +72,7 @@ import conftest
 import filed_query
 import harness_config
 import inspection
+import machine_load
 import outbox
 import outbox_sweep
 import run_status
@@ -200,8 +201,14 @@ MANDATE_DEPTH = 0
 #: What makes both sides cheap *and* decisive is that the bound sits below the
 #: default: a command asked to sleep for `SLEEPS_PAST_THE_BOUND` is killed at
 #: the configured bound, and under the default it would finish and land. So a
-#: harness that stopped reading the key fails the second half in seconds
+#: harness that stopped reading the key fails the killed half in seconds
 #: rather than after a minute of waiting.
+#:
+#: The bound is small enough that a busy machine can take a shell past it with
+#: no sleep at all. That is why the three halves are three tests: the number
+#: the transport was built with and the kill past it are decided without any
+#: race, and only the landing half depends on the machine — which reports
+#: inconclusive rather than failing, and takes neither of the others with it.
 SYNC_TIMEOUT = 1.3
 SLEEPS_PAST_THE_BOUND = 4
 
@@ -243,13 +250,16 @@ DEFAULT_SWEEP_MAX_ENTRIES = outbox_sweep.DEFAULT_MAX_ENTRIES
 #: answer. So a harness that stopped reading the key fails the second half in
 #: seconds rather than after half a minute of waiting.
 #:
-#: The first half is a wall-clock race the fixture cannot win by being fast: a
-#: command that only prints a document still has to be spawned, and this suite
-#: runs its modules in parallel while several of them spawn whole nested pytest
-#: runs. A bound tight enough to be quick was reached by that spawn under load
-#: and killed a command that had nothing to wait for, so the bound carries
-#: enough headroom that only a command deliberately sleeping past it is killed.
-#: Both sides are pinned exactly as before, and
+#: The half where the command answers is a wall-clock race the fixture cannot
+#: win by being fast: a command that only prints a document still has to be
+#: spawned, and this suite runs its modules in parallel while several of them
+#: spawn whole nested pytest runs. This number is not what settles that. It was
+#: once chosen to carry enough headroom that the spawn would fit under load,
+#: which made the suite's greenness a claim about the machine; now the number
+#: the settings resolve and the kill past the bound are their own tests that
+#: consult no clock, and the answering half reports inconclusive when the spawn
+#: does not fit. So the headroom decides how often that is reported rather than
+#: whether the suite is red. Both sides are pinned exactly as before, and
 #: `test_no_proof_value_is_a_default_or_this_repositorys_own_configured_value`
 #: holds the ordering the two numbers must keep.
 FILED_QUERY_TIMEOUT = 6.5
@@ -448,8 +458,12 @@ KEY_PROOFS: dict[str, Proof] = {
     "filed_query_max_items": Proof(
         "test_filed_query_max_items_is_the_bound_on_what_one_answer_carries",
         BEHAVIOURAL),
+    # The killed half rather than the read-off-the-settings half: it is the
+    # one that separates the configured value from the harness default by
+    # observing what the bound *did*, and it cannot report inconclusive, so
+    # the proof of the key survives whatever the landing half reports.
     "filed_query_timeout_seconds": Proof(
-        "test_filed_query_timeout_seconds_is_the_bound_a_query_is_held_to",
+        "test_a_query_command_sleeping_past_the_bound_is_killed_and_unanswered",
         BEHAVIOURAL),
     "history_dir": Proof(
         "test_history_dir_is_where_the_cross_run_records_are_written",
@@ -499,8 +513,9 @@ KEY_PROOFS: dict[str, Proof] = {
     "sync_command": Proof(
         "test_sync_command_is_the_command_an_entry_is_filed_by_running",
         BEHAVIOURAL),
+    # The killed half, for the reason given at `filed_query_timeout_seconds`.
     "sync_timeout_seconds": Proof(
-        "test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to",
+        "test_a_sync_command_sleeping_past_the_bound_is_killed_and_left_pending",
         BEHAVIOURAL),
     "test_command": Proof(
         "test_test_command_is_the_command_the_clean_clone_path_builds",
@@ -1522,13 +1537,19 @@ class Sweep:
     problem: str
 
 
-def swept(tmp_path: Path, *, sleeps: int = 0, **overrides: object) -> Sweep:
+def swept(tmp_path: Path, *, sleeps: int = 0, run: bool = True,
+          **overrides: object) -> Sweep:
     """Build a fixture target, install its sync command, and drain its queue.
 
     The command is a file this fixture writes, at the path the configuration
     names, printing a reference this module chose. Nothing reaches a network,
     and the path carries the token — so an entry landed with that reference
     can only have come from the harness running the *configured* command.
+
+    `run=False` stops before the drain, so a caller whose subject is the bound
+    the harness *built the transport with* can read it off the transport
+    without running any command at all. That half of the bound's proof then
+    depends on no machine at all.
     """
     values = fixture_config(**overrides)
     target = build_target(tmp_path, values)
@@ -1546,7 +1567,7 @@ def swept(tmp_path: Path, *, sleeps: int = 0, **overrides: object) -> Sweep:
     l5_sync = conftest.load_script("l5-sync")
     transport, problem = l5_sync.build_transport(
         harness_config.load_config(target), target)
-    if transport is not None or not problem:
+    if run and (transport is not None or not problem):
         outbox.sync(queue, transport)
     return Sweep(entry=entry_of(target, key), transport=transport,
                  problem=problem)
@@ -1585,24 +1606,64 @@ def test_sync_command_is_the_command_an_entry_is_filed_by_running(tmp_path):
 
 
 def test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to(tmp_path):
-    """The configured bound decides both halves, observed rather than read.
+    """The configured number is the bound the harness built the transport with.
 
-    A command that finishes inside it lands; the same command asked to sleep
-    past it is killed and its entry left pending, naming the bound. The two
-    runs differ in that sleep alone, so what separates them can only be the
-    number the configuration carries — and the number is below the default
-    written in harness source, so a harness that had fallen back to that
-    default would let the second command finish and land.
+    Read off the transport the harness built for a fixture target, with no
+    command run and no clock consulted, so nothing about this half can depend
+    on the machine. A harness that had fallen back to the default written in
+    harness source would carry that number here instead.
     """
-    inside = swept(tmp_path / "inside")
-    assert inside.transport.timeout == SYNC_TIMEOUT
-    assert inside.entry["state"] == outbox.LANDED
-    assert inside.entry["reference"] == SYNC_REFERENCE
+    built = swept(tmp_path, run=False)
+    assert built.problem == ""
+    assert built.transport.timeout == SYNC_TIMEOUT
 
-    beyond = swept(tmp_path / "beyond", sleeps=SLEEPS_PAST_THE_BOUND)
+
+def test_a_sync_command_sleeping_past_the_bound_is_killed_and_left_pending(
+        tmp_path):
+    """The half that separates the configured value from the harness default.
+
+    A command asked to sleep for longer than the configured bound and less
+    than the default is killed at the configured bound, and its entry is left
+    pending naming that bound. A loaded machine makes the command slower and
+    the kill more certain, so this half never reports inconclusive: it is the
+    proof of the key, and it survives whatever becomes of the half below.
+    """
+    beyond = swept(tmp_path, sleeps=SLEEPS_PAST_THE_BOUND)
     assert beyond.entry["state"] == outbox.PENDING
     assert "reference" not in beyond.entry
     assert str(SYNC_TIMEOUT) in beyond.entry["last_error"]
+
+
+def entry_that_got_to_land(sweep: Sweep, bound: float) -> dict:
+    """The swept entry, or an inconclusive report if the bound arrived first.
+
+    An entry left pending naming the bound, from a command that was asked to
+    sleep for nothing at all, says that the fixture's own shell script did not
+    finish inside `bound` on this machine. That is a claim about how fast the
+    machine spawns a process rather than about whether the harness obeyed the
+    key, and the two tests above have already settled the key without it.
+    """
+    entry = sweep.entry
+    if entry["state"] == outbox.PENDING and str(bound) in entry.get(
+            "last_error", ""):
+        machine_load.inconclusive(
+            f"a sync command asked to sleep for nothing was still killed at "
+            f"the configured {bound}s bound, so this machine did not let a "
+            f"command that lands be observed landing")
+    return entry
+
+
+def test_a_sync_command_that_finishes_inside_the_bound_lands(tmp_path):
+    """The other side of the bound: it kills, and it also lets through.
+
+    The command here sleeps for nothing, so the only thing between it and the
+    entry is how long the machine takes to spawn a shell. That is a
+    precondition rather than the claim, and when the machine does not meet it
+    this reports inconclusive — taking neither of the two tests above with it.
+    """
+    entry = entry_that_got_to_land(swept(tmp_path), SYNC_TIMEOUT)
+    assert entry["state"] == outbox.LANDED
+    assert entry["reference"] == SYNC_REFERENCE
 
 
 def counting_sync_command(target: Path, values: dict) -> Path:
@@ -1721,23 +1782,63 @@ def test_filed_query_command_is_the_command_the_question_is_put_to(tmp_path):
 
 
 def test_filed_query_timeout_seconds_is_the_bound_a_query_is_held_to(tmp_path):
-    """The configured bound decides both halves, observed rather than read.
+    """The configured number is the bound the harness resolves for a query.
 
-    A command that answers inside it is heard; the same command asked to sleep
-    past it is killed and the answer knows nothing, naming the bound. The two
-    questions differ in that sleep alone, so what separates them can only be
-    the number the configuration carries — and the number is below the default
-    written in harness source, so a harness that had fallen back to that
-    default would let the second command finish and answer.
+    Read off the settings the query module resolves, with no command run and
+    no clock consulted, so nothing about this half can depend on the machine.
+    A harness that had fallen back to the default written in harness source
+    would carry that number here instead.
     """
-    inside = asked_what_is_filed(tmp_path / "inside")
-    assert inside.answered is True, inside.reason
+    settings, problem = filed_query.resolve_settings(dict(VARYING))
+    assert problem == ""
+    assert settings.timeout == FILED_QUERY_TIMEOUT
 
-    beyond = asked_what_is_filed(tmp_path / "beyond",
-                                 sleeps=QUERY_SLEEPS_PAST_THE_BOUND)
+
+def test_a_query_command_sleeping_past_the_bound_is_killed_and_unanswered(
+        tmp_path):
+    """The half that separates the configured value from the harness default.
+
+    A command asked to sleep for longer than the configured bound and less
+    than the default is killed at the configured bound, and the answer knows
+    nothing and names that bound. A loaded machine makes the command slower
+    and the kill more certain, so this half never reports inconclusive: it is
+    the proof of the key, and it survives whatever becomes of the half below.
+    """
+    beyond = asked_what_is_filed(tmp_path, sleeps=QUERY_SLEEPS_PAST_THE_BOUND)
     assert beyond.answered is False
     assert beyond.items == ()
     assert str(FILED_QUERY_TIMEOUT) in beyond.reason
+
+
+def answer_that_got_to_be_heard(answer: filed_query.Answer,
+                                bound: float) -> filed_query.Answer:
+    """The answer, or an inconclusive report if the bound arrived first.
+
+    An unanswered query naming the bound, from a command that was asked to
+    sleep for nothing at all, says that the fixture's own shell script did not
+    finish inside `bound` on this machine. That is a claim about how fast the
+    machine spawns a process rather than about whether the harness obeyed the
+    key, and the two tests above have already settled the key without it.
+    """
+    if not answer.answered and str(bound) in answer.reason:
+        machine_load.inconclusive(
+            f"a query command asked to sleep for nothing was still killed at "
+            f"the configured {bound}s bound, so this machine did not let a "
+            f"command that answers be observed answering")
+    return answer
+
+
+def test_a_query_command_that_answers_inside_the_bound_is_heard(tmp_path):
+    """The other side of the bound: it kills, and it also lets through.
+
+    The command here sleeps for nothing, so the only thing between it and the
+    answer is how long the machine takes to spawn a shell. That is a
+    precondition rather than the claim, and when the machine does not meet it
+    this reports inconclusive — taking neither of the two tests above with it.
+    """
+    inside = answer_that_got_to_be_heard(asked_what_is_filed(tmp_path),
+                                         FILED_QUERY_TIMEOUT)
+    assert inside.answered is True, inside.reason
 
 
 def test_filed_query_max_items_is_the_bound_on_what_one_answer_carries(tmp_path):
@@ -2461,7 +2562,10 @@ def test_allowed_tools_reaches_both_the_runner_and_the_rendered_prompt(tmp_path)
 #: must land in the copy's own script rather than in this repository's.
 COPIED_TREES = ("orchestration", "schemas", "workflows", "prompts", "rules",
                 "scripts")
-COPIED_TESTS = ("conftest.py", MODULE_NAME)
+#: `machine_load.py` among them because `conftest.py` imports the ceiling's
+#: two hooks from it and this module reports through it, so a copy without it
+#: cannot import either file.
+COPIED_TESTS = ("conftest.py", "machine_load.py", MODULE_NAME)
 
 
 def harness_copy(tmp_path: Path) -> Path:
@@ -2553,7 +2657,7 @@ INVENTORY_NODES = (
     "tests/test_artifact_schemas.py::test_schemas_directory_holds_exactly_the_named_schemas",
 )
 
-INVENTORY_TESTS = ("conftest.py", "test_schema_validator.py",
+INVENTORY_TESTS = ("conftest.py", "machine_load.py", "test_schema_validator.py",
                    "test_artifact_schemas.py")
 
 

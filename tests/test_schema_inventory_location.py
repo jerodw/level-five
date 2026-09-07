@@ -76,7 +76,10 @@ ALL_NODES = INVENTORY_NODES + PARAMETRIZED_NODES + WALK_NODES
 
 #: The test files copied into the throwaway harness. Copying only these keeps
 #: collection there to the inventory checks and their dependencies.
-COPIED_TESTS = ("conftest.py", "test_schema_validator.py",
+#: `machine_load.py` is among them because `conftest.py` imports the
+#: inconclusive-result ceiling's hooks from it, so a copy without it cannot
+#: import the shared module at all.
+COPIED_TESTS = ("conftest.py", "machine_load.py", "test_schema_validator.py",
                 "test_artifact_schemas.py")
 
 #: The files the implementer touched under `tests/`, and the one function in
