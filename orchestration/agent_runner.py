@@ -23,6 +23,14 @@ SETTINGS_NAME = "settings.json"
 GUARD_NAME = "bash_guard.py"
 GUARD_PLACEHOLDER = "{guard_path}"
 GUARD_ARGUMENTS_PLACEHOLDER = "{guard_arguments}"
+#: The turn-end check, registered only for a workflow stage invocation: it
+#: needs the run directory and the stage to have anything to check, and an
+#: invocation that names neither — the planner, the workflow selector, the
+#: inspector — is given the declaration it was given before the entry existed.
+STOP_EVENT = "Stop"
+STOP_NAME = "stop_check.py"
+STOP_PLACEHOLDER = "{stop_path}"
+STOP_ARGUMENTS_PLACEHOLDER = "{stop_arguments}"
 
 
 #: What the CLI says when an invocation stopped because capacity ran out
@@ -126,7 +134,11 @@ def _rendered(node: Any, values: dict[str, str]) -> Any:
 
 
 def guard_settings(
-    harness_root: Path | None = None, *, suite_command: str | None = None
+    harness_root: Path | None = None,
+    *,
+    suite_command: str | None = None,
+    run_dir: Path | None = None,
+    stage: str | None = None,
 ) -> str | None:
     """The shipped hook declaration, with the guard's own path resolved.
 
@@ -145,9 +157,19 @@ def guard_settings(
     to the guard as one word. Unset, the placeholder resolves to nothing and
     the guard is registered with exactly the command line it had before this
     argument existed.
+
+    `run_dir` and `stage` are what a workflow stage invocation has and no other
+    invocation does, so the Stop entry is rendered when both are given and
+    dropped from the declaration when either is not — which is why the planner,
+    the workflow selector and the inspector are given exactly the declaration
+    they were given before that entry existed. It is dropped on a missing hook
+    file too, for the reason an unregisterable guard returns None: a check the
+    harness cannot install must not stop a run. Both are quoted for the reason
+    the suite command is.
     """
     directory = hooks_dir(harness_root)
     guard = directory / GUARD_NAME
+    stop = directory / STOP_NAME
     try:
         declaration = json.loads(
             (directory / SETTINGS_NAME).read_text(encoding="utf-8")
@@ -157,12 +179,22 @@ def guard_settings(
     if not guard.is_file():
         return None
     arguments = f" {shlex.quote(suite_command)}" if suite_command else ""
+    stop_wanted = run_dir is not None and stage and stop.is_file()
+    if not stop_wanted and isinstance(declaration.get("hooks"), dict):
+        declaration["hooks"].pop(STOP_EVENT, None)
+    stop_arguments = (
+        f" {shlex.quote(str(run_dir))} {shlex.quote(str(stage))}"
+        if stop_wanted
+        else ""
+    )
     return json.dumps(
         _rendered(
             declaration,
             {
                 GUARD_PLACEHOLDER: str(guard),
                 GUARD_ARGUMENTS_PLACEHOLDER: arguments,
+                STOP_PLACEHOLDER: str(stop),
+                STOP_ARGUMENTS_PLACEHOLDER: stop_arguments,
             },
         )
     )
@@ -179,6 +211,7 @@ def run_agent(
     allowed_tools: list[str] | None = None,
     max_budget_usd: float | None = None,
     suite_command: str | None = None,
+    run_dir: Path | None = None,
 ) -> AgentResult:
     """Run `claude -p` with the rendered prompt on stdin.
 
@@ -199,6 +232,12 @@ def run_agent(
     workflow entry declares that it runs no suite; unset, the guard is
     registered exactly as it was before the parameter existed and denies
     nothing on that account.
+
+    `run_dir` is the run directory of a workflow stage invocation, handed on to
+    `guard_settings` with the stage name it already has so the turn-end check
+    can be registered against them. Unset, no Stop entry is declared at all and
+    the settings are exactly the settings this built before the parameter
+    existed.
     """
     cmd = [
         "claude",
@@ -223,7 +262,9 @@ def run_agent(
     # configured test command, threaded through `suite_command` for a stage
     # declaring `may_not_run_suite` — which is why a fake runner driving one of
     # the shipped definitions has to accept that keyword.
-    settings = guard_settings(suite_command=suite_command)
+    settings = guard_settings(
+        suite_command=suite_command, run_dir=run_dir, stage=stage
+    )
     if settings:
         cmd += ["--settings", settings]
 

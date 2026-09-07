@@ -636,7 +636,7 @@ def test_run_agent_signature_is_unchanged_by_this_story(tmp_path):
     # ordered, and still goes red on a parameter nobody declared. A later story
     # that widens the signature again appends to this list, which is the
     # deliberate edit an assertion about a signature should cost.
-    ADDED_SINCE_STORY_035 = ["max_budget_usd", "suite_command"]
+    ADDED_SINCE_STORY_035 = ["max_budget_usd", "suite_command", "run_dir"]
     assert _signature_names(today) == (
         _signature_names(before) + ADDED_SINCE_STORY_035)
 

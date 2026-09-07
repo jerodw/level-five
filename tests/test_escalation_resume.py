@@ -380,7 +380,7 @@ class Runner:
         return edit(self.target_root, attempt)
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
+                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         self.archives_seen.append((stage, attempt_directories(self.run_dir)))
         attempt = max(1, self.calls.count(RETRY_STAGE))

@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Check a stage's required outputs before its turn ends.
+
+Usage: l5-check <run-dir> [stage]
+With no stage, checks the stage the run's state.json names as current.
+Exits zero when every required output that run's workflow declares for the
+stage is present, was written after the pre-stage baseline was taken, and
+satisfies its declared schema; exits non-zero naming what is not.
+
+The coordinator's own check after the turn is what decides; this is the same
+answer, reachable while the turn is still open.
+"""
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import output_check  # noqa: E402
+
+
+if __name__ == "__main__":
+    sys.exit(output_check.main(sys.argv[1:]))

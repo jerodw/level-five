@@ -276,7 +276,7 @@ class Runner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None):
+                 permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         if stage in self.silent:
             return AgentResult(ok=True, result_text=f"{stage} wrote nothing")
@@ -965,6 +965,12 @@ RENDERED_PROMPT = "prompt-"
 #: about.
 TREE_SIGNATURE = story_coordinator.stage_signature_file("").partition(".")[0]
 
+#: The pre-stage artifact snapshot the coordinator persists for a stage to
+#: read, taken from the coordinator's own name for it so the two cannot drift.
+#: Excluded for the reason the signature above is: a-stage-can-check-its-own-
+#: outputs introduced it rather than the story this module is about.
+OUTPUT_BASELINE = story_coordinator.OUTPUT_BASELINE
+
 
 def test_an_escalation_writes_no_new_file_to_the_run_directory(
     exhausted_escalation,
@@ -984,7 +990,8 @@ def test_an_escalation_writes_no_new_file_to_the_run_directory(
     run_dir = run_dir_of(exhausted_escalation)
     present = {path.name for path in run_dir.iterdir() if path.is_file()
                and not path.name.startswith(RENDERED_PROMPT)
-               and not path.name.startswith(TREE_SIGNATURE)}
+               and not path.name.startswith(TREE_SIGNATURE)
+               and path.name != OUTPUT_BASELINE}
 
     assert present <= ESCALATION_RUN_DIRECTORY, present - ESCALATION_RUN_DIRECTORY
     assert "escalation-summary.md" in present

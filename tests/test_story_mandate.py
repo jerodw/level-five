@@ -520,7 +520,7 @@ class Runner:
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
         # Written for the same reason the real runner writes it: the stage log
         # is one of the traces a refusal has to leave absent, and a fake that

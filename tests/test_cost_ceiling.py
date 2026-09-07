@@ -350,7 +350,8 @@ class Runner:
         return self.costs[min(ordinal, len(self.costs) - 1)]
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None, **extra):
+                 permission_mode=None, model=None, allowed_tools=None,
+                 run_dir=None, **extra):
         ordinal = len(self.calls)
         self.calls.append(stage)
         self.extras.append((stage, dict(extra)))
@@ -384,7 +385,7 @@ class RunnerWithoutTheBudgetParameter(Runner):
     """
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
-                 permission_mode=None, model=None, allowed_tools=None):
+                 permission_mode=None, model=None, allowed_tools=None, run_dir=None):
         return Runner.__call__(self, prompt, stage=stage, cwd=cwd,
                                log_path=log_path,
                                permission_mode=permission_mode, model=model,

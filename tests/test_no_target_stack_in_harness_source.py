@@ -144,10 +144,16 @@ PERMANENT_MENTIONS: dict[tuple[str, str], str] = {
     ('hooks/bash_guard.py',
      '#!/usr/bin/env python3'):
         "the harness's own hook is a Python program and says so to the kernel",
+    ('hooks/stop_check.py',
+     '#!/usr/bin/env python3'):
+        "the harness's own hook is a Python program and says so to the kernel",
     ('orchestration/brief_filing.py',
      '#!/usr/bin/env python3'):
         "the harness's own entry point is a Python program and says so to the kernel",
     ('scripts/l5-assist',
+     '#!/usr/bin/env python3'):
+        "the harness's own entry point is a Python program and says so to the kernel",
+    ('scripts/l5-check',
      '#!/usr/bin/env python3'):
         "the harness's own entry point is a Python program and says so to the kernel",
     ('scripts/l5-init',
