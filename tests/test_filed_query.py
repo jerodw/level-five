@@ -66,11 +66,23 @@ implementation. The subjects are kept apart deliberately:
     an item the listing did not return at all is answered transiently rather
     than overwritten.
 
-  * **the split between the two copies.** The template carries no project and
-    no column, the installed copy carries both, and every line the two do not
-    share is one of the editable constant assignments — asserted as the shape
-    of the difference rather than as byte identity, which the installed copy
-    is meant to break.
+  * **the classification a filed brief carries.** A brief's category reaches
+    the issue as a second label beside the one every entry gets, and its
+    category, severity, confidence, effort and workflow reach the board as
+    five single-select fields. The values driven are resolved from
+    `schemas/story-brief.schema.json`'s enums and from the harness's own
+    workflow listing rather than written here, so a category added to the
+    schema is a case in the sweep without this module being edited. The two
+    rules that differ are driven apart: a label the repository does not have
+    is created and then applied, while a field the board does not have — or an
+    option it does not offer — costs that field alone and the entry still
+    lands.
+
+  * **the split between the two copies.** The template carries no project, no
+    column and no field name, the installed copy carries all of them, and
+    every line the two do not share is one of the editable constant
+    assignments — asserted as the shape of the difference rather than as byte
+    identity, which the installed copy is meant to break.
 
   * **what the byte comparison used to guarantee.** That the file this
     repository runs is the file its suite exercises is asserted behaviourally
@@ -100,8 +112,15 @@ Every absence asserted here carries a demonstration that it can fail:
     which the stub's record of every project call it was made shows;
   * "no second issue was created" sits beside a filing under a different key,
     which does create one;
-  * "the template names no project and no column" sits beside the same
-    extraction over the installed copy, which names both;
+  * "the template names no project, no column and no field" sits beside the
+    same extraction over the installed copy, which names all of them;
+  * "a payload carrying no category adds no label and creates none" sits beside
+    the same filing of a brief, which does both;
+  * "the field the board already reports is not edited" sits beside a field
+    cleared on the same item, which is written by the same invocation;
+  * "the label the script creates is what lets it be applied" sits beside a
+    rendering of the same script with the create taken out, which the stub
+    refuses the add for;
   * "the two copies differ only in constant values" sits beside a rendering of
     the template differing in a line of mechanics, which the same predicate
     reports;
@@ -127,6 +146,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -197,6 +217,58 @@ THIS_TARGETS_STATUS_OPTION = "Backlog"
 #: A column nothing files into: what a human moved a landed item to, and what a
 #: later sweep must leave it at.
 A_COLUMN_A_HUMAN_MOVED_IT_TO = "In progress"
+
+
+class Axis(NamedTuple):
+    """One part of a brief's classification, on its way to the board.
+
+    `payload_field` is what the brief calls it, `constant` is what a sync
+    script names its board field with, `field_name` is what this deployment
+    calls that field on its board, and `values` is every value the field may
+    be written with.
+    """
+
+    payload_field: str
+    constant: str
+    field_name: str
+    values: tuple[str, ...]
+
+
+BRIEF_SHAPE = schema_validator.load_schema(brief_fetch.BRIEF_SCHEMA, REPO_ROOT)
+
+
+def declared_values(name: str) -> tuple[str, ...]:
+    """Every value the brief schema allows for one of its classifying fields.
+
+    Resolved out of the shipped schema rather than listed here, because the
+    acceptable values *are* the schema's enums: a category added there is a
+    case in the sweep below without this module being edited, and a field that
+    stopped declaring an enum is a resolution that raises rather than a sweep
+    that quietly drives nothing. Rendered as the strings a board option is
+    named with, which is what turns the integer severity into an option name.
+    """
+    return tuple(str(value) for value in BRIEF_SHAPE["properties"][name]["enum"])
+
+
+#: The five fields a brief's classification is written into, and what this
+#: deployment calls each of them. The names are written here rather than read
+#: out of `.harness/sync/github.sh` for the reason the Status values above are:
+#: a test that read the values out of its own subject would pass whatever they
+#: had been changed to. The values are not written here, for the opposite
+#: reason: they are the schema's and the harness's, and restating them would be
+#: the second list this story exists to avoid.
+CLASSIFICATION = (
+    Axis("category", "CATEGORY_FIELD", "Category", declared_values("category")),
+    Axis("severity", "SEVERITY_FIELD", "Severity", declared_values("severity")),
+    Axis("confidence", "CONFIDENCE_FIELD", "Confidence",
+         declared_values("confidence")),
+    Axis("effort", "EFFORT_FIELD", "Effort", declared_values("effort")),
+    #: The workflow a brief is planned under is not an enum: the acceptable
+    #: names are the definitions the harness holds, so they are read from the
+    #: same listing the coordinator refuses an unknown name against.
+    Axis("workflow", "WORKFLOW_FIELD", "Workflow",
+         harness_config.workflow_names(REPO_ROOT)),
+)
 
 #: What the module says about itself, read off it so this file names no key,
 #: bound or schema of its own.
@@ -1216,11 +1288,22 @@ needs_jq = pytest.mark.skipif(
 LEDGER_VARIABLE = "L5_STUB_LEDGER"
 
 #: How a test tells the stub to break on purpose. Two variables rather than
-#: one, because the two failures they cause are different claims: a project
-#: call that fails is a board the sync cannot write to, and a listing that
-#: reports nothing is a board the sync cannot *read* — which the script must
-#: not mistake for an item whose Status is empty.
+#: one, because the two failures they cause are different claims: a call that
+#: fails is a tracker the sync cannot write to, and a listing that reports
+#: nothing is a board the sync cannot *read* — which the script must not
+#: mistake for an item whose Status is empty.
+#:
+#: What the first names is a call rather than a project subcommand: the label
+#: work happens above the board work and every one of its calls is made after
+#: the issue exists, so it answers the same way and is failed the same way.
 FAIL_VARIABLE = "L5_STUB_FAILS_AT"
+
+#: What a test names in FAIL_VARIABLE to fail the two calls the label work
+#: makes. The project subcommands are named there by their own names, which is
+#: why these two carry the issue-side spelling rather than colliding with
+#: `item-edit`.
+LABEL_CREATE_CALL = "label-create"
+LABEL_ADD_CALL = "issue-edit"
 OMIT_VARIABLE = "L5_STUB_ITEM_LIST_REPORTS_NOTHING"
 
 STUB_GH = '''#!INTERPRETER
@@ -1231,27 +1314,42 @@ It implements exactly the invocations the reference scripts make and exits
 non-zero on anything else, which is what keeps it a fake tracker rather than a
 second implementation:
 
-  issue create        appends to the ledger and prints a URL.
+  issue create        appends to the ledger and prints a URL, carrying the
+                      label it was created with.
   issue list --search matches the search text against each issue's body.
   issue view          prints one issue's body by the key the create printed --
                       the invocation the query script makes to answer a
                       brief-fetch question.
+  issue edit          adds a label to an issue, beside the ones it carries. A
+                      label the repository does not hold is refused, as gh
+                      refuses it, which is what makes "created before it was
+                      applied" something this stub can report rather than
+                      something a test has to take on trust.
+  label create        gives the repository a label. A create over a label that
+                      already exists is refused unless --force is passed, again
+                      as gh does it, so a filing that is idempotent here is
+                      idempotent for the reason it claims to be.
   project item-add    adds the url to a project, or reports the item already
                       there rather than adding a second one, which is the
                       behaviour the sync script's retry depends on.
-  project item-list   the project's items. An item whose Status is unset
-                      carries no `status` key at all, which is how gh reports
-                      one, so a script that read a missing key as an empty
-                      string and a script that could not tell them apart are
-                      distinguishable here.
+  project item-list   the project's items. A field an item has no value for
+                      carries no key at all, which is how gh reports one, so a
+                      script that read a missing key as an empty string and a
+                      script that could not tell them apart are distinguishable
+                      here.
   project view        the project's node id.
   project field-list  the project's fields and their options, by name.
-  project item-edit   sets one single-select field on one item, by ids.
+  project item-edit   sets one single-select field on one item, by ids. The
+                      value lands under the key gh names that field's column
+                      after -- its name with the spaces removed and the case
+                      lowered -- so a board carrying five fields is read back
+                      field by field rather than as one column.
 
-The ledger holds the issues, the projects and every project invocation that was
-made, so a test can assert on a call that was *not* made as well as on one that
-was. FAIL_VARIABLE names project subcommands that must exit non-zero, and
-OMIT_VARIABLE makes `item-list` report a project with no items in it.
+The ledger holds the issues, the repository's labels, the projects and every
+project invocation that was made, so a test can assert on a call that was *not*
+made as well as on one that was. FAIL_VARIABLE names calls that must exit
+non-zero, and OMIT_VARIABLE makes `item-list` report a project with no items in
+it.
 """
 import json
 import os
@@ -1278,12 +1376,32 @@ def refuse(message):
     sys.exit(1)
 
 
+def told_to_fail(call):
+    return call in (os.environ.get("FAIL_VARIABLE", "") or "").split(",")
+
+
+def board_key(name):
+    """The key gh reports one field's value under, from the field's name."""
+    return name.replace(" ", "").lower()
+
+
+def record_issue_call(command):
+    """One call made against the issue itself, kept whatever it answers.
+
+    Held apart from the project calls rather than beside them, so an assertion
+    that no project call was made stays an assertion about the board.
+    """
+    state["issue_calls"].append({"command": command, "argv": argv})
+    save()
+
+
 if argv[:2] == ["issue", "create"]:
     number = len(issues) + 1
     issue = {
         "number": number,
         "title": flag(argv, "--title", ""),
         "body": flag(argv, "--body", ""),
+        "labels": [flag(argv, "--label")] if "--label" in argv else [],
         "url": "https://tracker.invalid/issues/%d" % number,
         "state": "OPEN",
         "stateReason": None,
@@ -1301,6 +1419,36 @@ elif argv[:2] == ["issue", "view"]:
     if not found:
         refuse("no issue is filed under %s" % wanted)
     print(found[0]["body"])
+elif argv[:2] == ["issue", "edit"]:
+    # The one edit the sync script makes: a label added beside the ones the
+    # issue carries rather than replacing them.
+    record_issue_call("LABEL_ADD_CALL")
+    if told_to_fail("LABEL_ADD_CALL"):
+        refuse("the stub was told to fail at issue edit")
+    wanted = argv[2]
+    found = [issue for issue in issues
+             if wanted in (issue["url"], str(issue["number"]))]
+    if not found:
+        refuse("no issue is filed under %s" % wanted)
+    added = flag(argv, "--add-label")
+    if added is None:
+        refuse("the stub was asked for something it does not do: %s"
+               % " ".join(argv))
+    if added not in state["labels"]:
+        refuse("the repository has no label %s" % added)
+    if added not in found[0]["labels"]:
+        found[0]["labels"].append(added)
+    save()
+elif argv[:2] == ["label", "create"]:
+    record_issue_call("LABEL_CREATE_CALL")
+    if told_to_fail("LABEL_CREATE_CALL"):
+        refuse("the stub was told to fail at label create")
+    name = argv[2]
+    if name in state["labels"] and "--force" not in argv:
+        refuse("the label %s already exists" % name)
+    if name not in state["labels"]:
+        state["labels"].append(name)
+    save()
 elif argv[:2] == ["issue", "list"]:
     search = (flag(argv, "--search", "") or "").strip('"')
     fields = (flag(argv, "--json", "") or "").split(",")
@@ -1317,7 +1465,7 @@ elif argv[:1] == ["project"]:
     # is still a call the test can see was made.
     state["calls"].append({"command": subcommand, "argv": argv})
     save()
-    if subcommand in (os.environ.get("FAIL_VARIABLE", "") or "").split(","):
+    if told_to_fail(subcommand):
         refuse("the stub was told to fail at project %s" % subcommand)
 
     if subcommand == "item-edit":
@@ -1337,7 +1485,7 @@ elif argv[:1] == ["project"]:
         if not (fields and options and items):
             refuse("project %s has no such item, field or option: %s"
                    % (project_id, " ".join(argv)))
-        items[0]["status"] = options[0]["name"]
+        items[0][board_key(fields[0]["name"])] = options[0]["name"]
         save()
         print(json.dumps(items[0]))
     else:
@@ -1368,8 +1516,10 @@ elif argv[:1] == ["project"]:
             for one in reported:
                 shown = {"id": one["id"],
                          "content": {"type": "Issue", "url": one["url"]}}
-                if one.get("status"):
-                    shown["status"] = one["status"]
+                for field in project["fields"]:
+                    key = board_key(field["name"])
+                    if one.get(key):
+                        shown[key] = one[key]
                 listed.append(shown)
             print(json.dumps({"items": listed}))
         else:
@@ -1381,9 +1531,33 @@ else:
 '''
 
 
+def classification_fields() -> list[dict]:
+    """The five fields a brief's classification is written into, as the board
+    holds them: each single-select, each offering every value the schema or the
+    harness allows.
+
+    Built from `CLASSIFICATION` rather than written out, so a category added to
+    the brief schema is an option on this board without this module being
+    edited — which is the same property the sync script has and the reason it
+    enumerates nothing itself.
+    """
+    return [
+        {
+            "id": f"PVTSSF_{axis.payload_field}",
+            "name": axis.field_name,
+            "type": "SINGLE_SELECT",
+            "options": [{"id": f"opt-{axis.payload_field}-{value}",
+                         "name": value}
+                        for value in axis.values],
+        }
+        for axis in CLASSIFICATION
+    ]
+
+
 def seeded_board() -> dict:
-    """The board the stub starts with: this target's project, and a Status
-    field with the options a project of this kind has.
+    """The board the stub starts with: this target's project, a Status field
+    with the options a project of this kind has, and the five classification
+    fields beside it.
 
     A Title field sits beside the Status field so that resolving the Status
     field's id by name is a resolution rather than a choice of the only field
@@ -1406,7 +1580,7 @@ def seeded_board() -> dict:
                         {"id": "opt-done", "name": "Done"},
                     ],
                 },
-            ],
+            ] + classification_fields(),
             "items": [],
         }
     }
@@ -1426,9 +1600,12 @@ def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
                  STUB_GH.replace("INTERPRETER", sys.executable)
                         .replace("LEDGER_VARIABLE", LEDGER_VARIABLE)
                         .replace("FAIL_VARIABLE", FAIL_VARIABLE)
-                        .replace("OMIT_VARIABLE", OMIT_VARIABLE))
+                        .replace("OMIT_VARIABLE", OMIT_VARIABLE)
+                        .replace("LABEL_CREATE_CALL", LABEL_CREATE_CALL)
+                        .replace("LABEL_ADD_CALL", LABEL_ADD_CALL))
     ledger.write_text(json.dumps(
-        {"issues": [], "projects": seeded_board(), "calls": []}),
+        {"issues": [], "labels": [], "projects": seeded_board(),
+         "calls": [], "issue_calls": []}),
         encoding="utf-8")
     environment = {
         name: value for name, value in os.environ.items()
@@ -1485,6 +1662,22 @@ def project_calls(ledger: Path, command: str | None = None) -> list[dict]:
     """Every project invocation the stub was made, optionally by subcommand."""
     return [call for call in ledger_state(ledger)["calls"]
             if command is None or call["command"] == command]
+
+
+def issue_calls(ledger: Path, command: str | None = None) -> list[dict]:
+    """Every call made against the issue itself, optionally by name."""
+    return [call for call in ledger_state(ledger)["issue_calls"]
+            if command is None or call["command"] == command]
+
+
+def issue_labels(ledger: Path, index: int = 0) -> list[str]:
+    """The labels one filed issue carries."""
+    return ledger_state(ledger)["issues"][index]["labels"]
+
+
+def repository_labels(ledger: Path) -> list[str]:
+    """The labels the stub's repository holds, whoever made them."""
+    return ledger_state(ledger)["labels"]
 
 
 @needs_jq
@@ -1647,15 +1840,24 @@ def board_environment_for(script: Path) -> dict:
     """What a copy needs in its environment to file against the stub's board.
 
     The installed copy needs nothing, which is the point of it. The template
-    carries no project and no column by design, so it is handed exactly the two
-    values the installed copy sets in its own text.
+    carries no project, no column and no field name by design, so it is handed
+    exactly the values the installed copy sets in its own text.
     """
     if script == INSTALLED_SYNC:
         return {}
     return {
         TEMPLATE_CONSTANTS["PROJECT"][0]: THIS_TARGETS_PROJECT,
         TEMPLATE_CONSTANTS["STATUS_OPTION"][0]: THIS_TARGETS_STATUS_OPTION,
+        **{TEMPLATE_CONSTANTS[axis.constant][0]: axis.field_name
+           for axis in CLASSIFICATION},
     }
+
+
+#: Every constant `board_environment_for` overrides, so the assertion that they
+#: are declared is made of the names the overriding uses rather than of a
+#: second list beside it.
+OVERRIDDEN_CONSTANTS = ("PROJECT", "STATUS_OPTION") + tuple(
+    axis.constant for axis in CLASSIFICATION)
 
 
 def sync_to_the_board(script: Path, tmp_path: Path, environment: dict, *,
@@ -1672,21 +1874,40 @@ def sync_to_the_board(script: Path, tmp_path: Path, environment: dict, *,
         extra={**board_environment_for(script), **(breaking or {})})
 
 
-def test_the_template_declares_the_two_constants_the_board_tests_override():
+def test_the_template_declares_the_constants_the_board_tests_override():
     """What `board_environment_for` rests on, asserted rather than assumed.
 
     A shipped artifact and the subject: the template's whole design is that its
-    board values are set from outside it, so the two constants below must exist
-    and must be spelled with the prefix the stripping in `stub_tracker` uses. A
-    rename would otherwise leave the template driven with no project at all,
-    and every board assertion about it passing on a board it never touched.
+    board values are set from outside it, so the constants it is handed must
+    exist and must be spelled with the prefix the stripping in `stub_tracker`
+    uses. A rename would otherwise leave the template driven with no project at
+    all, and every board assertion about it passing on a board it never
+    touched.
     """
-    assert set(TEMPLATE_CONSTANTS) >= {"PROJECT", "STATUS_OPTION"}, \
+    assert set(TEMPLATE_CONSTANTS) >= set(OVERRIDDEN_CONSTANTS), \
         sorted(TEMPLATE_CONSTANTS)
     assert SYNC_VARIABLE_PREFIX.startswith("L5_")
-    for name in ("PROJECT", "STATUS_OPTION"):
+    for name in OVERRIDDEN_CONSTANTS:
         assert TEMPLATE_CONSTANTS[name][0].startswith(SYNC_VARIABLE_PREFIX), name
     assert PROJECT_SUBCOMMANDS, "the script invokes no project subcommand"
+
+
+def test_every_axis_the_classification_is_written_over_carries_values():
+    """The sweep below drives what these tuples hold, so an axis that resolved
+    to nothing would be a sweep that asserts nothing and passes.
+
+    The brief schema's enums and the harness's workflow listing are live
+    artifacts and are the subject here: what is asserted is that each axis
+    resolved to more than one value, so that a filing writing one of them is a
+    choice rather than the only thing there was, and that each axis names a
+    field the schema requires a brief to carry.
+    """
+    for axis in CLASSIFICATION:
+        assert len(axis.values) >= 2, axis
+        assert all(isinstance(value, str) and value for value in axis.values), \
+            axis
+    assert {axis.payload_field for axis in CLASSIFICATION} <= \
+        set(BRIEF_SHAPE["required"])
 
 
 @needs_jq
@@ -1903,21 +2124,512 @@ def test_the_template_with_no_project_configured_files_exactly_as_before(
 
 
 # --------------------------------------------------------------------------
+# The classification a filed brief carries: one label and five board fields
+#
+# The same two copies are driven, for the same reason. What is written is the
+# payload's own classification, and the values driven are resolved from the
+# brief schema and from the harness's workflow listing rather than written
+# here, so a category added to the schema is a case in the sweep below without
+# this module being edited.
+# --------------------------------------------------------------------------
+
+
+def a_brief_carrying(**overrides) -> dict:
+    """The brief above with one part of its classification replaced."""
+    return {**a_filed_brief(), **overrides}
+
+
+def label_constants(script: Path) -> tuple[str, str]:
+    """The label every entry gets and the prefix a category's label carries.
+
+    Read off whichever copy is being driven rather than written here, so the
+    installed copy is held to its own values and the template to its own — and
+    a copy that overrode either is driven against what it overrode it to.
+    """
+    constants = sync_constants(script.read_text(encoding="utf-8"))
+    return constants["LABEL"][1], constants["CATEGORY_LABEL_PREFIX"][1]
+
+
+def stub_project(state: dict) -> dict:
+    return state["projects"][
+        f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}"]
+
+
+def board_field_value(ledger: Path, field_name: str) -> str:
+    """What the board holds for one field of the item it carries.
+
+    Keyed the way gh keys an item's columns — the field's name with its spaces
+    removed and its case lowered — which is the same derivation the stub makes
+    and the sync script reads back through.
+    """
+    item = board_items(ledger)[0]
+    return item.get(field_name.replace(" ", "").lower(), "")
+
+
+def rewrite_the_board(ledger: Path, change) -> None:
+    """Edit the stub's project in place, as a board somebody else changed."""
+    state = ledger_state(ledger)
+    change(stub_project(state))
+    ledger.write_text(json.dumps(state), encoding="utf-8")
+
+
+def board_without_the_field(ledger: Path, field_name: str) -> None:
+    """A board that never had one of the fields this target names."""
+    def drop(project):
+        project["fields"] = [field for field in project["fields"]
+                             if field["name"] != field_name]
+    rewrite_the_board(ledger, drop)
+
+
+def board_without_the_option(ledger: Path, field_name: str,
+                             option_name: str) -> None:
+    """A board whose field does not offer the value the payload carries."""
+    def drop(project):
+        for field in project["fields"]:
+            if field["name"] == field_name:
+                field["options"] = [option for option in field["options"]
+                                    if option["name"] != option_name]
+    rewrite_the_board(ledger, drop)
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_filed_brief_carries_its_category_as_a_second_label(script, tmp_path):
+    """The label a developer scanning the tracker reads the category off.
+
+    Beside the label every entry has always carried rather than in place of it,
+    and made of the configured prefix and the payload's own category — neither
+    of which this test writes: both are read off the copy being driven.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    brief = a_filed_brief()
+    every_entry, prefix = label_constants(script)
+
+    result = sync_to_the_board(script, tmp_path, environment, key="k-labelled",
+                               payload=brief)
+    assert result.returncode == 0, result.stderr
+    assert issue_labels(ledger) == [every_entry,
+                                    f"{prefix}{brief['category']}"]
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_category_whose_label_the_repository_lacks_is_created_then_applied(
+        script, tmp_path):
+    """The label is made by the script rather than by hand.
+
+    The stub's repository starts with no labels at all and refuses to add one
+    it does not hold, exactly as gh refuses it — so a filing that lands with
+    the label on the issue can only have created it first. The order is read
+    off the calls as well, so "created then applied" is a sequence rather than
+    an inference from the outcome.
+
+    The control is below, in `test_the_same_filing_fails_when_the_create_is
+    _taken_out`: the same script with the create removed is refused by the same
+    stub, so the create here is what the filing rests on.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    assert repository_labels(ledger) == []
+    brief = a_filed_brief()
+    _, prefix = label_constants(script)
+    expected = f"{prefix}{brief['category']}"
+
+    result = sync_to_the_board(script, tmp_path, environment, key="k-new-label",
+                               payload=brief)
+    assert result.returncode == 0, result.stderr
+    assert repository_labels(ledger) == [expected]
+    assert expected in issue_labels(ledger)
+    assert [call["command"] for call in issue_calls(ledger)] == \
+        [LABEL_CREATE_CALL, LABEL_ADD_CALL]
+
+
+@needs_jq
+def test_the_same_filing_fails_when_the_create_is_taken_out(tmp_path):
+    """The control for the create above, on a rendering rather than the tree.
+
+    The shipped template with its label create removed is a script that applies
+    a label nothing made, and the stub refuses it — which is what makes the
+    create in the shipped script the thing that carries the filing rather than
+    a call that happens to be there.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    shipped = TEMPLATE_SYNC.read_text(encoding="utf-8")
+    stripped = without_the_label_create(shipped)
+    assert stripped != shipped
+    assert "gh label create" not in stripped
+
+    rendered = fixture_file(tmp_path / "no-create", "github.sh", stripped)
+    result = sync_to_the_board(rendered, tmp_path, environment,
+                               key="k-no-create", payload=a_filed_brief())
+
+    assert result.returncode == TRANSIENT_EXIT, (result.returncode,
+                                                 result.stderr)
+    assert repository_labels(ledger) == []
+    assert len(ledger_state(ledger)["issues"]) == 1
+
+
+def without_the_label_create(text: str) -> str:
+    """The same script with the whole call that creates the label removed.
+
+    Removed as a command rather than as a line, because the invocation is
+    continued across several of them, so what is left is a script that reaches
+    the add with nothing having been created.
+    """
+    kept, dropping = [], False
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("gh label create"):
+            dropping = True
+        if dropping:
+            if not line.rstrip("\n").endswith("\\"):
+                dropping = False
+            continue
+        kept.append(line)
+    return "".join(kept)
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_an_entry_carrying_no_category_adds_no_label_and_creates_none(
+        script, tmp_path):
+    """A non-brief entry files exactly as it did before this story.
+
+    The control is in the same drive: the same script and the same stub over a
+    payload that *is* a brief does create a label and does add one, so the
+    absence here is the guard rather than label work that never happens.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    every_entry, _ = label_constants(script)
+
+    plain = sync_to_the_board(script, tmp_path, environment, key="k-no-category")
+    assert plain.returncode == 0, plain.stderr
+    assert issue_labels(ledger) == [every_entry]
+    assert repository_labels(ledger) == []
+    assert issue_calls(ledger) == []
+
+    brief = sync_to_the_board(script, tmp_path, environment, key="k-a-brief",
+                              payload=a_filed_brief())
+    assert brief.returncode == 0, brief.stderr
+    assert len(issue_labels(ledger, 1)) == 2, issue_labels(ledger, 1)
+    assert repository_labels(ledger) != []
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_second_brief_of_the_same_category_files_over_the_label_it_made(
+        script, tmp_path):
+    """The create is idempotent, which is what makes it safe on every filing.
+
+    The stub refuses a create over a label that already exists unless the
+    create says it means to update it, as gh does — so a second brief of one
+    category landing here is the create being genuinely idempotent rather than
+    the case never arising.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    brief = a_filed_brief()
+
+    first = sync_to_the_board(script, tmp_path, environment, key="k-one",
+                              payload=brief)
+    assert first.returncode == 0, first.stderr
+    second = sync_to_the_board(script, tmp_path, environment, key="k-two",
+                               payload=brief)
+    assert second.returncode == 0, second.stderr
+
+    _, prefix = label_constants(script)
+    assert repository_labels(ledger) == [f"{prefix}{brief['category']}"]
+    assert issue_labels(ledger, 0) == issue_labels(ledger, 1)
+
+
+@needs_jq
+@pytest.mark.parametrize("call", [LABEL_CREATE_CALL, LABEL_ADD_CALL])
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_label_call_that_fails_after_the_issue_exists_is_transient(
+        call, script, tmp_path):
+    """The label work sits below the issue's creation, so it answers as the
+    board work does: 75, the issue filed, the entry pending for a later sweep.
+
+    A zero would report an entry as landed with its label lost, and a non-zero
+    that is not 75 would fail the entry terminally and lose the entry.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = sync_to_the_board(script, tmp_path, environment, key="k-label-fails",
+                               payload=a_filed_brief(),
+                               breaking={FAIL_VARIABLE: call})
+
+    assert result.returncode == TRANSIENT_EXIT, (result.returncode,
+                                                 result.stderr)
+    assert len(ledger_state(ledger)["issues"]) == 1
+    assert issue_calls(ledger, call), f"the script never made the {call} call"
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_filed_brief_carries_its_classification_on_the_board(
+        script, tmp_path):
+    """The five fields, written from the five values the payload carries.
+
+    The severity is asserted where it is written rather than separately: the
+    payload carries it as an integer — asserted here, so the case is the one it
+    claims to be — and the board carries it as the option named after it, so a
+    brief of severity 2 lands on the option named 2.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    brief = a_filed_brief()
+    assert isinstance(brief["severity"], int), brief["severity"]
+
+    result = sync_to_the_board(script, tmp_path, environment, key="k-classified",
+                               payload=brief)
+    assert result.returncode == 0, result.stderr
+
+    for axis in CLASSIFICATION:
+        assert board_field_value(ledger, axis.field_name) == \
+            str(brief[axis.payload_field]), axis.field_name
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+    # One edit per field written, the Status among them, and nothing repeated.
+    assert len(project_calls(ledger, "item-edit")) == 1 + len(CLASSIFICATION)
+
+
+@needs_jq
+@pytest.mark.parametrize("axis,value", [
+    pytest.param(axis, value, id=f"{axis.payload_field}-{value}")
+    for axis in CLASSIFICATION for value in axis.values])
+def test_every_value_the_schema_and_the_harness_allow_reaches_the_board(
+        axis, value, tmp_path):
+    """The sweep, over values this module does not name.
+
+    Each case is one axis of the classification driven at one of its values,
+    with the rest of the brief left as it is — so what the board carries can
+    only have come from the payload. The cases come from
+    `schemas/story-brief.schema.json`'s enums and from the harness's own
+    workflow listing, which is what makes a category added to the schema a case
+    here without this module being edited.
+
+    Driven through the installed copy, which is the one this deployment files
+    with; that the template behaves identically is what the parametrization
+    over both copies above holds.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    brief = a_brief_carrying(**{axis.payload_field: value})
+
+    result = sync_to_the_board(INSTALLED_SYNC, tmp_path, environment,
+                               key=f"k-{axis.payload_field}-{value}",
+                               payload=brief)
+    assert result.returncode == 0, result.stderr
+    assert board_field_value(ledger, axis.field_name) == value
+
+    if axis.payload_field == "category":
+        _, prefix = label_constants(INSTALLED_SYNC)
+        assert f"{prefix}{value}" in issue_labels(ledger)
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_field_the_project_does_not_have_costs_that_field_alone(
+        script, tmp_path):
+    """A board without a column is not a filing that failed.
+
+    gh cannot create a project field, so a field the board does not have is
+    said on stderr and skipped: the issue is created, the item is on the board,
+    every other field is written and the entry lands. The control is the
+    assertion above, where the same drive against a board that *has* the field
+    writes it.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    missing = CLASSIFICATION[1]
+    board_without_the_field(ledger, missing.field_name)
+    brief = a_filed_brief()
+
+    result = sync_to_the_board(script, tmp_path, environment, key="k-no-field",
+                               payload=brief)
+
+    assert result.returncode == 0, result.stderr
+    assert missing.field_name in result.stderr
+    assert board_field_value(ledger, missing.field_name) == ""
+    assert len(board_items(ledger)) == 1
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    for axis in CLASSIFICATION:
+        if axis is not missing:
+            assert board_field_value(ledger, axis.field_name) == \
+                str(brief[axis.payload_field]), axis.field_name
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_field_whose_options_lack_the_value_costs_that_field_alone(
+        script, tmp_path):
+    """A column that does not offer the value is the same answer as no column.
+
+    The field is there and the option is not, which is what a board configured
+    before a category was added to the schema looks like. It is said on stderr
+    and skipped; the entry lands with everything else written.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    brief = a_filed_brief()
+    narrowed = CLASSIFICATION[2]
+    board_without_the_option(ledger, narrowed.field_name,
+                             str(brief[narrowed.payload_field]))
+
+    result = sync_to_the_board(script, tmp_path, environment, key="k-no-option",
+                               payload=brief)
+
+    assert result.returncode == 0, result.stderr
+    assert narrowed.field_name in result.stderr
+    assert str(brief[narrowed.payload_field]) in result.stderr
+    assert board_field_value(ledger, narrowed.field_name) == ""
+    for axis in CLASSIFICATION:
+        if axis is not narrowed:
+            assert board_field_value(ledger, axis.field_name) == \
+                str(brief[axis.payload_field]), axis.field_name
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_the_project_the_fields_and_the_listing_are_read_once_per_filing(
+        script, tmp_path):
+    """Six writes rather than six reads each.
+
+    Each of the three reads is asserted to have been made exactly once: an
+    upper bound alone would pass a script that made none of them, and this
+    filing needs all three, so the equality carries both halves.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = sync_to_the_board(script, tmp_path, environment, key="k-read-once",
+                               payload=a_filed_brief())
+    assert result.returncode == 0, result.stderr
+
+    for subcommand in ("view", "field-list", "item-list"):
+        assert len(project_calls(ledger, subcommand)) == 1, \
+            (subcommand, project_calls(ledger, subcommand))
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_field_the_board_already_reports_is_left_alone(script, tmp_path):
+    """Nothing overwrites a value a person edited.
+
+    One filing writes all five; a person then changes one of them and another
+    is cleared; the same entry is filed again. The changed one keeps what the
+    person put there and the cleared one is written — so the absence of an edit
+    is controlled by the edit that is made in the same invocation.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    edited, cleared = CLASSIFICATION[0], CLASSIFICATION[3]
+    brief = a_filed_brief()
+
+    first = sync_to_the_board(script, tmp_path, environment, key="k-settled-field",
+                              payload=brief)
+    assert first.returncode == 0, first.stderr
+
+    a_person_chose = [value for value in edited.values
+                      if value != brief[edited.payload_field]][0]
+
+    def change(project):
+        item = project["items"][0]
+        item[edited.field_name.replace(" ", "").lower()] = a_person_chose
+        item.pop(cleared.field_name.replace(" ", "").lower())
+    rewrite_the_board(ledger, change)
+    state = ledger_state(ledger)
+    state["calls"] = []
+    ledger.write_text(json.dumps(state), encoding="utf-8")
+
+    again = sync_to_the_board(script, tmp_path, environment,
+                              key="k-settled-field", payload=brief)
+    assert again.returncode == 0, again.stderr
+
+    assert board_field_value(ledger, edited.field_name) == a_person_chose
+    assert board_field_value(ledger, cleared.field_name) == \
+        str(brief[cleared.payload_field])
+    assert len(project_calls(ledger, "item-edit")) == 1
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_retry_reaches_the_label_work_and_the_field_work(script, tmp_path):
+    """A filing whose board work failed is finished by the next sweep.
+
+    The first invocation is failed at the item-add, below the issue's creation
+    and below the label add, so the entry is left with an issue, a label and no
+    board item. The second invocation finds that issue and must go on to do
+    both — the label work is idempotent over what is already there, and the
+    field work is what the first one never reached — without creating a second
+    issue.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    brief = a_filed_brief()
+
+    failed = sync_to_the_board(script, tmp_path, environment, key="k-finished",
+                               payload=brief,
+                               breaking={FAIL_VARIABLE: "item-add"})
+    assert failed.returncode == TRANSIENT_EXIT, failed.stderr
+    assert board_items(ledger) == []
+    created = ledger_state(ledger)["issues"][0]["url"]
+
+    retried = sync_to_the_board(script, tmp_path, environment, key="k-finished",
+                                payload=brief)
+    assert retried.returncode == 0, retried.stderr
+    assert retried.stdout.strip().splitlines()[-1] == created
+    assert len(ledger_state(ledger)["issues"]) == 1, "a second issue was created"
+
+    _, prefix = label_constants(script)
+    assert f"{prefix}{brief['category']}" in issue_labels(ledger)
+    for axis in CLASSIFICATION:
+        assert board_field_value(ledger, axis.field_name) == \
+            str(brief[axis.payload_field]), axis.field_name
+
+
+@needs_jq
+def test_the_template_with_nothing_configured_writes_no_field(tmp_path):
+    """A target that has configured no field files as it does today.
+
+    The template is run with a project and a column and no field name at all,
+    which is what a target that edited neither gets: the brief is filed, the
+    item lands in its column, and the only edit made is the Status one. The
+    control is the drive above through the same template *with* the five names
+    set, where all five are written.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = run_the_sync(
+        TEMPLATE_SYNC, tmp_path, environment, key="k-no-fields",
+        payload=a_filed_brief(),
+        extra={TEMPLATE_CONSTANTS["PROJECT"][0]: THIS_TARGETS_PROJECT,
+               TEMPLATE_CONSTANTS["STATUS_OPTION"][0]:
+                   THIS_TARGETS_STATUS_OPTION})
+
+    assert result.returncode == 0, result.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert len(project_calls(ledger, "item-edit")) == 1
+    for axis in CLASSIFICATION:
+        assert board_field_value(ledger, axis.field_name) == "", axis.field_name
+
+    configured = sync_to_the_board(TEMPLATE_SYNC, tmp_path, environment,
+                                   key="k-with-fields", payload=a_filed_brief())
+    assert configured.returncode == 0, configured.stderr
+    assert len(project_calls(ledger, "item-edit")) == \
+        1 + 1 + len(CLASSIFICATION)
+
+
+# --------------------------------------------------------------------------
 # The template carries no value particular to this deployment
 # --------------------------------------------------------------------------
 
 
-def test_the_template_names_no_project_and_no_status_option():
+def test_the_template_names_no_project_no_status_option_and_no_field():
     """A shipped artifact and the subject: what the template carries.
 
     A template carrying a project number would file another repository's briefs
-    onto this board. The owner is allowed the generic default it ships with;
-    the project and the column must both default to empty, and the column this
-    target files into must not appear anywhere in the file.
+    onto this board, and one carrying a field name would name a column another
+    board has no reason to have. The owner is allowed the generic default it
+    ships with; the project, the column and the five field names must all
+    default to empty, and the column this target files into must not appear
+    anywhere in the file.
+
+    The prefix a category's label carries is deliberately not in that list: it
+    is a mechanic every target that files briefs wants rather than a property
+    of a board, so the template is required to carry a non-empty one.
 
     The control is the same extraction and the same search over the installed
-    copy, which does name both — so the emptiness here is the template's rather
-    than a parse that stopped matching anything.
+    copy, which does name all of them — so the emptiness here is the
+    template's rather than a parse that stopped matching anything.
     """
     template = TEMPLATE_SYNC.read_text(encoding="utf-8")
     installed = sync_constants(INSTALLED_SYNC.read_text(encoding="utf-8"))
@@ -1926,11 +2638,16 @@ def test_the_template_names_no_project_and_no_status_option():
     assert TEMPLATE_CONSTANTS["STATUS_OPTION"][1] == ""
     assert TEMPLATE_CONSTANTS["PROJECT_OWNER"][1] == THIS_TARGETS_PROJECT_OWNER
     assert THIS_TARGETS_STATUS_OPTION not in template
+    assert TEMPLATE_CONSTANTS["CATEGORY_LABEL_PREFIX"][1] != ""
 
     assert installed["PROJECT"][1] == THIS_TARGETS_PROJECT
     assert installed["STATUS_OPTION"][1] == THIS_TARGETS_STATUS_OPTION
     assert THIS_TARGETS_STATUS_OPTION in \
         INSTALLED_SYNC.read_text(encoding="utf-8")
+
+    for axis in CLASSIFICATION:
+        assert TEMPLATE_CONSTANTS[axis.constant][1] == "", axis.constant
+        assert installed[axis.constant][1] == axis.field_name, axis.constant
 
 
 def lines_that_differ(left: str, right: str) -> list[str]:
