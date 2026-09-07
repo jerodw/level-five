@@ -1,0 +1,149 @@
+story:
+  id: story-112
+  title: A stage can check its own outputs
+  description: |
+    A stage finds out it left a required output unwritten only after its turn
+    has ended, when the coordinator checks and re-enters it. That costs a whole
+    agent invocation against the tester's $75 ceiling to write one JSON file,
+    and it has happened twice in the last six stories -- story-101 and
+    story-096, the same stage and the same file -- with the prompt already
+    saying so in the strongest terms prose has.
+
+    The coordinator's required-output, freshness and schema checks are correct
+    and stay the authority. What does not exist is any way for a stage to reach
+    the same answer while its turn is still open. This story builds two things
+    over one shared checker: a command the stage may run on itself, and a Stop
+    hook that runs that same checker when the stage tries to end its turn and
+    blocks once with the reason, so the artifact is written inside the turn
+    that earned it rather than in a re-entry that costs the run a budget.
+
+    The brief that asked for this judged the Stop hook unavailable and asked the
+    planner to confirm rather than assume. It is available -- Claude Code
+    supports the event, and agent_runner already ships a templated hook
+    declaration for the Bash guard -- and the developer chose to build both, on
+    the reasoning that a command alone helps only a stage that remembers to run
+    it, which is not the stage the two recorded failures were about.
+  workflow: story-workflow
+
+tasks:
+  - Add a persisted pre-stage baseline: the coordinator writes the artifact signature snapshot it already takes at stage entry to output-baseline.json in the run directory, and keeps deciding its own checks from the in-memory copy it already holds.
+  - Add orchestration/output_check.py, which reads that baseline and reports whether a named stage's required outputs are present, written by this invocation, and schema-valid, deriving every one of those three answers by calling the coordinator's own functions rather than reimplementing them.
+  - Add scripts/l5-check, a thin entry point over that module in the shape scripts/l5-status already takes, exiting zero when every required output is present, fresh and valid and non-zero naming what is not.
+  - Render the resolved command into prompts/harness-layer.md, the partial every workflow stage already receives, and append its grant to the stage's allowed tools so no target repository has to edit its configuration to make the command runnable.
+  - Add hooks/stop_check.py and register it as a Stop hook through the hooks/settings.json declaration agent_runner already renders, running the same checker and blocking once with the reason when a required output is unwritten, stale or invalid.
+  - Write the tests that hold all of it, driving the stale case specifically and showing the stage-side answer and the coordinator's come from one derivation.
+  - Record the new entry point and the turn-end check in the repository's documentation.
+
+acceptance_criteria:
+  - scripts/l5-check exits 0 and says so when every required output the loaded workflow declares for the named stage is present in the run directory, was written after the pre-stage baseline was taken, and satisfies its declared schema.
+  - scripts/l5-check exits non-zero and names the artifact when a required output is absent, when a required output is present but unchanged since the pre-stage baseline was taken, and when a present artifact carrying a declared schema does not satisfy it.
+  - The stale case is distinguished from the missing case in what the command prints, in the same two senses the coordinator distinguishes them by: absent is missing, present-and-unwritten is a previous attempt's.
+  - The command reports required outputs only as missing. A conditional artifact the stage did not write is not reported missing, and a conditional artifact it did write is schema-checked, which is exactly what the coordinator does with the same two sets.
+  - The command takes a run directory and, optionally, a stage name, defaulting to the stage the run's state.json names as current, and loads the workflow that run's state.json records rather than the target configuration's.
+  - orchestration/output_check.py computes no freshness comparison, no required-output list and no schema validation of its own. All three come from story_coordinator, so a change to any of those functions moves the command's answer with no edit to output_check.py.
+  - The coordinator writes its pre-stage artifact signature snapshot to output-baseline.json in the run directory at stage entry, and continues to decide its own missing, stale and schema checks from the in-memory snapshot it already holds, so a stage that rewrites that file changes what it is told about itself and nothing about what the coordinator decides.
+  - The baseline round-trips: the signatures read back from output-baseline.json compare equal to the signatures artifact_signatures produces for the same unchanged files. JSON renders a tuple as a list, and a reader that returned lists would find every artifact changed, report no stale artifact at all, and tell a stage it was complete in precisely the case the check exists to catch.
+  - prompts/harness-layer.md invites the stage to run the command, states that it is optional and that the coordinator's check after the turn is what decides, and carries the fully resolved command line -- the entry point's absolute path, the run directory and the stage name -- rather than a shape the stage has to assemble.
+  - The grant for that command is appended to the allowed tools the coordinator passes for a stage invocation, so it appears in the rendered {{allowed_tools}} list and is permitted without any edit to a target repository's .harness/config.yaml or to templates/config.yaml.
+  - The command is invoked by its own absolute path and its shebang. No interpreter is named in the rendered command line, in the appended grant, or in the hook declaration.
+  - hooks/stop_check.py runs the same checker on the Stop event and emits a block decision, carrying what is missing, stale or invalid, when the stage tries to end a turn with a required output unwritten.
+  - It blocks at most once per turn. When the hook payload reports that a stop hook is already active, it emits no decision at all, so a stage that cannot write the file ends its turn and the coordinator's existing self-route handles it exactly as it does today.
+  - It emits no decision when every required output is present, fresh and valid.
+  - Its bias is fail-open, the Bash guard's bias: unreadable stdin, a malformed payload, an absent or unreadable baseline, an unreadable state.json and an unloadable workflow each yield no decision rather than a block.
+  - The Stop hook is registered only for a workflow stage invocation. An invocation that names no run directory -- the planner, the workflow selector, the inspector -- is given the declaration it was given before this story, carrying the Bash guard and no Stop entry.
+  - A stage that reports itself complete and is not is still re-entered. Nothing in the coordinator's missing, stale or schema handling reads output-baseline.json, the command's exit status, or anything the hook decided.
+
+technical_plan:
+  implementation_steps:
+    - In story_coordinator, add a paired writer and reader for the pre-stage baseline over run_dir/output-baseline.json, holding the stage name and a mapping of artifact name to its signature. The reader returns the signatures in the same tuple form artifact_signatures produces, because that is the form stale_artifacts compares against.
+    - At the stage entry point that already computes artifacts_before around story_coordinator.py:7485, write that snapshot through the new writer. Leave every existing check reading the in-memory dict.
+    - Add orchestration/output_check.py. It loads the run's state.json for the workflow name and the current stage, loads that workflow through harness_config, finds the named stage, and produces a structured verdict from story_coordinator.required_artifacts, story_coordinator.stale_artifacts and story_coordinator._schema_violation against the baseline it read, in the coordinator's own order -- missing, then stale, then schema. It also carries the main() that prints the verdict and returns an exit status.
+    - Do not rename _schema_violation. Three test modules name it, and the implementer may not edit tests/, so the private name is called across the module boundary and the rename is left to a story that can move both halves at once.
+    - Add scripts/l5-check with a shebang, executable, parsing its arguments and handing control to output_check. It is the thin entry point the architecture standard asks for and nothing decides inside it.
+    - In context_assembler.build_context, add a keyword-only stage name defaulted to None and a placeholder holding the resolved command line, composed from harness_root, the run directory and that stage name. Absent stage name renders the placeholder as None, the optional-placeholder convention, so a caller that omits it renders exactly what it rendered before.
+    - Add the invitation to prompts/harness-layer.md around the existing Bash guidance, referencing the new placeholder. It says the check is optional and that the coordinator's own check after the turn is what decides.
+    - At the two coordinator call sites that pass allowed_tools off the config, append the grant for the entry point's absolute path.
+    - Add a Stop entry to hooks/settings.json with its own path and argument placeholders, alongside the PreToolUse entry. Extend agent_runner.guard_settings to accept the run directory and stage, render the Stop entry when both are given, and drop that entry from the declaration when they are not.
+    - Add hooks/stop_check.py, reading the payload from stdin, honouring stop_hook_active, calling output_check for its verdict, and writing a block decision naming what is wrong. Every failure path returns without a decision.
+    - Add the run directory as a keyword argument on run_agent, defaulted to None, and pass it from the stage invocation. The fake runners in the suite take **kwargs, so the new keyword reaches them without a test edit.
+  likely_file_changes:
+    - file: orchestration/output_check.py
+      stage: implementer
+      reason: New. The shared checker both the command and the Stop hook run, deriving its whole verdict from the coordinator's own functions.
+    - file: scripts/l5-check
+      stage: implementer
+      reason: New. The thin entry point over that module, in the shape scripts/l5-status takes.
+    - file: hooks/stop_check.py
+      stage: implementer
+      reason: New. The Stop hook that runs the checker at turn end and blocks once.
+    - file: hooks/settings.json
+      stage: implementer
+      reason: Gains the Stop entry beside the PreToolUse one, with its own path and argument placeholders, so the declaration's shape stays in the data file.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Writes the pre-stage baseline at stage entry, appends the command's grant to the stage's allowed tools, and passes the run directory to run_agent.
+    - file: orchestration/agent_runner.py
+      stage: implementer
+      reason: guard_settings renders the Stop entry when a run directory and stage are given and drops it when they are not; run_agent gains the run directory keyword.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Composes the resolved command line into a placeholder the harness-layer partial renders, and takes the stage name needed to compose it.
+    - file: prompts/harness-layer.md
+      stage: implementer
+      reason: Invites every stage to run the check, states that it is optional, and carries the resolved command.
+    - file: tests/test_a_stage_can_check_its_own_outputs.py
+      stage: tester
+      reason: New. Holds the command's four verdicts against a fixture workflow, the baseline round-trip, the agreement with the coordinator, the single derivation, and the hook's block-once and fail-open behaviour.
+    - file: README.md
+      stage: documenter
+      reason: The l5- script table gains l5-check, and the harness description gains the turn-end check.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the stage-side check, the baseline seam it decides against, and that the coordinator's check remains the authority.
+
+scope:
+  modify:
+    - orchestration/output_check.py
+    - orchestration/story_coordinator.py
+    - orchestration/agent_runner.py
+    - orchestration/context_assembler.py
+    - scripts/l5-check
+    - hooks/stop_check.py
+    - hooks/settings.json
+    - prompts/harness-layer.md
+    - tests/
+    - README.md
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - schemas/
+    - templates/config.yaml
+    - .harness/config.yaml
+    - hooks/bash_guard.py
+
+verification_requirements:
+  - Confirm the stale case is driven specifically, by a test that leaves a required artifact from a previous attempt untouched in the run directory and asserts the command fails on it. A test that only ever deletes the artifact proves nothing about the case this story exists for.
+  - Confirm the stage-side answer and the coordinator's come from one derivation. There must be a test that moves story_coordinator.stale_artifacts and observes the command's answer move with it, and no test that asserts the stage-side freshness, required-output or schema behaviour against a second copy of that logic written inside output_check.py or its test module.
+  - Confirm the coordinator still decides. A run in which a stage reports itself complete and has not written a required output freshly must still self-route with the reason it does today, and nothing in the coordinator's decision path may read output-baseline.json.
+  - Confirm the baseline round-trip is asserted directly, comparing signatures read back from the file against what artifact_signatures produces for the same unchanged files, so the tuple-to-list failure cannot ship green.
+  - Confirm the Stop hook blocks once and only once: a test that supplies a payload reporting an active stop hook and asserts no decision is emitted, beside one that asserts the block on the first stop.
+  - Confirm the hook's fail-open bias for each of its failure paths -- unreadable stdin, a malformed payload, a missing baseline, an unreadable state.json, an unloadable workflow -- with no decision emitted in any of them.
+  - Confirm an invocation that names no run directory is given the declaration it was given before this story, with the Bash guard registered and no Stop entry.
+  - Confirm the tests derive artifact and stage names from a fixture workflow rather than from the shipped workflows/story-workflow.json, and hard-code no stage name or artifact name.
+  - Confirm nothing in the rendered command line, the appended grant or the hook declaration names a Python interpreter.
+
+constraints:
+  - The coordinator's required-output, freshness and schema checks are the authority and their behaviour does not change. Nothing this story adds may cause a run to proceed where it would previously have self-routed or escalated.
+  - The stage-side check is optional. No stage is required to run it, no stage fails for not running it, and the coordinator reads nothing about whether it was run.
+  - The Stop hook may block a turn at most once, and its every failure path yields no decision rather than a block, so a defect in it stops no run.
+  - No artifact name, schema name or stage name is written into orchestration, script or hook code. Every one is read off the loaded workflow, as the coordinator's existing readers do.
+  - The workflow definition is unchanged. Nothing about which outputs a stage must write, which schemas they satisfy, or what a stage's budgets are is touched by this story.
+  - A call that omits the new keyword arguments -- the stage name into build_context, the run directory into run_agent and guard_settings -- renders and behaves exactly as it did before those arguments existed.
+  - Existing assertions are not weakened or skipped. The new tests are added beside them.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 15:14:48
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
