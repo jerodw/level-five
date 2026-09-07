@@ -456,31 +456,43 @@ class LocalIndex:
     entries — each contributes no key and stops nothing. The default is an index
     that was read and held nothing, which suppresses nothing and claims no
     failure.
+
+    `failed` is evidence and never a suppression source. Nothing that decides
+    whether a finding is filed reads it: it is here so a report can say a brief
+    was filed over a terminal failure, which is the only durable sign that
+    filing this identity keeps failing — `enqueue` writes a whole entry at the
+    same key, so the attempt count and the last error are erased on every
+    cycle. Suppressing on it is the rule story-095 refused; see `local_index`.
     """
 
     read: bool = True
     landed: frozenset = frozenset()
     queued: frozenset = frozenset()
+    failed: frozenset = frozenset()
     unreadable: int = 0
     reason: str = ""
 
 
 def _keys_in(directory: Path, label: str, states: set,
              harness_root: Path | None):
-    """The keys one directory holds in the states asked for.
+    """The keys one directory holds, grouped by the states asked for.
 
-    Returns `(keys, unreadable, problem)`. A directory that cannot be listed is
-    nothing known rather than an error, the one-directional bias every other
-    total path here takes, and the problem names which directory it was. A
-    directory that does not exist needs no special case: `entry_files` already
-    answers it with no entries rather than an error.
+    Returns `(by_state, unreadable, problem)`, where `by_state` maps each state
+    asked for to the keys held in it — one listing however many states a caller
+    wants, so a directory read for two of them is read once and a poisoned file
+    in it is counted once. A directory that cannot be listed is nothing known
+    rather than an error, the one-directional bias every other total path here
+    takes, and the problem names which directory it was. A directory that does
+    not exist needs no special case: `entry_files` already answers it with no
+    entries rather than an error.
     """
+    by_state: dict = {state: set() for state in states}
     try:
         files = entry_files(directory)
     except OSError as error:
-        return set(), 0, f"the {label} at {directory} could not be listed: {error}"
+        return (by_state, 0,
+                f"the {label} at {directory} could not be listed: {error}")
 
-    keys: set = set()
     unreadable = 0
     for path in files:
         entry, _ = read_entry(path, harness_root)
@@ -490,9 +502,9 @@ def _keys_in(directory: Path, label: str, states: set,
             # have been, and the count is reported.
             unreadable += 1
             continue
-        if entry["state"] in states:
-            keys.add(entry["key"])
-    return keys, unreadable, ""
+        if entry["state"] in by_state:
+            by_state[entry["state"]].add(entry["key"])
+    return by_state, unreadable, ""
 
 
 def local_index(target_root: Path,
@@ -502,22 +514,28 @@ def local_index(target_root: Path,
     Landed comes from the receipt index and pending from the queue, which is
     the split: a landed entry is a receipt and a pending one is still work.
 
-    A failed entry contributes to neither set, deliberately. It is terminal: no
-    later sync will file it, so it is a finding that reached nobody, and
-    suppressing on it would lose that finding permanently with no signal.
-    Leaving it out means the finding is enqueued again and replaces the failed
-    entry at the same key with a pending one — the finding getting another
-    chance rather than a duplicate, since the key is derived from the identity
-    alone.
+    A failed entry suppresses nothing, deliberately, and that rule is unchanged
+    by its keys being reported. It is terminal: no later sync will file it, so
+    it is a finding that reached nobody, and suppressing on it would lose that
+    finding permanently with no signal. Leaving it out of the suppression means
+    the finding is enqueued again and replaces the failed entry at the same key
+    with a pending one — the finding getting another chance rather than a
+    duplicate, since the key is derived from the identity alone. `failed` is
+    that third set, held as evidence so a report can say so; nothing that
+    decides whether a finding is filed reads it.
+
+    The queue is listed once for both the pending and the failed keys, so a
+    file in it that cannot be read as an entry contributes no key to either and
+    is counted once.
 
     Read once for a whole inspection rather than once per scope, because
     neither directory is scoped: they record what this harness filed, and every
     scope asks them the same question.
     """
-    landed, landed_unreadable, landed_problem = _keys_in(
+    receipts, landed_unreadable, landed_problem = _keys_in(
         receipts_dir(target_root), "receipt index", {LANDED}, harness_root)
-    queued, queued_unreadable, queued_problem = _keys_in(
-        queue_dir(target_root), "queue", {PENDING}, harness_root)
+    queue, queued_unreadable, queued_problem = _keys_in(
+        queue_dir(target_root), "queue", {PENDING, FAILED}, harness_root)
 
     problems = [problem for problem in (landed_problem, queued_problem)
                 if problem]
@@ -526,8 +544,9 @@ def local_index(target_root: Path,
 
     return LocalIndex(
         read=True,
-        landed=frozenset(landed),
-        queued=frozenset(queued),
+        landed=frozenset(receipts[LANDED]),
+        queued=frozenset(queue[PENDING]),
+        failed=frozenset(queue[FAILED]),
         unreadable=landed_unreadable + queued_unreadable,
     )
 

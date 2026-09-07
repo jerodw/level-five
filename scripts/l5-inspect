@@ -23,7 +23,10 @@ and needs a command configured. The local outbox queue is read as an index of
 what this harness has already filed, and needs no configuration at all: a
 landed entry suppresses, a pending one is reported as already queued rather
 than already filed, and a failed one suppresses nothing, because it is
-terminal and the finding it carries reached nobody. Both are consulted every
+terminal and the finding it carries reached nobody — it is reported instead,
+as a count on the local-queue line and as a note beneath each brief filed
+over one, since a refile overwrites the whole entry and no other record that
+filing this identity keeps failing survives it. Both are consulted every
 time; neither is a fallback for the other. Reading the local queue does not
 make dedupe complete, because it knows only what this machine filed.
 
@@ -100,8 +103,12 @@ def report(found, dry_run: bool) -> int:
     # says here.
     index = found.local_index
     if index.read:
+        # The failed count is said on every inspection the index was read on,
+        # including one where it held none, on the same grounds the line itself
+        # is: a source silent when it found nothing cannot be told from one
+        # that did not run.
         print(f"  local queue read: {len(index.landed)} landed identities, "
-              f"{len(index.queued)} queued")
+              f"{len(index.queued)} queued, {len(index.failed)} failed")
     else:
         print(f"  local queue could NOT be read: {index.reason}")
     if index.unreadable:
@@ -114,6 +121,14 @@ def report(found, dry_run: bool) -> int:
         print(f"  severity {brief.severity}  {brief.slug}  {brief.title}")
         if brief.key:
             print(f"      key: {brief.key}")
+        if brief.refiled_over_failure:
+            # Beneath the brief it belongs to, in the shape the key line takes.
+            # Nothing was suppressed on it: this brief was filed like any other,
+            # and what the note says is that filing this identity has failed
+            # terminally before and the record of that is about to be
+            # overwritten at the same key.
+            print("      refiled over a terminal failure: the local queue held "
+                  "this key failed")
 
     if found.dropped:
         print(f"dropped {len(found.dropped)}:")
