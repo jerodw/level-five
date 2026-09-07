@@ -1,0 +1,125 @@
+story:
+  id: story-113
+  title: A refile over a failure is reported
+  description: |
+    story-095 settled that a terminally failed queue entry suppresses nothing:
+    it is a finding that reached nobody, and suppressing on it would lose that
+    finding permanently with no signal. The consequence is that the next
+    inspection enqueues the finding again, and `enqueue` writes a whole entry at
+    the same key -- pending, attempts zero, no last_error -- so the only durable
+    record that this finding has been offered to a provider before, and that
+    filing it keeps failing, is erased on every cycle. A transport that is
+    misconfigured is indistinguishable from one that is flaky, forever.
+
+    This story keeps that record where a developer reads it. `local_index`
+    already lists the queue and already reads every entry in it; it keeps the
+    keys held failed in a third set, and the Inspector's report says which of
+    the briefs it filed were filed over a terminal failure. Nothing suppresses
+    on the new set, so the rule story-095 settled stands exactly as it stands
+    today.
+
+    The brief placed `local_index` in `orchestration/inspection.py`, which is
+    where it lived when the brief was filed. story-107 moved it to
+    `orchestration/outbox.py` and rebound the name, so that is where the third
+    set is added -- the developer's decision, on the reasoning that the brief's
+    exclusion list enumerates the filing machinery and that the Inspector
+    reading the queue directory a second time on its own would restore the
+    duplicate derivation story-107 removed.
+
+    Deliberately not here: a retry ceiling, which is the suppression story-095
+    refused and fails the same way; and whether `enqueue` should carry
+    `attempts` forward, which would fix the disarmed duplicate guard at its root
+    but gives a total, every-producer function a read it does not have. That is
+    a legitimate follow-on to be scored on its own evidence.
+  workflow: story-workflow
+
+tasks:
+  - Give LocalIndex a third set of keys, the ones whose queue entry is held in the terminal failed state, populated by local_index from the queue read it already makes, and consulted by nothing that suppresses.
+  - Carry that fact onto each brief the Inspector files, so a brief whose key the index held failed when the inspection began is marked as having been filed over a terminal failure.
+  - Print it in scripts/l5-inspect - the failed count on the local-queue line on every inspection, and the mark beside each brief that carries it.
+  - Write the tests that hold it, driving one queue that holds a landed, a pending and a failed entry at once.
+  - Record the third set and what the report says about it in the repository's documentation.
+
+acceptance_criteria:
+  - LocalIndex carries a set of the keys whose queue entry is in the terminal failed state, and local_index populates it from the same queue listing it already reads for pending keys.
+  - A queue holding one landed, one pending and one failed entry produces an index whose three sets each hold exactly the one key belonging to that state, so the three states are shown to be told apart rather than assumed to be.
+  - Adding a failed entry to a queue changes neither the landed set nor the queued set that same queue produced without it.
+  - Nothing in the Inspector's drop decisions reads the new set. A finding whose key the local queue holds failed is still filed, is not dropped as already filed, already filed locally or already queued, and is counted among what the inspection filed.
+  - An inspection that files a brief whose key the local queue held failed reports that brief as filed over a terminal failure, and names the brief.
+  - An inspection that files a brief whose key the local queue held in no state, or held landed or pending, does not report that brief as filed over a terminal failure.
+  - scripts/l5-inspect prints how many failed identities the local queue held on every inspection where the index was read, including one where it held none, on the same grounds story-095 gives for reporting an index that held nothing.
+  - An index that could not be read still reports that it could not be read, with its reason, and claims nothing about failed identities.
+  - A file in either directory that cannot be read as an entry still contributes no key to any of the three sets, still increments the unreadable count, and still stops nothing.
+  - Report.dedupe_ran remains a statement about the filed query alone, unchanged by anything the local index says about failed entries.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/outbox.py, add a failed frozenset to LocalIndex, defaulting empty so every existing construction stays valid, and say in the docstring that it is evidence and never a suppression source.
+    - In local_index, ask _keys_in for the FAILED keys of the queue directory in the same call shape the PENDING read already uses, and fold its unreadable count and its problem in beside the two already collected, so a queue that cannot be listed is still one unread index rather than a partial one.
+    - In orchestration/inspection.py, give Filed a field recording that this brief's key was held failed when the inspection began, defaulted false.
+    - Pass the failed keys into file_findings from inspect, which already reads the index once for the whole inspection, and set the field on each Filed whose key is in that set. The mark is taken from the index read before any filing, so a key this same inspection just overwrote is still reported as a refile.
+    - In scripts/l5-inspect, add the failed count to the local-queue-read line, and print the refile note beneath the brief it belongs to, in the shape the key line beneath a filed brief already takes.
+    - Leave enqueue, _file_one, _look_up, _land and the entry schema untouched.
+
+  likely_file_changes:
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: LocalIndex gains the failed set and local_index populates it; this is where the derivation of what this harness already filed lives since story-107.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: Filed carries the mark and file_findings sets it from the index inspect already reads.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: The failed count on the local-queue line and the refile note beside the brief; every word a developer reads is this script's.
+    - file: tests/test_outbox.py
+      stage: tester
+      reason: The three-state queue, the failed set, and that adding a failed entry changes neither of the other two sets.
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: That a finding matching a failed key is still filed, that the brief is marked, and that a brief matching no failed key is not.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The story-095 and story-107 sections both describe this derivation and what the Inspector reports from it.
+    - file: README.md
+      stage: documenter
+      reason: The story table row for this story.
+
+scope:
+  modify:
+    - orchestration/outbox.py
+    - orchestration/inspection.py
+    - scripts/l5-inspect
+    - tests/test_outbox.py
+    - tests/test_inspection.py
+    - .harness/docs/ARCHITECTURE.md
+    - README.md
+  do_not_modify:
+    - orchestration/outbox.py's enqueue, _file_one, _look_up and _land, the outbox entry schema, and schemas/outbox-entry.schema.json
+    - orchestration/brief_filing.py
+    - orchestration/filed_query.py
+    - orchestration/command_transport.py
+    - orchestration/outbox_sweep.py
+    - orchestration/story_coordinator.py
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm an inspection whose queue holds a failed entry matching a finding still files that finding, and that the report says it was refiled over a failure and names it.
+  - Confirm an inspection whose queue holds no failed entry reports that fact rather than falling silent.
+  - Confirm the counts are asserted against a queue holding one failed, one landed and one pending entry at once.
+  - Confirm nothing added invokes a model, reaches a network or touches a tracker, and that the tests drive a transport that fails terminally rather than one that raises.
+  - Confirm no retry ceiling was added and that no path suppresses a finding on the basis of a failed entry.
+  - Confirm enqueue, _file_one, _look_up, _land and the outbox entry schema are unchanged.
+
+constraints:
+  - A failed entry suppresses nothing. The new set is read for reporting and by nothing that decides whether a finding is filed.
+  - LocalIndex's failed field is defaulted, so every existing construction of it stays valid and the bad-bounds path that builds a Report still builds one.
+  - The one-directional bias holds: a queue that cannot be listed is an index that was not read, and a file that cannot be read as an entry contributes no key and stops nothing.
+  - The queue grows by nothing here. A refile overwrites at the same key, and this story changes neither that nor the key derivation.
+  - Report.dedupe_ran keeps its meaning: whether every scope's filed query answered, and nothing else.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 16:42:35
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
