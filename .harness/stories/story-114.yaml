@@ -1,0 +1,161 @@
+story:
+  id: story-114
+  title: What the Inspector files is not noise
+  description: |
+    A promotion policy for the Inspector, written against output a developer
+    has read rather than against a prediction of it. The corpus it is set from
+    is the tracker as it stands: 46 open briefs filed by thirteen post-story
+    inspections (story-101 through story-113), none of them closed and none of
+    them planned into a story. Fifteen of the 46 are severity 1 — which the
+    Inspector's own scale defines as "worth fixing the next time somebody has
+    the file open", and which by that definition is not a story. Thirty are
+    severity 2 and one is severity 3.
+
+    Two things the request predicted do not survive that reading, and the
+    policy is narrower than it would have been without it. Thin briefs are not
+    the problem: the median filed brief is 313 words with file:line evidence, a
+    statement of what would resolve it, a not_in_scope list and its workflow
+    choice argued. And the cap is inert: it is 10 across a whole inspection,
+    and the narrow mode has never produced more than 5, so nothing has ever
+    been dropped for any reason on any inspection — the drop report has read
+    zero every time.
+
+    What the corpus does show is arithmetic. Filing runs at roughly three and a
+    half briefs per completed story and planning drains none of them, so the
+    backlog grows monotonically. The lever that fits that is a floor, not a
+    quality bar: one configurable number, inspect_min_severity, defaulting to
+    2, applied in inspection.file_findings where the cap already lives so that
+    both producers of briefs get it from the same call and cannot diverge on
+    it. Against the 46 filed so far the floor files 31 and drops 15, each named
+    in the report with its severity.
+
+    The Inspector's prompt is told the floor as well as the filter enforcing
+    it, and the two are not a duplication of one fact: the filter decides, and
+    the prompt exists so an invocation does not spend a three-hundred-word
+    brief on a finding that will be dropped unread. The severity scale itself
+    is untouched — the floor decides what is filed, never what a rating means.
+
+    The policy also states what dedupe deliberately does not look at. The
+    tracker and this harness's own queue are consulted; .harness/requests/,
+    which holds the hand-written briefs, is not, because a request file carries
+    no slug, no category and no key, so any match against it would be a text
+    heuristic that fires wrongly in both directions. Saying so is part of the
+    deliverable: the request asked the policy to say which sources it reads,
+    and an unstated omission is indistinguishable from an oversight.
+  workflow: story-workflow
+
+tasks:
+  - Declare inspect_min_severity in schemas/harness-config.schema.json, in the idiom the two existing inspect_ keys use, saying what the floor is, that it defaults to 2, that 1 means no floor, and that it decides what is filed rather than what a severity means.
+  - Read it in inspection.bounds as a third bound carried on Bounds, refusing a value that is not an integer in 1 through 3 with the key and the value named, reported together with the two existing bound problems rather than instead of them, and never falling back to the default when the key is declared and unreadable.
+  - Apply the floor in inspection.file_findings, before the cap, dropping each finding beneath it under a new named reason that carries the finding's severity. Both producers reach filing through this one function, so the floor is written once and neither can diverge on it.
+  - Pass the resolved floor from story_inspection's own call to file_findings, and add the new reason to the hand-maintained list in _summary so the post-story mode's events.log line names it with a count.
+  - Tell the Inspector the floor in prompts/inspector.md through a rendered block supplied by inspection._render, in the shape _already_filed_block already has, so that a floor of 1 reads as no floor rather than as nothing below severity 1.
+  - Say in the l5-inspect report which floor the inspection ran under, on every inspection including one where the floor dropped nothing.
+  - State in inspection.py's dedupe paragraph that .harness/requests/ is deliberately not a dedupe source, and why: a request file carries no slug, category or key, so a match against it would be a text heuristic rather than a comparison.
+  - Comment inspect_min_severity into templates/config.yaml beside inspect_max_findings and inspect_max_cost_usd, with the reasoning a target reads before setting it.
+  - Write the validation for the floor as a standing module, and add the key's proof to the declared-keys module so a key that is read and not proven fails.
+  - Record the policy and the corpus it was set from in the architecture document.
+
+acceptance_criteria:
+  - With inspect_min_severity unset, an inspection whose invocation returns findings at severity 1, 2 and 3 files the severity 2 and the severity 3 and does not file the severity 1.
+  - The finding the floor excluded is named in the report with its own severity, under a reason distinct from every existing drop reason, so a reader is told which bound excluded it.
+  - With inspect_min_severity set to 1, the same three findings are all filed and the report names no floor drop.
+  - With inspect_min_severity set to 3, only the severity 3 finding is filed and the other two are named as excluded by the floor.
+  - The floor is applied before the cap - a severity 1 finding excluded while the cap was not reached is reported as below the floor and is never reported as past the cap.
+  - A dry run applies the floor exactly as an ordinary inspection does and enqueues nothing, so what it reports it would file is what an ordinary inspection would file.
+  - The post-story inspection applies the same floor resolved from the same key - a narrow-mode inspection whose findings include a severity 1 does not file it, and the summary line it writes to the run's events.log names the floor's reason with a count of how many went that way.
+  - A declared inspect_min_severity that is not an integer in 1 through 3 is refused by inspection.bounds with the key and the offending value named, is reported together with a bad inspect_max_findings or inspect_max_cost_usd rather than in place of either, and makes l5-inspect exit non-zero before any invocation is made and before anything is enqueued.
+  - The rendered Inspector prompt states the floor in force, and where the floor is 1 it states that there is no floor rather than stating a floor of 1.
+  - The l5-inspect report says which floor the inspection ran under, including on an inspection where the floor excluded nothing.
+  - inspect_min_severity is declared in schemas/harness-config.schema.json and carries a proof in the declared-keys module that sets it to a value this harness would not choose and observes the harness obeying it.
+  - orchestration/inspection.py states in its dedupe paragraph that .harness/requests/ is deliberately not consulted as a dedupe source, and gives the reason.
+
+technical_plan:
+  implementation_steps:
+    - Add a MIN_SEVERITY_KEY constant and a DEFAULT_MIN_SEVERITY of 2 beside the two existing inspect_ bounds in orchestration/inspection.py, and add min_severity to the Bounds dataclass.
+    - Extend inspection.bounds to resolve it, appending its problem to the same problems list the two existing bounds append to, so a target that got more than one wrong is told all of them.
+    - Add the new drop reason constant beside ALREADY_FILED, PAST_THE_CAP and the rest, phrased so it reads as a sentence in the report the way its neighbours do.
+    - In file_findings, take min_severity as a keyword parameter defaulting to 1 so every existing construction in the suite stays valid, partition the found list on it before calling capped, and build a Drop for each excluded finding carrying its severity.
+    - In inspection.inspect, pass bound.min_severity through to file_findings alongside the cap and the failed set it already passes.
+    - In orchestration/story_inspection.py, pass bound.min_severity at the file_findings call that currently passes only bound.max_findings, and add the new reason to the reasons list in _summary.
+    - Add a block-building helper beside _already_filed_block that renders the floor for the prompt, reading as no floor at 1, and supply it into the render context.
+    - Add the paragraph to prompts/inspector.md's rating section that carries that placeholder, saying that a finding beneath the floor is not filed and that the fix is to write no brief for it rather than to raise its rating.
+    - Add the floor line to the report in scripts/l5-inspect, beside the lines that already state what the dedupe tiers found.
+    - Extend the dedupe paragraph of inspection.py's module docstring with the sentence about .harness/requests/.
+    - Declare the key in schemas/harness-config.schema.json and comment it into templates/config.yaml.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: The bound, the drop reason, the floor applied in file_findings before the cap, the prompt block, and the docstring sentence about what dedupe deliberately does not read.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The post-story producer must pass the floor through to the shared file_findings, and must name the new reason in the summary it writes to the run's events.log.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares inspect_min_severity, which is what makes it a key the harness may read and what the declared-keys coverage check compares against.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: Tells the invocation the floor in force, so effort is not spent writing briefs the filter will drop unread.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: Says which floor the inspection ran under, so a floor that excluded nothing is still visible in the report.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: Comments the new key in beside the two existing inspect_ bounds, which is where a target meets it.
+    - file: tests/test_what_the_inspector_files_is_not_noise.py
+      stage: tester
+      reason: The standing module for the floor - the three settings, the ordering against the cap, the refusal, the dry run, the post-story producer, the prompt block and the report line.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The new key needs a proof that varies it, and the coverage comparison in this module fails on a declared key that has none.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the policy, the corpus it was set from, and what dedupe deliberately does not consult.
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - schemas/harness-config.schema.json
+    - prompts/inspector.md
+    - scripts/l5-inspect
+    - templates/config.yaml
+    - tests/test_what_the_inspector_files_is_not_noise.py
+    - tests/test_config_keys_are_obeyed.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/story-brief.schema.json
+    - orchestration/outbox.py
+    - orchestration/story_brief.py
+    - orchestration/filed_query.py
+    - orchestration/brief_filing.py
+    - orchestration/outbox_sweep.py
+    - .harness/config.yaml
+    - workflows/
+
+verification_requirements:
+  - Confirm the floor is applied in exactly one place and that both producers of briefs reach it through that place, rather than each applying a floor of its own.
+  - Confirm the floor is applied before the cap, and that a finding the floor excluded is never reported under the cap's reason.
+  - Confirm the post-story inspection applies the floor and names it in its summary, so this story does not repeat the divergence between the two producers that is already filed against them.
+  - Confirm a bad inspect_min_severity is refused before any invocation is made and before anything is enqueued, and that it is reported alongside the other bound problems rather than instead of them.
+  - Confirm the rendered prompt carries no unfilled placeholder and that the floor block reads correctly at each of 1, 2 and 3.
+  - Confirm the new key is declared in the config schema, is proven by a test that varies it, and that the declared-keys coverage comparison passes in both directions.
+  - Confirm nothing about what a brief is filed under has changed - the identity is still the kind, the category, the sorted paths and the slug.
+  - Confirm the post-story inspection is still total - the floor may exclude a brief and may not refuse, delay or block a run.
+
+constraints:
+  - The severity scale in prompts/inspector.md and in schemas/story-brief.schema.json keeps its present meaning. The floor decides what is filed and never what a rating means, so nothing here redefines 1, 2 or 3.
+  - What a brief is filed under is unchanged - the kind, the category, the sorted paths and the slug - and no digest, no derivation and no second identity is introduced.
+  - inspect_max_findings keeps its present value, its present meaning and its present ordering - 10 briefs across a whole inspection, kept by severity descending with a stable sort.
+  - inspect_max_cost_usd is untouched and stays a per-invocation ceiling handed to the runner.
+  - A queue entry in the terminal failed state still does not suppress a filing, and the report of a refile over such an entry still stands.
+  - Every way of excluding a finding stays named in the report with what it excluded. The floor is a bound like the others and may not become the first silent one.
+  - The post-story inspection stays a total function with no way to refuse - it returns nothing, raises on no path, and declares no parameter by which a caller could be told to stop.
+  - .harness/requests/ is read by no code this story adds. The statement that it is not a dedupe source is prose for a reader, not a check.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 17:49:11
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
