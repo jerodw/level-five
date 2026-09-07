@@ -957,6 +957,14 @@ ESCALATION_RUN_DIRECTORY = {
 #: count rather than of what this story did.
 RENDERED_PROMPT = "prompt-"
 
+#: The signature of the target tree the coordinator captures before each stage
+#: that declares a changed-files record. Named by shape for the reason the
+#: prompts are, and derived from the function that writes the name so the two
+#: cannot drift: how many there are is a property of how many stages declare a
+#: record, and story-111 introduced it rather than the story this module is
+#: about.
+TREE_SIGNATURE = story_coordinator.stage_signature_file("").partition(".")[0]
+
 
 def test_an_escalation_writes_no_new_file_to_the_run_directory(
     exhausted_escalation,
@@ -975,7 +983,8 @@ def test_an_escalation_writes_no_new_file_to_the_run_directory(
     """
     run_dir = run_dir_of(exhausted_escalation)
     present = {path.name for path in run_dir.iterdir() if path.is_file()
-               and not path.name.startswith(RENDERED_PROMPT)}
+               and not path.name.startswith(RENDERED_PROMPT)
+               and not path.name.startswith(TREE_SIGNATURE)}
 
     assert present <= ESCALATION_RUN_DIRECTORY, present - ESCALATION_RUN_DIRECTORY
     assert "escalation-summary.md" in present

@@ -678,8 +678,15 @@ FAILURE_IDS = [name for name, _ in FAILURES]
 #: and that exited non-zero is a fact computed from what the stage produced —
 #: an exit status of a subprocess the coordinator owns — rather than the stage
 #: failing to produce what it declared, so it has no plan here either and is
-#: driven by the module validating that check.
-NON_MECHANICAL_FAILURES = ["defective-retry-guidance", "suite-failed"]
+#: driven by the module validating that check. story-111 added the third on
+#: exactly those terms: a changed-files record that does not name a path the
+#: coordinator's own before-and-after comparison of the target tree shows the
+#: stage changed is a fact computed from what the stage produced rather than
+#: an output it failed to produce at all, so it has no plan here and is driven
+#: by the module validating that check.
+NON_MECHANICAL_FAILURES = [
+    "defective-retry-guidance", "suite-failed", "incomplete-changed-files",
+]
 
 
 def test_every_failure_class_the_schema_declares_is_accounted_for():
@@ -1618,11 +1625,23 @@ def crash_leaves_a_governed_file(root: Path) -> None:
 
 
 def repairs_the_suite(root: Path) -> dict:
-    """The re-run's edit: an addition to the module and coverage for it."""
+    """The re-run's edit: an addition to the module, coverage for it, and the
+    debris of the invocation that died cleared away.
+
+    The leftover is named because the coordinator compares the tree it took a
+    signature of before this stage was first invoked against the tree the
+    stage's turn ended on, and the crashed invocation's file is a difference
+    between the two that this stage is answerable for. Clearing it is what a
+    re-run should do with its own debris, and recording the removal is the
+    account of having done so — the same edit under a different heading would
+    be a creation the stage's own restriction forbids.
+    """
     write(root / "src" / "app.py", APP_ADDITIVE)
     write(root / "tests" / "test_app.py", TEST_APP_AT_HEAD + ADDED_COVERAGE)
+    prefix = declaration_of(BUDGETED)["may_not_create"][0]
+    (root / prefix / LEFTOVER).unlink()
     return {"modified": ["src/app.py", "tests/test_app.py"], "created": [],
-            "deleted": []}
+            "deleted": [f"{prefix}{LEFTOVER}"]}
 
 
 @pytest.fixture
@@ -1665,10 +1684,17 @@ def test_a_fresh_capture_from_the_same_tree_does_hold_that_file(
     crashed_then_re_ran, tmp_path,
 ):
     """The control for the absence above. The same capture, taken now against
-    the same tree, finds the leftover — so its absence from the run's baseline
-    is a statement about *when* the capture happened rather than about a
-    reader that stopped seeing files."""
+    the tree the crashed invocation left, finds the leftover — so its absence
+    from the run's baseline is a statement about *when* the capture happened
+    rather than about a reader that stopped seeing files.
+
+    The re-run cleared its own debris, because a stage is answerable for every
+    difference the coordinator's own before-and-after comparison of the tree
+    shows, so the file is put back here: what this asks about is a capture
+    taken over a tree that holds it, which is the state the crash left.
+    """
     target_root, _, _ = crashed_then_re_ran
+    crash_leaves_a_governed_file(target_root)
     declaration = declaration_of(BUDGETED)
     scratch = tmp_path / "fresh-capture"
     # No attempt number: story-037 removed it from the signature along with

@@ -174,8 +174,17 @@ class Runner:
         self.calls: list[str] = []
 
     def record_for(self, stage: str) -> dict:
-        return self.records.get(
+        record = self.records.get(
             stage, {"modified": [UNBLOCKED_PATH], "created": [], "deleted": []})
+        # Every record accounts for the file the writing stage puts in the
+        # tree, whatever else a case adds to it. A record that named only the
+        # case's own path would be incomplete, and the coordinator reports that
+        # before it reads the record for a blocked path — a different defect
+        # from the one every case here is about.
+        modified = list(record.get("modified", []))
+        if UNBLOCKED_PATH not in modified:
+            modified.append(UNBLOCKED_PATH)
+        return {**record, "modified": modified}
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
                  allowed_tools=None, max_budget_usd=None, suite_command=None):

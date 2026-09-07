@@ -208,6 +208,10 @@ def test_the_no_model_guard_fires_when_a_model_is_invoked(tmp_path):
 
 OK = "ok"          #: write everything declared, and leave the suite green
 BROKEN = "broken"  #: write everything declared, and leave the suite red
+#: Change the tree exactly as OK does, and write a changed-files record that
+#: does not name what was changed — the turn that did the work and did not
+#: record it, which is the third bookkeeping cause.
+OMIT = "omit"
 
 
 def skip(artifact: str) -> tuple:
@@ -265,12 +269,20 @@ class Runner:
         action = _nth(self.plan.get(stage, []), call - 1, OK)
         skipped = {action[1]} if isinstance(action, tuple) else set()
         changed: list[str] = []
-        if action in (OK, BROKEN):
-            state = REPAIRED if action == OK else "the state the stage found"
+        if action in (OK, BROKEN, OMIT):
+            state = REPAIRED if action in (OK, OMIT) \
+                else "the state the stage found"
             path = self.target_root / SENTINEL
             if path.read_text(encoding="utf-8").strip() != state:
                 write(path, f"{state}\n")
-                changed = [SENTINEL]
+            # An invocation that decides this file's state is answerable for
+            # it whether or not it had to rewrite it: the coordinator compares
+            # the tree the attempt began on against the tree the turn ended
+            # on, so an invocation that found the content it wanted already
+            # there is still the one whose record has to account for it.
+            # OMIT is that edit with the account withheld, which is the
+            # omission this cause exists to notice.
+            changed = [] if action == OMIT else [SENTINEL]
 
         verdict = conftest.answering_guidance(
             self.verdicts[min(self.calls.count(VERIFYING) - 1,
@@ -374,9 +386,19 @@ def stale_then_red() -> dict:
             "verdicts": [FAILED, PASS]}
 
 
+def omitted_then_red() -> dict:
+    """The stage's first invocation changes a repository file and writes a
+    changed-files record that does not name it; the invocation the re-entry
+    brings records what it changes and leaves the suite red, as does every one
+    after it."""
+    return {"plan": {DECLARING: [OMIT] + [BROKEN] * (FAILURE_BUDGET + 1)},
+            "verdicts": [PASS]}
+
+
 SEQUENCES = {
     story_coordinator.MISSING_REQUIRED_ARTIFACTS: missing_then_red,
     story_coordinator.STALE_REQUIRED_ARTIFACTS: stale_then_red,
+    story_coordinator.INCOMPLETE_CHANGED_FILES: omitted_then_red,
 }
 
 

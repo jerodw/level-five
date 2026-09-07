@@ -1446,13 +1446,23 @@ def _checkout_story_branch(
     return problems or ["git refused the checkout without saying why"]
 
 
+def is_blocked(path: str, blocked: list[str]) -> bool:
+    """Whether a repository path falls under a repository-wide blocked prefix.
+
+    The one reading of what a blocked prefix matches, so the check that
+    escalates on a blocked path and the completeness check that subtracts them
+    before reporting an omission cannot disagree about which paths are the
+    coordinator's own to write.
+    """
+    return any(path.startswith(prefix) for prefix in blocked)
+
+
 def _blocked_violation(run_dir: Path, record_name: str, blocked: list[str]) -> str | None:
     changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     for group in ("modified", "created", "deleted"):
         for path in changed.get(group, []):
-            for prefix in blocked:
-                if path.startswith(prefix):
-                    return path
+            if is_blocked(path, blocked):
+                return path
     return None
 
 
@@ -3117,6 +3127,275 @@ def governed_edits(
     )
 
 
+# --------------------------------------------------------------------------
+# A stage records every file it touched
+#
+# A changed-files record is what the whole governance layer reads:
+# recorded_by_all_stages derives what a run touched from the records, and
+# recorded_by_other_stages derives from the same reading which stage created a
+# governed path — which is what the baseline merge and the revert check turn
+# on. A file missing from a record is therefore a file the revert check does
+# not consider governed, a file the post-story inspection never takes into
+# scope, and a file no reader of the run can see was touched at all.
+#
+# So the coordinator takes a signature of the target tree before each stage
+# that declares a record is invoked, compares it after that stage's turn, and
+# reports any path the stage changed that its record does not name. It amends
+# no record: a record is the writing stage's own account of its own work, and
+# the only stage that may correct one is the stage that wrote it. An omission
+# therefore re-enters that stage as a self-route on a bookkeeping cause — the
+# stage did the work and did not record it, which is the same fact the two
+# artifact causes state.
+#
+# Detection is placed before the blocked-path, ownership and revert checks
+# deliberately: all three read the record, and an omitted governed path is
+# exactly how an edit escapes the check that decides whether it was forced.
+
+
+def stage_signature_file(stage_name: str) -> str:
+    """Where one stage's pre-stage tree signature is written.
+
+    The one place the name is shaped, in the idiom self_route_result_file and
+    prompt_file already establish, and keyed by stage so a coordinator process
+    that exits and resumes compares against the signature the first invocation
+    took. It lives in the run directory rather than in memory for that reason.
+    """
+    return f"tree-signature-{stage_name}.json"
+
+
+def _tracked_and_untracked(target_root: Path) -> list[str]:
+    """The repository-relative paths git reports as tracked or untracked-not-ignored.
+
+    The same set capture_stage_baseline and _build_clone already use, so a
+    path git excludes as ignored is out before anything else looks at it —
+    which is what keeps a suite run inside a stage's turn from reading as that
+    stage's omission. `-z` so a path containing a newline cannot corrupt the
+    listing.
+    """
+    listed = _git(
+        target_root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"
+    ).stdout
+    return [rel for rel in listed.split("\0") if rel]
+
+
+def _content_hash(path: Path) -> str | None:
+    """A digest of one file's content, or None where there is nothing to read.
+
+    Hashed here rather than by shelling to `git hash-object`, so a path
+    containing a newline cannot corrupt a listing on the way back. A path that
+    is not a readable regular file — a directory, a dangling symlink, a file
+    removed between the listing and the read — has no content to compare, and
+    answering None is what keeps it out of the signature rather than raising.
+    """
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def tree_signature(target_root: Path) -> dict[str, str]:
+    """What the target tree holds now: every readable path mapped to its content.
+
+    Names no stage and no prefix. Sorted by construction on the way out, so a
+    signature written twice over one tree is byte-identical.
+    """
+    signature: dict[str, str] = {}
+    for rel in _tracked_and_untracked(target_root):
+        digest = _content_hash(target_root / rel)
+        if digest is not None:
+            signature[rel] = digest
+    return dict(sorted(signature.items()))
+
+
+def capture_tree_signature(
+    run_dir: Path,
+    target_root: Path,
+    stage_name: str,
+    attempt: int,
+    entry: int,
+    *,
+    accounted_for: set[str],
+) -> dict[str, str]:
+    """Record what the tree held before a stage ran, first-seen-wins.
+
+    First seen wins within one attempt, mirroring capture_stage_baseline's
+    rule and for its reason: a signature re-taken at a self-route would hold
+    the stage's own uncorrected edits, and the omission this exists to find
+    would become invisible — a re-entered stage that ignores the report would
+    pass rather than being reported again.
+
+    A new attempt takes a fresh one, and that is where this parts company with
+    the baseline beside it, because the two answer different questions. The
+    baseline asks what the stage found, once, so the revert check decides an
+    attempt's edits against the tree before any of them; this asks whether the
+    record at the run directory root accounts for the attempt it describes,
+    and each attempt writes its own record and is decided on it. Carrying one
+    signature across a retry would make a retried stage re-declare edits an
+    earlier attempt already recorded and had adjudicated, which would widen
+    what the revert check governs on the later attempt — an edit already
+    decided being re-decided in company, and this check does not decide
+    whether an edit was permitted. A new entry of the run takes a fresh one for
+    that reason and one of its own: a resume restores the attempt allowance, so
+    the attempt number alone repeats, and the tree a resumed stage starts from
+    is the tree the developer committed before deciding to resume — work nobody
+    may attribute to a stage. Both are stored beside the paths rather than
+    written into the filename, so nothing here is keyed by a counter a resume
+    zeroes and no name has to be moved when one is.
+
+    What a re-capture within an attempt may admit is narrowed by
+    `accounted_for`, the paths some other stage's changed-files record names,
+    so a file another stage created or removed between two invocations of this
+    one is taken at its current state and is not attributed here, while this
+    stage's own crash leftovers are not admitted and stay reportable. It is
+    narrowed by who changed the path rather than by the route the stage was
+    entered on, because the harness records the first and a resume can defeat
+    the second.
+
+    A first capture admits everything, having nothing of this stage's to
+    mistake for the tree's: it is taken before the stage is invoked.
+
+    The result is written into the run directory under a name one function
+    shapes, so a coordinator process that exits and resumes compares against
+    what the first invocation took rather than against a fresh reading.
+    """
+    destination = run_dir / stage_signature_file(stage_name)
+    now = tree_signature(target_root)
+    signature = now
+    if destination.exists():
+        held = json.loads(destination.read_text(encoding="utf-8"))
+        if (held.get("attempt"), held.get("entry")) == (attempt, entry):
+            signature = held.get("paths", {})
+            for path in accounted_for:
+                if path in now:
+                    signature[path] = now[path]
+                else:
+                    signature.pop(path, None)
+            signature = dict(sorted(signature.items()))
+    destination.write_text(
+        json.dumps(
+            {"attempt": attempt, "entry": entry, "paths": signature}, indent=2
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return signature
+
+
+#: The groups a changed-files record uses, and therefore the groups a
+#: derivation of what a stage actually changed is expressed in. Written once
+#: so the derivation, the comparison against a record and the report all read
+#: one list.
+CHANGED_FILE_GROUPS = ("modified", "created", "deleted")
+
+
+def coordinator_written_prefixes(config: dict) -> list[str]:
+    """The directories the coordinator writes into during a stage's turn.
+
+    The run directory, the raw agent log and the cross-run history: each is the
+    coordinator's own write, made while a stage is running and named by that
+    stage's turn rather than by anything the stage did, so none of them is that
+    stage's to record. They are subtracted from what the completeness check
+    reports for the reason the repository-wide blocked paths are.
+
+    Two of the three are gitignored here and the third is blocked by this
+    repository's rules, so this deployment would meet none of them — but
+    nothing in the harness establishes any of that for a target. `l5-init`
+    writes no ignore rule, and a target's blocked paths are the target's to
+    declare, so a target that tracks its logs or does not block its history
+    would otherwise have the coordinator's own writes reported against every
+    stage of every run. Blocking them is a statement about who may write them;
+    this is a statement about who did, and the check needs the second whether
+    or not a target has made the first. The locations come off the target's own
+    configuration, spelled as the sites that write them spell it, so a target
+    that relocates any of the three is covered by the same subtraction.
+    """
+    return [
+        f"{str(config.get(key, default)).rstrip('/')}/"
+        for key, default in (
+            ("runs_dir", ".harness/runs"),
+            ("logs_dir", ".harness/logs"),
+            ("history_dir", harness_config.DEFAULT_HISTORY_DIR),
+        )
+    ]
+
+
+def tree_changes(
+    signature: dict[str, str], target_root: Path, blocked: list[str]
+) -> dict[str, list[str]]:
+    """What changed in the target tree since a signature was taken.
+
+    Expressed in the groups the changed-files schema already uses, so what is
+    derived and what a record declares are the same vocabulary. `blocked` is
+    subtracted through the same reading the blocked-path check makes, so the
+    coordinator's own writes during a stage's turn do not read as that stage's
+    work. A path git excludes as ignored is already out, because the listing
+    this compares against is the tracked-plus-untracked set.
+
+    Names no stage and no prefix: the caller passes the signature it captured
+    for one stage and the prefixes it read off the rules and the config.
+    """
+    now = tree_signature(target_root)
+    groups: dict[str, list[str]] = {
+        "modified": [
+            path
+            for path, digest in now.items()
+            if path in signature and signature[path] != digest
+        ],
+        "created": [path for path in now if path not in signature],
+        "deleted": [path for path in signature if path not in now],
+    }
+    return {
+        group: sorted(path for path in paths if not is_blocked(path, blocked))
+        for group, paths in groups.items()
+    }
+
+
+def unrecorded_changes(
+    run_dir: Path, record_name: str, changes: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """The paths a stage changed that its own changed-files record does not name.
+
+    Omissions only. A record naming a path the tree does not show as changed is
+    not reported: the question is whether the record accounts for what the
+    stage did, and a stage that recorded more than the tree can confirm has not
+    hidden anything from the readers this protects.
+
+    Membership is tested against everything the record names, across all three
+    groups rather than group by group, because a path recorded under a
+    different heading is a classification quibble and not an omission — the
+    readers this exists for take the union.
+
+    A record that cannot be read names nothing, so everything the tree shows is
+    reported; the schema check above this has already escalated on a record
+    that is not well-formed, and this reports rather than raising for the
+    reason every other reader of these records does.
+    """
+    try:
+        changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        changed = {}
+    recorded = {
+        path for group in CHANGED_FILE_GROUPS for path in changed.get(group, [])
+    }
+    return {
+        group: [path for path in changes.get(group, []) if path not in recorded]
+        for group in CHANGED_FILE_GROUPS
+    }
+
+
+def describe_unrecorded(omitted: dict[str, list[str]]) -> str:
+    """The omitted paths, grouped, for a reason a human reads.
+
+    Only the groups that have something in them appear, so a report never
+    names a heading with nothing under it.
+    """
+    return "; ".join(
+        f"{group} {', '.join(paths)}"
+        for group in CHANGED_FILE_GROUPS
+        if (paths := omitted.get(group))
+    )
+
+
 #: Where a nominated test is substituted into the target's configured
 #: selection command. A literal the harness looks for and replaces, and the
 #: whole of what it knows about that command: the selector syntax on either
@@ -4475,6 +4754,13 @@ STALE_REQUIRED_ARTIFACTS = "stale-required-artifacts"
 #: subprocess the coordinator owns — and not a judgement about the work.
 SUITE_FAILED = "suite-failed"
 
+#: The stage changed a repository file its own changed-files record does not
+#: name. Like the two artifact causes it is a fact about what the stage did
+#: not write down rather than a judgement about what it did, and the only
+#: stage that may amend a record is the stage that wrote it — so the omission
+#: re-enters that stage rather than being repaired anywhere else.
+INCOMPLETE_CHANGED_FILES = "incomplete-changed-files"
+
 #: Every cause a self-route can be taken for. Declared so the classification
 #: below is held *total* against it rather than against a list written at a
 #: call site or in a test: a cause added later and left unclassified is a
@@ -4486,12 +4772,16 @@ SELF_ROUTE_FAILURES = (
     STALE_REQUIRED_ARTIFACTS,
     DEFECTIVE_RETRY_GUIDANCE,
     SUITE_FAILED,
+    INCOMPLETE_CHANGED_FILES,
 )
 
 #: The bookkeeping subset: the stage did the work and did not record it, or
-#: recorded it somewhere the freshness check reads as a previous attempt's.
-#: Nothing about the work is in question in either case, which is what makes
-#: spending a budget of its own the right price for them.
+#: recorded it somewhere the freshness check reads as a previous attempt's, or
+#: recorded it incompletely. Nothing about the work is in question in any of
+#: the three, which is what makes spending a budget of its own the right price
+#: for them. The incomplete record is the sharpest instance of the fact the
+#: other two state: the tree already holds the change and the account of it is
+#: what is missing.
 #:
 #: agent-process-failed is deliberately not here. A process that exited
 #: without completing produced no account of what it did, so what is missing
@@ -4502,6 +4792,7 @@ SELF_ROUTE_FAILURES = (
 BOOKKEEPING_SELF_ROUTE_FAILURES = (
     MISSING_REQUIRED_ARTIFACTS,
     STALE_REQUIRED_ARTIFACTS,
+    INCOMPLETE_CHANGED_FILES,
 )
 
 #: The declaration each budget is read off, and the name a stop is reported
@@ -4603,7 +4894,14 @@ def self_route_statement(
     and the verdict that failed anyway, because the contradiction is between
     those two things and a re-running verifier told only that it contradicted
     itself has nothing to act on. `entries` carries them, and they are written
-    out verbatim rather than counted.
+    out verbatim rather than counted; the incomplete-record statement carries
+    its omitted paths through the same argument and on the same terms.
+
+    Every cause reaches its text by its own condition and none by falling off
+    the end, so a cause added to SELF_ROUTE_FAILURES later has to be given
+    words rather than silently inheriting another cause's. An unknown cause
+    raises, which is the loud failure this repository prefers to a degraded
+    one.
     """
     named = ", ".join(artifacts)
     if failure == SUITE_FAILED:
@@ -4653,13 +4951,34 @@ def self_route_statement(
             f"about the work — no verifier saw it. Produce the named output "
             f"this time."
         )
-    return (
-        f"The previous invocation of this stage left required output "
-        f"unwritten: {named}. What sits at the run directory root under those "
-        f"names is a previous attempt's, not that invocation's. This is not a "
-        f"judgement about the work — no verifier saw it. Write the named "
-        f"output afresh this time."
-    )
+    if failure == STALE_REQUIRED_ARTIFACTS:
+        return (
+            f"The previous invocation of this stage left required output "
+            f"unwritten: {named}. What sits at the run directory root under "
+            f"those names is a previous attempt's, not that invocation's. "
+            f"This is not a judgement about the work — no verifier saw it. "
+            f"Write the named output afresh this time."
+        )
+    if failure == INCOMPLETE_CHANGED_FILES:
+        listed = "; ".join(entries or [])
+        return (
+            f"You changed repository files your changed-files record does not "
+            f"name. The record is {named}, and the paths missing from it are: "
+            f"{listed}. This is not a judgement about the work — no verifier "
+            f"saw it, and it is not an assertion by any agent: the coordinator "
+            f"took a signature of the tree before your turn began and compared "
+            f"it after, subtracting the repository-wide blocked paths and "
+            f"whatever git excludes as ignored. Your record is the only "
+            f"account of what you touched, and every check that decides "
+            f"whether an edit was permitted reads it, so a path missing from "
+            f"it is a path nothing can adjudicate. Amend your own record so it "
+            f"names every path above, in the group that describes what you did "
+            f"to it; no other stage may write it for you. The signature is not "
+            f"re-taken, so an omission left uncorrected is reported again. No "
+            f"retry has been spent and no attempt archived; this is the same "
+            f"attempt, running again."
+        )
+    raise ValueError(f"no self-route statement for failure {failure!r}")
 
 
 @dataclass(frozen=True)
@@ -7165,6 +7484,28 @@ def run_story(
         required = required_artifacts(stage)
         artifacts_before = artifact_signatures(run_dir, conditional + required)
 
+        # What the whole tree held before this stage ran, so the completeness
+        # check below can say what the stage changed without asking the stage.
+        # Taken beside the stage baselines below and from the same tree;
+        # first-seen-wins within the attempt, so a stage re-entered in place is
+        # compared against what it originally found rather than against its own
+        # uncorrected edits. Driven off the changed_files declaration alone: a
+        # stage that declares no record has nothing to be held to, and no stage
+        # name is written here.
+        # The same account the baseline capture below is narrowed by, bound to
+        # a name rather than spelled a second time at the call: two identical
+        # calls would be two call sites a reader — and anything that rewrites
+        # one to show what it decides — could not tell apart.
+        changed_elsewhere = recorded_by_other_stages(run_dir, stages, name)
+        signature = (
+            capture_tree_signature(
+                run_dir, target_root, name, attempt, state.resume_count,
+                accounted_for=changed_elsewhere,
+            )
+            if stage.get("changed_files")
+            else {}
+        )
+
         # What the tree held under this stage's governed prefixes before it
         # ran, which is the baseline the revert check below decides against.
         # Both names come off the stage's declaration, so removing that one
@@ -7458,6 +7799,61 @@ def run_story(
 
         record_name = stage.get("changed_files")
         if record_name:
+            # Is the record complete? Asked first, and before the three checks
+            # below that read it, because all three decide from what it names:
+            # an omitted governed path is precisely how an edit escapes the
+            # revert check that exists to decide whether it was forced, and a
+            # path no record names is one the post-story inspection never takes
+            # into scope.
+            #
+            # The coordinator does not amend a record. It reports the omission
+            # and re-enters the stage that wrote it, which is the only stage
+            # that may correct it — the block on .harness/runs/ stays, and
+            # nothing here creates a route around it. The cause is a
+            # bookkeeping one, so a stage with an unspent bookkeeping budget
+            # runs again in place and a stage without one escalates with the
+            # omitted paths named.
+            omitted = unrecorded_changes(
+                run_dir,
+                record_name,
+                tree_changes(
+                    signature,
+                    target_root,
+                    rules.get("blocked_paths", [])
+                    + coordinator_written_prefixes(config),
+                ),
+            )
+            missing = describe_unrecorded(omitted)
+            if missing:
+                decision = self_route(
+                    run_dir,
+                    state,
+                    stage,
+                    failure=INCOMPLETE_CHANGED_FILES,
+                    reason=(
+                        f"{name} changed repository files {record_name} does "
+                        f"not name: {missing}"
+                    ),
+                    artifacts=[record_name],
+                    attempt=attempt,
+                    entries=[
+                        f"{group}: {path}"
+                        for group in CHANGED_FILE_GROUPS
+                        for path in omitted[group]
+                    ],
+                )
+                if decision.taken:
+                    self_routed = True
+                    continue
+                return _escalate(
+                    run_dir,
+                    state,
+                    decision.reason,
+                    target_root=target_root,
+                    harness_root=harness_root,
+                    duration_seconds=elapsed(),
+                )
+
             violation = _blocked_violation(run_dir, record_name, rules.get("blocked_paths", []))
             if violation:
                 return _escalate(
