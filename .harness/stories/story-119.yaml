@@ -1,0 +1,133 @@
+story:
+  id: story-119
+  title: A worktree carries the build state its configured commands name
+  description: |
+    A fresh worktree holds only tracked files, so a target whose test_command
+    names an interpreter inside its own tree has no interpreter in the tree the
+    run now works in. That is this repository's own configuration and what the
+    testing standard mandates verbatim: test_command is
+    `.venv/bin/python -m pytest tests/ -q -n auto`, verification_runner is
+    `.venv310/bin/python`, and .gitignore lists both directories.
+
+    Since story-117 a run works in a worktree cut from the base, and three
+    things break there. The coordinator's own suite run invokes the configured
+    argv with the worktree as its working directory, so the relative first word
+    resolves against a directory that has no such file, raises OSError, and is
+    recorded as ran=False with "the configured test command could not be run".
+    The clean-clone path fails one step earlier: _resolve_interpreter reads
+    verification_runner relative to the target root, answers None, and the run
+    escalates on a check that reports it did not run. And the absence reaches
+    the agents, whose working directory is the worktree and whose allowed_tools
+    grants `Bash(.venv/bin/python:*)`, a path that is not there. A planning
+    worktree has the same absence for the same reason.
+
+    After this story a worktree is given the directories its configured
+    commands name, linked from the tree the harness was invoked from and
+    excluded so they never dirty the tree or reach a commit. The reasoning is
+    not new: run_clean_clone already links the interpreter roots into the fresh
+    clone it builds, because a virtualenv is gitignored and therefore absent
+    from a clone. story-117 recognised the class for one directory — it creates
+    .harness/logs/ because that is gitignored and so absent from a fresh
+    worktree — and did not carry it to the interpreters, which mkdir cannot
+    supply. This carries it, and puts the derivation the clone path already
+    makes into one home that both callers read.
+
+    This is the brief filed under 174.
+  workflow: story-workflow
+
+tasks:
+  - Add to orchestration/worktrees.py the derivation of an interpreter's root directory from a configured command word, and the linking of named directories from an invoked root into a worktree together with the exclusion that keeps them invisible to git. Both return what happened rather than printing it, the shape every function in that module already has.
+  - Make story_coordinator's existing _link_interpreter_roots a caller of those two functions, so the derivation the clean-clone path makes and the derivation a worktree makes are one fact with one home, and the clone's behaviour is unchanged.
+  - Link the roots derived from test_command's first word and from verification_runner into the run root in run_story, whenever the run root is not the tree the run was invoked from.
+  - Link the same roots into the planning worktree in scripts/l5-plan, once the worktree has been created and above the session that will need them.
+  - Write the standing regression module that drives a run whose test_command names a tree-relative interpreter present only in the invoked root, and holds the properties the linking must have.
+  - Record the design in .harness/docs/ARCHITECTURE.md and amend the sections that describe what a fresh worktree has in it.
+
+acceptance_criteria:
+  - A run whose configured test_command names a tree-relative interpreter that exists in the invoked tree and not in a fresh worktree records the coordinator's suite run as having run, with an exit code, rather than as ran=False with the reason that the configured test command could not be run.
+  - A run whose configured verification_runner names a tree-relative interpreter resolves it under the run root and runs the clean-clone check, rather than reporting that the runner is not an executable that exists under the target root.
+  - The interpreter path the target configures is executable from inside the run's worktree, so a stage agent granted that relative path in allowed_tools can run it.
+  - git status --porcelain in the worktree reports nothing for a linked path, which is asserted directly rather than inferred from the target's .gitignore, because an entry naming a directory does not match a symlink standing in its place.
+  - No commit a run makes contains a linked path, on a run that reaches its completion commit and on one that escalates.
+  - Removing a worktree that carries a linked interpreter leaves the source directory in the invoked tree intact.
+  - A planning worktree carries the same links, so a planning session can run the target's configured test command.
+  - A worktree that already exists without the links gains them when a run resumes into it, so a tree cut before this story is not left broken.
+  - Linking twice is idempotent: a second run over the same worktree adds no second symlink and no second line to the exclude file.
+  - A configured command word that is absolute, that is a bare name looked up on PATH, or whose root directory is absent from the invoked tree causes nothing to be linked and no refusal to be added; the existing reports for a command that could not be run are unchanged.
+  - The clean-clone path's linking behaves exactly as it does today, including the exclusion it writes inside the clone, after being rewritten to call the shared functions.
+  - Reverting the linking alone leaves the new module failing, so the change is shown non-vacuous.
+
+technical_plan:
+  implementation_steps:
+    - Add interpreter_roots to orchestration/worktrees.py — given command words, the first path component of each that is relative and has more than one component, deduplicated and in order. It is the derivation _link_interpreter_roots makes inline today, moved so a worktree and a clone cannot disagree about what an interpreter's root is.
+    - Add link_build_state to the same module — for each named directory that exists in the source root and is not already present in the destination, create a symlink, and append each newly linked name to the repository's common exclude file, found with `git rev-parse --git-common-dir` resolved against the root. That command answers the per-worktree .git file correctly and answers `.git` for an ordinary clone, so one function serves both callers. A name already on a line of that file is not appended again, because the common exclude file belongs to the developer's repository and a run must not grow it.
+    - Rewrite _link_interpreter_roots as a caller of both, keeping its signature and its callers unchanged, so the clean clone links what it linked before and writes the exclusion it wrote before.
+    - In run_story, below the worktree creation and beside the .harness/logs/ mkdir that exists for the same reason, link the roots derived from test_command's first word and from verification_runner into the run root. Guarded on the run root not being the invoked tree rather than on run_root.create, so a resume into a worktree cut before this story heals it; the link is skipped where the destination already has the path, so a second run does nothing.
+    - In scripts/l5-plan, link the same roots into the planning worktree immediately after add_detached succeeds and above the session, so the session opens a tree whose configured commands can be run. A failure to link is not a refusal — the session is still worth running — and follows the reporting the surrounding steps use.
+  likely_file_changes:
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: Holds the two new facts — the interpreter root derivation and the link-and-exclude — beside the rest of the worktree concept.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: _link_interpreter_roots becomes a caller of the shared functions, and run_story links the configured roots into the run root.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: The planning worktree needs the same links, created above the session that will need them.
+    - file: tests/test_a_worktree_carries_its_build_state.py
+      stage: tester
+      reason: The standing module for the story — the suite run and the clean-clone check under a tree-relative interpreter, the clean status, the absence from both commits, the source surviving removal, the idempotence and the non-vacuity demonstration.
+    - file: tests/conftest.py
+      stage: tester
+      reason: The shared target fixture configures `echo tests-ok`, a PATH command that resolves in any directory, so a module driving a tree-relative interpreter needs a seam to configure its own test command rather than changing what every other module runs.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records what a worktree is given and why, and amends the sections stating what a fresh worktree has in it and which tree each check reads.
+    - file: scripts/l5-run
+      stage: documenter
+      reason: Its docstring describes the tree a run works in and says nothing about the build state that tree is given.
+
+scope:
+  modify:
+    - orchestration/worktrees.py
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - scripts/l5-run
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/config.yaml
+    - schemas/
+    - workflows/
+    - prompts/
+    - hooks/
+    - templates/
+    - plugin/
+    - orchestration/agent_runner.py
+
+verification_requirements:
+  - The configured test command passes in a clean clone.
+  - The new module builds its own target whose test_command names a tree-relative interpreter, so the property is exercised by a real run rather than asserted about the source.
+  - The clean status of the worktree is confirmed by reading git status --porcelain there, and the absence from a commit by reading the commit's own tree, rather than by reasoning about ignore rules.
+  - The source directory surviving worktree removal is confirmed after a real `git worktree remove --force`, because a mechanism that could delete a developer's environment is the one failure this story must not have.
+  - Reverting the linking alone makes the new module fail, and the clean-clone path's existing tests still pass after _link_interpreter_roots is rewritten, so the shared derivation is shown to preserve what it replaced.
+  - No test bounds how slow the machine is allowed to be; a git or subprocess operation that must have completed before a question can be asked is a precondition reported through tests/machine_load.py rather than asserted as a wall-clock window.
+
+constraints:
+  - Standard library only, and no third-party runtime dependency.
+  - Scripts stay thin: the linking mechanism lives in orchestration/worktrees.py, and scripts/l5-plan calls it rather than spelling it.
+  - One fact has one home. The interpreter root derivation exists once and is read by both the clean-clone path and the worktree path; nothing re-derives it and no directory name is written into the harness.
+  - No new configuration key. The directories to link are derived from the commands the target already configures, so a target that names its environments differently needs no change.
+  - No new refusal. A command whose root cannot be linked leaves the existing reports exactly as they are, and no invocation is blocked that runs today.
+  - Nothing is written into the developer's repository beyond one line per linked name in the common exclude file, appended only when it is not already there, and nothing under the invoked tree's working directory is created, moved or removed.
+  - The clean clone and the revert check are not changed in what they do; the rewrite of _link_interpreter_roots keeps its signature, its callers and its effect on the clone.
+  - What verification_runner means is unchanged: it still replaces the first word of the configured command and still exercises an environment other than the one the developer works in.
+  - Reaping worktrees is not this story's subject. Nothing here removes a worktree, and a completed run still leaves its worktree in place.
+  - This story's own run is not governed by what it lands: the coordinator process imports its module at start, so the run that lands this carries the previous behaviour, and enforcement begins with the next story.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-08 15:53:25
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
