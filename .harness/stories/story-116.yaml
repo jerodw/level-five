@@ -1,0 +1,147 @@
+story:
+  id: story-116
+  title: Every brief is titled for the behaviour it produces, defects included
+  description: |
+    Planned from the brief filed under key 169.
+
+    A brief's title is the line a developer reads in a tracker column, and
+    nothing currently tells a writer how to pitch it. The three places that
+    describe a title all say the same thing about what it is *not* — not part
+    of what a brief is filed under, so phrase it freely — and nothing about
+    what it should say. `schemas/story-brief.schema.json` goes further and
+    teaches a split rule: "what is wrong where the brief states a defect, what
+    should exist where it states work to be done". The result is that defects
+    are titled for the state the system is in today — "A pending outbox entry
+    never says why it is pending" — so a tracker column reads as a list of
+    complaints rather than as a description of the system being built, and
+    every line in it describes something that will not exist once the work
+    lands.
+
+    This story replaces the split with one rule for every brief, defects
+    included: a title states the finished behaviour, in the present tense, as
+    though it already holds. "A pending outbox entry says why it is pending".
+
+    Obligations come with it, and the prompts must carry them or the rule makes
+    titles worse. The behaviour named must identify this work and not its
+    neighbours — "The outbox report is correct" is an end state and is useless,
+    because it fits twenty defects; where an end-state title cannot be made
+    specific, the title is underspecified rather than mis-framed, and the fix
+    is a sharper behaviour rather than a return to naming the fault. And the
+    body's opening line states what is wrong today for a defect, because that
+    is what the case rests on and it is no longer in the title; the file:line
+    evidence already lives there.
+
+    The fact that something is broken now is carried by `category` and
+    `severity`, which are fields a board can sort and filter on, rather than by
+    tone in a sentence.
+
+    The schema is where the split rule is taught and where the two prompts got
+    it, so it is the site that must change first; the prompts are downstream of
+    it and must not be left disagreeing with it. `prompts/assist.md` names a
+    title only in passing, in a clause enumerating every field, and is included
+    on the developer's decision so that the assist agent meets the rule before
+    it reaches the skill rather than only inside it.
+
+    The slug rule is untouched and this story must not let the title rule leak
+    into it. A title is safe to rewrite because it is outside the identity; a
+    slug is not, because a rewritten one files a duplicate.
+  workflow: story-workflow
+
+tasks:
+  - Replace the `title` property's description in schemas/story-brief.schema.json with the single end-state rule, stated in the terms the schema uses for its other fields — what the field is for and why it is that way — covering the specificity obligation, the body's opening line for a defect, and category and severity as what carry the fact that something is broken now. Keep the existing clause saying a title is deliberately not part of what a brief is filed under, and why.
+  - Give the title its own short section in prompts/inspector.md, placed immediately after the existing slug section, teaching the rule by example in the Inspector's own voice: a badly-pitched title beside its corrected form, and the underspecified case with what to do about it.
+  - Restate the rule in plugin/skills/file-a-brief/SKILL.md in that document's own voice, with its own example, replacing the two lines at SKILL.md:43-44 that currently say a title may be as readable as you like.
+  - Widen the title clause in prompts/assist.md so it names what a title should say rather than only who reads it.
+  - Write a standing test module under tests/ holding the shipped schema and the three shipped documents to the new rule, and holding the slug rule unchanged.
+
+acceptance_criteria:
+  - The `title` property description in schemas/story-brief.schema.json no longer states a rule that differs by whether the brief is a defect, and no longer contains the phrase "what is wrong where the brief states a defect".
+  - That description states that a title says the behaviour the finished work produces, in the present tense, and states that this holds for a brief that reports a defect as well as for one that reports work to be done.
+  - That description states that the behaviour a title names must distinguish this work from its neighbours, and that where it cannot the answer is a sharper behaviour rather than a return to naming the fault.
+  - That description states that a defect brief's body opens by saying what is wrong today, and that `category` and `severity` are what carry the fact that something is broken now.
+  - That description still states that a title is deliberately not part of what a brief is filed under, and still gives the reason: two writings phrase it differently and filing on the phrasing would file it twice.
+  - prompts/inspector.md states the end-state title rule and shows at least one badly-pitched title beside its corrected form, and shows the underspecified case with the instruction to sharpen the behaviour rather than name the fault.
+  - prompts/inspector.md no longer says that a title may be as readable as you like.
+  - plugin/skills/file-a-brief/SKILL.md states the end-state title rule with an example of its own, in wording that is not a copy of the schema's sentence or of the Inspector prompt's.
+  - plugin/skills/file-a-brief/SKILL.md no longer says that a title may be as readable as you like.
+  - prompts/assist.md's clause about the title names what a title should say — the behaviour the finished work produces — rather than only that a human scans it in a list.
+  - The slug derivation rule is byte-for-byte unchanged in prompts/inspector.md, in plugin/skills/file-a-brief/SKILL.md and in the schema's `slug` description, and each of those three still states that a slug is part of what a brief is filed under.
+  - Neither prompt nor the skill instructs a writer to re-derive or rewrite the slug of work whose title is retitled.
+  - The `severity` and `confidence` property descriptions and their enums are unchanged.
+  - No field is added to or removed from schemas/story-brief.schema.json and its `required` list is unchanged.
+  - A brief valid under the schema before this story is still valid under it after.
+  - The existing suite passes, tests/test_a_brief_is_not_only_a_defect.py included.
+  - A standing test module under tests/ reads the shipped schema, the two shipped prompts and the shipped skill document and fails if any of them stops carrying the end-state rule, and fails if any of them regains the superseded "as readable as you like" or split-rule wording.
+
+technical_plan:
+  implementation_steps:
+    - Rewrite the `title` description in schemas/story-brief.schema.json first, since it is the statement the other three are brought into line with. Write it in the register the neighbouring descriptions use — what the field is for and why it is that way — not as a list of instructions.
+    - Check the new description against the constraint below before moving on - tests/test_a_brief_is_not_only_a_defect.py:398 fails any schema description that contains "defect" without also naming work to be done.
+    - Add a title section to prompts/inspector.md immediately below the existing "[The slug, and what a brief is filed under]" section, leaving that section's slug bullets and its sentence about the title being outside the identity where they are. Edit only the sentence there that says the title may be as readable as you like.
+    - Replace SKILL.md:43-44 with the rule in that document's voice and an example of its own, keeping the "### The slug" section above it untouched.
+    - Widen the title clause in prompts/assist.md:48 in place, without disturbing the rest of that enumerating paragraph.
+    - Have the tester write the standing module, holding the four shipped documents to the rule and holding the slug rule unchanged. Follow the convention tests/test_a_brief_is_not_only_a_defect.py established - read the shipped files live because they are the subject, carry the superseded wording as constants so each absence scan can be shown reporting something, and collapse whitespace before searching, because a sentence in a wrapped document is not a line.
+  likely_file_changes:
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: The `title` property description is where the split rule is taught and where the two prompts got it; it is replaced with the single end-state rule.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: The Inspector's whole instruction about titles is the sentence at 176-182 saying a title may be as readable as you like; it gains a title section teaching the end-state rule by example.
+    - file: plugin/skills/file-a-brief/SKILL.md
+      stage: implementer
+      reason: Lines 43-44 say the same superseded thing to the assist agent and are replaced with the rule in the skill's own voice.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: The title clause at line 48 names only who reads a title; it is widened to name what a title should say, so the assist agent meets the rule before it reaches the skill.
+    - file: tests/test_a_brief_is_titled_for_its_end_state.py
+      stage: tester
+      reason: The new standing module holding the shipped schema, the two prompts and the skill document to the end-state rule, and holding the slug rule unchanged.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the decision that one title rule covers every brief including defects, why the schema is the site that changed first, and why the slug rule was deliberately left alone.
+
+scope:
+  modify:
+    - schemas/story-brief.schema.json
+    - prompts/inspector.md
+    - prompts/assist.md
+    - plugin/skills/file-a-brief/SKILL.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - scripts/
+    - templates/
+    - .harness/query/
+    - .harness/sync/
+    - schemas/outbox-entry.schema.json
+    - schemas/story.schema.json
+    - schemas/harness-config.schema.json
+
+verification_requirements:
+  - Confirm the schema's `title` description states one rule covering both a defect brief and a brief for work to be done, and states no rule that differs between them.
+  - Confirm the schema's `title` description carries each part - present-tense finished behaviour, the specificity obligation with its remedy, the defect body's opening line, and category and severity as what carry that something is broken now - and still carries the reason a title is outside the identity.
+  - Confirm prompts/inspector.md and plugin/skills/file-a-brief/SKILL.md each state the rule in wording that is not a copy of the other's or of the schema's, and that each carries at least one example of a badly-pitched title beside its corrected form.
+  - Confirm prompts/assist.md's title clause names what a title should say.
+  - Confirm the slug derivation rule is unchanged wherever it is stated, and that nothing added by this story asks a writer to re-derive a slug when a title changes.
+  - Confirm the `severity` and `confidence` descriptions and enums, the declared fields and the `required` list are all unchanged, and that a brief valid before this story validates after it.
+  - Confirm the new test module fails when the end-state rule is removed from any one of the four shipped documents, by showing each scan reporting the superseded wording it replaced.
+  - Confirm the full suite passes, tests/test_a_brief_is_not_only_a_defect.py included.
+
+constraints:
+  - The slug rule stays exactly as it is, in all three places that state it. A slug is part of what a brief is filed under and a rewritten one files a duplicate; a title is outside the identity, which is what makes it safe to rewrite. The story must not let the title rule leak into the slug rule.
+  - Nothing in this story retitles a brief already filed, and nothing in it asks anyone to. A title is outside the identity, so a filed brief can be corrected in the tracker at any time and needs no story.
+  - The severity and confidence scales are untouched. They are what carry the fact that something is broken now, and they are unaffected by how a title is pitched.
+  - The identity a brief is filed under stays kind, category, sorted bare paths and slug. No code in this story computes, hashes or derives an identity.
+  - tests/test_a_brief_is_not_only_a_defect.py:398 fails any schema description containing "defect" without also naming work to be done. The new `title` description says "defect" by design, so it must name work to be done as well.
+  - The bare-repository-relative-paths rule, and the paragraph in the schema description stating it, are untouched.
+  - No field is added to or removed from the brief schema, and its `required` list is unchanged, so a brief written before this story validates unchanged after it.
+  - The rule is stated once in the schema and restated in each document's own voice. No prompt or skill quotes the schema's sentence at the reader.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 20:24:29
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
