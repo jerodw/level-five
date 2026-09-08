@@ -808,17 +808,24 @@ def test_this_story_left_the_configured_shape_and_the_template_alone():
 def test_the_harness_configuration_declares_the_keys_it_declared_before():
     """The same claim through what the shape says rather than through a diff.
 
+    Both ends are this module's own story's bounds. Reading the near end out of
+    the working tree instead would make this an assertion that *no later story*
+    ever declares a key, which is not what this module is about and is not true:
+    story-114 declares `inspect_min_severity` and reddened this test without
+    saying anything about the story it belongs to.
+
     The second assertion is the control the first needs: two empty sets would
     compare equal, so the shape is required to declare something.
     """
-    today = json.loads(
-        (REPO_ROOT / HARNESS_CONFIG_SCHEMA).read_text(encoding="utf-8"))
+    after = json.loads(conftest.repository_file_at(
+        HARNESS_CONFIG_SCHEMA, validation_file=Path(__file__),
+        bound=conftest.ENDPOINT))
     before = json.loads(conftest.repository_file_at(
         HARNESS_CONFIG_SCHEMA, validation_file=Path(__file__),
         bound=conftest.BASELINE))
 
-    assert set(today["properties"]) == set(before["properties"])
-    assert set(today["properties"]) != set()
+    assert set(after["properties"]) == set(before["properties"])
+    assert set(after["properties"]) != set()
 
 
 def test_the_index_location_is_a_constant_rather_than_something_configured(

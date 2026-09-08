@@ -42,7 +42,16 @@ consulted on every inspection: the local index is not a fallback for a query
 that failed, and the query is not a fallback for an index that is empty. A
 fallback would make the answer depend on which source responded, and story-093
 went out of its way to make nothing known distinguishable from nothing filed
-precisely so a caller can say dedupe did not run.
+precisely so a caller can say dedupe did not run. **`.harness/requests/` is
+deliberately not a third source.** It holds the hand-written briefs a developer
+filed by editing a file, and a request file carries no slug, no category and no
+key, so there is nothing there to compare against the identity a brief is filed
+under. Any match against it would be a text heuristic rather than a comparison,
+and one that fires wrongly in both directions — suppressing a finding because
+some sentence there resembled it, and missing one because nobody phrased it the
+way the model did. No code this module runs reads that directory, and saying so
+is part of the answer to which sources dedupe consults: an unstated omission is
+indistinguishable from an oversight.
 
 **Which state a queue entry is in decides what it is evidence of.** A landed
 entry means the provider named what it holds, so it suppresses. A pending entry
@@ -72,9 +81,21 @@ name, never with `git add -A` — so the record does not sit in the working tree
 as a dirty tree the next run's pre-flight refuses. Both halves are guarded: a
 record that cannot be written costs the record and nothing else.
 
+**A floor decides what is filed and never what a rating means.** Filing runs at
+roughly three and a half briefs per completed story and planning drains none of
+them, so a backlog that nothing bounds grows monotonically; `inspect_min_severity`
+is the bound, and it is a floor rather than a quality bar because what the corpus
+shows is arithmetic rather than thin briefs. It is applied in `file_findings`,
+before the cap, so both producers of briefs get it from the same call and cannot
+diverge on it. The Inspector's prompt is told the floor as well, and that is not
+a duplication of one fact: the filter decides, and the prompt exists so an
+invocation does not spend a three-hundred-word brief on a finding that will be
+dropped unread. The severity scale itself is untouched by all of it.
+
 **No silent bound.** Every way of dropping a finding is named in the report with
 what it excluded: already filed by the tracker, already filed by this harness,
-already queued, malformed, an unknown workflow, past the cap, lost by the queue.
+already queued, malformed, an unknown workflow, beneath the severity floor, past
+the cap, lost by the queue.
 A scope whose filed query could not answer is reported as dedupe not having run,
 in those terms, and its findings are filed anyway — losing dedupe is not a
 reason to lose the findings.
@@ -111,12 +132,25 @@ MAX_FINDINGS_KEY = "inspect_max_findings"
 #: The allowance one invocation may spend, handed to the invocation.
 MAX_COST_KEY = "inspect_max_cost_usd"
 
+#: The lowest severity an inspection files. A floor on what is filed and never
+#: on what a rating means: a finding beneath it is rated exactly as the scale
+#: says and is not written down anywhere a planner will meet it.
+MIN_SEVERITY_KEY = "inspect_min_severity"
+
 #: Where a target's tests live, which is a scope of its own beside the source
 #: dirs rather than one of them.
 TESTS_DIR_KEY = "tests_dir"
 
 DEFAULT_MAX_FINDINGS = 10
 DEFAULT_MAX_COST_USD = 5.0
+
+#: Two, because the Inspector's own scale defines severity 1 as worth fixing the
+#: next time somebody has the file open — which by that definition is not a
+#: story. One means no floor.
+DEFAULT_MIN_SEVERITY = 2
+
+#: The severities the scale defines, which is what a declared floor must name.
+MIN_SEVERITY_RANGE = (1, 3)
 DEFAULT_LOGS_DIR = ".harness/logs"
 
 #: The prompt the Inspector carries, and the two schemas its answer is held to.
@@ -192,6 +226,14 @@ ALREADY_QUEUED = "already queued"
 
 MALFORMED = "malformed"
 UNKNOWN_WORKFLOW = "names a workflow the harness does not define"
+
+#: The finding is real and rated honestly and is beneath the floor this
+#: inspection files at. Distinct from every reason above and from the cap below,
+#: because the floor excluded it on its severity alone and a reader is owed
+#: which bound decided: it is not a duplicate, it is not malformed, and it was
+#: not crowded out by findings that mattered more.
+BENEATH_THE_FLOOR = "beneath the severity floor"
+
 PAST_THE_CAP = "past the cap"
 LOST_BY_THE_QUEUE = "lost by the queue"
 NO_ARTIFACT = "no findings artifact"
@@ -492,6 +534,11 @@ class Report:
     #: How many files were in scope across every invocation. What a cost means
     #: depends on how much was read, so the two are reported together.
     scope_files: int = 0
+    #: The severity floor this inspection ran under, carried so the report can
+    #: say it on every inspection including one where the floor excluded
+    #: nothing: a bound that is silent when it dropped nothing is
+    #: indistinguishable from a bound that is not there.
+    min_severity: int = DEFAULT_MIN_SEVERITY
 
     def dropped_for(self, reason: str) -> tuple[Drop, ...]:
         """Everything dropped one way, so a caller can say each way once."""
@@ -543,10 +590,16 @@ class _ScopeResult:
 
 @dataclass(frozen=True)
 class Bounds:
-    """The two bounds an inspection runs under, already resolved."""
+    """The bounds an inspection runs under, already resolved.
+
+    `min_severity` is the lowest severity this inspection files, defaulted here
+    to the harness default so that every construction that predates it stays
+    valid and resolves to what a target with the key unset gets.
+    """
 
     max_findings: int
     max_cost_usd: float
+    min_severity: int = DEFAULT_MIN_SEVERITY
 
 
 def bounds(config: dict):
@@ -554,11 +607,12 @@ def bounds(config: dict):
 
     Returns `(bounds, problem)`, in the shape `filed_query.resolve_settings`
     and the sweep's transport build already take: a terminal caller refuses a
-    configuration it cannot obey. Neither falls back to its default when it is
-    declared and unreadable — a bound that cannot be read is a bound the target
-    did not declare, and obeying the default in its place would obey a number
-    nobody wrote. Both problems are reported together, so a target that got
-    both wrong is told both.
+    configuration it cannot obey. None of them falls back to its default when it
+    is declared and unreadable — a bound that cannot be read is a bound the
+    target did not declare, and obeying the default in its place would obey a
+    number nobody wrote. Every problem is reported together with the others, so
+    a target that got more than one wrong is told all of them rather than one at
+    a time.
     """
     problems: list[str] = []
 
@@ -588,9 +642,28 @@ def bounds(config: dict):
                 "dollars, and every invocation must be bounded in cost"
             )
 
+    lowest, highest = MIN_SEVERITY_RANGE
+    min_severity = DEFAULT_MIN_SEVERITY
+    declared = config.get(MIN_SEVERITY_KEY)
+    if declared is not None:
+        try:
+            min_severity = int(str(declared))
+        except (TypeError, ValueError):
+            min_severity = 0
+        if not lowest <= min_severity <= highest:
+            problems.append(
+                f"{MIN_SEVERITY_KEY}: {declared!r} is not an integer in "
+                f"{lowest} through {highest}, and the floor an inspection files "
+                "at has to name a severity the scale defines"
+            )
+
     if problems:
         return None, "; ".join(problems)
-    return Bounds(max_findings=max_findings, max_cost_usd=max_cost), ""
+    return Bounds(
+        max_findings=max_findings,
+        max_cost_usd=max_cost,
+        min_severity=min_severity,
+    ), ""
 
 
 # --------------------------------------------------------------------------
@@ -653,8 +726,37 @@ def _already_filed_block(answer) -> str:
     )
 
 
+def _severity_floor_block(min_severity: int) -> str:
+    """The floor in force, rendered for the Inspector.
+
+    In the shape `_already_filed_block` has, and for the reason that one is a
+    block rather than a bare value: a floor of 1 has to read as there being no
+    floor rather than as nothing below severity 1, which is the same sentence
+    and tells an invocation nothing. It states the floor and says what to do
+    about it — write no brief — because the failure this exists against is an
+    invocation spending a long brief on a finding the filter will drop unread.
+    Telling the invocation is not the enforcement: `file_findings` is, and this
+    block only saves the effort.
+    """
+    lowest, _ = MIN_SEVERITY_RANGE
+    if min_severity <= lowest:
+        return ("There is no severity floor on this inspection. A finding is "
+                "filed whatever its severity, so write a brief for anything "
+                "worth reporting.")
+    return (
+        f"This inspection files severity {min_severity} and above. A finding "
+        f"beneath severity {min_severity} is not filed: it is dropped, and no "
+        "planner ever sees it. So write no brief for such a finding — the "
+        "effort is wasted, and raising its rating to get it past the floor is "
+        "not the fix, because the scale above means what it says and a rating "
+        "that has been inflated to clear a filter makes every other rating "
+        "worth less."
+    )
+
+
 def _render(harness_root: Path, target_root: Path, config: dict, scope: Scope,
-            paths: tuple[str, ...], answer, artifact: Path) -> str:
+            paths: tuple[str, ...], answer, artifact: Path,
+            min_severity: int = DEFAULT_MIN_SEVERITY) -> str:
     """The prompt one invocation is given."""
     context = context_assembler.schema_context(harness_root)
     context["scope"] = scope.label
@@ -666,6 +768,7 @@ def _render(harness_root: Path, target_root: Path, config: dict, scope: Scope,
     context["scope_paths"] = "\n".join(paths) or "(this scope tracks no files)"
     context["repository_standards"] = _standards(target_root, config) or None
     context["already_filed"] = _already_filed_block(answer)
+    context["severity_floor"] = _severity_floor_block(min_severity)
     context["findings_path"] = str(artifact)
     context["workflow_candidates"] = workflow_selection.candidate_block(
         workflow_selection.candidates(harness_root)
@@ -798,7 +901,7 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
             granted.append(DELIVERY_TOOL)
         invoked = runner(
             _render(harness_root, target_root, config, scope, paths, answer,
-                    artifact),
+                    artifact, bound.min_severity),
             stage=f"inspector:{scope.label}",
             cwd=target_root,
             log_path=log_path,
@@ -902,7 +1005,8 @@ def capped(found: list, max_findings: int):
 
 
 def file_findings(target_root: Path, found: list, max_findings: int, *,
-                  dry_run: bool = False, failed: frozenset = frozenset()):
+                  min_severity: int = 1, dry_run: bool = False,
+                  failed: frozenset = frozenset()):
     """Apply the cap and file what survives it, reporting both.
 
     Returns `(filed, dropped)`. This is the whole of what a producer of
@@ -912,9 +1016,19 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
     same enqueue, and drop what they drop for the same named reasons. A second
     copy of this would be a second answer to what filing a finding means.
 
+    `min_severity` is the floor: a finding beneath it is dropped under a reason
+    of its own, carrying its severity, and never reaches the cap. It is applied
+    **before** the cap so that a finding the floor excluded is never reported as
+    having been crowded out — the cap may not even have been reached — and so
+    that the cap spends its places on findings that were going to be filed. It
+    defaults to 1, which is no floor at all, so every construction that predates
+    it files exactly what it filed before; the callers that have a resolved
+    bound pass it, and both producers reach filing through here, so neither can
+    diverge on it.
+
     `dry_run` reports exactly what an ordinary call would file and enqueues
-    nothing: the cap is applied identically and only the call into the queue is
-    not made.
+    nothing: the floor and the cap are applied identically and only the call
+    into the queue is not made.
 
     `failed` is the keys the local queue held in the terminal failed state when
     the inspection began, and it only marks what it files — nothing here drops
@@ -923,15 +1037,27 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
     than as the queue now stands, so a key this call has just overwritten with
     a pending entry is still reported as a refile.
     """
-    kept, excluded = capped(found, max_findings)
+    above = [one for one in found if one.finding["severity"] >= min_severity]
+    beneath = [one for one in found if one.finding["severity"] < min_severity]
     dropped = [
+        Drop(
+            BENEATH_THE_FLOOR,
+            f"{one.finding['slug']}: severity {one.finding['severity']}, "
+            f"beneath the floor of {min_severity}",
+            one.finding["severity"],
+        )
+        for one in beneath
+    ]
+
+    kept, excluded = capped(above, max_findings)
+    dropped.extend(
         Drop(
             PAST_THE_CAP,
             f"{one.finding['slug']}: severity {one.finding['severity']}",
             one.finding["severity"],
         )
         for one in excluded
-    ]
+    )
     filed: list = []
     queue = outbox.queue_dir(target_root)
     for one in kept:
@@ -1142,7 +1268,11 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         scope_files += result.scope_files
 
     filed, over = file_findings(
-        target_root, found, bound.max_findings, dry_run=dry_run,
+        target_root, found, bound.max_findings,
+        # The floor the bounds resolved, applied here rather than at each
+        # producer, so this mode and the post-story one file on one set of
+        # terms.
+        min_severity=bound.min_severity, dry_run=dry_run,
         # The index read above every invocation, so a brief whose key this same
         # inspection is about to overwrite is still reported as a refile.
         failed=index.failed,
@@ -1159,6 +1289,7 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         dry_run=dry_run,
         cost_usd=reported_total(costs),
         scope_files=scope_files,
+        min_severity=bound.min_severity,
     )
     # Written last, and not by a dry run. Two reasons, and the second is the
     # one that decides it. A dry run's filed count is zero because filing was

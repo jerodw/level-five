@@ -196,7 +196,15 @@ def build_target(root: Path, **config_keys) -> Path:
     modified events.log by the story's own requirement that the record reach
     it. The history directory is deliberately *not* ignored, because the record
     being committed is one of the things this module is about.
+
+    The severity floor is declared at the lowest severity the scale defines —
+    which is no floor at all — unless the caller departs from it. The findings
+    this module builds carry that severity, and its subject is what an
+    inspection records about itself rather than which findings the floor files:
+    with the default floor in force every one of them would be dropped before
+    it reached the queue, which is the floor's own module's question.
     """
+    config_keys.setdefault(inspection.MIN_SEVERITY_KEY, str(min(SEVERITY_ENUM)))
     for sub in (".harness/standards", ".harness/stories", ".harness/docs"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     config = conftest.CONFIG.format(workflow=WORKFLOW["name"])
@@ -241,6 +249,10 @@ def target(tmp_path) -> Path:
 # ==========================================================================
 # The fake inspector, installed in place of the agent runner
 # ==========================================================================
+
+
+SEVERITY_ENUM = schema_validator.load_schema(
+    inspection.BRIEF_SCHEMA)["properties"]["severity"]["enum"]
 
 
 def finding(ordinal: int = 1, **overrides) -> dict:

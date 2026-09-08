@@ -30,6 +30,13 @@ filing this identity keeps failing survives it. Both are consulted every
 time; neither is a fallback for the other. Reading the local queue does not
 make dedupe complete, because it knows only what this machine filed.
 
+A finding beneath inspect_min_severity is not filed either, and the report
+says which floor the inspection ran under whether or not the floor excluded
+anything. The floor decides what is filed and never what a rating means: a
+finding beneath it is rated exactly as the scale says and is dropped under a
+reason of its own, before the cap, so it is never reported as having been
+crowded out by findings that mattered more.
+
 --dry-run reports exactly what an ordinary invocation would file and
 enqueues nothing. It still makes the invocations, because what would be
 filed is not knowable without them.
@@ -115,6 +122,17 @@ def report(found, dry_run: bool) -> int:
         print(f"      note: {index.unreadable} file(s) in the queue could not "
               "be read as entries and contributed nothing")
 
+    # Said on every inspection, including one where the floor excluded nothing:
+    # a bound that is silent when it dropped nothing cannot be told from a bound
+    # that is not there, and which findings an inspection was never going to
+    # file is exactly what a reader of the drop list below needs to know.
+    if found.min_severity <= 1:
+        print("  severity floor: none, so a finding is filed whatever its "
+              "severity")
+    else:
+        print(f"  severity floor: {found.min_severity}, so a finding below "
+              f"severity {found.min_severity} is not filed")
+
     verb = "would file" if dry_run else "filed"
     print(f"{verb} {len(found.filed)} brief(s):")
     for brief in found.filed:
@@ -155,7 +173,7 @@ def main() -> int:
     target_root = harness_config.find_target_root(Path.cwd())
     config = harness_config.load_config(target_root)
 
-    # Both bounds are refused before anything is invoked and before anything
+    # The bounds are refused before anything is invoked and before anything
     # is enqueued: a bound the harness cannot read is a bound the target did
     # not declare, and spending an invocation to discover that costs money.
     # This is the refusable half; the module's own half obeys what it is given.

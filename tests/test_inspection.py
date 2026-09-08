@@ -146,6 +146,7 @@ SOURCE_DIRS_KEY = inspection.SOURCE_DIRS_KEY
 TESTS_DIR_KEY = inspection.TESTS_DIR_KEY
 MAX_FINDINGS_KEY = inspection.MAX_FINDINGS_KEY
 MAX_COST_KEY = inspection.MAX_COST_KEY
+MIN_SEVERITY_KEY = inspection.MIN_SEVERITY_KEY
 DEFAULT_MAX_FINDINGS = inspection.DEFAULT_MAX_FINDINGS
 DEFAULT_MAX_COST_USD = inspection.DEFAULT_MAX_COST_USD
 DELIVERY_TOOL = inspection.DELIVERY_TOOL
@@ -1801,19 +1802,43 @@ def test_the_identity_a_brief_is_filed_under_is_byte_for_byte_what_it_was():
 REQUESTS_DIR = ".harness/requests"
 
 
+def code_without_docstrings(source: str) -> str:
+    """Source with every docstring taken out of it.
+
+    The subject of the two assertions below is that no *code* reaches the
+    hand-written briefs, and a whole-file text search cannot tell code from a
+    docstring that says the directory is deliberately not consulted — which
+    story-114 requires `orchestration/inspection.py` to say, because an
+    unstated omission is indistinguishable from an oversight. So the code is
+    what is searched, and the docstring is asserted separately and positively.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and ast.get_docstring(node):
+            node.body = node.body[1:]
+    return ast.unparse(tree)
+
+
 def test_nothing_the_inspector_ships_reaches_the_hand_written_briefs():
-    """Neither the module nor the entry point reads, writes or names it.
+    """No code in the module or the entry point reads, writes or names it.
 
     The control is a planted source naming the directory, which the same search
     reports — so the silence over the two shipped files is a fact about them
-    rather than about a search that has stopped seeing anything.
+    rather than about a search that has stopped seeing anything. The second
+    control is the module's own docstring, which must *say* the directory is
+    deliberately not a dedupe source: without it a search finding nothing would
+    be satisfied by a module that had simply stopped mentioning it.
     """
-    for path in (REPO_ROOT / "orchestration" / "inspection.py",
-                 SCRIPTS / "l5-inspect"):
-        assert REQUESTS_DIR not in path.read_text(encoding="utf-8"), path
+    module = (REPO_ROOT / "orchestration" / "inspection.py").read_text(
+        encoding="utf-8")
+    for source in (module, (SCRIPTS / "l5-inspect").read_text(encoding="utf-8")):
+        assert REQUESTS_DIR not in code_without_docstrings(source)
 
     planted_source = f'BRIEFS = "{REQUESTS_DIR}"\n'
-    assert REQUESTS_DIR in planted_source
+    assert REQUESTS_DIR in code_without_docstrings(planted_source)
+
+    assert REQUESTS_DIR in ast.get_docstring(ast.parse(module))
 
 
 # --------------------------------------------------------------------------
@@ -1824,7 +1849,13 @@ def test_nothing_the_inspector_ships_reaches_the_hand_written_briefs():
 def test_the_cap_keeps_the_highest_severities_and_names_what_it_dropped(
         tmp_path):
     """Written in an order that makes first-written and highest-severity
-    different answers, so a cap on writing order fails here."""
+    different answers, so a cap on writing order fails here.
+
+    The floor is set to the lowest severity the scale defines, so that what is
+    being asked about here is the cap: with the default floor the lowest of the
+    three is excluded before the cap ever sees it, which is a different bound's
+    answer and is the subject of the floor's own module.
+    """
     findings = (
         brief(slug="written-first-and-lowest", severity=LOWEST),
         brief(slug="written-second-and-highest", severity=HIGHEST,
@@ -1832,7 +1863,7 @@ def test_the_cap_keeps_the_highest_severities_and_names_what_it_dropped(
         brief(slug="written-third-and-middling", severity=MIDDLE),
     )
     found = inspecting(tmp_path, act=writes(*findings), config=configuration(
-        **{MAX_FINDINGS_KEY: "2"}))
+        **{MAX_FINDINGS_KEY: "2", MIN_SEVERITY_KEY: str(LOWEST)}))
 
     assert found.filed_slugs == ["written-second-and-highest",
                                  "written-third-and-middling"]
@@ -1846,7 +1877,12 @@ def test_the_cap_keeps_the_highest_severities_and_names_what_it_dropped(
 
 def test_the_cap_is_applied_across_the_whole_inspection_rather_than_per_scope(
         tmp_path):
-    """Two scopes, two findings each, and a bound of two briefs in total."""
+    """Two scopes, two findings each, and a bound of two briefs in total.
+
+    The floor is set to the lowest severity the scale defines for the reason
+    the test above states: the subject here is the cap, and the default floor
+    would exclude the two low findings before the cap could.
+    """
     first = (brief(slug="first-scope-high", severity=HIGHEST,
                    confidence=CONFIDENCES[-1]),
              brief(slug="first-scope-low", severity=LOWEST))
@@ -1856,7 +1892,8 @@ def test_the_cap_is_applied_across_the_whole_inspection_rather_than_per_scope(
 
     found = inspecting(tmp_path, act=writes_per_invocation(first, second),
                        arguments=(SOURCE_DIR, OTHER_SOURCE_DIR),
-                       config=configuration(**{MAX_FINDINGS_KEY: "2"}))
+                       config=configuration(**{MAX_FINDINGS_KEY: "2",
+                                               MIN_SEVERITY_KEY: str(LOWEST)}))
 
     assert len(found.invocations) == 2
     assert sorted(found.filed_slugs) == ["first-scope-high",
@@ -2610,13 +2647,18 @@ def test_nothing_in_this_story_reads_the_request_directory():
     """The briefs under it are worked examples and historical records.
 
     An absence over the two sources this story adds, controlled by the same
-    search over a planted source that does name the directory.
+    search over a planted source that does name the directory. It is the code
+    that is searched rather than the whole file, for the reason
+    `code_without_docstrings` states: story-114 requires the module's docstring
+    to say the directory is deliberately not consulted, and a whole-file search
+    reads that statement as the thing it forbids.
     """
     requests = ".harness/requests"
     for relative in ("orchestration/inspection.py", "scripts/l5-inspect"):
-        assert requests not in (REPO_ROOT / relative).read_text(
-            encoding="utf-8"), relative
-    assert requests in f"a source that reads {requests}/README.md"
+        assert requests not in code_without_docstrings(
+            (REPO_ROOT / relative).read_text(encoding="utf-8")), relative
+    assert requests in code_without_docstrings(
+        f'BRIEFS = "{requests}/README.md"\n')
 
 
 # --------------------------------------------------------------------------

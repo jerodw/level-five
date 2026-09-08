@@ -303,6 +303,10 @@ def build_target(root: Path, journal: Path, *, ignore_history: bool = False,
 # ==========================================================================
 
 
+SEVERITY_ENUM = schema_validator.load_schema(
+    inspection.BRIEF_SCHEMA)["properties"]["severity"]["enum"]
+
+
 def finding(ordinal: int = 1, **overrides) -> dict:
     """One conforming finding, named for the workflow this fixture defines."""
     schema = schema_validator.load_schema(inspection.BRIEF_SCHEMA)
@@ -533,8 +537,17 @@ def completing_run(tmp_path: Path, harness: Path, monkeypatch, *,
     unless the caller departs from it, so a run built by this helper inspects.
     `extra_changed` reaches the writing stage's changed-files record, so a
     caller can give the run a change the expansion will leave out.
+
+    The severity floor is declared at the lowest severity the scale defines —
+    which is no floor at all — unless the caller departs from it. The findings
+    this module builds carry that severity, and this module's subject is the
+    post-story inspection's mechanics rather than which findings the floor
+    files: with the default floor in force every one of them would be dropped
+    before it reached the queue, which is the floor's own module's question.
     """
     config_keys.setdefault(story_inspection.MAX_FILES_KEY, ROOMY_CAP)
+    config_keys.setdefault(inspection.MIN_SEVERITY_KEY,
+                           str(min(SEVERITY_ENUM)))
     journal = tmp_path / f"{name}-journal.txt"
     target = build_target(tmp_path / name, journal,
                           ignore_history=ignore_history, **config_keys)
@@ -634,7 +647,12 @@ def test_a_query_that_cannot_answer_costs_the_run_nothing(
     journal = tmp_path / "broken-query-journal.txt"
     target = build_target(tmp_path / "with-a-broken-query", journal,
                           filed_query_command="sync/cannot-answer.sh",
-                          **{story_inspection.MAX_FILES_KEY: ROOMY_CAP})
+                          # No floor, for the reason `completing_run` states:
+                          # this target is built directly rather than through
+                          # that helper, and the subject here is the query.
+                          **{story_inspection.MAX_FILES_KEY: ROOMY_CAP,
+                             inspection.MIN_SEVERITY_KEY:
+                                 str(min(SEVERITY_ENUM))})
     break_the_filed_query(target)
     _git(target, "add", "-A")
     _git(target, "commit", "-q", "-m", "the query command")
@@ -1334,10 +1352,18 @@ def test_it_files_under_the_existing_brief_cap(tmp_path, harness, monkeypatch):
 def test_no_second_ceiling_and_no_second_brief_cap_are_declared():
     """As a fact of the declaration rather than as prose: the inspection keys
     the schema declares are the two that already bounded an inspection, plus
-    the file cap this story adds."""
+    the file cap this story adds.
+
+    `inspect_min_severity` joined them in story-114 and is neither of the two
+    things this test is about: it is a floor on what is filed, not a second
+    ceiling on what an invocation may spend and not a second cap on how many
+    briefs an inspection may file. The comparison stays exact so that a key
+    that *is* one of those two cannot arrive unnoticed.
+    """
     declared = {key for key in harness_config.declared_config_keys()
                 if key.startswith("inspect")}
     assert declared == {inspection.MAX_COST_KEY, inspection.MAX_FINDINGS_KEY,
+                        inspection.MIN_SEVERITY_KEY,
                         story_inspection.MAX_FILES_KEY}
 
 

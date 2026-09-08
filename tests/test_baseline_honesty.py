@@ -2556,6 +2556,18 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":
         "its subject is this repository's own module names",
+    "test_what_the_inspector_files_is_not_noise.py":
+        "every inspection it drives runs against a harness root it mirrors and "
+        "a target repository it builds, where the configured floor, the "
+        "findings an invocation returns and the prompt template are inputs — "
+        "the render assertions read a template this module wrote. What it "
+        "resolves live is what this repository ships and nothing else: "
+        "prompts/inspector.md, because the criterion is that this deployment's "
+        "own inspector template carries the floor's placeholder and renders "
+        "with it filled, which only the shipped template can answer; and "
+        "templates/config.yaml, because 'a target meets this key commented in "
+        "beside the two existing bounds' is a claim about the template this "
+        "repository ships",
     "test_workflow_proposal.py":
         "the workflows it plans under are built and written into roots it "
         "owns; what it resolves live are the shipped declarations that are its "

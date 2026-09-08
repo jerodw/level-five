@@ -93,6 +93,16 @@ test_command: {test_command}
 # four scopes may spend four of these, and the report says how many invocations
 # it made. Delete the key and the allowance is 5.0.
 # inspect_max_cost_usd: 5.0
+# The lowest severity an inspection files, as 1, 2 or 3. Delete the key and the
+# floor is 2, because the severity scale defines 1 as worth fixing the next time
+# somebody has the file open — which by that definition is not a story, and a
+# backlog that fills with them is one nobody reads. Set it to 1 for no floor at
+# all, or to 3 to file only what produces wrong behaviour. It decides what is
+# filed and never what a rating means: the scale is unchanged, a finding beneath
+# the floor is still rated honestly, and the report names each one it excluded
+# with its severity. It is applied before inspect_max_findings, so a finding the
+# floor excluded is never reported as having been crowded out by the cap.
+# inspect_min_severity: 2
 # Whether a completed run inspects what its story changed, and how many files
 # that inspection may take into scope. Delete the key and no run inspects
 # anything: the whole mechanism is off, and a completed run leaves exactly what

@@ -133,6 +133,16 @@ Two mechanical rules hold the scale still. They are not guidance:
    highest severity is reserved for things you can show; without this the
    scale drifts upward until 3 means "I think this matters".
 
+**A floor decides what this inspection files.** It is applied to what you
+write, after you have written it, and it is told to you here only so that
+you do not spend a long brief on a finding that will be dropped unread:
+
+{{severity_floor}}
+
+Nothing about the floor changes what a rating means. Rate every finding by
+the scale above and by nothing else; a finding beneath the floor is one you
+simply do not write down, not one to promote until it clears.
+
 **Do not score how important a finding is to the project.** No priority
 number, no placement, no ranking against work you cannot see. You have no
 basis for that judgement, and a fabricated one is worse than none, because
