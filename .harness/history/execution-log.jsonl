@@ -46,3 +46,5 @@
 {"story_id": "story-117", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-08 05:48:21"}
 {"story_id": "story-117", "status": "budget-stopped", "retry_count": 0, "timestamp": "2026-09-08 08:07:02"}
 {"story_id": "story-117", "status": "escalated", "retry_count": 0, "timestamp": "2026-09-08 08:07:02"}
+{"story_id": "story-117", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-08 11:07:22"}
+{"story_id": "story-117", "status": "completed", "retry_count": 1, "timestamp": "2026-09-08 11:27:15"}

@@ -449,6 +449,63 @@ def test_a_plan_commit_consumes_the_reservation_and_releases_nothing(
     assert subject.startswith("Plan ")
 
 
+def test_an_artifact_carrying_another_id_branches_on_it_and_releases_the_claim(
+        tmp_path: Path):
+    """The session wrote a story under an id other than the one reserved for
+    it, which is the one case where the reservation and the artifact disagree.
+
+    The artifact wins, because the artifact is what the run will be about: the
+    disagreement is reported naming both ids, the branch carries the artifact's
+    id, and the claim nothing consumed is given back rather than left as a
+    silently burnt id.
+
+    The control is the agreeing path in the same reading — a second target
+    whose session writes the id it was reserved — where the same three
+    questions answer the other way: no disagreement is reported, nothing is
+    released, and the ref the claim created is the one the plan commit lands
+    on. Without it, "the reserved ref is gone" would pass just as happily for a
+    harness that never claimed a ref at all.
+    """
+    disagreeing = build_target(tmp_path / "disagreeing")
+    before = set(remote_refs(disagreeing.remote))
+
+    result = disagreeing.plan("a request", L5_STUB_WRITE=planned("story-777"))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    reserved = result.stdout.split("l5-plan: reserved ")[1].split()[0]
+    assert reserved != "story-777", result.stdout
+    # (a) both ids named, and the branch said to carry the artifact's.
+    assert reserved in result.stdout
+    assert "story-777" in result.stdout
+    assert "the id the artifact carries" in result.stdout
+    assert disagreeing.story_branch("story-777") in result.stdout
+
+    gained = set(remote_refs(disagreeing.remote)) - before
+    # (b) the ref the remote gained is the artifact's branch, carrying the plan
+    # commit, and (c) the reserved id's ref is not there.
+    assert gained == {f"refs/heads/{disagreeing.story_branch('story-777')}"}
+    assert f"refs/heads/{disagreeing.story_branch(reserved)}" \
+        not in remote_refs(disagreeing.remote)
+    assert "released the claim on " + reserved in result.stdout
+
+    # The control: the agreeing path, where each of the three answers inverts.
+    agreeing = build_target(tmp_path / "agreeing")
+    also_before = set(remote_refs(agreeing.remote))
+    control = agreeing.plan("a request", L5_STUB_WRITE=planned("story-001"))
+    assert control.returncode == 0, control.stdout + control.stderr
+
+    assert control.stdout.split("l5-plan: reserved ")[1].split()[0] == "story-001"
+    assert "the id the artifact carries" not in control.stdout
+    assert "released the claim" not in control.stdout
+    assert set(remote_refs(agreeing.remote)) - also_before \
+        == {f"refs/heads/{agreeing.story_branch('story-001')}"}
+    landed = subprocess.run(
+        ["git", "-C", str(agreeing.remote), "log", "-1", "--format=%s",
+         agreeing.story_branch("story-001")],
+        capture_output=True, text=True).stdout.strip()
+    assert landed.startswith("Plan ")
+
+
 def test_a_session_that_writes_no_artifact_releases_its_claim(target: Target):
     """Nothing was planned, so the id goes back: the ref the claim created is
     deleted and the remote holds exactly what it held before.

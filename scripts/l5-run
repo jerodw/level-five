@@ -5,6 +5,19 @@ Usage: l5-run <story-id> [--stage <stage>] [--base <branch>]
 The target repository is found by walking up from the current directory
 to the nearest .harness/config.yaml.
 
+That repository is where the run reads refs and branches from; it is not
+necessarily where the run works. The run works in a worktree of its own,
+under the directory worktree_dir names, which is outside the repository:
+this tree when it already stands on the story branch, the existing
+worktree for that branch when there is one, and a new worktree otherwise.
+So an invocation from a checkout with uncommitted work leaves that work
+alone and commits none of it.
+
+A story whose artifact is not in this tree is not refused for that. It is
+the ordinary state of a clone that did not plan the story, because
+planning pushes its artifact on the story branch and removes its own
+worktree; the branch is fetched and the artifact read from it.
+
 A run whose state.json says it escalated, or that it paused because
 capacity ran out, resumes at the recorded stage. --stage overrides that
 with a stage the loaded workflow defines; the coordinator refuses one it
