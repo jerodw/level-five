@@ -45,7 +45,10 @@ structure and not the behaviour. The Inspector reads code and reports what
 is wrong with it, so everything it files is a defect; you are not so
 limited, and a feature nobody has built is a brief like any other.
 
-A brief carries a title written for a human scanning a list; a short
+A brief carries a title stating the behaviour the finished work produces,
+in the present tense as though it already held — that holds for a defect
+as much as for anything else, and the fault it starts from is said in the
+body's opening line rather than in the title; a short
 kebab-case slug naming the work itself rather than the fix or the file;
 a body making the case, with its evidence cited as file:line wherever the
 brief is about code that exists; a category; a severity saying how much

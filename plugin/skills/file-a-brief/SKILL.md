@@ -40,8 +40,23 @@ Derive it by the rule the harness states:
 - Describe it in the most general terms still true of this work and not of its
   neighbours.
 
-The title is prose for a human scanning a list and is deliberately not part of
-what the brief is filed under, so it may be as readable as you like.
+### The title
+
+The title is prose, and it is deliberately not part of what the brief is filed
+under — which is what makes it safe to rewrite in the tracker later, where a
+rewritten slug would file a duplicate. What it must say is the behaviour the
+finished work produces, written in the present tense as though it already
+held. That is the rule whether the brief reports a defect, a feature or a
+refactor: `l5-status shows what each queued brief is waiting on`, not `l5-status
+says nothing about why a brief is stuck`.
+
+Two things come with it. The behaviour has to pick this work out from the work
+beside it — `The queue report is better` is an end state that fits anything, and
+a title that vague is underspecified rather than badly framed, so make the
+behaviour sharper instead of reaching back for the fault. And where the brief
+reports a defect, open the body by saying what is wrong today: that is the case
+for the work, the file:line evidence is already there, and `category` and
+`severity` are the fields a board sorts on to know something is broken.
 
 ### The paths, and where the evidence goes
 

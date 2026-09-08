@@ -177,14 +177,43 @@ The slug, the category and the paths are what a brief is **filed under**.
 The `title` is prose written for a human scanning a list, and it is
 deliberately **not** part of what a brief is filed under, because it is the
 part you would phrase differently on a second reading — filing on the
-phrasing would file one defect twice. So the title may be as readable as
-you like, and the slug has to be derived by the rule above.
+phrasing would file one defect twice. That is what makes a title safe to
+rewrite later and a slug not, and it is why the slug has to be derived by
+the rule above while the title is pitched by the rule below.
 
 **The paths a brief carries are bare repository-relative paths, with no
 line number appended.** Line-level evidence goes in the body, where the
 file:line rule above puts it. A path carrying a line number is filed
 somewhere no later query will look for it, so it defeats the
 already-filed check for everyone who comes after you.
+
+[The title, and what it says]
+A `title` states the behaviour the finished work produces, in the present
+tense, as though it already held. Everything you file is a defect, and
+that changes nothing here: the title is still the end state and not the
+fault.
+
+- Not `A pending outbox entry never says why it is pending`, which
+  describes what a developer is stuck with today.
+- But `A pending outbox entry says why it is pending`, which describes
+  what they will have.
+
+A tracker column read this way describes the system being built. Written
+the other way every line in it describes something that will not exist
+once the work lands.
+
+The behaviour you name has to be this work and not its neighbours. `The
+outbox report is correct` is an end state and is useless, because it fits
+twenty of your findings. When your title comes out that vague the title
+is underspecified rather than mis-framed, so sharpen the behaviour — say
+which report, saying what, about which entries — and do not fall back on
+naming the fault to make it specific.
+
+What is wrong today still has to be said, and it is said in the body's
+opening line: that is the case for the work, and it is where your
+file:line evidence already goes. `category` and `severity` are what carry
+the fact that something is broken now, being fields a board can sort and
+filter on rather than a tone you put in a sentence.
 
 [What is already filed]
 Below is what a query of this repository's tracker reported as already
