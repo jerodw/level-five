@@ -85,6 +85,19 @@ import schema_validator
 #: reports untracked files — a pending entry that was only untracked would
 #: refuse the next run, and the mechanism whose whole purpose is never to
 #: block would be the thing blocking.
+#:
+#: The pair is one per *repository* rather than one per working tree, and
+#: `queue_dir` is where that is arranged: both directories resolve beneath the
+#: repository's primary working tree, so a run in a worktree, an explicit drain
+#: from the developer's checkout, an assist session anywhere in the repository
+#: and the read-only status listing all name one queue and one index. A
+#: worktree's own queue would be read by nothing that outlives the worktree —
+#: the in-run sweep reads the run's tree, the next run is a run of another
+#: story in another tree, and l5-sync resolves from wherever it was invoked —
+#: so an entry filed by a run whose transport was unreachable would sit in a
+#: directory nothing later opens, and local dedupe would restart from empty in
+#: every new tree. A directory git cannot answer for keeps its queue beneath
+#: itself, which is what it answered before this derivation existed.
 QUEUE_DIR = (".harness", "outbox")
 
 #: Where the receipt index lives beneath a target repository: the permanent
@@ -99,6 +112,14 @@ QUEUE_DIR = (".harness", "outbox")
 #: completion commit — so a versioned index would write a new file into a
 #: tracked directory mid-run and the next run's clean-tree pre-flight would
 #: refuse it, which is exactly the blocking the queue is gitignored to avoid.
+#:
+#: One per repository, beside the queue and for the queue's reason: a receipt
+#: is what makes local dedupe answer without a network, and an index that
+#: restarted from empty in every new working tree would let one brief be filed
+#: once per tree. What a run in a worktree therefore writes is a gitignored
+#: file into the developer's checkout — stated rather than hidden, and it is
+#: what makes the index outlive the tree that filed into it. Nothing tracked is
+#: written, so no clean-tree pre-flight sees it.
 RECEIPTS_DIR = (".harness", "receipts")
 
 #: The shape an entry is written in and read back against. One file, so what
@@ -136,14 +157,43 @@ DROP_MESSAGE = "outbox: dropped an item for identity {identity}: {reason}"
 UNRENDERABLE_IDENTITY = "<an identity that cannot be rendered>"
 
 
+def _repository_root(target_root: Path) -> Path:
+    """The repository's primary working tree for `target_root`.
+
+    The one derivation of where the pair lives, so the queue and the index
+    cannot come to disagree about which tree they belong to. The import is
+    inside the body in the idiom `_report_drop` already uses: a caller that
+    never asks for a queue pays nothing for the capability, and no import at
+    module scope can close a cycle with a module that reaches this one.
+
+    `primary_root` reports rather than raises, answering with the path it was
+    given wherever git cannot say, so a target that is not a repository keeps
+    its queue beneath itself — which is what a tmpdir target has always had.
+    """
+    from worktrees import primary_root
+
+    return primary_root(Path(target_root))
+
+
 def queue_dir(target_root: Path) -> Path:
-    """The queue directory beneath a target repository: what is still to file."""
-    return target_root.joinpath(*QUEUE_DIR)
+    """The queue directory of `target_root`'s repository: what is still to file.
+
+    Beneath the repository's primary working tree rather than beneath the tree
+    it was asked from, so a run working in a worktree files into the queue an
+    explicit drain and every later run will actually read. See QUEUE_DIR above
+    for what that costs and why a per-tree queue could not work.
+    """
+    return _repository_root(target_root).joinpath(*QUEUE_DIR)
 
 
 def receipts_dir(target_root: Path) -> Path:
-    """The receipt index beneath a target repository: what was filed."""
-    return target_root.joinpath(*RECEIPTS_DIR)
+    """The receipt index of `target_root`'s repository: what was filed.
+
+    Resolved through the same derivation the queue is, so the pair is one pair
+    for the repository and `receipts_beside` keeps agreeing with this function:
+    both roots are now the same root.
+    """
+    return _repository_root(target_root).joinpath(*RECEIPTS_DIR)
 
 
 def receipts_beside(queue: Path) -> Path:
