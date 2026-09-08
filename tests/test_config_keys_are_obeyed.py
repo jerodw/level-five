@@ -480,7 +480,7 @@ KEY_PROOFS: dict[str, Proof] = {
         "test_architecture_docs_names_the_documents_injected_into_a_stage",
         BEHAVIOURAL),
     "base_branch": Proof(
-        "test_base_branch_is_the_base_the_pre_flight_resolves_and_decides_on",
+        "test_base_branch_is_the_base_the_run_resolves_and_cuts_its_tree_from",
         BEHAVIOURAL),
     "branch_prefix": Proof(
         "test_branch_prefix_names_the_branch_the_run_creates_and_works_on",
@@ -896,10 +896,24 @@ def build_target(tmp_path: Path, config: dict[str, object], *,
     # base-branch proof below decides on which branch HEAD is standing.
     _git(root, "branch", "-M", "main")
     for branch in extra_branches:
-        _git(root, "branch", branch)
+        # Each extra branch carries a commit `main` does not, so a tree cut
+        # from it can be told from a tree cut from `main` by what is in it.
+        # That is what the base proof below decides on now that a run cuts its
+        # worktree from the base by name rather than from wherever HEAD stands.
+        _git(root, "checkout", "-q", "-b", branch)
+        (root / branch_marker(branch)).write_text(
+            f"committed on {branch}\n", encoding="utf-8")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", f"a commit only {branch} has")
+        _git(root, "checkout", "-q", "main")
     if checkout:
         _git(root, "checkout", "-q", checkout)
     return root
+
+
+def branch_marker(branch: str) -> str:
+    """The file committed on `branch` and on no other, named for it."""
+    return f"only-on-{branch.replace('/', '-')}.txt"
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -1589,28 +1603,37 @@ def test_worktree_dir_is_where_a_run_cuts_the_tree_it_works_in(tmp_path):
     assert worktrees.standing_branch(run.target) == "main"
 
 
-def test_base_branch_is_the_base_the_pre_flight_resolves_and_decides_on(
-        tmp_path, capsys):
-    """Both directions of the base pre-flight, against a configured base.
+def test_base_branch_is_the_base_the_run_resolves_and_cuts_its_tree_from(
+        tmp_path):
+    """The configured base is what `resolve_base` returns and what the run's
+    worktree is cut from.
 
-    The configured base is what `resolve_base` returns and what the pre-flight
-    decides against. Standing anywhere else is refused by name; standing on it
-    is accepted. With the key no longer read, the base resolves to `main` and
-    both halves reverse — the refusal disappears and the acceptance becomes a
-    refusal — so neither half can pass against a harness that ignores it.
+    `xyzzy-base` carries a commit `main` does not, and the file that commit
+    adds is the whole of the difference between the two: it is in the tree the
+    run works in exactly when the branch was cut from the configured base. With
+    the key no longer read the base resolves to `main`, the worktree is cut
+    from there, and the file is not in it — so this cannot pass against a
+    harness that ignores the key.
+
+    What is decided on is what the branch is cut *from* rather than where the
+    invoked checkout is standing. Since story-117 a run cuts its worktree from
+    the base by name and `base_problems` is asked without its
+    HEAD-standing-on-the-base leg, which is the leg
+    `tests/test_planning_runs_on_its_own_worktree.py` holds for the caller that
+    still cuts from HEAD.
     """
-    away = start_run(tmp_path / "away", _branches=("xyzzy-base",))
-    assert away.code == 1
-    refusal = capsys.readouterr().err
-    assert "xyzzy-base" in refusal
-    assert "HEAD is on branch main" in refusal
-    assert not (away.target / str(VARYING["runs_dir"])).exists()
-    assert story_coordinator.resolve_base(away.target, away.config, None) == \
+    run = complete_run(tmp_path, _branches=("xyzzy-base",))
+    assert story_coordinator.resolve_base(run.target, run.config, None) == \
         "xyzzy-base"
-
-    standing = complete_run(tmp_path / "standing", _branches=("xyzzy-base",),
-                            _checkout="xyzzy-base")
-    assert standing.state["branch"] == "xyzzy-branch/story-001"
+    assert run.state["branch"] == "xyzzy-branch/story-001"
+    marker = branch_marker("xyzzy-base")
+    assert (run.run_root / marker).is_file()
+    # The control for the half above: the marker is not everywhere in the
+    # fixture. The invoked checkout is standing on `main`, which is where a
+    # harness ignoring the key would have cut the worktree from, and the file
+    # is not there — so its presence in the run root is the base being obeyed
+    # rather than the fixture carrying it on every branch.
+    assert not (run.target / marker).exists()
 
 
 def test_stories_dir_is_where_the_story_artifact_is_read_from(tmp_path):
@@ -2384,7 +2407,13 @@ def seeded_history(target: Path, directory: str, days_ago: dict[str, float]) -> 
 
 
 def history_markers(target: Path, directory: str, log: str) -> list[str]:
-    text = (target / directory / log).read_text(encoding="utf-8")
+    """The markers a log holds after a run, read in the tree the run worked in.
+
+    The seeding above goes into the invoked checkout and is committed there, so
+    the worktree the run cuts inherits it; the pruning then happens in that
+    worktree, which is where what survived is read.
+    """
+    text = (run_root_of(target) / directory / log).read_text(encoding="utf-8")
     return [json.loads(line)["story_id"] for line in text.splitlines() if line]
 
 

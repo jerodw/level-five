@@ -348,8 +348,16 @@ def history(target: Path) -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def run_tree(target: Path) -> Path:
+    """The tree the run works in, which since story-117 is a worktree of its
+    own rather than the checkout the run was invoked from — so it is the tree
+    a pause commits in, the tree a resume reads and the tree every question
+    below about commits, status and branches is asked of."""
+    return conftest.run_root_for(Path(target), STORY_ID)
+
+
 def subjects(target: Path) -> list[str]:
-    return git(target, "log", "--format=%s").splitlines()
+    return git(run_tree(target), "log", "--format=%s").splitlines()
 
 
 def attempt_archive(under: Path) -> Path:
@@ -823,11 +831,11 @@ def test_a_pause_commits_what_the_run_left(environment):
     """
     target, _, _, _, _ = paused_at_the_first_invocation(environment,
                                                         name="commits")
-    assert git(target, "status", "--porcelain").strip() == ""
+    assert git(run_tree(target), "status", "--porcelain").strip() == ""
 
     subject = story_coordinator.pause_commit_subject(STORY_ID, WRITING)
     assert subjects(target)[:2] == [subject, subject]
-    assert git(target, "show", "HEAD:src/app.py") == APP_MID_STAGE
+    assert git(run_tree(target), "show", "HEAD:src/app.py") == APP_MID_STAGE
 
 
 def test_the_pause_commit_says_what_it_is_and_how_to_undo_it(environment):
@@ -837,7 +845,7 @@ def test_the_pause_commit_says_what_it_is_and_how_to_undo_it(environment):
     at a glance from the two an escalation leaves."""
     target, _, _, _, _ = paused_at_the_first_invocation(environment,
                                                         name="message")
-    body = git(target, "log", "-1", "--format=%B")
+    body = git(run_tree(target), "log", "-1", "--format=%B")
 
     assert "capacity" in body.lower()
     assert "rejected" in body.lower()
@@ -891,13 +899,13 @@ def test_a_completion_after_a_resumed_pause_is_not_amended_over_the_pause(
     target, harness = environment(name="not-amended")
     assert run(target, harness, Runner(target, {0: stop(None)})) == \
         story_coordinator.PAUSE_EXIT_CODE
-    paused_head = git(target, "rev-parse", "HEAD").strip()
+    paused_head = git(run_tree(target), "rev-parse", "HEAD").strip()
 
     assert run(target, harness, Runner(target, {})) == 0
     log = subjects(target)
     assert story_coordinator.pause_commit_subject(STORY_ID, WRITING) in log
-    assert git(target, "rev-parse", "HEAD").strip() != paused_head
-    assert paused_head in git(target, "log", "--format=%H")
+    assert git(run_tree(target), "rev-parse", "HEAD").strip() != paused_head
+    assert paused_head in git(run_tree(target), "log", "--format=%H")
 
 
 # --------------------------------------------------------------------------
@@ -1000,7 +1008,7 @@ def test_the_state_and_the_commit_both_land_before_the_sleep(environment):
         observed["seconds"] = seconds
         observed["status"] = state_of(target)["status"]
         observed["subject"] = subjects(target)[0]
-        observed["committed"] = git(target, "show", "HEAD:src/app.py")
+        observed["committed"] = git(run_tree(target), "show", "HEAD:src/app.py")
         observed["event"] = [entry["event"] for entry in history(target)]
 
     runner = Runner(target, {0: stop(INSIDE_THE_BOUND)})
@@ -1044,7 +1052,7 @@ def test_a_process_killed_while_waiting_leaves_a_run_that_resumes(environment):
             sleep=killer)
 
     assert state_of(target)["status"] == "paused"
-    assert git(target, "show", "HEAD:src/app.py") == APP_MID_STAGE
+    assert git(run_tree(target), "show", "HEAD:src/app.py") == APP_MID_STAGE
 
     resumed = Runner(target, {})
     assert run(target, harness, resumed) == 0
@@ -1341,15 +1349,18 @@ def refusable_by_the_guard(target: Path, harness: Path, status: str) -> None:
     run_dir = run_dir_of(target)
     state = story_coordinator.load_state(run_dir)
     state.status = status
-    state.escalation_commit = git(target, "rev-parse", "HEAD").strip()
+    # The guard reads the tree the run works in, which since story-117 is the
+    # run's own worktree — so the commit it compares against is that tree's.
+    tree = run_tree(target)
+    state.escalation_commit = git(tree, "rev-parse", "HEAD").strip()
     state.harness_revision = git(harness, "rev-parse", "HEAD").strip()
     story_coordinator.save_state(run_dir, state)
-    conftest.commit_setup(target, "record what the guard compares against")
+    conftest.commit_setup(tree, "record what the guard compares against")
 
-    story_text = (target / ".harness" / "stories" / f"{STORY_ID}.yaml").read_text(
+    story_text = (tree / ".harness" / "stories" / f"{STORY_ID}.yaml").read_text(
         encoding="utf-8")
     assert story_coordinator.unchanged_since_escalation(
-        state, story_text, target, harness), \
+        state, story_text, tree, harness), \
         "the guard has no evidence here, so neither run below would be refused"
 
 
@@ -1391,13 +1402,16 @@ def test_the_clean_tree_pre_flight_exempts_a_paused_run_as_it_does_an_escalated(
     target, harness = environment(name="clean-tree")
     assert run(target, harness, Runner(target, {0: stop(None)})) == \
         story_coordinator.PAUSE_EXIT_CODE
-    assert git(target, "status", "--porcelain").strip() == ""
+    assert git(run_tree(target), "status", "--porcelain").strip() == ""
     assert run(target, harness, Runner(target, {})) == 0
 
     dirty, harness = environment(name="dirty-tree")
     assert run(dirty, harness, Runner(dirty, {0: stop(None)})) == \
         story_coordinator.PAUSE_EXIT_CODE
-    write(dirty / "src" / "elsewhere.py", "work the developer left behind\n")
+    # Left in the tree the run works in, which is the tree that check reads
+    # since story-117 — work left in the invoked checkout refuses nothing.
+    write(run_tree(dirty) / "src" / "elsewhere.py",
+          "work the developer left behind\n")
     assert run(dirty, harness, Runner(dirty, {})) == 1
 
 
@@ -1436,9 +1450,12 @@ def test_the_status_reader_renders_the_recorded_status_rather_than_a_list(
     """
     target, _, _, _, _ = paused_at_the_first_invocation(environment,
                                                         name="status")
-    detail = run_status.format_detail(target, STORY_ID)
+    # Pointed at the tree the run worked in, which since story-117 is a
+    # worktree of its own and is where the run directory the reader reads is.
+    worked_in = conftest.run_root_for(target, STORY_ID)
+    detail = run_status.format_detail(worked_in, STORY_ID)
     assert "paused" in detail
-    assert "paused" in run_status.format_listing(target)
+    assert "paused" in run_status.format_listing(worked_in)
 
     assert statuses_named_in(RUN_STATUS_SOURCE) == []
     planted = RUN_STATUS_SOURCE.replace(

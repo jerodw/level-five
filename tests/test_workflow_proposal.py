@@ -92,7 +92,8 @@ from pathlib import Path
 import pytest
 
 import conftest
-from test_plan_commit import Planning, bare_remote, drain, writes
+from test_plan_commit import (Planning, bare_remote, drain, kept_worktree_in,
+                              writes)
 
 import context_assembler
 import schema_validator
@@ -408,9 +409,9 @@ class Runner:
                         for stage in workflow["stages"]}
         self.calls: list[str] = []
 
-    def _write(self, artifact: str) -> None:
+    def _write(self, artifact: str, tree: Path) -> None:
         if artifact == conftest.CHANGED_FILES:
-            write(Path(cwd) / "src" / "app.py",
+            write(tree / "src" / "app.py",
                   APP_AT_HEAD + f"print('call {len(self.calls)}')\n")
             write_json(self.run_dir / artifact,
                        {"modified": ["src/app.py"], "created": [],
@@ -435,8 +436,11 @@ class Runner:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a", encoding="utf-8") as handle:
                 handle.write(f"===== stage: {stage} =====\n")
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         for artifact in self.outputs.get(stage, []):
-            self._write(artifact)
+            self._write(artifact, tree)
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 
@@ -1275,7 +1279,9 @@ def test_the_confirmed_workflow_is_what_the_artifact_is_held_to(
     assert ADDING["name"] in output
     assert PRESERVING["name"] in output
     assert planning.head() == head
-    assert artifact_path(planning).is_file()
+    # In the worktree the refusal kept, which since story-117 is where the
+    # session wrote it: the developer's own checkout never held it.
+    assert (kept_worktree_in(output) / relative_artifact()).is_file()
 
 
 def test_a_confirmed_session_commits_the_artifact_naming_that_workflow(
@@ -1292,7 +1298,9 @@ def test_a_confirmed_session_commits_the_artifact_naming_that_workflow(
         L5_STUB_WRITE=writes((relative_artifact(), planned(ADDING["name"]))))
 
     assert status == 0, output
-    assert planning.head() != head
+    # On the story branch, which since story-117 is where the plan is committed
+    # and pushed; the invoked checkout's HEAD is what the developer keeps.
+    assert planning.planned_head(PLANNED_ID) != head
     assert rendered_against(invocations(planning)[1], ADDING)
 
 
@@ -1693,7 +1701,8 @@ def test_an_unnamed_plan_reaches_a_proposal_by_the_route_production_uses(
     assert answer_asked_for(made[0]).is_absolute()
     assert ADDING["name"] in output
     assert rendered_against(made[1], ADDING)
-    assert planning.head() != head
+    # On the story branch, for the reason its neighbour above gives.
+    assert planning.planned_head(PLANNED_ID) != head
 
 
 def test_phase_one_is_asked_for_its_answer_beneath_the_target_root(

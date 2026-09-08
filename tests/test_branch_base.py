@@ -809,40 +809,67 @@ def planning_stub() -> str:
     return writes((PLANNED, artifact("story-900")))
 
 
-@pytest.mark.parametrize("condition", ["not-on-base", "base-drifted"])
-def test_l5_plan_refuses_on_the_same_two_conditions_before_committing(
+@pytest.mark.parametrize("condition", ["base-drifted"])
+def test_l5_plan_refuses_on_the_same_conditions_before_anything_is_created(
     planning: Planning, condition,
 ):
-    if condition == "not-on-base":
-        planning.git("checkout", "-q", "-b", ELSEWHERE)
-    else:
-        planning.git("commit", "-q", "--allow-empty", "-m", "local, never pushed")
+    """Since story-117 the refusal happens above the worktree and above the
+    session, so nothing was created, nothing was invoked and nothing written.
+
+    The HEAD-standing-on-the-base leg is no longer one of these conditions and
+    is not silently dropped: l5-plan cuts its worktree from the base *by name*,
+    so where the developer is standing is not a fact about the plan. The test
+    below is that half, stated positively.
+    """
+    planning.git("commit", "-q", "--allow-empty", "-m", "local, never pushed")
     before_head = planning.head()
     before_refs = remote_refs(planning.remote)
 
     result = run_plan(planning, "add a thing", L5_STUB_WRITE=planning_stub())
 
     assert result.returncode == 1
-    # The refusal, and then that it happened before anything was committed.
+    # The refusal, and then that it happened before anything at all.
     assert "base" in result.stderr
     assert planning.head() == before_head, "HEAD moved"
     assert remote_refs(planning.remote) == before_refs, "something was pushed"
-    assert (planning.root / PLANNED).is_file(), "the artifact was removed"
-    assert "?? " + PLANNED in planning.status(), \
-        "the artifact is not sitting uncommitted where the session wrote it"
+    assert planning.status() == "", \
+        "a refusal above the session was meant to write nothing"
+    assert not planning.log.exists(), "the session was invoked"
+
+
+def test_l5_plan_no_longer_refuses_a_developer_standing_off_the_base(
+    planning: Planning,
+):
+    """The leg story-117 dropped, asserted rather than left as an absence.
+
+    Standing on another branch was a refusal while planning happened in the
+    developer's own checkout. It cannot be one now: the worktree is cut from
+    the base by name, so the plan lands on the base whatever the checkout is
+    standing on — and the checkout is left standing there.
+    """
+    planning.git("checkout", "-q", "-b", ELSEWHERE)
+    before_head = planning.head()
+
+    result = run_plan(planning, "add a thing", L5_STUB_WRITE=planning_stub())
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert planning.planned_head() != before_head
+    assert planning.head() == before_head
+    assert planning.git(
+        "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == ELSEWHERE
 
 
 def test_the_same_session_on_the_base_commits_and_pushes(planning: Planning):
-    """The control for both refusals above: one thing differs about the
-    repository, and HEAD moves, the remote's refs move, and the working tree
-    is clean of the artifact."""
+    """The control for the refusal above: one thing differs about the
+    repository, and the plan's branch moves, the remote's refs move, and the
+    developer's working tree is clean of the artifact."""
     before_head = planning.head()
     before_refs = remote_refs(planning.remote)
 
     result = run_plan(planning, "add a thing", L5_STUB_WRITE=planning_stub())
 
     assert result.returncode == 0, result.stderr
-    assert planning.head() != before_head
+    assert planning.planned_head() != before_head
     assert remote_refs(planning.remote) != before_refs
     assert PLANNED not in planning.status()
 
@@ -863,7 +890,7 @@ def test_l5_plan_takes_base_ahead_of_the_request_and_passes_the_rest_unchanged(
     # and nothing else: neither the flag nor its value reaches it.
     session = planning.session()
     assert session["argv"][-1] == "Story request: add a thing"
-    assert planning.head() != before_head, "the artifact was not committed"
+    assert planning.planned_head() != before_head, "the artifact was not committed"
 
 
 def test_l5_plan_still_refuses_a_declared_base_that_does_not_resolve(
@@ -887,15 +914,21 @@ def test_l5_plan_still_refuses_a_declared_base_that_does_not_resolve(
 def test_the_two_entry_points_print_the_same_condition_identically(
     based, planning: Planning,
 ):
-    """Both real scripts, both standing off the base, and their refusals
-    compared as text: one function or the texts would not be equal.
+    """Both real scripts, both over a base that has drifted from its remote,
+    and their refusals compared as text: one function or the texts would not
+    be equal.
+
+    The condition is the drift rather than where HEAD is standing, because
+    since story-117 both entry points cut from the base by name and neither
+    asks the HEAD leg — so the leg they *do* both ask is what a comparison of
+    one shared function can be made over.
 
     The control is built in — the two repositories are different repositories
     with different paths, so equality here is equality of a message derived
     from the branch names alone, which is what a shared derivation produces.
     """
-    elsewhere(based)
-    planning.git("checkout", "-q", "-b", ELSEWHERE)
+    base_ahead(based)
+    planning.git("commit", "-q", "--allow-empty", "-m", "local, never pushed")
 
     from_run = subprocess.run(
         [sys.executable, str(L5_RUN), STORY_ID],

@@ -236,6 +236,18 @@ def build_target(root: Path, **config_keys) -> Path:
     _git(root, "config", "user.name", "Test")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", SETUP_SUBJECT)
+    # Standing on the story branch, which since story-117 is what makes this
+    # tree the tree a run works in rather than one it cuts a worktree away
+    # from. A narrow-mode record is written where the run works and a broad
+    # one where l5-inspect was pointed, so without this the two modes would
+    # write into two trees and "one read of one file answers both" — which is
+    # this module's subject — would be a claim about the fixture rather than
+    # about the record. It is a configuration the harness reaches on its own:
+    # an accepted plan-time run offer runs in the tree planning left standing
+    # on the branch.
+    _git(root, "checkout", "-q", "-b",
+         story_coordinator.story_branch(
+             harness_config.load_config(root), STORY_ID))
     return root
 
 

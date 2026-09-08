@@ -237,6 +237,11 @@ class Runner:
     def __init__(self, target_root: Path, plan: dict | None = None,
                  verdicts: list | None = None, workflow: dict | None = None):
         self.target_root = Path(target_root)
+        # The tree the run works in, which since story-117 is a worktree of its
+        # own rather than the tree the run was invoked from. The sentinel the
+        # target's suite reads has to be repaired there, because that is the
+        # tree the coordinator runs the suite against.
+        self.tree = conftest.run_root_for(target_root)
         self.run_dir = run_dir_of(target_root)
         self.plan = plan or {}
         self.verdicts = list(verdicts or [PASS])
@@ -272,7 +277,7 @@ class Runner:
         if action in (OK, BROKEN, OMIT):
             state = REPAIRED if action in (OK, OMIT) \
                 else "the state the stage found"
-            path = self.target_root / SENTINEL
+            path = self.tree / SENTINEL
             if path.read_text(encoding="utf-8").strip() != state:
                 write(path, f"{state}\n")
             # An invocation that decides this file's state is answerable for

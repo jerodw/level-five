@@ -227,13 +227,24 @@ QUIET_GITIGNORE = ".harness/runs/\n.harness/history/\n"
 
 
 def build_target(root: Path, *, harness_inside: bool,
-                 gitignore: str = "") -> Path:
+                 gitignore: str = "",
+                 on_the_story_branch: bool = False) -> Path:
     """A target repository, optionally carrying the harness inside it.
 
     `harness_inside` is the whole difference between the two fixtures: with it
     the same directory is a working harness root — `workflows/`, `rules/`,
     `prompts/` and `schemas/` are what `run_story` reads out of one — and can
     be passed as both roots, which is the deployment this story is about.
+
+    `on_the_story_branch` stands the checkout where a run will work in it.
+    Since story-117 a run works in the invoked tree only when that tree is
+    already standing on the story branch — which is what an accepted plan-time
+    run offer leaves — and that is the only shape in which the harness root,
+    the target root and the tree the run works in are one checkout. Cut a
+    worktree instead and the guard's third comparison is asked of two different
+    toplevels, which is the separate-root question and not this one. It is off
+    by default because a caller whose subject *is* where the developer stands
+    moves the checkout itself.
     """
     for sub in (".harness/standards", ".harness/stories", ".harness/runs",
                 ".harness/logs", ".harness/docs"):
@@ -255,6 +266,9 @@ def build_target(root: Path, *, harness_inside: bool,
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
     subprocess.run(["git", "branch", "-M", DEFAULT_BRANCH], cwd=root, check=True)
+    if on_the_story_branch:
+        subprocess.run(["git", "checkout", "-q", "-b", STORY_BRANCH], cwd=root,
+                       check=True)
     return root
 
 
@@ -288,8 +302,9 @@ def separate_harness(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def shared_root(tmp_path: Path) -> Path:
-    """One checkout that is both the harness and the target."""
-    return build_target(tmp_path / "shared", harness_inside=True)
+    """One checkout that is the harness, the target and the tree a run works in."""
+    return build_target(tmp_path / "shared", harness_inside=True,
+                        on_the_story_branch=True)
 
 
 @pytest.fixture
@@ -348,6 +363,19 @@ def run_dir_of(target_root: Path) -> Path:
     return conftest.run_dir_for(target_root, STORY_ID)
 
 
+def run_dir_in(tree: Path) -> Path:
+    """The run directory as it sits inside a *named* tree.
+
+    `run_dir_of` resolves which tree a run of this story works in and then
+    looks inside it, which is what a caller holding only the invoked checkout
+    wants. A caller that already knows the tree — because the tree is its
+    subject — names it here instead, and gets the run directory in it whatever
+    the checkout is standing on now.
+    """
+    config = harness_config.load_config(tree)
+    return tree / config.get("runs_dir", ".harness/runs") / STORY_ID
+
+
 def state_of(target_root: Path) -> dict:
     return json.loads((run_dir_of(target_root) / "state.json").read_text())
 
@@ -366,7 +394,8 @@ def escalate(target_root: Path, harness: Path, *, edit: bool = True) -> Runner:
 
 def guard(target_root: Path, harness: Path,
           story_text: str | None = None, *,
-          module=story_coordinator, changes: dict | None = None) -> list[str]:
+          module=story_coordinator, changes: dict | None = None,
+          tree: Path | None = None) -> list[str]:
     """`unchanged_since_escalation`, called directly against a run directory.
 
     `changes` overrides recorded fields *in memory* rather than by rewriting
@@ -375,14 +404,22 @@ def guard(target_root: Path, harness: Path,
     on a dirty tree, which would make every "this field cleared the guard"
     assertion pass for a reason that has nothing to do with the field.
     """
-    state = module.load_state(run_dir_of(target_root))
+    # Put to the tree the run works in, which since story-117 is a worktree of
+    # its own: that is the tree the branch is checked out in, the tree the
+    # escalation committed in and the tree the coordinator puts the guard to.
+    # A caller whose subject *is* which tree the leg reads names one instead.
+    if tree is None:
+        tree = conftest.run_root_for(Path(target_root), STORY_ID)
+    # The run directory is in the tree the run worked in, so it is read out of
+    # the tree the guard is being put to rather than resolved a second time.
+    state = module.load_state(run_dir_in(Path(tree)))
     for field, value in (changes or {}).items():
         assert hasattr(state, field), field
         setattr(state, field, value)
     if story_text is None:
         story_text = story_path_of(target_root).read_text()
     return module.unchanged_since_escalation(
-        state, story_text, target_root, harness)
+        state, story_text, tree, harness)
 
 
 def amend_the_story(target_root: Path) -> None:
@@ -397,9 +434,16 @@ def amend_the_story(target_root: Path) -> None:
 
 def commit_on_the_branch(target_root: Path,
                          message: str = "a developer's fix") -> None:
-    write(target_root / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
-    git(target_root, "add", "-A")
-    git(target_root, "commit", "-q", "-m", message)
+    """A developer's own commit on the story branch, made where the branch is.
+
+    Since story-117 that is the tree the run works in rather than the checkout
+    the run was invoked from, and the guard's second comparison reads the same
+    tree — so a commit made anywhere else would clear nothing.
+    """
+    tree = conftest.run_root_for(target_root, STORY_ID)
+    write(tree / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "-m", message)
 
 
 def executable_source(text: str) -> str:
@@ -873,7 +917,8 @@ def test_a_separate_root_deployment_behaves_at_both_ends_as_it_did(
 
     # The control: one checkout as both roots, where the pre-story guard can
     # never refuse and today's does.
-    shared = build_target(tmp_path / "shared-for-control", harness_inside=True)
+    shared = build_target(tmp_path / "shared-for-control", harness_inside=True,
+                          on_the_story_branch=True)
     escalate(shared, shared)
     was, now = both(shared, shared)
     assert was == []

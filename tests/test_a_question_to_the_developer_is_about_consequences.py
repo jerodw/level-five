@@ -57,6 +57,7 @@ from pathlib import Path
 import pytest
 
 from conftest import load_mutant, load_script
+import conftest
 
 import context_assembler
 import harness_config
@@ -635,6 +636,10 @@ def planner_prompt(tmp_path: Path) -> str:
     (tmp_path / ".harness").mkdir()
     (tmp_path / ".harness" / "config.yaml").write_text(
         f"workflow: {PLANNED_WORKFLOW}\ntests_dir: tests/\n", encoding="utf-8")
+    # Since story-117 the whole of planning happens in a worktree cut from the
+    # base, so the directory l5-plan is invoked in has to be a repository with
+    # the configuration committed in it — the worktree reads its own copy.
+    conftest.init_repository(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_path = tmp_path / "argv.json"

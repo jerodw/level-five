@@ -46,6 +46,7 @@ repository's own commit graph.
 """
 import ast
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -255,8 +256,13 @@ class Runner:
                  max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         attempt = max(1, self.calls.count(WRITING))
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the checkout the run was invoked from. An edit
+        # made in the invoked checkout would be work no stage produced there,
+        # and would leave the developer's tree dirty for every question below.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
-            changed = (self.edit(self.target_root, attempt) if self.edit
+            changed = (self.edit(tree, attempt) if self.edit
                        else {"modified": [], "created": [], "deleted": []})
             write_json(self.run_dir / conftest.CHANGED_FILES, changed)
             write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY,
@@ -304,8 +310,59 @@ def escalate(target_root: Path, harness: Path) -> Runner:
     code, runner = run(target_root, harness, edits_the_module, [FAIL])
     assert code == 2, "the shape was meant to escalate"
     assert state_of(target_root)["status"] == "escalated"
-    assert current_branch(target_root) == STORY_BRANCH
+    # The tree the run worked in stands on the story branch; the checkout it
+    # was invoked from is where the developer left it. Since story-117 those
+    # are two different trees, and both halves are what the story asks for.
+    assert current_branch(run_root_of(target_root)) == STORY_BRANCH
+    assert current_branch(target_root) == DEFAULT_BRANCH
     return runner
+
+
+def run_root_of(target_root: Path) -> Path:
+    """The tree a run of this story works in, resolved as the run resolves it."""
+    return conftest.run_root_for(Path(target_root), STORY_ID)
+
+
+def released_from_its_worktree(target_root: Path) -> None:
+    """Give the story branch back to the invoked checkout.
+
+    Since story-117 a run works in a worktree standing on the story branch, and
+    git refuses to check out a branch another working tree already holds — a
+    refusal about worktrees rather than about the divergence between two
+    branches. Removing that worktree is what leaves the checkout facing the
+    divergence and nothing else, which is what the two cases below are about.
+    """
+    tree = run_root_of(target_root)
+    if tree != Path(target_root) and tree.exists():
+        git(target_root, "worktree", "remove", "--force", str(tree))
+
+
+def unregistered_worktree(target_root: Path) -> Path:
+    """Take the run's worktree off git's books, leaving its contents alone.
+
+    Since story-117 what stands a run on its branch is `git worktree add`
+    rather than a checkout in the invoked tree, so a run root git will not make
+    is what refuses a run now. With the registration moved aside git no longer
+    knows the tree, so the run resolves a *new* worktree at that path — and
+    refuses to create one, because the path is an existing directory that is
+    not empty.
+
+    The directory itself is untouched, which is the whole reason the
+    registration is moved rather than the worktree removed: everything the
+    assertions read afterwards — the run directory, its state, its events and
+    the history the escalated run wrote — is still in it. `reregister_worktree`
+    below puts it back, which is the obstruction being cleared.
+    """
+    registration = Path(target_root) / ".git" / "worktrees"
+    assert registration.is_dir(), "the escalated run left no worktree"
+    moved = Path(target_root).parent / "worktree-registration-set-aside"
+    shutil.move(str(registration), str(moved))
+    return moved
+
+
+def reregister_worktree(target_root: Path, moved: Path) -> None:
+    """Put back what `unregistered_worktree` set aside."""
+    shutil.move(str(moved), str(Path(target_root) / ".git" / "worktrees"))
 
 
 def current_branch(root: Path) -> str:
@@ -324,19 +381,31 @@ def messages(target_root: Path) -> list[str]:
             for line in log.splitlines() if "] " in line]
 
 
-def history_directory(target_root: Path) -> Path:
-    """Where this target's cross-run records go, resolved as a run resolves it."""
+def history_directory(target_root: Path, root: Path | None = None) -> Path:
+    """Where this target's cross-run records go, resolved as a run resolves it.
+
+    `root` is the tree to resolve it in, defaulting to the checkout the
+    configuration is read from. A run writes them in the tree it works in,
+    which since story-117 is not that checkout.
+    """
     return harness_config.history_dir(
-        target_root, harness_config.load_config(target_root))
+        root or target_root, harness_config.load_config(target_root))
 
 
 def history_files(target_root: Path) -> dict[str, str]:
-    """Every cross-run history log in the working tree, by run-relative path."""
-    directory = history_directory(target_root)
+    """Every cross-run history log a run wrote, by run-relative path.
+
+    Read in the tree the run works in, which since story-117 is a worktree of
+    its own: read in the invoked checkout this would report an empty history
+    for every run, and the absence a refusal is asked for would be the absence
+    of a directory no run was ever going to write in.
+    """
+    tree = run_root_of(target_root)
+    directory = history_directory(target_root, tree)
     if not directory.is_dir():
         return {}
     return {
-        path.relative_to(target_root).as_posix(): path.read_text(encoding="utf-8")
+        path.relative_to(tree).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(directory.rglob("*")) if path.is_file()
     }
 
@@ -385,12 +454,14 @@ def commit_a_fix_on_the_branch(target_root: Path) -> None:
     repoints at the branch. Performed *on the branch* and returned from, so the
     caller decides where the resume is invoked from.
     """
-    standing = current_branch(target_root)
-    git(target_root, "checkout", "-q", STORY_BRANCH)
-    write(target_root / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
-    git(target_root, "add", "-A")
-    git(target_root, "commit", "-q", "-m", "the fix the developer made")
-    git(target_root, "checkout", "-q", standing)
+    # Since story-117 the branch is checked out in the tree the run worked in,
+    # so that is where the fix is made — and checking it out here instead is
+    # what git refuses while a worktree holds it. The caller's checkout is left
+    # standing where it was, which is the point.
+    tree = run_root_of(target_root)
+    write(tree / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "-m", "the fix the developer made")
 
 
 def escalated_and_fixed(target_root: Path, harness: Path) -> str:
@@ -424,6 +495,7 @@ def test_the_history_the_branches_disagree_about_is_what_git_refuses_over(
     """
     standing = escalated_and_fixed(target, harness_root)
     assert standing == DEFAULT_BRANCH
+    released_from_its_worktree(target)
     committed = committed_history(target)
 
     assert committed, "the escalation committed no cross-run history"
@@ -456,7 +528,8 @@ def test_a_resume_from_another_branch_reaches_its_stage(target, harness_root):
     assert code == 0
     assert runner.calls == [VERIFYING]
     assert state_of(target)["status"] == "completed"
-    assert current_branch(target) == STORY_BRANCH
+    assert current_branch(run_root_of(target)) == STORY_BRANCH
+    assert current_branch(target) == DEFAULT_BRANCH
 
 
 #: The fields of a run's recorded state that describe what the resume did,
@@ -483,9 +556,13 @@ def test_a_resume_from_the_story_branch_is_unchanged(target, harness_root,
     differently for having been invoked from the branch fails here whatever the
     difference was.
     """
-    on_branch = target
-    escalate(on_branch, harness_root)
-    commit_a_fix_on_the_branch(on_branch)
+    # Since story-117 a checkout cannot stand on the story branch while the
+    # run's worktree holds it, so the tree standing on the branch is that
+    # worktree — and resuming from it is the "already on the branch" case, the
+    # one where the run works in the tree it was invoked from.
+    escalate(target, harness_root)
+    commit_a_fix_on_the_branch(target)
+    on_branch = run_root_of(target)
     assert current_branch(on_branch) == STORY_BRANCH
     code, on_branch_runner = run(on_branch, harness_root, verdicts=[PASS])
     assert code == 0
@@ -533,8 +610,12 @@ def test_the_record_this_run_appends_lands_on_the_story_branch(
 # --------------------------------------------------------------------------
 
 #: The call whose position the whole story is about, matched by name because
-#: its arguments are wrapped across lines.
-CHECKOUT = "_checkout_story_branch("
+#: its arguments are wrapped across lines. Since story-117 a run does not check
+#: the story branch out in the tree it was invoked from: it cuts a worktree of
+#: its own and stands on the branch there. So the act the ordering is about is
+#: the creation of that tree, which is written exactly where the checkout was —
+#: below every refusal that needs no branch and above everything the run writes.
+CHECKOUT = "worktrees.add("
 
 #: Everything `run_story` does that writes — to the run directory, to the
 #: cross-run history, to the queue or to the recorded state. Each must be
@@ -702,20 +783,24 @@ def test_the_checkout_helper_writes_no_raise_on_a_refused_checkout():
     assert raises_in(put_back, CHECKOUT_HELPER) != []                 # control
 
 
-def test_run_story_is_the_only_caller_of_the_checkout_helper():
-    """One call site, so the refusal below it is the only way a refused
-    checkout is handled. The control is a source carrying a second caller,
-    which the same scan reports."""
+def test_no_function_checks_the_story_branch_out_in_the_invoked_tree():
+    """Since story-117 nothing does, because a run works in a worktree.
+
+    The helper is kept and still reports rather than raising — the test above
+    and the four below it are what hold that — but no caller reaches it, so a
+    run cannot move the branch the developer's checkout stands on. The control
+    is a source carrying a caller, which the same scan reports, so an empty
+    answer is the absence rather than a scan that has stopped looking.
+    """
     source = COORDINATOR_PATH.read_text(encoding="utf-8")
 
-    assert callers_of(source, CHECKOUT_HELPER) == {"run_story"}
+    assert callers_of(source, CHECKOUT_HELPER) == set()
 
-    second = source + (
-        "\n\ndef _a_second_caller(target_root, branch):\n"
+    with_one = source + (
+        "\n\ndef _a_caller(target_root, branch):\n"
         f"    return {CHECKOUT_HELPER}(target_root, branch)\n"
     )
-    assert callers_of(second, CHECKOUT_HELPER) == {"run_story",
-                                                  "_a_second_caller"}  # control
+    assert callers_of(with_one, CHECKOUT_HELPER) == {"_a_caller"}      # control
 
 
 def test_the_helper_returns_the_problems_git_named(target, harness_root):
@@ -726,6 +811,7 @@ def test_the_helper_returns_the_problems_git_named(target, harness_root):
     checkout git makes, which returns nothing and does move the branch.
     """
     escalated_and_fixed(target, harness_root)
+    released_from_its_worktree(target)
     conflicting = conflicting_history(target)
 
     problems = story_coordinator._checkout_story_branch(target, STORY_BRANCH)
@@ -797,19 +883,20 @@ def test_a_refused_resume_archives_nothing_and_resets_no_counter(
     target, harness_root, capsys,
 ):
     """The refusal in the state the traceback was found in: a run to re-enter,
-    a run directory already holding evidence, and a checkout git refuses.
+    a run directory already holding evidence, and a run root git refuses to make.
 
     The state is left `running`, which is the one status the clean-tree
     pre-flight excludes — a crashed run's tree is its own unfinished work — so
-    the run reaches the checkout with the conflict in place, which is what
-    makes this a test of the checkout's refusal rather than of the dirty-tree
-    one. The control is the identical resume with the conflict cleared, which
-    does archive, does open the entry and does reset the counters.
+    the run reaches the point it stands on its branch with the obstruction in
+    place, which is what makes this a test of that refusal rather than of the
+    dirty-tree one. The control is the identical resume with the obstruction
+    cleared, which does archive, does open the entry and does reset the
+    counters.
     """
     escalated_and_fixed(target, harness_root)
     write_state(target, status="running")
     run_dir = run_dir_of(target)
-    conflicting = conflicting_history(target)
+    registration = unregistered_worktree(target)
 
     state_before = (run_dir / "state.json").read_text()
     events_before = (run_dir / "events.log").read_text()
@@ -823,10 +910,11 @@ def test_a_refused_resume_archives_nothing_and_resets_no_counter(
     assert code == 1
     assert blocked.calls == []
     assert STORY_BRANCH in message
-    for relative in conflicting:
-        assert any(f"  - {problem}" in message and relative in problem
-                   for problem in story_coordinator._checkout_story_branch(
-                       target, STORY_BRANCH))
+    # One line per problem git named, and among them the path it would not make
+    # the worktree at — which is what a developer needs in order to clear it.
+    named = [line for line in message.splitlines() if line.startswith("  - ")]
+    assert named
+    assert any(str(run_root_of(target)) in line for line in named)
     assert (run_dir / "state.json").read_text() == state_before
     assert (run_dir / "events.log").read_text() == events_before
     assert history_files(target) == history_before
@@ -834,10 +922,10 @@ def test_a_refused_resume_archives_nothing_and_resets_no_counter(
     assert not story_coordinator.attempt_dir(run_dir, 1).exists()
     assert current_branch(target) == DEFAULT_BRANCH
 
-    # The control: the same resume with the conflict cleared, which takes every
-    # act the refusal above took none of.
-    for relative in conflicting:
-        (target / relative).unlink()
+    # The control: the same resume with the obstruction cleared — the
+    # registration put back, so the tree the run left is a worktree again —
+    # which takes every act the refusal above took none of.
+    reregister_worktree(target, registration)
     code, runner = run(target, harness_root, verdicts=[PASS])
     assert code == 0
     assert runner.calls != []
@@ -969,17 +1057,25 @@ def test_the_porcelain_leg_still_asks_about_the_one_working_tree(
     state = story_coordinator.load_state(run_dir_of(target))
     story_text = (target / ".harness" / "stories" / f"{STORY_ID}.yaml").read_text()
 
-    def evidence() -> list[str]:
+    def evidence(root: Path) -> list[str]:
         return story_coordinator.unchanged_since_escalation(
-            state, story_text, target, harness_root)
+            state, story_text, root, harness_root)
 
-    assert evidence()                                   # on the branch, clean
-    git(target, "checkout", "-q", DEFAULT_BRANCH)
-    assert evidence()                                   # off the branch, clean
+    # The two places, which since story-117 are two trees rather than one tree
+    # checked out twice: the run's worktree stands on the story branch, and the
+    # developer's own checkout stands on the base. Standing on the branch is
+    # asked of the first because git will not check that branch out anywhere
+    # else while a worktree holds it.
+    on_the_branch = run_root_of(target)
+    assert current_branch(on_the_branch) == STORY_BRANCH
+    assert current_branch(target) == DEFAULT_BRANCH
+
+    assert evidence(on_the_branch)                      # on the branch, clean
+    assert evidence(target)                             # off the branch, clean
 
     write(target / "src" / "app.py", APP_AT_HEAD + "print('uncommitted')\n")
-    assert evidence() == []                             # off the branch, dirty
+    assert evidence(target) == []                       # off the branch, dirty
     git(target, "checkout", "-q", "--", "src/app.py")
-    git(target, "checkout", "-q", STORY_BRANCH)
-    write(target / "src" / "app.py", APP_AT_HEAD + "print('uncommitted')\n")
-    assert evidence() == []                             # on the branch, dirty
+    write(on_the_branch / "src" / "app.py",
+          APP_AT_HEAD + "print('uncommitted')\n")
+    assert evidence(on_the_branch) == []                # on the branch, dirty

@@ -361,8 +361,15 @@ class Runner:
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 
-def history_dir_of(target_root: Path) -> Path:
-    return target_root / HISTORY_DIR
+def history_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
+    """Where the cross-run history is written.
+
+    In the tree the run works in, which since story-117 is a worktree of its
+    own rather than the checkout the run was invoked from — so a reader that
+    looked here in the invoked tree would find an empty log and read it as
+    nothing having been recorded.
+    """
+    return conftest.run_root_for(Path(target_root), story_id) / HISTORY_DIR
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
@@ -373,13 +380,13 @@ def state_of(run_dir: Path) -> dict:
     return json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
 
-def log_text(target_root: Path, log: str) -> str:
-    path = history_dir_of(target_root) / log
+def log_text(target_root: Path, log: str, story_id: str = "story-001") -> str:
+    path = history_dir_of(target_root, story_id) / log
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
-def records(target_root: Path, log: str) -> list[dict]:
-    text = log_text(target_root, log)
+def records(target_root: Path, log: str, story_id: str = "story-001") -> list[dict]:
+    text = log_text(target_root, log, story_id)
     return [json.loads(line) for line in text.splitlines() if line]
 
 
@@ -865,7 +872,12 @@ def land(root: Path, story_id: str, base: str) -> None:
     landing a finished branch whatever it left behind, and because an empty
     commit costs the assertion after this call nothing.
     """
-    conftest.commit_setup(root, f"Land {story_id}")
+    # In the tree the run worked in, which since story-117 is a worktree of its
+    # own. Committing in the invoked checkout instead would put a commit on the
+    # base the run never touched, and the fast-forward below — the whole point
+    # of landing — would then be impossible.
+    conftest.commit_setup(
+        conftest.run_root_for(Path(root), story_id), f"Land {story_id}")
     git(root, "checkout", "-q", base)
     git(root, "merge", "-q", "--ff-only", f"story/{story_id}")
 
@@ -910,12 +922,16 @@ def test_a_later_run_appends_to_the_logs_rather_than_rewriting_them(
     assert story_coordinator.run_story(
         SECOND_STORY_ID, harness_root, target_root, second) == 0
 
+    # Read in the second run's own worktree, which was cut from the base the
+    # first run's records were landed on — so the file it appended to is the
+    # file the first run left, and the prefix comparison is what it always was.
     for log in RUN_PRODUCED_LOGS:
-        after_second = log_text(target_root, log)
+        after_second = log_text(target_root, log, SECOND_STORY_ID)
         assert after_second.startswith(after_first[log]), log
         assert len(after_second) > len(after_first[log]), log
         assert jsonl_problems(after_second) == [], log
-        ids = [record["story_id"] for record in records(target_root, log)]
+        ids = [record["story_id"]
+               for record in records(target_root, log, SECOND_STORY_ID)]
         assert ids[:len(ids) // 2] == ["story-001"] * (len(ids) // 2)
         assert SECOND_STORY_ID in ids
 
@@ -991,6 +1007,10 @@ def test_no_routing_decision_changes_when_the_logs_already_hold_records(
     """
     seeded = tmp_path / "seeded-target"
     shutil.copytree(target_root, seeded)
+    # The history goes in the tree that run will work in, and that tree is
+    # created as the run creates it: a plain directory at its path is exactly
+    # what the run's `git worktree add` then refuses to write into.
+    worked_in = conftest.worktree_a_run_left(seeded, "story-001")
     history = history_dir_of(seeded)
     history.mkdir(parents=True, exist_ok=True)
     for log in DECLARATIONS:
@@ -1001,7 +1021,7 @@ def test_no_routing_decision_changes_when_the_logs_already_hold_records(
             record["timestamp"] = "2020-01-01 00:00:00"
             lines.append(json.dumps(record))
         (history / log).write_text("\n".join(lines) + "\n", encoding="utf-8")
-    conftest.commit_setup(seeded, "a history this run did not produce")
+    conftest.commit_setup(worked_in, "a history this run did not produce")
 
     plain_runner = Runner(target_root, [failing_verdict(1), PASS])
     plain_code = story_coordinator.run_story(

@@ -158,10 +158,19 @@ def seeded_record(log: str, marker: str, timestamp: str) -> str:
 
 
 def history_dir_of(target_root: Path) -> Path:
-    return target_root / HISTORY_DIR
+    """Where the cross-run history is written, which since story-117 is the
+    tree the run works in rather than the checkout it was invoked from."""
+    return conftest.run_root_for(Path(target_root), STORY_ID) / HISTORY_DIR
 
 
 def seed_history(target_root: Path, lines: dict[str, list[str]]) -> None:
+    """Put a history in place for the next run to prune.
+
+    In the tree that run will work in — and creating that tree as the run
+    would, because a plain directory at its path is exactly what the run's
+    `git worktree add` then refuses to write into.
+    """
+    conftest.worktree_a_run_left(Path(target_root), STORY_ID)
     directory = history_dir_of(target_root)
     directory.mkdir(parents=True, exist_ok=True)
     for log, log_lines in lines.items():
@@ -201,12 +210,24 @@ def prepared(target_root: Path, *, retention: object | None,
     Everything the test wrote is committed, because a run commits the tree it
     ends on and refuses to start from one it cannot account for — so the seeded
     history is part of the repository the run starts *from*.
+
+    Each half is committed in the tree it was written in, which since story-117
+    are two trees. The bound goes in the checkout the run is invoked from,
+    which is where the configuration a run loads is read. The history goes in
+    the worktree the run works in, which is the tree the clean-tree check reads
+    and the tree the run commits — seeded and left uncommitted there, it would
+    refuse the very run the seeding exists to feed. The bound is committed
+    first so the worktree, cut from that HEAD, carries it too.
     """
     if retention is not None:
         configure(target_root, **{RETENTION_KEY: retention})
+    conftest.commit_setup(target_root, "a history this run did not produce")
     if lines:
         seed_history(target_root, lines)
-    conftest.commit_setup(target_root, "a history this run did not produce")
+        worked_in = conftest.run_root_for(Path(target_root), STORY_ID)
+        if worked_in != Path(target_root):
+            conftest.commit_setup(
+                worked_in, "a history this run did not produce")
     return target_root
 
 

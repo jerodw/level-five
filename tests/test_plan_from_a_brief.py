@@ -63,10 +63,12 @@ from test_filed_query import fixture_command, fixture_file
 from test_plan_commit import (  # noqa: F401 - shared idioms
     Planning,
     bare_remote,
+    kept_worktree_in,
     writes,
 )
 from test_workflow_proposal import (  # noqa: F401 - fixtures used by name
     ADDING,
+    PLANNED_ID,
     ANSWER_IN_PROMPT,
     APPROVES,
     CONFIRMS,
@@ -292,8 +294,10 @@ def test_nothing_in_the_target_persists_the_fetched_brief(
     carrying = [relative for relative, content in briefed.tree().items()
                 if brief["body"].encode() in content]
     assert carrying == [], carrying
-    assert brief["slug"] not in artifact_path(briefed).read_text(
-        encoding="utf-8")
+    # Read out of the plan commit: since story-117 the artifact is written and
+    # committed in a worktree the declined run offer then removes, so the
+    # commit is what survives an invocation.
+    assert brief["slug"] not in briefed.planned_file(relative_artifact())
 
 
 # ==========================================================================
@@ -570,8 +574,10 @@ def test_a_fetch_that_answers_invokes_a_session_and_commits(
 
     assert status == 0, output
     assert len(invocations(briefed)) == 1
-    assert stories(briefed) != []
-    assert briefed.head() != head
+    # On the story branch, which since story-117 is where the artifact is
+    # committed and pushed; the developer's own checkout does not move.
+    assert briefed.planned_paths() != []
+    assert briefed.planned_head() != head
 
 
 # ==========================================================================
@@ -590,13 +596,15 @@ def test_a_brief_planned_artifact_is_stamped_from_an_observed_approval(
         L5_STUB_WRITE=writes((relative_artifact(), planned(ADDING["name"]))))
 
     assert status == 0, output
-    artifact = artifact_path(briefed)
-    assert artifact.is_file()
-    written = artifact.read_text(encoding="utf-8")
+    # Read out of the plan commit on the story branch, which since story-117 is
+    # where the artifact is committed and where it survives the worktree.
+    assert briefed.planned_paths() == [relative_artifact()]
+    written = briefed.planned_file(relative_artifact())
     assert f"workflow: {ADDING['name']}" in written
     assert f"{plan_mandate.MANDATE_KEY}:" in written
-    assert briefed.git("status", "--porcelain", str(artifact)).stdout == ""
-    assert artifact.name.removesuffix(".yaml") in briefed.subject()
+    # And the developer's own checkout holds nothing at all from any of it.
+    assert briefed.status() == ""
+    assert PLANNED_ID in briefed.planned_subject()
 
 
 def test_a_rejected_brief_driven_session_stamps_nothing_and_commits_nothing(
@@ -613,7 +621,10 @@ def test_a_rejected_brief_driven_session_stamps_nothing_and_commits_nothing(
 
     assert status != 0, output
     assert briefed.head() == head
-    written = artifact_path(briefed).read_text(encoding="utf-8")
+    # In the worktree the rejection kept and named, which since story-117 is
+    # where the session wrote it.
+    written = (kept_worktree_in(output) / relative_artifact()).read_text(
+        encoding="utf-8")
     assert f"{plan_mandate.MANDATE_KEY}:" not in written
 
 

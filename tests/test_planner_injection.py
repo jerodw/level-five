@@ -300,6 +300,10 @@ def captured_plan_argv(tmp_path: Path) -> list[str]:
         # restriction for the planner prompt to carry.
         "workflow: story-workflow\ntests_dir: tests/\n", encoding="utf-8"
     )
+    # Since story-117 the whole of planning happens in a worktree cut from the
+    # base, so the directory l5-plan is invoked in has to be a repository with
+    # the configuration committed in it — the worktree reads its own copy.
+    conftest.init_repository(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_path = tmp_path / "argv.json"
@@ -948,6 +952,11 @@ def test_l5_plan_injects_the_workflow_facts_into_the_session_prompt(
     )
     nested = project / "src" / "deep"
     nested.mkdir(parents=True)
+    # A repository, because since story-117 the whole of planning happens in a
+    # worktree cut from the base — so a target that is not one is a target no
+    # plan can be written in, and the invocation is refused above everything
+    # this test is about.
+    conftest.init_repository(project)
 
     result, argv = plan_capture(nested)
     assert result.returncode == 0, result.stderr

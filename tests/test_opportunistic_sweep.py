@@ -199,6 +199,17 @@ def build_target(root: Path, journal: Path, **config_keys) -> Path:
     _git(root, "config", "user.name", "Test")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", SETUP_SUBJECT)
+    # Standing on the story branch, which since story-117 is what makes this
+    # tree the tree the run works in rather than one the run cuts a worktree
+    # away from. The queue is gitignored, so an entry seeded here would
+    # otherwise be one no worktree ever carries and no sweep ever sees — the
+    # queue this module seeds and the queue the run sweeps have to be one
+    # queue for any of the observations below to be about the sweep. It is a
+    # configuration the harness reaches on its own: an accepted plan-time run
+    # offer runs in the tree planning left standing on the branch.
+    _git(root, "checkout", "-q", "-b",
+         story_coordinator.story_branch(
+             harness_config.load_config(root), STORY_ID))
     return root
 
 
@@ -525,25 +536,54 @@ def break_with_a_finished_branch(target: Path) -> None:
     message = story_coordinator.completion_commit_message(
         story_coordinator.RunState(story_id=STORY_ID, branch=branch),
         "Sample story for coordinator tests")
-    _git(target, "checkout", "-q", "-b", branch)
+    # The builder already left the checkout on that branch, so the commit is
+    # made where it stands rather than cutting the branch a second time.
     _git(target, "commit", "-q", "--allow-empty", "-m", message)
 
 
 def break_base(target: Path) -> None:
-    """A configured base that exists and is not the branch HEAD is on.
+    """A configured base that has drifted from its remote.
 
     A base named in configuration is an undeclared base as far as
     `base_problems` is concerned — only the `--base` argument declares one —
     and an undeclared base that does not resolve reports nothing rather than a
-    guess. So the break is a base that does resolve: a real branch the run
-    would have to be standing on and is not, which is the first leg of that
-    check and the refusal a developer actually meets.
+    guess. Since story-117 the HEAD-standing-on-the-base leg is not asked by a
+    run either, because a run cuts its worktree from the base by name. So the
+    break is the leg that is still asked wherever a branch is cut: a base whose
+    remote holds a different commit, which is the refusal a developer meets.
+
+    The base check is creation-time — an existing story branch is never refused
+    for its base, because a resume must keep working — so this break also
+    stands the tree on the base and removes the story branch the builder left.
+    That is the only shape in which a run is about to cut one, and so the only
+    shape in which the base is asked about at all. Every other break leaves the
+    builder's tree as it found it.
     """
+    remote = target.parent / f"{target.name}-origin.git"
+    # `cwd` stated, as every git call in this suite must state where it runs:
+    # the path argument says what to create, and this says the call is not
+    # about the repository the suite is running in.
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)],
+                   cwd=str(target.parent), check=True)
+    _git(target, "remote", "add", "origin", str(remote))
     _git(target, "branch", "the-shared-base")
+    _git(target, "push", "-q", "-u", "origin", "the-shared-base")
+    _git(target, "commit", "-q", "--allow-empty", "-m", "local, never pushed")
+    _git(target, "branch", "-f", "the-shared-base", "HEAD")
+    _git(target, "checkout", "-q", "the-shared-base")
+    _git(target, "branch", "-D",
+         story_coordinator.story_branch(
+             harness_config.load_config(target), STORY_ID))
     _append_config(target, "base_branch: the-shared-base\n")
 
 
 def break_clean_tree(target: Path) -> None:
+    """Work no stage produced, in the tree the run will work in.
+
+    Since story-117 the clean-tree check reads the run root, and the builder
+    left this tree standing on the story branch, so it is its own run root and
+    the work is left where that check reads.
+    """
     (target / "src" / "left_behind.py").write_text(
         "print('work no stage produced')\n", encoding="utf-8")
 

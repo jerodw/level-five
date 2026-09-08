@@ -136,7 +136,9 @@ from test_plan_commit import (  # noqa: F401
     artifact,
     as_the_session_left_it,
     bare_remote,
+    kept_worktree,
     make_planning,
+    refs_carrying_a_new_commit,
     remote_refs,
     run_plan,
     stamped,
@@ -648,6 +650,13 @@ def test_pre_flight_does_not_start_refusing_the_assignment_class(planning: Plann
     # mandate on, and pre-flight refuses an artifact without one above the
     # clean-tree refusal this test is about reaching.
     install(planning, "story-900", stamped(CONFLICTING_ARTIFACT))
+    # Since story-117 the clean-tree check reads the tree the run *works* in,
+    # and a dirty developer checkout is expressly not what refuses a run. So
+    # the checkout is put on the story branch, where it is its own run root,
+    # and dirtied there — which is the tree that check is about.
+    planning.git("checkout", "-q", "-b",
+                 story_coordinator.story_branch(
+                     harness_config.load_config(planning.root), "story-900"))
     (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
 
     result = run_script(L5_RUN, planning, "story-900")
@@ -690,14 +699,23 @@ def test_l5_plan_leaves_a_conflicting_artifact_uncommitted_and_prints_the_proble
 
     assert result.returncode != 0
     assert planning.head() == before
-    assert remote_refs(planning.remote) == refs_before
+    # Since story-117 the id is claimed before the session runs, so what the
+    # remote must not have gained is a commit; the reservation is not one.
+    assert refs_carrying_a_new_commit(planning, refs_before) == {}
 
-    written = (planning.root / ARTIFACT_PATH)
+    # In the worktree the refusal kept and named, which is where the session
+    # wrote it.
+    tree = kept_worktree(result)
+    written = (tree / ARTIFACT_PATH)
     # story-087: l5-plan confers the mandate between the snapshot and the
     # validation, so what the refusal leaves is the session's bytes plus that
     # block. The session's own text is still compared byte for byte.
     assert as_the_session_left_it(written) == CONFLICTING_ARTIFACT
-    assert ARTIFACT_PATH in planning.status()
+    # `-uall`, because the worktree is fresh and the whole stories directory
+    # is untracked in it: without it git names the directory alone and the
+    # path this asserts on never appears.
+    assert ARTIFACT_PATH in planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall").stdout
 
     printed = result.stdout + result.stderr
     assert STORY_031_FILE in printed
@@ -719,8 +737,8 @@ def test_each_clean_resolution_produces_an_artifact_l5_plan_commits(
     result = run_plan(planning, L5_STUB_WRITE=writes((ARTIFACT_PATH, text)))
 
     assert result.returncode == 0, result.stderr
-    assert planning.head() != before, resolution
-    assert remote_refs(planning.remote) != refs_before
+    assert planning.planned_head() != before, resolution
+    assert refs_carrying_a_new_commit(planning, refs_before) != {}
     assert planning.status() == ""
 
 
@@ -1937,8 +1955,15 @@ def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
         f"  - {problem}\n"
         "Fix the artifact or re-run planning before executing the story.\n"
     )
+    # Since story-117 the refusing path says one more thing after the summary:
+    # which worktree it kept the artifacts in, because the session no longer
+    # writes them in the developer's own checkout and a refusal that did not
+    # name that tree would leave them looking for it there. Both lines are
+    # compared, and in this order.
     summary = f"l5-plan: committed nothing; {path} remain in the working tree.\n"
-    assert printed.out.endswith(summary)
+    kept = (f"l5-plan: kept the worktree {empty}; "
+            "the artifacts are in it, waiting on repair.\n")
+    assert printed.out.endswith(summary + kept)
     # Since story-087 the refusing path says one more thing when nothing
     # stamped a mandate, and since story-088 that is the headless case rather
     # than this one: this call approves at a terminal, so a mandate *was*
@@ -1947,7 +1972,7 @@ def test_report_prints_and_returns_on_the_refusing_path_exactly_as_today(
     # that stamped nothing and stopped saying so. They are identified rather
     # than quoted: that wording belongs to those stories and this module's
     # subject is the assignment refusal.
-    before_the_summary = printed.out[: -len(summary)]
+    before_the_summary = printed.out[: -len(summary + kept)]
     assert not re.search(r"(?i)no mandate was stamped", before_the_summary)
     assert re.search(r"(?i)runs on a mandate conferred by",
                      before_the_summary), before_the_summary
@@ -1994,8 +2019,12 @@ def test_l5_plan_withholds_a_plan_naming_a_file_the_target_already_holds(
 
     assert result.returncode != 0
     assert planning_holding.head() == before
-    assert remote_refs(planning_holding.remote) == refs_before
-    assert ARTIFACT_PATH in planning_holding.status()
+    assert refs_carrying_a_new_commit(planning_holding, refs_before) == {}
+    # `-uall`: in a worktree cut from the base the whole stories directory is
+    # untracked, and porcelain's default collapses an untracked directory to
+    # its own name, so the artifact would never be named whatever happened.
+    assert ARTIFACT_PATH in planning_holding.git(
+        "-C", str(kept_worktree(result)), "status", "--porcelain", "-uall").stdout
 
     printed = result.stdout + result.stderr
     assert PRESENT_FILE in printed
@@ -2013,8 +2042,8 @@ def test_l5_plan_commits_it_once_a_grant_naming_the_file_is_added(
         (ARTIFACT_PATH, GRANTED_PRESENT_ARTIFACT)))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert planning_holding.head() != before
-    assert remote_refs(planning_holding.remote) != refs_before
+    assert planning_holding.planned_head() != before
+    assert refs_carrying_a_new_commit(planning_holding, refs_before) != {}
     assert planning_holding.status() == ""
 
 
@@ -2031,7 +2060,8 @@ def test_l5_plan_refuses_the_same_plan_where_the_target_lacks_the_file(
     printed = result.stdout + result.stderr
     assert PRESENT_FILE in printed
     assert "creation" in printed
-    assert ARTIFACT_PATH in planning.status()
+    assert ARTIFACT_PATH in planning.git(
+        "-C", str(kept_worktree(result)), "status", "--porcelain", "-uall").stdout
 
 
 def test_l5_plan_words_the_problem_from_the_target_root_not_its_cwd(
@@ -2047,6 +2077,12 @@ def test_l5_plan_words_the_problem_from_the_target_root_not_its_cwd(
     work = planning_holding.root / "work"
     work.mkdir()
     assert not (work / PRESENT_FILE).exists()
+    # Since story-117 the session's own working directory is the planning
+    # worktree rather than the directory l5-plan was invoked from, so the stub
+    # writes the artifact at its plain path. What the invocation still differs
+    # in is where it was *started* — `work/`, from which the plan's named file
+    # is not visible and from the target root it is — which is the difference
+    # this test exists to decide.
 
     # Both invocations below are given a terminal for stdin, as `run_plan`
     # does: since story-087 a session with none stamps no mandate and its
@@ -2057,21 +2093,28 @@ def test_l5_plan_words_the_problem_from_the_target_root_not_its_cwd(
              "--workflow", PLANNED_WORKFLOW, "add a thing"],
             cwd=work,
             env=planning_holding.env(L5_STUB_WRITE=writes(
-                (f"../{ARTIFACT_PATH}", PRESENT_ARTIFACT))),
+                (ARTIFACT_PATH, PRESENT_ARTIFACT))),
             stdin=stdin, capture_output=True, text=True,
         )
 
     assert from_holding.returncode != 0
     assert "modification" in from_holding.stdout + from_holding.stderr
 
+    # Committed and pushed, not merely unlinked: the second invocation's
+    # worktree is cut from the base, so a removal left uncommitted here would
+    # not be in the tree the plan is validated against, and an unpushed commit
+    # would be refused by the base check above everything this test asks.
     (planning_holding.root / PRESENT_FILE).unlink()
+    planning_holding.git("add", "-A")
+    planning_holding.git("commit", "-q", "-m", "the file the plan names, removed")
+    planning_holding.git("push", "-q")
     with conftest.a_terminal_for_stdin() as stdin:
         from_empty = subprocess.run(
             [sys.executable, str(HARNESS_ROOT / "scripts" / "l5-plan"),
              "--workflow", PLANNED_WORKFLOW, "add a thing"],
             cwd=work,
             env=planning_holding.env(L5_STUB_WRITE=writes(
-                (f"../{ARTIFACT_PATH.replace('900', '901')}",
+                (ARTIFACT_PATH.replace('900', '901'),
                  PRESENT_ARTIFACT.replace("story-900", "story-901")))),
             stdin=stdin, capture_output=True, text=True,
         )
@@ -2677,6 +2720,7 @@ def test_l5_plan_commits_either_resolution_where_the_target_holds_the_file(
 
     assert result.returncode == 0, (resolution,
                                     result.stdout + result.stderr)
-    assert planning_holding.head() != before, resolution
-    assert remote_refs(planning_holding.remote) != refs_before, resolution
+    assert planning_holding.planned_head() != before, resolution
+    assert refs_carrying_a_new_commit(
+        planning_holding, refs_before) != {}, resolution
     assert planning_holding.status() == "", resolution

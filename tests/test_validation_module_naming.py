@@ -61,7 +61,9 @@ from test_plan_commit import (  # noqa: F401 - fixtures used by name
     artifact,
     as_the_session_left_it,
     bare_remote,
+    kept_worktree,
     make_planning,
+    refs_carrying_a_new_commit,
     remote_refs,
     run_plan,
     stamped,
@@ -805,13 +807,22 @@ def test_l5_plan_leaves_the_offending_artifact_uncommitted_and_prints_it(
 
     assert result.returncode != 0
     assert planning.head() == before
-    assert remote_refs(planning.remote) == refs_before
+    # Since story-117 the id is claimed before the session runs, so what the
+    # remote must not have gained is a commit; the reservation is not one.
+    assert refs_carrying_a_new_commit(planning, refs_before) == {}
 
-    written = planning.root / ARTIFACT_PATH
+    # In the worktree the refusal kept and named, which is where the session
+    # wrote it and where the developer repairs it.
+    tree = kept_worktree(result)
+    written = tree / ARTIFACT_PATH
     # story-087: the mandate is conferred between the snapshot and the
     # validation, so a refused artifact is the session's bytes plus that block.
     assert as_the_session_left_it(written) == OFFENDING_ARTIFACT
-    assert ARTIFACT_PATH in planning.status()
+    # `-uall`, because the worktree is fresh and the whole stories directory
+    # is untracked in it: without it git names the directory alone and the
+    # path this asserts on never appears.
+    assert ARTIFACT_PATH in planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall").stdout
 
     printed = result.stdout + result.stderr
     assert OFFENDING in printed
@@ -829,8 +840,8 @@ def test_the_well_named_artifact_is_committed_by_the_same_run(
         (ARTIFACT_PATH, WELL_NAMED_ARTIFACT)))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert planning.head() != before
-    assert remote_refs(planning.remote) != refs_before
+    assert planning.planned_head() != before
+    assert refs_carrying_a_new_commit(planning, refs_before) != {}
     assert planning.status() == ""
 
 
@@ -844,6 +855,13 @@ def test_pre_flight_does_not_start_refusing_the_naming_class(planning: Planning)
     # mandate on, and pre-flight refuses one without a mandate above the
     # clean-tree refusal this test is about reaching.
     install(planning, "story-900", stamped(OFFENDING_ARTIFACT))
+    # Since story-117 the clean-tree check reads the tree the run *works* in,
+    # and a dirty developer checkout is expressly not what refuses a run. So
+    # the checkout is put on the story branch, where it is its own run root,
+    # and dirtied there — which is the tree that check is about.
+    planning.git("checkout", "-q", "-b",
+                 story_coordinator.story_branch(
+                     harness_config.load_config(planning.root), "story-900"))
     (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
 
     result = run_script(L5_RUN, planning, "story-900")

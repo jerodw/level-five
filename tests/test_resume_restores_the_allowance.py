@@ -353,9 +353,13 @@ def ready_to_resume(target_root: Path, marker: str) -> None:
     satisfied. The marker makes each change distinct from the last, which is
     what lets one run be resumed more than once.
     """
-    write(target_root / "src" / "app.py", APP_AT_HEAD + f"print('{marker}')\n")
-    git(target_root, "add", "-A")
-    git(target_root, "commit", "-q", "--allow-empty", "-m", f"decided: {marker}")
+    # Since story-117 the run works in a worktree of its own, and the guard
+    # reads the story branch and that tree. A change committed in the invoked
+    # checkout lands on another branch entirely, where nothing is looking.
+    tree = conftest.run_root_for(target_root, STORY_ID)
+    write(tree / "src" / "app.py", APP_AT_HEAD + f"print('{marker}')\n")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "--allow-empty", "-m", f"decided: {marker}")
 
 
 def resume(target_root: Path, harness: Path, verdicts: list | None = None,
@@ -897,8 +901,11 @@ def test_a_resume_onto_an_occupied_entry_refuses_and_writes_nothing(
     # entitled to refuse — a different refusal from the one under test.
     (occupied / "an-earlier-entry.txt").unlink()
     occupied.rmdir()
-    git(target, "add", "-A")
-    git(target, "commit", "-q", "-m", "cleared the entry directory")
+    # Committed in the tree the run directory is in, which since story-117 is
+    # the worktree the run works in rather than the invoked checkout.
+    tree = conftest.run_root_for(target, STORY_ID)
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "-m", "cleared the entry directory")
     proceeding = Runner(target, [PASS])
     assert story_coordinator.run_story(
         STORY_ID, harness_root, target, proceeding) == 0
@@ -979,7 +986,10 @@ def test_the_accumulated_total_matches_the_attempts_the_run_actually_took(
     assert state.retry_count < taken, "the live counter is entry-scoped"
     assert story_coordinator.accumulated_attempts(run_dir, state) == taken
 
-    detail = run_status.format_detail(target, STORY_ID)
+    # Pointed at the tree the run worked in, which since story-117 is a
+    # worktree of its own and is where the run directory the reader reads is.
+    detail = run_status.format_detail(
+        conftest.run_root_for(target, STORY_ID), STORY_ID)
     summary = (run_dir / "escalation-summary.md").read_text(encoding="utf-8")
     assert str(taken) in detail
     assert str(taken) in summary
@@ -1034,8 +1044,11 @@ def test_deleting_the_run_directory_still_starts_from_nothing(
     escalate_at_the_ceiling(target, harness_root)
     run_dir = run_dir_of(target)
     subprocess.run(["rm", "-rf", str(run_dir)], check=True)
-    git(target, "add", "-A")
-    git(target, "commit", "-q", "--allow-empty", "-m", "cleared the run")
+    # In the tree the run directory was in, which is the worktree the run
+    # worked in; the invoked checkout never held it.
+    tree = conftest.run_root_for(target, STORY_ID)
+    git(tree, "add", "-A")
+    git(tree, "commit", "-q", "--allow-empty", "-m", "cleared the run")
 
     code, rerun = run(target, harness_root, verdicts=[PASS])
 

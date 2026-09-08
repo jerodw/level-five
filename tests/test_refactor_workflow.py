@@ -379,7 +379,10 @@ class Runner:
     """
 
     def __init__(self, root: Path, change):
-        self.root = root
+        # The tree a stage writes into is the one the run works in, which since
+        # story-117 is a worktree of the run's own; an edit made in the invoked
+        # checkout is one no census, no revert check and no clean clone sees.
+        self.root = conftest.run_root_for(root, STORY_ID)
         self.run_dir = conftest.run_dir_for(root, STORY_ID)
         self.change = change
         self.calls: list[str] = []

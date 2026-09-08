@@ -86,14 +86,15 @@ from test_plan_commit import (
     Planning,
     artifact,
     bare_remote,
-    committed_paths,
     conferring_paths,
     drain,
+    kept_worktree,
     make_planning,
+    refs_carrying_a_new_commit,
     remote_refs,
     run_plan,
     run_plan_on_a_pty,
-    wait_for_the_session_to_write,
+    wait_for_the_planning_session_to_write,
     writes,
 )
 #: The shipped template, the schema it injects and the normative-sentence
@@ -112,6 +113,7 @@ from test_story_mandate import (
     PLANNED_REL,
     conferring_records,
     plan_without_a_terminal,
+    planned_conferring_records,
     session_writing,
 )
 
@@ -518,8 +520,16 @@ def reject_plan(planning: Planning, **stub) -> subprocess.CompletedProcess:
             capture_output=True, text=True)
 
 
-def history_log(planning: Planning) -> Path:
-    return planning.root / harness_config.DEFAULT_HISTORY_DIR / CONFERRED_LOG
+def history_log(planning: Planning, tree: Path | None = None) -> Path:
+    """The conferring log, in the tree the session ran in.
+
+    Since story-117 that is the planning worktree rather than the developer's
+    checkout, so a caller with a rejection in hand passes the worktree the
+    refusal kept and named. The default stays the checkout, which is where an
+    absence is asserted of the tree the invocation was meant to leave alone.
+    """
+    return (tree or planning.root) / harness_config.DEFAULT_HISTORY_DIR \
+        / CONFERRED_LOG
 
 
 def test_a_rejection_stamps_commits_and_pushes_nothing(planning: Planning):
@@ -535,10 +545,18 @@ def test_a_rejection_stamps_commits_and_pushes_nothing(planning: Planning):
 
     assert result.returncode == 1
     assert planning.head() == head
-    assert remote_refs(planning.remote) == refs
-    assert (planning.root / PLANNED_REL).read_bytes() == BODY.encode("utf-8")
-    assert PLANNED_REL in planning.status()
-    assert not history_log(planning).exists()
+    # Since story-117 the id is claimed before the session runs, so what the
+    # remote must not have gained is a commit; the reservation itself is not
+    # one. The artifacts are in the worktree the rejection kept and named.
+    assert refs_carrying_a_new_commit(planning, refs) == {}
+    tree = kept_worktree(result)
+    assert (tree / PLANNED_REL).read_bytes() == BODY.encode("utf-8")
+    # `-uall`: in a worktree cut from the base the whole stories directory is
+    # untracked, and porcelain's default collapses an untracked directory to
+    # its own name, so the artifact would never be named.
+    assert PLANNED_REL in planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall").stdout
+    assert not history_log(planning, tree).exists()
 
 
 def test_the_same_fixture_approved_stamps_commits_and_pushes(planning: Planning):
@@ -550,11 +568,22 @@ def test_the_same_fixture_approved_stamps_commits_and_pushes(planning: Planning)
     head, refs = planning.head(), remote_refs(planning.remote)
     assert run_plan(planning, L5_STUB_WRITE=session_writing(BODY)).returncode == 0
 
-    assert planning.head() != head
-    assert remote_refs(planning.remote) != refs
+    # The plan is on the story branch and on the remote; the developer's own
+    # checkout is where it was.
+    assert planning.planned_head() != head
+    assert planning.head() == head
+    assert refs_carrying_a_new_commit(planning, refs) != {}
     assert plan_mandate.carries_a_mandate(
-        (planning.root / PLANNED_REL).read_text(encoding="utf-8"))
-    assert history_log(planning).exists()
+        planning.planned_file(PLANNED_REL))
+    # The conferring record goes in beneath the artifact commit, so the branch
+    # tip still says what it always said and the log is one commit down. Asked
+    # of the branch rather than of the tip's own path list, which is what
+    # `planned_paths` reads.
+    relative = str(Path(harness_config.DEFAULT_HISTORY_DIR) / CONFERRED_LOG)
+    repo, revision = planning.planned_in()
+    assert subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "-e", f"{revision}:{relative}"],
+        capture_output=True).returncode == 0
 
 
 def test_a_rejection_says_where_the_artifacts_are_and_what_removes_them(
@@ -587,10 +616,12 @@ def test_a_rejection_removes_nothing_including_a_block_the_session_wrote(
     result = reject_plan(planning, L5_STUB_WRITE=session_writing(forged))
 
     assert result.returncode == 1
-    assert (planning.root / PLANNED_REL).read_bytes() == forged.encode("utf-8")
+    # In the worktree the rejection kept, which is where the session wrote it.
+    tree = kept_worktree(result)
+    assert (tree / PLANNED_REL).read_bytes() == forged.encode("utf-8")
     assert plan_mandate.carries_a_mandate(
-        (planning.root / PLANNED_REL).read_text(encoding="utf-8"))
-    assert not history_log(planning).exists()
+        (tree / PLANNED_REL).read_text(encoding="utf-8"))
+    assert not history_log(planning, tree).exists()
 
 
 def test_the_approval_is_all_or_nothing_across_the_session_s_artifacts(
@@ -608,10 +639,11 @@ def test_the_approval_is_all_or_nothing_across_the_session_s_artifacts(
 
     assert result.returncode == 1
     assert planning.head() == head
-    assert (planning.root / PLANNED_REL).read_bytes() == BODY.encode("utf-8")
-    assert (planning.root / ".harness" / "stories" / "story-901.yaml"
+    tree = kept_worktree(result)
+    assert (tree / PLANNED_REL).read_bytes() == BODY.encode("utf-8")
+    assert (tree / ".harness" / "stories" / "story-901.yaml"
             ).read_bytes() == second.encode("utf-8")
-    assert not history_log(planning).exists()
+    assert not history_log(planning, tree).exists()
 
 
 def expected_steps(planning: Planning) -> list[str]:
@@ -625,7 +657,9 @@ def expected_steps(planning: Planning) -> list[str]:
         f"{PLANNED_ID} runs on a mandate conferred by",
         f"committed {', '.join(conferring_paths(planning))} as ",
         f"committed {PLANNED_REL} as Plan {PLANNED_ID}:",
-        "pushed main to",
+        # Since story-117 the push is of the story branch the plan was
+        # committed to, not of the branch the checkout stands on.
+        f"pushed {planning.planned_branch()} to",
         RUN_OFFER,
     ]
 
@@ -673,7 +707,6 @@ def test_the_conferred_time_is_when_the_approval_was_read(planning: Planning):
     the artifact was written.
     """
     held = 4
-    written = planning.root / PLANNED_REL
     process, master = run_plan_on_a_pty(planning,
                                         L5_STUB_WRITE=session_writing(BODY))
     # A precondition asserted with a clock rather than the claim this test
@@ -681,21 +714,21 @@ def test_the_conferred_time_is_when_the_approval_was_read(planning: Planning):
     # and the conferring timestamp, and a session that never wrote leaves that
     # gap unmeasured rather than wrong. The arithmetic that follows is
     # untouched.
-    wait_for_the_session_to_write(written)
+    wait_for_the_planning_session_to_write(planning, PLANNED_REL)
     session_ended = time.time()
     time.sleep(held)
     os.write(master, (conftest.APPROVES + conftest.DECLINES).encode())
     status, output = drain(process, master)
     assert status == 0, output
 
-    (record,) = conferring_records(planning.root,
-                                   harness_config.DEFAULT_HISTORY_DIR)
+    (record,) = planned_conferring_records(planning)
     conferred_at = time.mktime(
         time.strptime(record["timestamp"], plan_mandate.TIMESTAMP_FORMAT))
     assert conferred_at - session_ended >= held - 2, (record, session_ended)
-    # The block and the record are one act, so the block moved with it.
-    assert f"conferred_at: {record['timestamp']}" in (
-        planning.root / PLANNED_REL).read_text(encoding="utf-8")
+    # The block and the record are one act, so the block moved with it. Read
+    # out of the commit, because the declined offer removed the worktree.
+    assert f"conferred_at: {record['timestamp']}" in planning.planned_file(
+        PLANNED_REL)
 
 
 # --------------------------------------------------------------------------
@@ -734,14 +767,11 @@ def test_approving_a_carried_block_discards_it_and_stamps_exactly_one(
     assert run_plan(planning, L5_STUB_WRITE=session_writing(
         BODY + conftest.MANDATE_BLOCK)).returncode == 0
 
-    committed = subprocess.run(
-        ["git", "-C", str(planning.root), "show", f"HEAD:{PLANNED_REL}"],
-        capture_output=True, text=True, check=True).stdout
-    (record,) = conferring_records(planning.root,
-                                   harness_config.DEFAULT_HISTORY_DIR)
+    committed = planning.planned_file(PLANNED_REL)
+    (record,) = planned_conferring_records(planning)
     assert committed == BODY + SEPARATOR + plan_mandate.block(
         record["conferred_by"], record["timestamp"])
-    assert committed_paths(planning.root) == [PLANNED_REL]
+    assert PLANNED_REL in planning.planned_paths()
 
 
 def test_the_conferring_record_says_the_conferral_discarded_a_block(
@@ -754,8 +784,7 @@ def test_the_conferring_record_says_the_conferral_discarded_a_block(
     """
     assert run_plan(planning, L5_STUB_WRITE=session_writing(
         BODY + conftest.MANDATE_BLOCK)).returncode == 0
-    (discarding,) = conferring_records(planning.root,
-                                       harness_config.DEFAULT_HISTORY_DIR)
+    (discarding,) = planned_conferring_records(planning)
     assert discarding["discarded_session_block"] is True
     assert discarding["story_id"] == PLANNED_ID
 
@@ -764,8 +793,7 @@ def test_a_conferral_onto_a_clean_artifact_says_it_discarded_nothing(
         planning: Planning):
     """The control for the record above, from the other side."""
     assert run_plan(planning, L5_STUB_WRITE=session_writing(BODY)).returncode == 0
-    (clean,) = conferring_records(planning.root,
-                                  harness_config.DEFAULT_HISTORY_DIR)
+    (clean,) = planned_conferring_records(planning)
     assert clean["discarded_session_block"] is False
 
 
@@ -819,8 +847,11 @@ def test_a_headless_session_written_block_commits_nothing(planning: Planning):
 
     assert result.returncode == 1
     assert planning.head() == head
-    assert (planning.root / PLANNED_REL).read_bytes() == forged.encode("utf-8")
-    assert not history_log(planning).exists()
+    # In the worktree the refusal kept and named, which is where the session
+    # wrote it since story-117.
+    tree = kept_worktree(result)
+    assert (tree / PLANNED_REL).read_bytes() == forged.encode("utf-8")
+    assert not history_log(planning, tree).exists()
     assert "stamped nothing and committed nothing" in result.stdout
 
 
@@ -838,7 +869,8 @@ def test_a_headless_session_with_no_block_behaves_as_story_087_left_it(
 
     assert result.returncode == 1
     assert planning.head() == head
-    assert (planning.root / PLANNED_REL).read_bytes() == BODY.encode("utf-8")
+    assert (kept_worktree(result) / PLANNED_REL).read_bytes() \
+        == BODY.encode("utf-8")
     assert plan_mandate.MANDATE_KEY in result.stderr
     assert "no human present" in result.stdout
     assert "no terminal" in result.stdout

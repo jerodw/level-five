@@ -324,9 +324,11 @@ def test_the_read_is_written_above_the_run_directory_and_the_checkout():
     source = Path(story_coordinator.__file__).read_text(encoding="utf-8")
     call = source.index("reading = read_story(")
     assert call < source.index("run_dir.mkdir(")
-    # The checkout *call* in run_story, not the helper's definition above it.
-    # The call's arguments are wrapped, so the name alone is what is matched.
-    assert call < source.rindex("_checkout_story_branch(")
+    # The act that stands the run on its branch, which since story-117 is
+    # creating the run's worktree rather than checking the branch out in the
+    # invoked tree. The call in run_story, not the helper's definition above
+    # it, so the last occurrence is what is matched.
+    assert call < source.rindex("worktrees.add(")
 
 
 def test_the_one_read_happens_before_any_run_state_or_branch_exists(
@@ -562,8 +564,12 @@ def test_the_completion_report_and_commit_take_the_parsed_title(
     assert "- test-results.json" in report
     assert "verification/iteration-1.json (passed)" in report
 
+    # Read in the tree the run worked in, which since story-117 is a worktree
+    # of its own: the completion commit is on the story branch there, and the
+    # invoked checkout's HEAD is still the commit the test set up.
     subject = subprocess.run(
-        ["git", "-C", str(target_root), "log", "-1", "--pretty=%s"],
+        ["git", "-C", str(conftest.run_root_for(target_root, "story-001")),
+         "log", "-1", "--pretty=%s"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert subject == f"story-001: {title}"

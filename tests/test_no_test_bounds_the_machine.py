@@ -124,10 +124,13 @@ CLASSIFICATION = {
     "test_the_approval_is_observed.py": CARRIES_PRECONDITIONS,
 }
 
-#: A shared helper that reports through `machine_load` on its caller's behalf.
-#: A module reaching the route this way names the helper rather than the
-#: module, and that is the only other spelling the rule below admits.
-SHARED_ROUTES = ("wait_for_the_session_to_write",)
+#: The shared helpers that report through `machine_load` on a caller's behalf —
+#: one waiting on a path a caller knows, and one waiting on a path only the
+#: planning worktree's name completes. A module reaching the route this way
+#: names the helper rather than the module, and these are the only other
+#: spellings the rule below admits.
+SHARED_ROUTES = ("wait_for_the_session_to_write",
+                 "wait_for_the_planning_session_to_write")
 
 
 def enumeration_problems(found, classified) -> list[str]:

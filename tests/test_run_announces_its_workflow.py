@@ -293,9 +293,9 @@ class Runner:
         self.verdicts = list(verdicts or [PASS])
         self.calls: list[str] = []
 
-    def _write(self, artifact: str) -> None:
+    def _write(self, artifact: str, tree: Path) -> None:
         if artifact == conftest.CHANGED_FILES:
-            write(Path(cwd) / "src" / "app.py",
+            write(tree / "src" / "app.py",
                   APP_AT_HEAD + f"print('call {len(self.calls)}')\n")
             write_json(self.run_dir / artifact,
                        {"modified": ["src/app.py"], "created": [],
@@ -320,8 +320,11 @@ class Runner:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a", encoding="utf-8") as handle:
                 handle.write(f"===== stage: {stage} =====\n")
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         for artifact in self.outputs.get(stage, []):
-            self._write(artifact)
+            self._write(artifact, tree)
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 

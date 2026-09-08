@@ -73,6 +73,7 @@ from test_plan_commit import (
     Planning,
     artifact,
     bare_remote,
+    kept_worktree,
     make_planning,
     run_plan,
     writes,
@@ -592,8 +593,7 @@ def traces(target_root: Path, story_id: str = STORY_ID) -> dict[str, bool]:
         "run directory": run_dir.exists(),
         "state.json": (run_dir / "state.json").exists(),
         "events.log": (run_dir / "events.log").exists(),
-        "stage log": (target_root / ".harness" / "logs" /
-                      f"{story_id}.log").exists(),
+        "stage log": conftest.log_path_for(target_root, story_id).exists(),
         "story branch": f"story/{story_id}" in branches(target_root),
     }
 
@@ -902,7 +902,11 @@ def test_the_conferring_log_is_declared_and_no_run_produces_it(
     install(target_root, conftest.STORY)
     assert story_coordinator.run_story(
         STORY_ID, harness_root, target_root, Runner(target_root)) == 0
-    directory = target_root / harness_config.DEFAULT_HISTORY_DIR
+    # In the tree the run worked in, which since story-117 is a worktree of its
+    # own: the invoked checkout has no history directory at all, and reading it
+    # there would report the absence this test is about for the wrong reason.
+    directory = conftest.run_root_for(target_root, STORY_ID) \
+        / harness_config.DEFAULT_HISTORY_DIR
     written = {path.name for path in directory.iterdir()}
     assert log not in written
     assert written
@@ -947,9 +951,9 @@ def test_l5_plan_stamps_a_mandate_the_coordinator_then_resolves(planning):
     result = run_plan(planning, L5_STUB_WRITE=session_writing(artifact(PLANNED_ID)))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    committed = subprocess.run(
-        ["git", "-C", str(planning.root), "show", f"HEAD:{PLANNED_REL}"],
-        capture_output=True, text=True, check=True).stdout
+    # Read out of the plan commit on the story branch, which since story-117 is
+    # where the artifact is committed and where it survives the worktree.
+    committed = planning.planned_file(PLANNED_REL)
     assert plan_mandate.carries_a_mandate(committed)
 
     reading = story_coordinator.read_story(committed)
@@ -973,7 +977,7 @@ def test_the_stamped_artifact_is_accepted_at_a_real_pre_flight(
     assert run_plan(
         planning,
         L5_STUB_WRITE=session_writing(artifact(PLANNED_ID))).returncode == 0
-    stamped = (planning.root / PLANNED_REL).read_text(encoding="utf-8")
+    stamped = planning.planned_file(PLANNED_REL)
     install(target_root, stamped, story_id=PLANNED_ID)
     runner = Runner(target_root, story_id=PLANNED_ID)
     assert story_coordinator.run_story(
@@ -1001,10 +1005,17 @@ def test_an_artifact_that_arrives_carrying_a_mandate_is_refused(planning):
 
     assert result.returncode == 1
     assert planning.head() == head
-    path = planning.root / PLANNED_REL
+    # In the worktree the refusal kept and named, which is where the session
+    # wrote it since story-117.
+    tree = kept_worktree(result)
+    path = tree / PLANNED_REL
     assert path.is_file()
     assert path.read_text(encoding="utf-8") == forged
-    assert PLANNED_REL in planning.status()
+    # `-uall`: in a worktree cut from the base the whole stories directory is
+    # untracked, and porcelain's default collapses an untracked directory to
+    # its own name, so the file this is about would never be named.
+    assert PLANNED_REL in planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall").stdout
     assert "already carries a mandate block" in result.stderr
     assert "stamped nothing and committed nothing" in result.stdout
 
@@ -1026,8 +1037,9 @@ def test_one_session_artifact_carrying_a_block_stamps_none_of_them(planning):
         (".harness/stories/story-901.yaml", clean)))
 
     assert result.returncode == 1
-    assert (planning.root / ".harness" / "stories" / "story-901.yaml").read_text(
-        encoding="utf-8") == clean
+    # In the worktree the refusal kept, which is where the session wrote both.
+    assert (kept_worktree(result) / ".harness" / "stories"
+            / "story-901.yaml").read_text(encoding="utf-8") == clean
     assert not plan_mandate.carries_a_mandate(clean)
 
 
@@ -1058,7 +1070,7 @@ def test_a_headless_invocation_stamps_nothing_and_commits_nothing(planning):
 
     assert result.returncode == 1
     assert planning.head() == head
-    path = planning.root / PLANNED_REL
+    path = kept_worktree(result) / PLANNED_REL
     assert path.is_file()
     assert not plan_mandate.carries_a_mandate(path.read_text(encoding="utf-8"))
     assert "no human present" in result.stdout
@@ -1075,8 +1087,7 @@ def test_the_same_invocation_with_a_terminal_does_commit(planning):
     assert run_plan(
         planning,
         L5_STUB_WRITE=session_writing(artifact(PLANNED_ID))).returncode == 0
-    assert plan_mandate.carries_a_mandate(
-        (planning.root / PLANNED_REL).read_text(encoding="utf-8"))
+    assert plan_mandate.carries_a_mandate(planning.planned_file(PLANNED_REL))
 
 
 def test_can_prompt_is_what_decides_whether_a_mandate_is_stamped():
@@ -1107,6 +1118,20 @@ def conferring_records(root: Path, directory: str) -> list[dict]:
             for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def planned_conferring_records(planning, story_id: str = PLANNED_ID) -> list[dict]:
+    """The conferring records the plan commit holds.
+
+    Since story-117 the log is written in the planning worktree and committed
+    from there, and a declined run offer removes that worktree once the push
+    has landed. So what survives an invocation is the commit, and a caller
+    asking what an *approved* session recorded reads it there; `conferring_records`
+    above still reads a tree, which is what an assertion about a tree wants.
+    """
+    text = planning.planned_file(
+        f"{harness_config.DEFAULT_HISTORY_DIR}/{CONFERRED_LOG}", story_id)
+    return [json.loads(line) for line in text.splitlines() if line]
+
+
 def test_l5_plan_writes_one_conferring_record_per_story_it_stamped(planning):
     """Named, timed and attributed, in the declared log under the history dir.
 
@@ -1119,7 +1144,7 @@ def test_l5_plan_writes_one_conferring_record_per_story_it_stamped(planning):
          artifact("story-901", title="A second planned story"))))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    records = conferring_records(planning.root, harness_config.DEFAULT_HISTORY_DIR)
+    records = planned_conferring_records(planning)
     assert [record["story_id"] for record in records] == [PLANNED_ID, "story-901"]
     for record in records:
         assert record["conferred_by"] == "Test <test@example.com>"
@@ -1127,7 +1152,9 @@ def test_l5_plan_writes_one_conferring_record_per_story_it_stamped(planning):
         assert record["timestamp"]
     # The time in the record is the time in the block, so the two renderings of
     # one act cannot disagree.
-    block = (planning.root / PLANNED_REL).read_text(encoding="utf-8")
+    # Read out of the plan commit for `planned_conferring_records`' reason: the
+    # worktree the artifact was written in is gone once the push has landed.
+    block = planning.planned_file(PLANNED_REL)
     assert f"conferred_at: {records[0]['timestamp']}" in block
 
 
@@ -1145,12 +1172,20 @@ def test_the_conferring_record_is_committed_rather_than_left_in_the_tree(
     relative = f"{harness_config.DEFAULT_HISTORY_DIR}/{CONFERRED_LOG}"
     assert relative not in planning.status()
     assert planning.status() == ""
+    # In the plan commit, on the story branch: since story-117 the record is
+    # written and committed in the planning worktree, so the commit is what
+    # survives a declined offer and the invoked checkout's HEAD never moved.
+    repo, revision = planning.planned_in(PLANNED_ID)
     assert subprocess.run(
-        ["git", "-C", str(planning.root), "cat-file", "-e", f"HEAD:{relative}"]
+        ["git", "-C", str(repo), "cat-file", "-e", f"{revision}:{relative}"]
     ).returncode == 0
-    # The artifact commit is still the tip and still says what it always said.
-    assert planning.subject().startswith(f"Plan {PLANNED_ID}:")
-    assert PLANNED_ID in planning.subject("HEAD~1")
+    # The artifact commit is still the tip and still says what it always said,
+    # read on the same branch the record was found on.
+    assert planning.planned_subject(PLANNED_ID).startswith(f"Plan {PLANNED_ID}:")
+    beneath = subprocess.run(
+        ["git", "-C", str(repo), "log", "-1", "--format=%s", f"{revision}~1"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert PLANNED_ID in beneath
 
 
 def test_the_record_goes_to_the_configured_history_directory(tmp_path):
@@ -1176,8 +1211,17 @@ def test_the_record_goes_to_the_configured_history_directory(tmp_path):
     assert run_plan(
         planning,
         L5_STUB_WRITE=session_writing(artifact(PLANNED_ID))).returncode == 0
-    assert [record["story_id"] for record in
-            conferring_records(planning.root, configured)] == [PLANNED_ID]
+    # Read out of the plan commit, which since story-117 is what survives the
+    # planning worktree the record was written and committed in.
+    written = planning.planned_file(f"{configured}/{CONFERRED_LOG}", PLANNED_ID)
+    assert [json.loads(line)["story_id"]
+            for line in written.splitlines() if line] == [PLANNED_ID]
+    # And the default directory holds nothing, in the commit or in the tree.
+    repo, revision = planning.planned_in(PLANNED_ID)
+    default = f"{harness_config.DEFAULT_HISTORY_DIR}/{CONFERRED_LOG}"
+    assert subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "-e", f"{revision}:{default}"],
+        capture_output=True).returncode != 0
     assert not (planning.root / harness_config.DEFAULT_HISTORY_DIR).exists()
 
 

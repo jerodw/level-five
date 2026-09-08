@@ -195,7 +195,11 @@ def build_target(root: Path, *, with_remote: bool = True) -> Target:
     remote = None
     if with_remote:
         remote = root.parent / f"{root.name}-origin.git"
-        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        # `cwd` stated, as every git call in this suite must state where it
+        # runs: the path argument says what to create, and this says the call
+        # is not about the repository the suite is running in.
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)],
+                       cwd=str(root.parent), check=True)
         git(root, "remote", "add", "origin", str(remote))
         git(root, "push", "-q", "-u", "origin", DEFAULT_BRANCH)
     return Target(root, bin_dir, root.parent / f"{root.name}-session.json", remote)
@@ -322,6 +326,35 @@ def test_the_id_is_claimed_by_pushing_a_ref_that_must_not_already_exist(
         target.root, "origin", branch, DEFAULT_BRANCH)
 
     assert not again
+    assert refusal
+    assert remote_refs(target.remote)[f"refs/heads/{branch}"] == held
+
+
+def test_a_claim_on_a_ref_standing_at_the_very_commit_being_pushed_is_refused(
+        target: Target):
+    """The case a lease alone cannot answer, and the one an id collides on.
+
+    Two invocations from the same clone with the base unmoved between them push
+    the identical commit to the identical ref. git has nothing to do, so it
+    exits zero saying "Everything up-to-date" without ever consulting the
+    lease — and an id somebody else already holds at this base would read as
+    free, which is exactly the id two clones would then both plan. The claim is
+    therefore decided on whether the push *created* the ref rather than on its
+    exit status.
+
+    The control is the first claim above it: the same call against a ref that
+    is not there does create it and is made, so a refusal here is the ref
+    already existing rather than this reader refusing everything.
+    """
+    branch = target.story_branch("story-042")
+    made, detail = story_ids.claim(target.root, "origin", branch, DEFAULT_BRANCH)
+    assert made, detail
+    held = remote_refs(target.remote)[f"refs/heads/{branch}"]
+
+    again, refusal = story_ids.claim(
+        target.root, "origin", branch, DEFAULT_BRANCH)
+
+    assert not again, "a ref that is already there was read as a free id"
     assert refusal
     assert remote_refs(target.remote)[f"refs/heads/{branch}"] == held
 
@@ -774,8 +807,11 @@ def test_a_story_that_lives_only_on_its_branch_is_fetched_and_run(
     origin.git("push", "-q", "origin", f"{DEFAULT_BRANCH}:{branch}")
 
     clone = tmp_path / "fresh-clone"
+    # `cwd` stated, for the reason `build_target`'s bare init states it: both
+    # paths are arguments, and this says the call is not about the repository
+    # the suite is running in.
     subprocess.run(["git", "clone", "-q", str(origin.remote), str(clone)],
-                   check=True)
+                   cwd=str(tmp_path), check=True)
     git(clone, "config", "user.email", "test@example.com")
     git(clone, "config", "user.name", "Test")
     # The story is on the branch and not in this tree, which is the state the

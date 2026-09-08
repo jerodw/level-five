@@ -1233,9 +1233,13 @@ def test_a_resume_reports_what_the_run_has_spent(environment):
     ordinary = Runner(other_target, costs=[None],
                       verdicts=[failing(f"attempt-{n}") for n in range(1, 6)])
     assert run(other_target, other_harness, ordinary) == 2
-    write(other_target / "src" / "app.py", APP_AT_HEAD + "print('decided')\n")
-    git(other_target, "add", "-A")
-    git(other_target, "commit", "-q", "-m", "decided")
+    # The developer's decision, made in the tree the run works in: since
+    # story-117 that is the run's own worktree, and the escalation guard reads
+    # it rather than the checkout the run was invoked from.
+    other_tree = conftest.run_root_for(other_target, STORY_ID)
+    write(other_tree / "src" / "app.py", APP_AT_HEAD + "print('decided')\n")
+    git(other_tree, "add", "-A")
+    git(other_tree, "commit", "-q", "-m", "decided")
     resumed = Runner(other_target, costs=[None], verdicts=[PASS])
     assert run(other_target, other_harness, resumed) == 0
 

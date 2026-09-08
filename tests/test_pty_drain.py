@@ -431,8 +431,23 @@ def statuses_a_source_admits(source: str) -> list[int]:
     return admitted
 
 
+#: The readings that answer "what did the plan commit hold". `committed_paths`
+#: takes a repository and a revision; `planned_paths` is the same question put
+#: to a `Planning`, which since story-117 is what resolves where the commit is —
+#: on the remote when the push landed, on the local branch when it did not.
+#: Either spelling is the assertion this module is checking for.
+COMMITTED_PATH_READINGS = ("committed_paths", "planned_paths")
+
+
+def _reads_the_committed_paths(call: ast.Call) -> bool:
+    name = call.func
+    if isinstance(name, ast.Attribute):
+        return name.attr in COMMITTED_PATH_READINGS
+    return isinstance(name, ast.Name) and name.id in COMMITTED_PATH_READINGS
+
+
 def committed_path_lists(source: str) -> list[list[str]]:
-    """The literal path lists the source asserts `committed_paths` equals."""
+    """The literal path lists the source asserts a committed-paths reading equals."""
     asserted = []
     for node in ast.walk(ast.parse(textwrap.dedent(source))):
         if not isinstance(node, ast.Assert):
@@ -440,8 +455,7 @@ def committed_path_lists(source: str) -> list[list[str]]:
         for compare in ast.walk(node.test):
             if not (isinstance(compare, ast.Compare)
                     and isinstance(compare.left, ast.Call)
-                    and isinstance(compare.left.func, ast.Name)
-                    and compare.left.func.id == "committed_paths"):
+                    and _reads_the_committed_paths(compare.left)):
                 continue
             if not all(isinstance(operator, ast.Eq)
                        for operator in compare.ops):

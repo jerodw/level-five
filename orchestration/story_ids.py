@@ -142,17 +142,35 @@ def claim(
     whether this id is free. Returns whether the claim was made and, when it
     was not, what git said — which the caller reads as "somebody else has that
     id" and tries the next one.
+
+    The lease alone does not answer the question, because a ref that already
+    stands at the very commit being pushed makes the push a no-op: git reports
+    "Everything up-to-date" and exits zero without consulting the lease, so an
+    id somebody else already holds at this base would read as free. `--porcelain`
+    is what distinguishes the two — it flags each ref with `*` when the push
+    created it, `=` when there was nothing to do and `!` when it was rejected —
+    so a claim is made only where the push *created* the ref.
     """
     result = _git(
         target_root,
         "push",
+        "--porcelain",
         f"--force-with-lease=refs/heads/{branch}:",
         remote,
         f"{start_point}:refs/heads/{branch}",
     )
-    if result.returncode == 0:
+    created = any(
+        line.startswith("*\t") and line.split("\t")[1].endswith(
+            f":refs/heads/{branch}")
+        for line in result.stdout.splitlines()
+    )
+    if result.returncode == 0 and created:
         return True, ""
-    lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    # git says why on stderr when it rejected the push, and says nothing there
+    # when the push was the no-op above; the porcelain line is what carries the
+    # reason in that case.
+    said = result.stderr.splitlines() or result.stdout.splitlines()
+    lines = [line.strip() for line in said if line.strip()]
     return False, "; ".join(lines) or "git refused the claim without saying why"
 
 

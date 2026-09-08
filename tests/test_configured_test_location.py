@@ -672,15 +672,18 @@ class RenamingRunner(Runner):
     implementer authored.
     """
 
-    def __call__(self, prompt, *, stage, **kwargs):
+    def __call__(self, prompt, *, stage, cwd=None, **kwargs):
         if stage == "implementer":
-            write(Path(cwd) / "src" / "app.py", APP_RENAMED)
-            write(Path(cwd) / CONFIGURED / "test_app.py", SPEC_REPAIRED)
+            # The tree the stage was invoked in, which since story-117 is the
+            # run's worktree rather than the tree the run was invoked from.
+            tree = Path(cwd) if cwd else Path(self.target_root)
+            write(tree / "src" / "app.py", APP_RENAMED)
+            write(tree / CONFIGURED / "test_app.py", SPEC_REPAIRED)
             self.records["implementer"] = {
                 "modified": ["src/app.py", f"{CONFIGURED}test_app.py"],
                 "created": [], "deleted": [],
             }
-        return super().__call__(prompt, stage=stage, **kwargs)
+        return super().__call__(prompt, stage=stage, cwd=cwd, **kwargs)
 
 
 def implementer_declaration() -> dict:

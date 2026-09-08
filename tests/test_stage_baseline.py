@@ -398,20 +398,24 @@ class Runner:
     def _nth(self, sequence: list, index: int):
         return sequence[min(index, len(sequence) - 1)]
 
-    def _record(self, stage: str) -> dict:
+    def _record(self, stage: str, tree: Path) -> dict:
         seen = self.calls.count(stage) - 1
         edit = self._nth(self.edits.get(stage, [unchanged]), seen)
-        return edit(self.target_root, self.run_dir)
+        return edit(tree, self.run_dir)
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from — and it is
+        # the tree the stage baseline is captured over.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
             write_json(self.run_dir / conftest.CHANGED_FILES,
-                       self._record(stage))
+                       self._record(stage, tree))
             write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
         elif stage == VALIDATING:
-            record = self._record(stage)
+            record = self._record(stage, tree)
             write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 2,
                 "tests_passed": 2, "tests_failed": 0, "failures": [],
@@ -432,6 +436,17 @@ class Runner:
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
     return conftest.run_dir_for(target_root, story_id)
+
+
+def worked_in(target_root: Path, story_id: str = "story-001") -> Path:
+    """The tree the run worked in, which is what a stage edited and a revert
+    undid.
+
+    Since story-117 that is a worktree of its own rather than the checkout the
+    run was invoked from, so a reader that looked in the invoked tree would
+    find what it always held and report a stage that never ran.
+    """
+    return conftest.run_root_for(Path(target_root), story_id)
 
 
 def state_of(target_root: Path) -> dict:
@@ -693,7 +708,8 @@ def test_the_pre_story_code_refuses_the_same_run(target, harness_root, tmp_path)
     # And the forced work was thrown away: the tree holds what the wrong
     # baseline said the stage started from.
     assert record["reverted"]["restored"] == ["tests/test_app.py"]
-    assert (target / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
+    assert (worked_in(target) / "tests" / "test_app.py").read_text() \
+        == TEST_APP_REPAIRED
 
     # And the reason it asked the wrong question: two attempt-keyed
     # directories, the second already holding attempt 1's content.
@@ -746,7 +762,7 @@ def test_the_baseline_that_decision_was_made_against_holds_the_original_content(
     captured = baseline_at(target) / "tests" / "test_app.py"
     assert captured.read_text() == TEST_APP_AT_HEAD
     assert captured.read_text() != TEST_APP_REPAIRED
-    assert (target / "tests" / "test_app.py").read_text() \
+    assert (worked_in(target) / "tests" / "test_app.py").read_text() \
         == TEST_APP_WITH_FREE_COVERAGE
 
 
@@ -774,7 +790,7 @@ def test_a_retry_editing_a_path_it_did_not_touch_before_is_still_refused(
     assert record["permitted"] is False
     assert record["paths"] == ["tests/conftest.py"]
     assert record["reverted"]["restored"] == ["tests/conftest.py"]
-    assert (target / "tests" / "conftest.py").read_text() \
+    assert (worked_in(target) / "tests" / "conftest.py").read_text() \
         == TESTS_CONFTEST_AT_HEAD
 
 
@@ -818,9 +834,13 @@ def test_a_path_created_between_two_invocations_is_captured_at_what_it_met(
     # It had no version at HEAD for the whole of the run: HEAD^ is where the
     # run started, and the run's own commit is _complete's, made after the
     # check had already decided. The control is the path that did have one.
-    assert git(target, "cat-file", "-e", "HEAD^:tests/test_new.py",
+    # Asked of the tree the run worked in, which since story-117 is a worktree
+    # of its own: the run's commit is on its branch there, and the invoked
+    # checkout has no second commit for `HEAD^` to name.
+    tree = worked_in(target)
+    assert git(tree, "cat-file", "-e", "HEAD^:tests/test_new.py",
                check=False).returncode != 0
-    assert git(target, "cat-file", "-e", "HEAD^:tests/test_app.py",
+    assert git(tree, "cat-file", "-e", "HEAD^:tests/test_app.py",
                check=False).returncode == 0
 
 
@@ -1079,11 +1099,16 @@ def test_a_resumed_stage_captures_nothing_new_and_decides_against_the_stored_one
         run(target, harness_root, {WRITING: [forced_repair]},
             interrupt=(WRITING, 1))
     assert state_of(target)["status"] == "running"
-    assert (target / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
+    assert (worked_in(target) / "tests" / "test_app.py").read_text() \
+        == TEST_APP_REPAIRED
 
     stored = contents_of(baseline_at(target))
     assert stored["tests/test_app.py"] == TEST_APP_AT_HEAD
-    fresh = contents_of(capture(target, tmp_path / "at-the-resume"))
+    # Taken over the tree the interrupted stage edited, which is the tree the
+    # run works in: a capture over the invoked checkout would hold what that
+    # checkout always held and would agree with the stored baseline for a
+    # reason that has nothing to do with the reuse under test.
+    fresh = contents_of(capture(worked_in(target), tmp_path / "at-the-resume"))
     assert fresh["tests/test_app.py"] == TEST_APP_REPAIRED
 
     code, resumed = run(target, harness_root, {WRITING: [forced_repair]})

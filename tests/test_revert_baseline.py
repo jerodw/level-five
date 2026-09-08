@@ -417,22 +417,26 @@ class Runner:
     def _nth(self, sequence: list, index: int):
         return sequence[min(index, len(sequence) - 1)]
 
-    def _record(self, stage: str) -> dict:
+    def _record(self, stage: str, tree: Path) -> dict:
         seen = self.calls.count(stage) - 1
         edit = self._nth(self.edits.get(stage, [unchanged]), seen)
-        record = edit(self.target_root, self.run_dir)
+        record = edit(tree, self.run_dir)
         self.records.append((stage, record))
         return record
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from. An edit made
+        # anywhere else is not one the baseline captures or the revert meets.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
             write_json(self.run_dir / conftest.CHANGED_FILES,
-                       self._record(stage))
+                       self._record(stage, tree))
             write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
         elif stage == VALIDATING:
-            record = self._record(stage)
+            record = self._record(stage, tree)
             write_json(self.run_dir / conftest.TEST_RESULTS, {
                 "status": "passed", "tests_written": 1, "tests_run": 2,
                 "tests_passed": 2, "tests_failed": 0, "failures": [],
@@ -453,6 +457,13 @@ class Runner:
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
     return conftest.run_dir_for(target_root, story_id)
+
+
+def run_tree(target_root: Path, story_id: str = "story-001") -> Path:
+    """The tree the run works in, which since story-117 is a worktree of its
+    own — so it is the tree the run's commits are in and the tree every
+    question below about what HEAD carried is asked of."""
+    return conftest.run_root_for(Path(target_root), story_id)
 
 
 def state_of(target_root: Path) -> dict:
@@ -767,8 +778,10 @@ def test_the_baseline_of_the_retry_holds_the_file_the_tester_left(
     captured = baseline_at(target, WRITING) / "tests" / "test_new.py"
     assert captured.read_text() == TEST_NEW_BROKEN
 
-    tracked = git(target, "ls-tree", "-r", "--name-only", "HEAD^", "--",
-                  PREFIX).stdout.split()
+    # Read in the tree the run worked in, which since story-117 is the run's
+    # own worktree and the tree its commits are in.
+    tracked = git(run_tree(target), "ls-tree", "-r", "--name-only", "HEAD^",
+                  "--", PREFIX).stdout.split()
     assert "tests/test_new.py" not in tracked
     assert "tests/test_app.py" in tracked      # the control for the listing
 
@@ -946,9 +959,9 @@ def test_a_governed_path_with_no_head_version_is_decided_rather_than_skipped(
     already decided. The control is the governed path that did have a version
     there."""
     assert run(target, harness_root, RETRY_SHAPE, [FAIL, PASS])[0] == 0
-    assert git(target, "cat-file", "-e", "HEAD^:tests/test_new.py",
+    assert git(run_tree(target), "cat-file", "-e", "HEAD^:tests/test_new.py",
                check=False).returncode != 0
-    assert git(target, "cat-file", "-e", "HEAD^:tests/test_app.py",
+    assert git(run_tree(target), "cat-file", "-e", "HEAD^:tests/test_app.py",
                check=False).returncode == 0
     record = record_of(target)
     assert record["paths"] == ["tests/test_new.py"]
@@ -1091,7 +1104,8 @@ def test_a_re_entered_stage_is_decided_against_the_baseline_it_first_found(
     with pytest.raises(KeyboardInterrupt):
         story_coordinator.run_story("story-001", harness_root, target, interrupted)
     assert state_of(target)["status"] == "running"
-    assert (target / "tests" / "test_app.py").read_text() == TEST_APP_REPAIRED
+    assert (run_tree(target) / "tests" / "test_app.py").read_text() == \
+        TEST_APP_REPAIRED
 
     code, resumed = run(target, harness_root, {WRITING: [forced_repair]})
     assert code == 0

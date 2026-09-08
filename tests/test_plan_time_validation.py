@@ -67,8 +67,10 @@ from test_plan_commit import (
     bare_remote,
     committed_paths,
     conferring_paths,
+    kept_worktree,
     make_planning,
     python_code,
+    refs_carrying_a_new_commit,
     remote_refs,
     run_plan,
     stamped,
@@ -701,8 +703,16 @@ def test_a_failing_artifact_is_reported_and_never_committed(defect: str,
 
     assert result.returncode != 0, result.stdout
     assert planning.head() == before
-    assert remote_refs(planning.remote) == refs_before
-    written = planning.stories_dir / "story-900.yaml"
+    # Since story-117 the invocation reserves its id before the session runs,
+    # so the remote is not untouched; what it must hold is no commit this
+    # invocation made. The control is the valid artifact below, where the same
+    # reader reports the plan that was pushed.
+    assert refs_carrying_a_new_commit(planning, refs_before) == {}
+    # And the artifact is where the session wrote it: in the worktree a refusal
+    # keeps and names, rather than in the developer's own checkout.
+    tree = kept_worktree(result)
+    written = tree / planning.stories_dir.relative_to(planning.root) \
+        / "story-900.yaml"
     assert written.is_file()
     # story-087: the mandate is conferred between the snapshot and the
     # validation, so what a refusal leaves is the session's bytes plus the
@@ -710,7 +720,14 @@ def test_a_failing_artifact_is_reported_and_never_committed(defect: str,
     # compared exactly; the reader asserts the rest is a mandate and nothing
     # else.
     assert as_the_session_left_it(written) == text
-    assert "?? .harness/stories/story-900.yaml" in planning.status()
+    # `-uall` rather than the default: in a worktree cut from the base the whole
+    # stories directory is untracked, and porcelain's default collapses an
+    # untracked directory to its own name, so the file the assertion is about
+    # would never be named whatever happened to it.
+    assert "?? .harness/stories/story-900.yaml" in planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall").stdout
+    # And the developer's own checkout is untouched by any of it.
+    assert planning.status() == ""
     assert "story-900.yaml" in result.stderr
     assert "committed nothing" in result.stdout
 
@@ -724,9 +741,11 @@ def test_the_control_for_every_refusal_above_is_the_valid_artifact(
         (".harness/stories/story-900.yaml", artifact())))
 
     assert result.returncode == 0, result.stderr
-    assert planning.head() != before
-    assert remote_refs(planning.remote) != refs_before
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    # The plan is committed on the story branch and pushed there; the invoked
+    # checkout's HEAD does not move, which is what the developer keeps.
+    assert planning.planned_head() != before
+    assert refs_carrying_a_new_commit(planning, refs_before) != {}
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
     assert planning.status() == ""
 
 
@@ -743,25 +762,25 @@ def test_when_one_of_several_artifacts_fails_none_of_them_is_committed(
 
     assert result.returncode != 0, result.stdout
     assert planning.head() == before
-    assert remote_refs(planning.remote) == refs_before
+    assert refs_carrying_a_new_commit(planning, refs_before) == {}
+    # Both are where the session wrote them: in the worktree the refusal kept.
+    tree = kept_worktree(result)
+    stories = tree / planning.stories_dir.relative_to(planning.root)
+    left = planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall").stdout
     for name, text in (("story-903", good), ("story-904", bad)):
-        written = planning.stories_dir / f"{name}.yaml"
-        assert as_the_session_left_it(written) == text
-        assert f"?? .harness/stories/{name}.yaml" in planning.status()
+        assert as_the_session_left_it(stories / f"{name}.yaml") == text
+        assert f"?? .harness/stories/{name}.yaml" in left
     assert "story-904.yaml" in result.stderr
 
     # Control: the same two artifacts with the second one valid is one commit
     # holding both, so "none committed" is the refusal and not the fixture.
-    planning.git("rm", "-q", "-f", "--ignore-unmatch",
-                 ".harness/stories/story-903.yaml")
-    for name in ("story-903", "story-904"):
-        (planning.stories_dir / f"{name}.yaml").unlink()
     control = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-903.yaml", good),
         (".harness/stories/story-904.yaml", artifact("story-904")),
     ))
     assert control.returncode == 0, control.stderr
-    assert committed_paths(planning.root) == [
+    assert planning.planned_paths("story-903") == [
         ".harness/stories/story-903.yaml",
         ".harness/stories/story-904.yaml",
     ]
@@ -782,17 +801,19 @@ def test_a_refusal_deletes_no_artifact_and_rewrites_none(planning: Planning):
 
     assert result.returncode != 0
     assert existing.is_file()
-    written = planning.stories_dir / "story-900.yaml"
-    tree_after = planning.tree()
-    # story-087: the session's bytes are still every byte of the artifact but
-    # the mandate this process conferred on it before the validation refused
-    # it, and the record of that conferral is in the tree as well. Both are
-    # named, so a third addition still fails the comparison below.
+    # Since story-117 the session ran in a worktree, so the developer's own
+    # checkout is byte for byte what it was — the refusal leaves nothing here
+    # at all, not even the artifact it refused.
+    assert planning.tree() == tree_before
+
+    # And what it does leave, in the worktree it kept: the artifact the session
+    # wrote, unrepaired and unrewritten. story-087: the session's bytes are
+    # still every byte of it but the mandate this process conferred before the
+    # validation refused it.
+    tree = kept_worktree(result)
+    written = tree / planning.stories_dir.relative_to(planning.root) \
+        / "story-900.yaml"
     assert as_the_session_left_it(written) == text
-    tree_after.pop(".harness/stories/story-900.yaml")
-    for log in conferring_paths(planning):
-        assert tree_after.pop(log), f"{log} holds no conferring record"
-    assert tree_after == tree_before
 
     # The control: the same byte comparison against the same file reports a
     # one-line edit. It is compared against the bytes the refusal left rather
@@ -801,30 +822,36 @@ def test_a_refusal_deletes_no_artifact_and_rewrites_none(planning: Planning):
     left = written.read_bytes()
     written.write_text(
         written.read_text(encoding="utf-8") + "# edited\n", encoding="utf-8")
-    assert planning.tree()[".harness/stories/story-900.yaml"] != left
+    assert written.read_bytes() != left
 
 
 def test_a_refused_artifact_is_the_developers_and_no_later_session_commits_it(
         planning: Planning):
-    """What a refusal leaves is an ordinary uncommitted file in the tree.
+    """What a refusal leaves is an ordinary uncommitted file, where it wrote it.
 
     story-023's rule is unchanged by this story: the script commits what
-    *appeared* during a session. The refused artifact was already there when
-    the next session started, so that session commits only what it added and
-    the refused file stays where the developer can repair it, commit it, or
-    throw it away.
+    *appeared* during a session. Since story-117 the refused artifact is left
+    in the worktree that session kept, where the developer can repair it,
+    commit it or throw it away, and a later session gets a worktree and an id
+    of its own — so it commits only what it wrote and cannot pick the refused
+    one up.
     """
-    assert run_plan(planning, L5_STUB_WRITE=writes(
-        (".harness/stories/story-900.yaml", DEFECTS["schema"]))).returncode != 0
-    refused = planning.stories_dir / "story-900.yaml"
+    refusal = run_plan(planning, L5_STUB_WRITE=writes(
+        (".harness/stories/story-900.yaml", DEFECTS["schema"])))
+    assert refusal.returncode != 0
+    kept = kept_worktree(refusal)
+    refused = kept / planning.stories_dir.relative_to(planning.root) \
+        / "story-900.yaml"
 
     later = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-901.yaml", artifact("story-901"))))
 
     assert later.returncode == 0, later.stderr
-    assert committed_paths(planning.root) == [".harness/stories/story-901.yaml"]
+    assert planning.planned_paths("story-901") == [
+        ".harness/stories/story-901.yaml"]
     assert as_the_session_left_it(refused) == DEFECTS["schema"]
-    assert "?? .harness/stories/story-900.yaml" in planning.status()
+    assert "?? .harness/stories/story-900.yaml" in planning.git(
+        "-C", str(kept), "status", "--porcelain", "-uall").stdout
 
 
 # --------------------------------------------------------------------------
@@ -841,14 +868,25 @@ def test_plan_time_and_pre_flight_print_the_same_text(defect: str,
         (".harness/stories/story-900.yaml", text)))
     assert planned.returncode != 0
 
-    # The artifact is where the refusal left it, so pre-flight reads exactly
-    # the file plan time read. Committing it is what a developer who ignored
-    # the refusal would have done.
+    # The artifact is where the refusal left it — since story-117 that is the
+    # worktree the session ran in — so pre-flight reads exactly the file plan
+    # time read. Taking it into the checkout and committing it is what a
+    # developer who ignored the refusal would have done.
+    relative = planning.stories_dir.relative_to(planning.root) / "story-900.yaml"
+    kept = kept_worktree(planned)
+    (planning.root / relative).write_bytes((kept / relative).read_bytes())
     planning.git("add", "-A")
     planning.git("commit", "-q", "-m", "committed in spite of the refusal")
     ran = run_script(L5_RUN, planning, "story-900")
 
-    assert ran.stderr == planned.stderr
+    # Each refusal names the artifact it read, and since story-117 those are two
+    # different files: plan time read the one in the worktree the session ran in,
+    # pre-flight the one the developer committed into their own checkout. So the
+    # directory holding it is substituted and every other byte is compared
+    # exactly — the defect, the pointer at it and the closing sentence.
+    assert str(kept) in planned.stderr, \
+        "the plan-time refusal did not name the worktree it read the artifact in"
+    assert ran.stderr == planned.stderr.replace(str(kept), str(planning.root))
     assert ran.stderr.strip(), "neither path printed anything"
     assert ran.returncode == 1
 
@@ -930,13 +968,37 @@ def test_a_session_that_added_nothing_still_says_so_and_exits_on_its_own_status(
         assert planning.head() == before
         assert remote_refs(planning.remote) == refs_before
 
-    # Control: the same fixture with an artifact written does move both, so
-    # the stillness above is the no-artifact path rather than a broken run.
+    # Control: the same fixture with an artifact written does move the plan's
+    # branch and the remote, so the stillness above is the no-artifact path
+    # rather than a broken run. Since story-117 the commit is on the story
+    # branch in a worktree, so the invoked checkout's HEAD is not what moves.
     control = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-900.yaml", artifact())))
     assert control.returncode == 0, control.stderr
-    assert planning.head() != before
-    assert remote_refs(planning.remote) != refs_before
+    assert planning.planned_head() != before
+    assert refs_carrying_a_new_commit(planning, refs_before) != {}
+
+
+#: What story-117 gave l5-plan to say, which a script from before it had no
+#: notion of: the id it reserved, the worktree it planned in, a claim it
+#: released and a worktree it removed. Each is subtracted by what it says, so
+#: every other byte of the report is still compared exactly against the older
+#: script's.
+SAID_SINCE_STORY_117 = (
+    "l5-plan: reserved ",
+    "l5-plan: planning in ",
+    "l5-plan: released the claim on ",
+    "l5-plan: removed the worktree ",
+    "l5-plan: the session wrote ",
+)
+
+
+def without_story_117(text: str) -> str:
+    """`text` with the lines story-117 added to l5-plan's report removed."""
+    return "".join(
+        line for line in text.splitlines(keepends=True)
+        if not any(line.startswith(marker) for marker in SAID_SINCE_STORY_117)
+    )
 
 
 def test_the_no_artifact_path_reads_the_same_as_before_this_story(
@@ -945,7 +1007,9 @@ def test_the_no_artifact_path_reads_the_same_as_before_this_story(
                      planning, "add a thing", L5_STUB_EXIT=5)
     new = run_plan(planning, "add a thing", L5_STUB_EXIT=5)
 
-    assert (new.returncode, new.stdout, new.stderr) == \
+    assert new.stdout != old.stdout, \
+        "the story-117 report was meant to be subtracted, not to be absent"
+    assert (new.returncode, without_story_117(new.stdout), new.stderr) == \
         (old.returncode, old.stdout, old.stderr)
 
 
@@ -956,6 +1020,10 @@ def test_a_valid_session_commits_and_pushes_exactly_as_it_did_before(
     old_remote = bare_remote(tmp_path / "old", old_repo, upstream=True)
     new_repo = make_planning(tmp_path / "new")
     new_remote = bare_remote(tmp_path / "new", new_repo, upstream=True)
+    # Where the plan of the new script lands: a declined offer removes the
+    # planning worktree and its local branch, so the commit is read off the
+    # remote the push put it on.
+    new_repo.remote = new_remote
     written = writes((".harness/stories/story-900.yaml", artifact()))
 
     old = run_script(pre_story_harness(tmp_path) / "scripts" / "l5-plan",
@@ -970,26 +1038,49 @@ def test_a_valid_session_commits_and_pushes_exactly_as_it_did_before(
     # says, each must appear on exactly one line, and everything else — the
     # status, the stderr and every other byte of the commit-and-push report —
     # is still compared exactly.
-    SAID_SINCE = (
-        "runs on a mandate conferred by",
-        "Record the mandate conferred for",
-        "run story-900",
-        "l5-plan: story-900: ",
-    )
+    #
+    # Each is mapped to the number of lines it is expected on rather than
+    # assumed to be on one, because since story-117 "run story-900" is on two.
+    # The offer prompt ends without a newline of its own, so before this story
+    # the "run it with" line that follows a decline was printed onto the end of
+    # it and the two were one line; the decline now reports the worktree it
+    # removed between them, which ends that line. Both are still subtracted, so
+    # what is compared below is unchanged; what would go unnoticed if this said
+    # "at least one" is a third.
+    SAID_SINCE = {
+        "runs on a mandate conferred by": 1,
+        "Record the mandate conferred for": 1,
+        "run story-900": 2,
+        "l5-plan: story-900: ": 1,
+    }
     lines = new.stdout.splitlines(keepends=True)
-    for marker in SAID_SINCE:
-        assert sum(marker in line for line in lines) == 1, (marker, new.stdout)
-    without_them = "".join(
+    for marker, on_lines in SAID_SINCE.items():
+        assert sum(marker in line for line in lines) == on_lines, \
+            (marker, new.stdout)
+    without_them = without_story_117("".join(
         line for line in lines
         if not any(marker in line for marker in SAID_SINCE)
-    )
+    ))
+    # The one line story-117 did not add but changed: the push names the story
+    # branch the plan was committed on rather than the branch the checkout
+    # stands on. It is taken out of both texts and asserted as its own fact
+    # below, so everything either script says about the commit and the push is
+    # still compared byte for byte.
+    pushed = re.compile(r"^l5-plan: pushed .*\n", re.M)
     assert new.stdout != old.stdout
-    assert (new.returncode, without_them, new.stderr) == \
-        (old.returncode, old.stdout, old.stderr)
+    assert (new.returncode, pushed.sub("", without_them), new.stderr) == \
+        (old.returncode, pushed.sub("", old.stdout), old.stderr)
+    assert f"l5-plan: pushed {new_repo.planned_branch()} to origin\n" in new.stdout
+    assert "l5-plan: pushed main to origin\n" in old.stdout
     assert new.returncode == 0, new.stderr
-    assert committed_paths(new_repo.root) == committed_paths(old_repo.root)
-    assert new_repo.subject() == old_repo.subject()
-    assert remote_refs(new_remote)["refs/heads/main"] == new_repo.head()
+    # The same commit, holding the same paths under the same subject. Since
+    # story-117 the new script puts it on the story branch rather than on the
+    # branch the checkout stands on, so where it is read from is what differs
+    # and what is read is what is compared.
+    assert new_repo.planned_paths() == committed_paths(old_repo.root)
+    assert new_repo.planned_subject() == old_repo.subject()
+    assert remote_refs(new_remote)[
+        f"refs/heads/{new_repo.planned_branch()}"] == new_repo.planned_head()
     assert remote_refs(old_remote)["refs/heads/main"] == old_repo.head()
 
 
@@ -1073,6 +1164,13 @@ def test_pre_flight_does_not_start_refusing_the_strictness_class(
     # mandate on, and pre-flight refuses one without a mandate above the
     # clean-tree check this test is about reaching.
     install(planning, "story-900", stamped(strict_artifact()))
+    # Since story-117 the clean-tree check reads the tree the run *works* in,
+    # and a dirty developer checkout is expressly not what refuses a run. So
+    # the checkout is put on the story branch, where it is its own run root,
+    # and dirtied there — which is the tree that check is about.
+    planning.git("checkout", "-q", "-b",
+                 story_coordinator.story_branch(
+                     harness_config.load_config(planning.root), "story-900"))
     (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
 
     result = run_script(L5_RUN, planning, "story-900")

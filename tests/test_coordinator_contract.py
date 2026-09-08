@@ -877,8 +877,15 @@ STORY_TITLE = "Sample story for coordinator tests"
 
 
 def commit_message(target_root: Path, revision: str = "HEAD") -> str:
+    """The message at `revision` in the tree the run committed into.
+
+    Since story-117 that is the run's own worktree rather than the checkout the
+    run was invoked from, whose HEAD a run no longer moves — read there, every
+    assertion below would be about the commit the fixture made.
+    """
     return subprocess.run(
-        ["git", "-C", str(target_root), "log", "-1", "--format=%B", revision],
+        ["git", "-C", str(conftest.run_root_for(target_root, "story-001")),
+         "log", "-1", "--format=%B", revision],
         capture_output=True, text=True, check=True).stdout
 
 
