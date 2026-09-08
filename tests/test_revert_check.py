@@ -351,10 +351,10 @@ class Runner:
         #: one beside it.
         self.prompts: dict[str, str] = {}
 
-    def _record(self, stage: str) -> dict:
+    def _record(self, stage: str, tree: Path) -> dict:
         edit = self.edits.get(stage)
-        record = edit(self.target_root) if edit else {"modified": [], "created": [],
-                                                      "deleted": []}
+        record = edit(tree) if edit else {"modified": [], "created": [],
+                                          "deleted": []}
         self.records[stage] = record
         return record
 
@@ -362,8 +362,13 @@ class Runner:
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         self.prompts[stage] = prompt
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from. An edit made
+        # anywhere else is not one the revert check would ever meet.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
-            write_json(self.run_dir / conftest.CHANGED_FILES, self._record(stage))
+            write_json(self.run_dir / conftest.CHANGED_FILES,
+                       self._record(stage, tree))
             write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
         elif stage == VALIDATING:
             write_json(self.run_dir / conftest.TEST_RESULTS, {
@@ -371,7 +376,7 @@ class Runner:
                 "tests_passed": 2, "tests_failed": 0, "failures": [],
             })
             write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
-                       self._record(stage))
+                       self._record(stage, tree))
         elif stage == VERIFYING:
             write_json(self.run_dir / conftest.VERIFICATION_RESULT, PASS)
         elif stage == DOCUMENTING:
@@ -383,6 +388,13 @@ class Runner:
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
     return conftest.run_dir_for(target_root, story_id)
+
+
+def run_tree(target_root: Path, story_id: str = "story-001") -> Path:
+    """The tree the run works in, which since story-117 is a worktree of its
+    own — so it is where a stage's edits land and where a revert undoes
+    them."""
+    return conftest.run_root_for(Path(target_root), story_id)
 
 
 def state_of(target_root: Path) -> dict:
@@ -630,9 +642,9 @@ def test_the_reverted_path_holds_what_the_stage_baseline_captured(target,
     """
     assert run(target, harness_root, {WRITING: added_coverage})[0] == 0
 
-    assert (target / "tests" / "test_app.py").read_text(
+    assert (run_tree(target) / "tests" / "test_app.py").read_text(
         encoding="utf-8") == TEST_APP_AT_HEAD
-    assert (target / "src" / "app.py").read_text(
+    assert (run_tree(target) / "src" / "app.py").read_text(
         encoding="utf-8") == APP_ADDITIVE
 
 

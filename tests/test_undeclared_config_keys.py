@@ -373,7 +373,10 @@ def test_the_same_fixture_without_the_key_creates_all_five(
     assert run_dir.is_dir()
     assert json.loads((run_dir / "state.json").read_text(
         encoding="utf-8"))["status"] == "completed"
-    assert (sound_target / ".harness" / "logs" / f"{STORY_ID}.log").is_file()
+    # In the tree the run worked in, which since story-117 is a worktree of the
+    # run's own rather than the checkout it was invoked from.
+    assert (conftest.run_root_for(sound_target, STORY_ID) / ".harness" /
+            "logs" / f"{STORY_ID}.log").is_file()
     assert branches(sound_target) - before == {f"story/{STORY_ID}"}
     assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
@@ -537,8 +540,12 @@ def test_a_dirty_tree_and_an_undeclared_key_together_report_the_key(
     """The clean-tree pre-flight is the last one a developer meets before a
     run directory exists, and it is below this one too."""
     configure(sound_target, **{offending_key: "whatever"})
-    (sound_target / "dirty.txt").write_text("the developer's own\n",
-                                            encoding="utf-8")
+    # In the tree the clean-tree check reads, which since story-117 is the
+    # worktree the run works in: dirt in the invoked checkout is not a refusal
+    # at all any more, and this test's control is the same file in the same
+    # place with the key removed, where it is.
+    tree = conftest.worktree_a_run_left(sound_target, STORY_ID)
+    (tree / "dirty.txt").write_text("the developer's own\n", encoding="utf-8")
 
     code, runner, _ = run(sound_target, harness_root)
 
@@ -554,9 +561,16 @@ def test_the_same_dirty_tree_alone_is_what_the_clean_tree_pre_flight_reports(
 ):
     """The control for the test above: the dirty file really is a refusal of
     its own, so the undeclared key displaced something rather than being the
-    only thing wrong."""
-    (sound_target / "dirty.txt").write_text("the developer's own\n",
-                                            encoding="utf-8")
+    only thing wrong.
+
+    The dirt goes in the tree the run will work in, which since story-117 is a
+    worktree for the story branch rather than the invoked checkout — a run is
+    no longer refused for uncommitted work in a tree it never touches. So the
+    worktree an earlier run would have left is cut first, and the file written
+    there; `resolve_run_root` then answers with it and the check reads it.
+    """
+    tree = conftest.worktree_a_run_left(sound_target, STORY_ID)
+    (tree / "dirty.txt").write_text("the developer's own\n", encoding="utf-8")
 
     code, runner, _ = run(sound_target, harness_root)
 

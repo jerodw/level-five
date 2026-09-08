@@ -342,8 +342,12 @@ class Runner:
                  permission_mode=None, model=None, allowed_tools=None,
                  max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from. An edit made
+        # anywhere else is not one the revert would ever meet.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
-            record = (self.edit(self.target_root, self.run_dir) if self.edit
+            record = (self.edit(tree, self.run_dir) if self.edit
                       else dict(EMPTY))
             self.records[stage] = record
             write_json(self.run_dir / conftest.CHANGED_FILES, record)
@@ -362,6 +366,16 @@ def run(target_root: Path, harness: Path, edit=None,
 
 def run_dir_of(target_root: Path) -> Path:
     return conftest.run_dir_for(target_root, STORY_ID)
+
+
+def worked_in(target_root: Path) -> Path:
+    """The tree the run worked in, which the revert acts on.
+
+    Since story-117 that is a worktree of its own rather than the checkout the
+    run was invoked from, so a reader that looked in the invoked tree would
+    find the content it always held and report a revert that never happened.
+    """
+    return conftest.run_root_for(Path(target_root), STORY_ID)
 
 
 def record_of(target_root: Path, artifact: str = REVERT_ARTIFACT) -> dict:
@@ -442,9 +456,10 @@ def test_the_reverted_path_holds_what_the_stage_baseline_captured(target,
     """
     assert run(target, harness_root, free_coverage)[0] == 0
 
-    assert (target / GOVERNED_PREFIX / "test_app.py").read_text(
+    tree = worked_in(target)
+    assert (tree / GOVERNED_PREFIX / "test_app.py").read_text(
         encoding="utf-8") == TEST_APP_AT_HEAD
-    assert (target / "src" / "app.py").read_text(
+    assert (tree / "src" / "app.py").read_text(
         encoding="utf-8") == APP_ADDITIVE
 
 
@@ -515,7 +530,7 @@ def test_a_refused_deletion_leaves_the_file_present_at_the_baselines_content(
     assert record["paths"] == [f"{GOVERNED_PREFIX}test_extra.py"]
     assert record["reverted"]["restored"] == [f"{GOVERNED_PREFIX}test_extra.py"]
 
-    restored = target / GOVERNED_PREFIX / "test_extra.py"
+    restored = worked_in(target) / GOVERNED_PREFIX / "test_extra.py"
     assert restored.is_file()
     assert restored.read_text(encoding="utf-8") == TEST_EXTRA_AT_HEAD
 
@@ -678,7 +693,7 @@ def test_that_escalation_reverts_nothing(target, harness_root):
     """The tree is left exactly as the stage left it, because the check that
     would have licensed undoing it never reached a verdict."""
     assert run(target, harness_root, free_coverage_with_no_baseline)[0] == 2
-    assert (target / GOVERNED_PREFIX / "test_app.py").read_text(
+    assert (worked_in(target) / GOVERNED_PREFIX / "test_app.py").read_text(
         encoding="utf-8") == TEST_APP_PLUS_COVERAGE
     assert not (run_dir_of(target) / DISCARDED_DIR).exists()
 
@@ -692,7 +707,7 @@ def test_a_creation_beneath_a_governed_prefix_still_escalates(target,
 
     assert code == 2
     assert runner.calls == [WRITING]
-    assert (target / GOVERNED_PREFIX / "test_created.py").is_file()
+    assert (worked_in(target) / GOVERNED_PREFIX / "test_created.py").is_file()
     assert not (run_dir_of(target) / REVERT_ARTIFACT).exists()
 
 
@@ -721,7 +736,7 @@ def test_a_refusal_under_a_confinement_has_the_same_disposition(tmp_path):
         encoding="utf-8"))
     assert record["permitted"] is False
     assert record["reverted"]["restored"] == [f"{GOVERNED_PREFIX}test_app.py"]
-    assert (root / GOVERNED_PREFIX / "test_app.py").read_text(
+    assert (worked_in(root) / GOVERNED_PREFIX / "test_app.py").read_text(
         encoding="utf-8") == TEST_APP_AT_HEAD
     assert (run_dir_of(root) / DISCARDED_DIR / GOVERNED_PREFIX
             / "test_app.py").is_file()
@@ -751,5 +766,5 @@ def test_a_workflow_declaring_no_restriction_reverts_and_escalates_nothing(
     assert runner.calls == STAGE_NAMES
     assert not (run_dir_of(root) / REVERT_ARTIFACT).exists()
     assert not (run_dir_of(root) / DISCARDED_DIR).exists()
-    assert (root / "src" / "app.py").read_text(
+    assert (worked_in(root) / "src" / "app.py").read_text(
         encoding="utf-8") == APP_ADDITIVE

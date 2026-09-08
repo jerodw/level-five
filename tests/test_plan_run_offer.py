@@ -57,12 +57,12 @@ import conftest
 import context_assembler
 import harness_config
 import plan_run_offer
+import worktrees
 
 from test_plan_commit import (  # noqa: F401 - fixtures used by name
     Planning,
     artifact,
     bare_remote,
-    committed_paths,
     drain,
     make_planning,
     planning,
@@ -286,11 +286,18 @@ def test_enter_starts_the_run_for_the_story_that_was_just_committed(
                                    reply=b"\n", L5_STUB_WRITE=wrote(),
                                    L5_RUN_STUB_EXIT=6)
 
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    # Where the plan landed since story-117: on the story branch, committed in
+    # the planning worktree and pushed from there, rather than on the branch
+    # the invoking checkout happens to stand on.
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
     assert remote_refs(remote) != refs_before
     launched = harness.launched()
     assert launched["argv"] == [str(harness.run_script), "story-900"]
-    assert launched["cwd"] == str(planning.root.resolve())
+    # An accepted offer continues in the worktree planning ran in, so the run
+    # creates no second worktree and re-cuts no branch.
+    worktree = worktrees.find(planning.root, planning.planned_branch())
+    assert worktree is not None, "an accepted offer keeps the planning worktree"
+    assert launched["cwd"] == str(worktree.resolve())
     # l5-plan exits with the run's own status.
     assert status == 6
 
@@ -325,18 +332,27 @@ def subprocess_run_keywords(source: str, function: str) -> list[str]:
     raise AssertionError(f"{function} is not defined in this source")
 
 
+#: The keywords the launch is allowed to pass. Since story-117 it passes the
+#: working directory the run is to be started in, which is what makes an
+#: accepted offer continue in the planning worktree; it is neither a capture
+#: nor a redirect, so the child still inherits the terminal. Stated as the
+#: whole permitted set rather than subtracted from what is found, so a capture
+#: added beside it is reported rather than allowed through.
+LAUNCH_KEYWORDS = ["cwd"]
+
+
 def test_the_launch_passes_no_capture_or_redirect_argument():
     source = PLAN_RUN_OFFER.read_text(encoding="utf-8")
-    assert subprocess_run_keywords(source, "launch_run") == []
+    assert subprocess_run_keywords(source, "launch_run") == LAUNCH_KEYWORDS
 
     # Control: the same reading of the same call with a capture planted in it.
     planted = source.replace(
-        "subprocess.run(_arguments(harness_root, story_id, base))",
-        "subprocess.run(_arguments(harness_root, story_id, base), "
-        "capture_output=True)",
+        "cwd=None if cwd is None else str(cwd),",
+        "cwd=None if cwd is None else str(cwd), capture_output=True,",
     )
     assert planted != source, "the launch's call site has moved"
-    assert subprocess_run_keywords(planted, "launch_run") == ["capture_output"]
+    assert subprocess_run_keywords(planted, "launch_run") == \
+        sorted([*LAUNCH_KEYWORDS, "capture_output"])
 
 
 # --------------------------------------------------------------------------
@@ -465,7 +481,11 @@ def test_stdin_that_is_not_a_terminal_is_never_prompted_and_exits(
 
     Asserted as the whole of stdout rather than as a substring, because "no
     prompt was written" is a claim about everything that was written, and a
-    prompt ends without a newline where every line here has one.
+    prompt ends without a newline where every line here has one. Since
+    story-117 three of those lines are the reservation, the worktree the
+    session ran in and the worktree kept for the artifacts to be repaired in;
+    each is subtracted by what it says and required to be on exactly one line,
+    so every byte written is still accounted for.
     """
     result = plan_without_a_terminal(harness, planning, "add a thing",
                                      L5_STUB_WRITE=wrote())
@@ -473,6 +493,12 @@ def test_stdin_that_is_not_a_terminal_is_never_prompted_and_exits(
     assert result.returncode == 1
     assert not harness.log.exists()
     lines = result.stdout.splitlines()
+    said_since_117 = ("l5-plan: reserved ", "l5-plan: planning in ",
+                      "l5-plan: kept the worktree ")
+    for marker in said_since_117:
+        assert sum(line.startswith(marker) for line in lines) == 1, result.stdout
+    lines = [line for line in lines
+             if not any(line.startswith(marker) for marker in said_since_117)]
     assert len(lines) == 3, result.stdout
     assert lines[0] == "stub session"
     # The middle line's wording belongs to the story that added it; what this
@@ -517,7 +543,7 @@ def test_a_bounded_wait_reports_an_offer_that_asks_anyway(tmp_path: Path,
         os.close(keep_open)
     # The commit and the push still happened: the block is at the offer, after
     # everything this story leaves alone.
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
 
 # --------------------------------------------------------------------------
@@ -600,8 +626,7 @@ def test_a_push_that_fails_returns_1_and_offers_nothing(tmp_path: Path,
                                         reply=b"n\n", L5_STUB_WRITE=wrote())
 
     assert status == 1
-    assert committed_paths(remoteless.root) == [
-        ".harness/stories/story-900.yaml"]
+    assert remoteless.planned_paths() == [".harness/stories/story-900.yaml"]
     assert "push it yourself." in output
     assert not harness.log.exists()
     assert command_for(harness, remoteless, "story-900") not in output

@@ -655,7 +655,10 @@ def test_both_refusals_happen_above_run_directory_creation():
     text = executable_source(inspect.getsource(story_coordinator.run_story))
     assert text.index("read_story(") < text.index("stage_exception_problems(")
     assert text.index("stage_exception_problems(") < text.index("run_dir.mkdir")
-    assert text.index("stage_exception_problems(") < text.index("_checkout_story_branch")
+    # The act that stands the run on its branch, which since story-117 is
+    # creating the run's worktree rather than checking the branch out in the
+    # invoked tree. Both refusals still sit above it.
+    assert text.index("stage_exception_problems(") < text.index("worktrees.add(")
     assert source is not None
 
 

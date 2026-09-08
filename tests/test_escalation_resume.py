@@ -2359,9 +2359,12 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
         """An implementer that edits the tree and writes no artifacts, so the
         run escalates inside the stage that made the edit."""
 
-        def __call__(self, prompt, *, stage, **kwargs):
+        def __call__(self, prompt, *, stage, cwd=None, **kwargs):
             self.calls.append(stage)
-            write(self.target_root / "tests" / "test_existing.py",
+            # The tree the stage was invoked in, which since story-117 is the
+            # run's worktree rather than the tree the run was invoked from.
+            tree = Path(cwd) if cwd else Path(self.target_root)
+            write(tree / "tests" / "test_existing.py",
                   TEST_AT_HEAD + "\n\ndef test_added():\n    assert True\n")
             return AgentResult(ok=True, result_text="no artifacts")
 
@@ -2379,8 +2382,11 @@ def test_a_resumed_stage_reuses_the_baseline_recorded_for_it(
     assert code == 0
 
     assert (captured / "tests" / "test_existing.py").read_text() == TEST_AT_HEAD
+    # Taken against the tree the run worked in, which is where the stage made
+    # its edit; the invoked checkout never saw it.
     recaptured = story_coordinator.capture_stage_baseline(
-        tmp_path / "scratch-run", target, BASELINE, IMPLEMENTER_STAGE["name"],
+        tmp_path / "scratch-run", conftest.run_root_for(target, STORY_ID),
+        BASELINE, IMPLEMENTER_STAGE["name"],
         IMPLEMENTER_STAGE["may_not_create"], accounted_for=set())
     assert (recaptured / "tests" / "test_existing.py").read_text() != TEST_AT_HEAD
 

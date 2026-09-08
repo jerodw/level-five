@@ -82,6 +82,7 @@ from test_plan_commit import (
     artifact,
     bare_remote,
     committed_paths,
+    kept_worktree,
     make_planning,
     run_plan,
     writes,
@@ -372,8 +373,12 @@ def test_the_subject_lines_are_printed_before_anything_is_stamped(
 
     Nothing about the invocation differs from the control below but the answer,
     and the answer is read after the lines are printed — so what is asserted
-    here is the artifact's own bytes, an unmoved HEAD and unmoved remote refs
-    beside a subject line that was printed anyway.
+    here is the artifact's own bytes and a story branch nothing was committed
+    to, beside a subject line that was printed anyway.
+
+    The artifact is read in the planning worktree, which since story-117 is
+    where the session writes and which a rejection keeps and names. The
+    invoked checkout is where neither half writes at all.
     """
     head = planning.head()
     result = decline_plan(planning, L5_STUB_WRITE=session_writing(titled(TITLE)))
@@ -381,9 +386,15 @@ def test_the_subject_lines_are_printed_before_anything_is_stamped(
     assert result.returncode == 1
     assert subject_line(PLANNED_ID, TITLE) in printed_lines(result.stdout)
     assert planning.head() == head
-    written = (planning.root / PLANNED_REL).read_text(encoding="utf-8")
+    written = (kept_worktree(result) / PLANNED_REL).read_text(encoding="utf-8")
     assert written == titled(TITLE)
     assert not plan_mandate.carries_a_mandate(written)
+    # Nothing was committed anywhere. The worktree is cut detached and the
+    # branch is named from the artifact only at commit time, so a rejection
+    # leaves no story branch at all for a commit to be on.
+    assert planning.git(
+        "rev-parse", "--verify", planning.planned_branch(PLANNED_ID)
+    ).returncode != 0
 
 
 def test_the_same_fixture_approved_stamps_and_commits_what_it_named(
@@ -394,9 +405,8 @@ def test_the_same_fixture_approved_stamps_and_commits_what_it_named(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert subject_line(PLANNED_ID, TITLE) in printed_lines(result.stdout)
-    assert planning.head() != head
-    assert plan_mandate.carries_a_mandate(
-        (planning.root / PLANNED_REL).read_text(encoding="utf-8"))
+    assert planning.planned_head(PLANNED_ID) != head
+    assert plan_mandate.carries_a_mandate(planning.planned_file(PLANNED_REL))
 
 
 @pytest.mark.parametrize("written, printed", [
@@ -595,14 +605,18 @@ def test_one_question_one_stamp_and_one_commit(planning: Planning):
     assert result.stdout.count("approve this plan?") == 1
     paths = [PLANNED_REL, f".harness/stories/{second}.yaml"]
     for relative in paths:
-        text = (planning.root / relative).read_text(encoding="utf-8")
+        text = planning.planned_file(relative)
         assert text.count(f"\n{plan_mandate.MANDATE_KEY}:\n") == 1
+    # One commit, holding both artifacts. Read off the branch the plan was
+    # pushed to rather than off the invoked checkout, which since story-117 the
+    # session neither writes in nor commits to.
+    assert sorted(planning.planned_paths()) == sorted(paths)
+    repo, revision = planning.planned_in()
     committed = subprocess.run(
-        ["git", "-C", str(planning.root), "log", "--format=%H",
-         "--diff-filter=A", "--", *paths],
+        ["git", "-C", str(repo), "log", "--format=%H",
+         "--diff-filter=A", revision, "--", *paths],
         capture_output=True, text=True, check=True).stdout.split()
     assert len(committed) == 1
-    assert committed_paths(planning.root, committed[0]) == sorted(paths)
 
 
 # ==========================================================================

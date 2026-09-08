@@ -464,7 +464,11 @@ class Runner:
     def __init__(self, target_root: Path, plan: dict | None = None,
                  verdicts: list | None = None, workflow: dict | None = None,
                  hooks: dict | None = None, tree: dict | None = None):
-        self.target_root = target_root
+        # The tree a stage's edits land in is the one the run works in, which
+        # since story-117 is a worktree of the run's own; the baselines, the
+        # signatures and the revert check all read that tree, so an edit made
+        # in the invoked checkout is one none of them ever sees.
+        self.target_root = conftest.run_root_for(target_root, STORY_ID)
         self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.plan = plan or {}
         self.verdicts = list(verdicts or [PASS])
@@ -1905,7 +1909,13 @@ def created_nothing(target_root: Path) -> list[str]:
     branch = f"story/{STORY_ID}"
     if git(target_root, "branch", "--list", branch).stdout.strip():
         problems.append(f"branch {branch} was created")
-    head = git(target_root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    # Asked of the tree the run works in, which since story-117 is a worktree
+    # of its own when the run got as far as making one. A refused run makes
+    # none, so there the question falls back to the invoked checkout and means
+    # exactly what it always meant: nothing stood anything on the story branch.
+    tree = conftest.run_root_for(target_root, STORY_ID)
+    standing = tree if tree.is_dir() else target_root
+    head = git(standing, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if head != DEFAULT_BRANCH:
         problems.append(f"the repository was left on {head}")
     return problems

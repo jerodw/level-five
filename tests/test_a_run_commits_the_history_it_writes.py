@@ -323,12 +323,20 @@ def run_dir_of(target: Path) -> Path:
     return conftest.run_dir_for(target, STORY_ID)
 
 
+def run_root_of(target: Path) -> Path:
+    """The tree the run works in, which since story-117 is a worktree of its
+    own — so it is the tree the history is written in and the tree both
+    terminal commits are taken over, and every question below about what was
+    recorded or committed is asked of it rather than of the invoked checkout."""
+    return conftest.run_root_for(target, STORY_ID)
+
+
 def history_dir_of(target: Path) -> Path:
-    return target / HISTORY_DIR
+    return run_root_of(target) / HISTORY_DIR
 
 
 def subject_of(target: Path, revision: str = "HEAD") -> str:
-    return git(target, "log", "-1", "--format=%s", revision).strip()
+    return git(run_root_of(target), "log", "-1", "--format=%s", revision).strip()
 
 
 def parse_records(text: str) -> list[dict]:
@@ -345,7 +353,7 @@ def committed_text(target: Path, log: str) -> str:
     """A log as the commit at HEAD carries it, or "" when HEAD carries none."""
     relative = f"{HISTORY_DIR}/{log}"
     result = subprocess.run(
-        ["git", "-C", str(target), "show", f"HEAD:{relative}"],
+        ["git", "-C", str(run_root_of(target)), "show", f"HEAD:{relative}"],
         capture_output=True, text=True)
     return result.stdout if result.returncode == 0 else ""
 

@@ -768,7 +768,10 @@ def test_a_rerun_is_refused_when_the_trunk_has_taken_the_escalated_story(
                                        base=TRUNK)
     assert code != 0
     assert runner.calls == [], "a refused run must invoke no agent"
-    assert not (subject / RUNS_REL / SAMPLE_ID).exists(), \
+    # Read where a run of this story would have written, which since story-117
+    # is the tree the run resolves as its root rather than the invoked
+    # checkout.
+    assert not conftest.run_dir_for(subject, SAMPLE_ID).exists(), \
         "a refused run must leave no run directory"
 
     control = sample_target(tmp_path, name="unmerged-target")
@@ -777,7 +780,7 @@ def test_a_rerun_is_refused_when_the_trunk_has_taken_the_escalated_story(
                                 control_runner, base=TRUNK)
     assert control_runner.calls != [], \
         "with nothing merged the same call runs the story"
-    assert (control / RUNS_REL / SAMPLE_ID).exists()
+    assert conftest.run_dir_for(control, SAMPLE_ID).exists()
 
 
 @pytest.mark.parametrize("method", [m for _, m in METHODS], ids=METHOD_IDS)

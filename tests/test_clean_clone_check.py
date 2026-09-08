@@ -294,12 +294,17 @@ class Runner:
         self.calls.append(stage)
         self.prompts = getattr(self, "prompts", {})
         self.prompts.setdefault(stage, []).append(prompt)
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from. A stage that
+        # wrote into the invoked tree would leave the run's own tree unchanged,
+        # and the clean clone is built from the tree the run works in.
+        tree = Path(cwd) if cwd else self.target_root
         if stage == WRITING:
-            (self.target_root / "src" / "app.py").write_text(
+            (tree / "src" / "app.py").write_text(
                 f"print('hello')\n# {MARKER}\n", encoding="utf-8")
-            (self.target_root / "probe.txt").write_text("probe\n", encoding="utf-8")
-            (self.target_root / "ignored").mkdir(exist_ok=True)
-            (self.target_root / "ignored" / "secret.txt").write_text(
+            (tree / "probe.txt").write_text("probe\n", encoding="utf-8")
+            (tree / "ignored").mkdir(exist_ok=True)
+            (tree / "ignored" / "secret.txt").write_text(
                 "secret\n", encoding="utf-8")
             write_json(self.run_dir / conftest.CHANGED_FILES, {
                 "modified": ["src/app.py"], "created": ["probe.txt"], "deleted": [],

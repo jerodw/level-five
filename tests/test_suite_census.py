@@ -262,7 +262,10 @@ def census_over(root: Path, change, *, command: str | None = None,
     arguments; nothing is routed through a run, because what is being decided
     is the check's verdict rather than the routing on it.
     """
-    run_dir = conftest.run_dir_for(root, STORY_ID)
+    # Not a run's run directory: nothing is routed through a run here, `root` is
+    # a bare repository with no harness configuration to resolve one against,
+    # and the two calls below are handed this scratch directory directly.
+    run_dir = root / ".harness" / "runs" / STORY_ID
     run_dir.mkdir(parents=True, exist_ok=True)
     baseline = story_coordinator.capture_stage_baseline(
         run_dir, root, "stage-baseline", "stage", list(paths), accounted_for=set())
@@ -666,8 +669,12 @@ class Runner:
                  permission_mode=None, model=None, allowed_tools=None,
                  max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the stage was invoked in, which since story-117 is the run's
+        # worktree rather than the tree the run was invoked from. The census is
+        # taken over the tree the run works in, so the change has to land there.
+        tree = Path(cwd) if cwd else Path(self.root)
         if stage == WRITING:
-            write_json(self.run_dir / conftest.CHANGED_FILES, self.change(self.root))
+            write_json(self.run_dir / conftest.CHANGED_FILES, self.change(tree))
             write(self.run_dir / conftest.IMPLEMENTATION_SUMMARY, "Did it.\n")
         elif stage == VERIFYING:
             write_json(self.run_dir / conftest.VERIFICATION_RESULT, PASS_VERDICT)
@@ -744,7 +751,10 @@ def test_the_baseline_census_is_taken_in_a_clone_at_the_stages_baseline(
     record = record_of(censused)
     assert record["baseline"][COUNTER] == COUNTER_AT_BASELINE
     assert record["after"][COUNTER] == 1
-    assert (censused / GOVERNED / f"{COUNTER}.txt").read_text().strip() == "1"
+    # Read in the tree the stage was invoked in, which since story-117 is the
+    # run's worktree rather than the checkout the run was invoked from.
+    left = conftest.run_root_for(censused, STORY_ID)
+    assert (left / GOVERNED / f"{COUNTER}.txt").read_text().strip() == "1"
 
 
 # --------------------------------------------------------------------------

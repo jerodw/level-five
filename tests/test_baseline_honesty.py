@@ -2469,6 +2469,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "rather than inputs to the test — together with the one end-to-end "
         "case that drives l5-plan, which resolves this repository as its own "
         "harness root and so can only be compared against what is deployed",
+    "test_planning_runs_on_its_own_worktree.py":
+        "the three things it resolves live are what story-117's criteria are "
+        "about and could not be anything else: prompts/planner.md, because the "
+        "criterion is that the planner this repository ships is told the id it "
+        "is planning rather than asked to derive one; "
+        "orchestration/story_coordinator.py, because the criterion is that the "
+        "run root this harness resolves is decided above everything a run "
+        "writes; and scripts/l5-plan driven end to end, which resolves this "
+        "repository as its own harness root and so can only be compared "
+        "against what is deployed. Every target it plans in and runs against "
+        "is a repository it builds under tmp_path, with a bare repository of "
+        "its own as the remote, so the reservation, the refused second claim "
+        "and the release reach no network and no shipped configuration",
     "test_prompt_workflow_ownership.py":
         "the shipped prompts and the shipped workflow definitions are the "
         "whole of its subject: it asks whether the file this repository holds "

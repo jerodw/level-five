@@ -71,7 +71,7 @@ import pytest
 import conftest
 from conftest import story_diff
 from test_plan_commit import (Planning, STUB, as_the_session_left_it,
-                              bare_remote, writes)
+                              bare_remote, kept_worktree, writes)
 
 import harness_config
 import plan_validation
@@ -1362,6 +1362,23 @@ def untracked(planning: Planning) -> list[str]:
             if line.startswith("??")]
 
 
+def untracked_in(planning: Planning, tree: Path) -> list[str]:
+    """`untracked` above, asked of the worktree a refusal kept.
+
+    Since story-117 the session runs in a worktree of its own, so what a
+    refusal leaves is there and not in the developer's checkout — which is why
+    the refusal names that path, and why the callers below read the one it
+    named rather than deriving a second.
+
+    `-uall` rather than porcelain's default: in a worktree cut from the base
+    the whole stories directory is untracked, and the default collapses an
+    untracked directory to its own name, so the file would never be named.
+    """
+    return [line[3:] for line in planning.git(
+        "-C", str(tree), "status", "--porcelain", "-uall"
+    ).stdout.splitlines() if line.startswith("??")]
+
+
 def test_a_session_whose_artifact_names_the_workflow_it_ran_under_commits(
     planning, planning_harness,
 ):
@@ -1395,13 +1412,15 @@ def test_a_session_whose_artifact_names_no_definition_is_refused(
         assert name in result.stderr, name
     # The artifact is the developer's: left where the session wrote it,
     # uncommitted, which is the state they can repair and re-run from.
-    assert artifact_path(planning).is_file()
+    kept = kept_worktree(result)
+    left = kept / relative_artifact()
+    assert left.is_file()
     # story-087: l5-plan confers the mandate between the snapshot and the
     # validation, so what a refusal leaves is the session's bytes plus that
     # block. The session's own text is still compared byte for byte.
-    assert as_the_session_left_it(artifact_path(planning)) == planned(UNDEFINED)
+    assert as_the_session_left_it(left) == planned(UNDEFINED)
     assert planning.head() == head
-    assert relative_artifact() in untracked(planning)
+    assert relative_artifact() in untracked_in(planning, kept)
 
 
 def test_a_session_whose_artifact_names_another_workflow_is_refused_with_both(
@@ -1419,9 +1438,10 @@ def test_a_session_whose_artifact_names_another_workflow_is_refused_with_both(
     assert result.returncode != 0
     assert SELECTED["name"] in result.stderr
     assert CONFIGURED["name"] in result.stderr
-    assert artifact_path(planning).is_file()
+    kept = kept_worktree(result)
+    assert (kept / relative_artifact()).is_file()
     assert planning.head() == head
-    assert relative_artifact() in untracked(planning)
+    assert relative_artifact() in untracked_in(planning, kept)
 
 
 def test_a_session_naming_the_configured_workflow_still_holds_its_artifact_to_it(
@@ -1446,10 +1466,12 @@ def test_a_session_naming_the_configured_workflow_still_holds_its_artifact_to_it
     assert result.returncode != 0
     assert planning.head() == head
 
-    # The refused artifact is still in the working tree, and `l5-plan` commits
-    # what a session *added* — so the control starts from the state the first
-    # session started from rather than from the wreckage it left.
-    artifact_path(planning).unlink()
+    # The refused artifact is still in the worktree the refusal kept, and
+    # `l5-plan` commits what a session *added* — so the control starts from the
+    # state the first session started from rather than from the wreckage it
+    # left. The second invocation gets a worktree of its own anyway, so what
+    # this removes is the tree the first one was told to keep.
+    (kept_worktree(result) / relative_artifact()).unlink()
     assert plan(planning, planning_harness, "--workflow", CONFIGURED["name"],
                 "a story request",
                 L5_STUB_WRITE=writes((relative_artifact(),

@@ -1073,7 +1073,10 @@ class BreakingRunner(Runner):
         result = super().__call__(prompt, **kwargs)
         if (kwargs["stage"] == DECLARED_ENTRY
                 and self.calls.count(DECLARED_ENTRY) == 2):
-            (Path(cwd) / BREAKAGE).write_text("", encoding="utf-8")
+            # The tree the stage was invoked in, which since story-117 is the
+            # run's worktree rather than the tree the run was invoked from.
+            tree = Path(kwargs.get("cwd") or self.target_root)
+            (tree / BREAKAGE).write_text("", encoding="utf-8")
             # And the record says so. A stage is answerable for every file it
             # writes into the target tree, so a file written here and named
             # nowhere would be an incomplete record — a different defect from
@@ -1202,7 +1205,8 @@ def test_the_same_runner_against_an_unbroken_suite_completes(
     run_dir = run_dir_of(target_root)
 
     assert code == 0
-    assert (target_root / BREAKAGE).is_file()
+    # In the tree the run worked in, which is where the runner wrote it.
+    assert (conftest.run_root_for(target_root, "story-001") / BREAKAGE).is_file()
     assert clean_clone_events(run_dir) == [CLEAN_CLONE_PASSED]
 
 
@@ -1227,8 +1231,14 @@ def created_nothing(target_root: Path, branch: str) -> list[str]:
         problems.append("state.json was written")
     if (run_dir / "events.log").exists():
         problems.append("an event stream was written")
-    if head_of(target_root) != branch:
-        problems.append(f"the repository was left on {head_of(target_root)}")
+    # Asked of the tree the run works in, which since story-117 is a worktree
+    # of its own when the run got as far as making one. A refused run makes
+    # none, so there the question falls back to the invoked checkout and means
+    # exactly what it always meant: nothing stood anything on the story branch.
+    tree = conftest.run_root_for(target_root, "story-001")
+    standing = head_of(tree) if tree.is_dir() else head_of(target_root)
+    if standing != branch:
+        problems.append(f"the repository was left on {standing}")
     return problems
 
 

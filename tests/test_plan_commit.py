@@ -244,6 +244,19 @@ class Planning:
         repo, revision = self.planned_in(story_id)
         return committed_paths(repo, revision)
 
+    def planned_file(self, relative: str, story_id: str = "story-900") -> str:
+        """One file's text as the plan commit holds it.
+
+        Read out of the commit rather than off disk, because the worktree the
+        plan was committed in is gone by the time a caller asks: a declined
+        offer removes it once the push has landed.
+        """
+        repo, revision = self.planned_in(story_id)
+        return subprocess.run(
+            ["git", "-C", str(repo), "show", f"{revision}:{relative}"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
 
 def conferring_paths(planning: "Planning") -> list[str]:
     """Where a conferring record lands, as paths relative to the target root.
@@ -418,10 +431,20 @@ def bare_remote(tmp_path: Path, planning: Planning, name: str = "origin",
 KEPT_WORKTREE = re.compile(r"kept the worktree (\S+?);")
 
 
-def kept_worktree(result: subprocess.CompletedProcess) -> Path:
-    match = KEPT_WORKTREE.search(result.stdout)
-    assert match, result.stdout
+def kept_worktree_in(printed: str) -> Path:
+    """The planning worktree a refusal kept, read off the text it printed.
+
+    `kept_worktree` below is this for a caller holding the completed process; a
+    caller that drove the script on a pty holds one interleaved stream and
+    nothing else, and both read the same sentence.
+    """
+    match = KEPT_WORKTREE.search(printed)
+    assert match, printed
     return Path(match.group(1))
+
+
+def kept_worktree(result: subprocess.CompletedProcess) -> Path:
+    return kept_worktree_in(result.stdout)
 
 
 def remote_refs(remote: Path) -> dict:
@@ -430,6 +453,26 @@ def remote_refs(remote: Path) -> dict:
         capture_output=True, text=True, check=True,
     )
     return dict(line.split() for line in listed.stdout.splitlines() if line.strip())
+
+
+def refs_carrying_a_new_commit(planning: "Planning", before: dict) -> dict:
+    """The refs the remote gained or moved that hold a commit this run made.
+
+    Since story-117 an invocation reserves its id *before* the session starts,
+    by pushing the story branch's ref, so "the remote is exactly where it was"
+    is no longer what a refusal leaves and no longer what a test can ask. What
+    a refusal must still leave is a remote holding no commit the invocation
+    made: every ref it gained points at a commit that was already there.
+
+    So this subtracts the refs that were there unchanged and the refs standing
+    at the base, and what is left is a plan that reached the remote. Empty says
+    nothing was pushed but the reservation; non-empty is what a session that
+    committed produces, which is the control every caller of this has beside
+    the assertion.
+    """
+    base = planning.head()
+    return {ref: sha for ref, sha in remote_refs(planning.remote).items()
+            if before.get(ref) != sha and sha != base}
 
 
 # --------------------------------------------------------------------------
@@ -893,6 +936,31 @@ def wait_for_the_session_to_write(path: Path,
     return path
 
 
+def wait_for_the_planning_session_to_write(
+        planning: "Planning", relative: str,
+        deadline: float = SESSION_WRITE_DEADLINE) -> Path:
+    """The same wait, for a file the session writes in its own worktree.
+
+    Since story-117 a session writes in a worktree named for the id the
+    invocation reserved, and a caller does not know that id before the session
+    starts — so what is waited on is the path under the worktree root rather
+    than one path derived here, and the file that appeared is returned.
+    """
+    root = worktrees.worktree_root(
+        planning.root, harness_config.load_config(planning.root))
+    expires = time.monotonic() + deadline
+    while True:
+        found = sorted(root.glob(f"*/{relative}")) if root.exists() else []
+        if found:
+            return found[0]
+        if time.monotonic() >= expires:
+            machine_load.inconclusive(
+                f"the session never got as far as writing {relative} in its "
+                f"worktree within {deadline:g}s, so it never reached the point "
+                f"this test measures from")
+        time.sleep(0.05)
+
+
 def test_the_developers_terminal_is_the_sessions_terminal(planning: Planning):
     process, master = run_plan_on_a_pty(planning, L5_STUB_EXIT=7)
     status, _ = drain(process, master)
@@ -908,8 +976,12 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
         L5_STUB_WRITE=writes((".harness/stories/story-900.yaml", artifact())),
         L5_STUB_SLEEP=30,
     )
-    written = planning.stories_dir / "story-900.yaml"
-    wait_for_the_session_to_write(written)
+    # Waited on in the worktree the session runs in, which since story-117 is
+    # where it writes: waiting on the invoked checkout's stories directory is
+    # waiting on a file that never appears, so the interrupt would be sent
+    # before the session had written anything to commit.
+    wait_for_the_planning_session_to_write(
+        planning, ".harness/stories/story-900.yaml")
     os.killpg(os.getpgid(process.pid), signal.SIGINT)
     # The interrupted session's artifact is still committed and pushed, and
     # since story-059 a successful push on a terminal ends by offering to run

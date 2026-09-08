@@ -55,10 +55,12 @@ repository's commit graph.
 """
 import ast
 import json
+import shutil
 from pathlib import Path
 
 import conftest
 from conftest import function_source, load_mutant
+import worktrees
 
 import story_coordinator
 
@@ -66,7 +68,7 @@ from test_resume_guard import (APP_AT_HEAD, COORDINATOR_PATH, DEFAULT_BRANCH,
                                PASS, QUIET_GITIGNORE, STORY_BRANCH, STORY_ID,
                                VERIFIER_STAGE, WORKFLOW_REL, Runner,
                                build_harness, build_target, escalate, git,
-                               guard, state_of, write, write_json)
+                               guard, run_dir_in, state_of, write, write_json)
 
 #: The frozen text of `unchanged_since_escalation` as it stood while the
 #: shared-checkout leg deferred outright. A committed fixture rather than a
@@ -113,6 +115,66 @@ def shared(tmp_path: Path, name: str = "shared") -> Path:
     """
     return build_target(tmp_path / name, harness_inside=True,
                         gitignore=QUIET_GITIGNORE)
+
+
+def onto_the_story_branch(root: Path) -> None:
+    """Put the shared checkout itself on the story branch.
+
+    Since story-117 a run works in a worktree of its own, so an escalated run
+    leaves the branch checked out there and the developer's checkout standing
+    where it was. This module's subject is the leg that reads *the tree the
+    resume will run in*, and the configuration it is about is the one where
+    that tree is the checkout itself — so the worktree is removed, freeing the
+    branch, and the checkout is put on it. `resolve_run_root` then answers with
+    this tree, which is what makes every question below one about it.
+    """
+    tree = conftest.run_root_for(Path(root), STORY_ID)
+    if tree != Path(root):
+        # The run directory is ignored, so it lives in the worktree and goes
+        # with it. It is what a resume reads, so it moves to the tree that is
+        # about to become the run root — the state, the history and the
+        # evidence are the escalated run's own either way.
+        left = conftest.run_dir_for(Path(root), STORY_ID)
+        destination = Path(root) / left.relative_to(tree)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(left, destination, dirs_exist_ok=True)
+        removal = worktrees.remove(Path(root), tree)
+        assert not removal.problems, removal.problems
+    git(root, "checkout", "-q", STORY_BRANCH)
+
+
+def back_into_a_worktree(root: Path) -> Path:
+    """Put the escalated run's evidence back where `run_story` will look for it.
+
+    `onto_the_story_branch` moved it into the checkout, which is what lets the
+    guard be asked about that tree. Driving the resume is a different question —
+    which tree `run_story` resolves — and from a checkout standing anywhere but
+    the story branch that is a worktree of the run's own. So the worktree is
+    cut again and the evidence copied into it, which is exactly the state an
+    escalated run leaves behind.
+    """
+    tree = conftest.worktree_a_run_left(root, STORY_ID)
+    shutil.copytree(run_dir_in(root), conftest.run_dir_for(root, STORY_ID),
+                    dirs_exist_ok=True)
+    return tree
+
+
+def guard_here(root: Path, **kwargs) -> list[str]:
+    """`guard`, put to the shared checkout itself.
+
+    This module's subject is the form in which the tree the resume will run in
+    *is* the checkout, so every call below names it. Letting the helper resolve
+    one instead would, from anywhere but the story branch, answer with a
+    worktree this fixture removed — and the guard would be asked about a tree
+    that does not exist rather than about the one the developer is standing in,
+    which is the whole question here.
+    """
+    return guard(root, root, tree=root, **kwargs)
+
+
+def state_here(root: Path) -> dict:
+    """The escalated run's state, read in the checkout it worked in."""
+    return json.loads((run_dir_in(root) / "state.json").read_text())
 
 
 def separate(tmp_path: Path, name: str = "separate") -> Path:
@@ -172,28 +234,36 @@ def test_a_shared_checkout_resume_from_the_base_reaches_its_stage(tmp_path):
     Two controls: the same fixture standing on the story branch immediately
     before the checkout, which is refused, and the same situation put to a
     coordinator without the standing condition, which refuses it.
+
+    The drive at the end is the same developer's next act, and since story-117
+    it lands in the tree the coordinator resolves rather than in the checkout:
+    from the base that is the worktree the escalated run left, so the evidence
+    is put back into one before the run is driven. What the guard cleared is
+    unchanged by that — the harness fix is a commit in the checkout either way.
     """
     root = shared(tmp_path)
     escalate(root, root)
-    assert guard(root, root) != []                          # the control
+    onto_the_story_branch(root)
+    assert guard_here(root) != []                          # the control
 
     git(root, "checkout", "-q", DEFAULT_BRANCH)
     fix_the_harness_here(root)
     assert git(root, "status", "--porcelain").stdout.strip() == ""
-    assert state_of(root)["status"] == "escalated"
+    assert state_here(root)["status"] == "escalated"
 
-    assert guard(root, root) == []
+    assert guard_here(root) == []
 
     # The control: the identical situation, decided by today's coordinator with
     # the standing condition deleted, which refuses it — so the emptiness above
     # is that condition rather than anything else about this repository.
     before = without_the_standing_condition(tmp_path)
-    assert guard(root, root, module=before) != []
+    assert guard_here(root, module=before) != []
 
+    tree = back_into_a_worktree(root)
     resumed = Runner(root, PASS)
     assert story_coordinator.run_story(STORY_ID, root, root, resumed) == 0
     assert resumed.calls[0] == VERIFIER_STAGE["name"]
-    assert state_of(root)["status"] == "completed"
+    assert state_here(tree)["status"] == "completed"
 
 
 def test_a_shared_checkout_resume_from_the_branch_is_still_refused(
@@ -211,15 +281,16 @@ def test_a_shared_checkout_resume_from_the_branch_is_still_refused(
     """
     root = shared(tmp_path)
     escalate(root, root)
+    onto_the_story_branch(root)
     capsys.readouterr()
 
     refused = Runner(root)
     assert story_coordinator.run_story(STORY_ID, root, root, refused) == 1
     message = capsys.readouterr().err
     assert refused.calls == []
-    assert state_of(root)["status"] == "escalated"
+    assert state_here(root)["status"] == "escalated"
 
-    evidence = guard(root, root)
+    evidence = guard_here(root)
     assert len(evidence) == 3
     for line in evidence:
         assert line in message
@@ -231,7 +302,7 @@ def test_a_shared_checkout_resume_from_the_branch_is_still_refused(
 
     # The control: the same fixture, the same run, standing on the base.
     git(root, "checkout", "-q", DEFAULT_BRANCH)
-    assert guard(root, root) == []
+    assert guard_here(root) == []
 
 
 def test_the_shared_form_establishes_nothing_from_another_revision(tmp_path):
@@ -250,6 +321,7 @@ def test_the_shared_form_establishes_nothing_from_another_revision(tmp_path):
     """
     root = shared(tmp_path)
     escalate(root, root)
+    onto_the_story_branch(root)
     before = without_the_standing_condition(tmp_path)
 
     branch_tip = revision(root, STORY_BRANCH)
@@ -259,12 +331,12 @@ def test_the_shared_form_establishes_nothing_from_another_revision(tmp_path):
     for standing in (DEFAULT_BRANCH, THIRD_BRANCH, base):
         git(root, "checkout", "-q", standing)
         assert revision(root) != branch_tip, standing
-        assert guard(root, root) == [], standing
-        assert len(guard(root, root, module=before)) == 3, standing  # control
+        assert guard_here(root) == [], standing
+        assert len(guard_here(root, module=before)) == 3, standing  # control
 
     git(root, "checkout", "-q", "--detach", branch_tip)
     assert revision(root) == branch_tip
-    assert len(guard(root, root)) == 3
+    assert len(guard_here(root)) == 3
 
 
 def test_a_separate_checkout_off_branch_resume_is_still_refused(tmp_path):
@@ -301,8 +373,9 @@ def test_a_separate_checkout_off_branch_resume_is_still_refused(tmp_path):
     # standing, which this story stopped refusing.
     both = shared(tmp_path, "shared-for-the-control")
     escalate(both, both)
+    onto_the_story_branch(both)
     git(both, "checkout", "-q", DEFAULT_BRANCH)
-    assert guard(both, both) == []
+    assert guard_here(both) == []
 
 
 def test_the_branch_comparison_and_the_porcelain_leg_decide_as_they_did(
@@ -324,12 +397,13 @@ def test_the_branch_comparison_and_the_porcelain_leg_decide_as_they_did(
 
     root = shared(tmp_path)
     escalate(root, root)
+    onto_the_story_branch(root)
     assert revision(root) == revision(root, STORY_BRANCH)
-    assert guard(root, root) != []                          # the control
+    assert guard_here(root) != []                          # the control
 
     write(root / "src" / "app.py", APP_AT_HEAD + "print('uncommitted')\n")
     assert git(root, "status", "--porcelain").stdout.strip() != ""
-    assert guard(root, root) == []
+    assert guard_here(root) == []
 
 
 # --------------------------------------------------------------------------

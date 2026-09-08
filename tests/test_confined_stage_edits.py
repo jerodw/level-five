@@ -265,7 +265,12 @@ class Runner:
     stage also makes the working-tree change the case is about."""
 
     def __init__(self, target_root: Path, edit=None):
-        self.target_root = target_root
+        # The tree a stage writes into is the one the run works in, which since
+        # story-117 is a worktree of the run's own rather than the checkout
+        # `run_story` was invoked from. An edit made in the invoked tree would
+        # be a file the revert check's clone of the run root never has, so the
+        # check would decide against a tree the stage never touched.
+        self.target_root = tree_of(target_root)
         self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.edit = edit
         self.records: dict[str, dict] = {}
@@ -303,6 +308,11 @@ def run(target_root: Path, harness: Path, edit=None) -> tuple[int, Runner]:
     runner = Runner(target_root, edit)
     code = story_coordinator.run_story(STORY_ID, harness, target_root, runner)
     return code, runner
+
+
+def tree_of(target_root: Path) -> Path:
+    """The tree a run of this story invoked from `target_root` works in."""
+    return conftest.run_root_for(target_root, STORY_ID)
 
 
 def run_dir_of(target_root: Path) -> Path:
@@ -410,7 +420,7 @@ def test_a_stage_writing_only_inside_its_confinement_is_unaffected(
     # No governed path, so the check has nothing to decide and writes nothing.
     assert not (run_dir_of(target) / ARTIFACT).exists()
     # And the stage's work stands.
-    assert (target / CONFINED_TO / "test_app.py").read_text(
+    assert (tree_of(target) / CONFINED_TO / "test_app.py").read_text(
         encoding="utf-8") == TEST_APP_PLUS_COVERAGE
 
 
@@ -445,7 +455,7 @@ def test_an_edit_outside_the_confinement_that_the_suite_needs_is_permitted(
     assert record["permitted"] is True
     assert record["exit_code"] != 0          # the suite failed without it
     # The file keeps the stage's content.
-    assert (target / SOURCE_DIR / "app.py").read_text(
+    assert (tree_of(target) / SOURCE_DIR / "app.py").read_text(
         encoding="utf-8") == APP_WITH_HELPER
 
 
@@ -464,7 +474,7 @@ def test_the_same_edit_with_nothing_needing_it_is_refused(target, harness_root):
     assert record["ran"] is True
     assert record["permitted"] is False
     assert record["exit_code"] == 0
-    assert (target / SOURCE_DIR / "app.py").read_text(
+    assert (tree_of(target) / SOURCE_DIR / "app.py").read_text(
         encoding="utf-8") == APP_AT_HEAD
 
 
@@ -497,7 +507,7 @@ def test_that_escalation_leaves_the_tree_as_the_stage_left_it(target,
                                                                harness_root):
     """Nothing was proved about the file, so nothing about it is undone."""
     assert run(target, harness_root, creation_outside)[0] == 2
-    assert (target / SOURCE_DIR / "helper.py").read_text(
+    assert (tree_of(target) / SOURCE_DIR / "helper.py").read_text(
         encoding="utf-8") == "VALUE = 1\n"
     assert not (run_dir_of(target) / ARTIFACT).exists()
 
@@ -511,7 +521,7 @@ def test_the_same_creation_inside_the_confinement_does_not_escalate(
 
     assert code == 0
     assert runner.calls == STAGE_NAMES
-    assert (target / CONFINED_TO / "test_more.py").is_file()
+    assert (tree_of(target) / CONFINED_TO / "test_more.py").is_file()
 
 
 # --------------------------------------------------------------------------
@@ -548,7 +558,7 @@ def test_a_granted_creation_outside_the_confinement_does_not_escalate(
 
     assert code == 0
     assert runner.calls == STAGE_NAMES
-    assert (target / SOURCE_DIR / "helper.py").is_file()
+    assert (tree_of(target) / SOURCE_DIR / "helper.py").is_file()
 
 
 def test_a_granted_modification_outside_it_is_not_put_to_the_revert_check(
@@ -566,7 +576,7 @@ def test_a_granted_modification_outside_it_is_not_put_to_the_revert_check(
     assert code == 0
     assert runner.calls == STAGE_NAMES
     assert not (run_dir_of(target) / ARTIFACT).exists()
-    assert (target / SOURCE_DIR / "app.py").read_text(
+    assert (tree_of(target) / SOURCE_DIR / "app.py").read_text(
         encoding="utf-8") == APP_WITH_HELPER
 
 

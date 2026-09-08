@@ -1048,6 +1048,14 @@ def test_a_run_whose_stages_all_write_is_unaffected(fresh_retry, stale_retry):
 
 
 def subject_of(target_root: Path) -> str:
+    """The subject of the commit a run of `STORY_ID` from `target_root` made.
+
+    Read in the tree that run worked in, which since story-117 is a worktree of
+    the run's own: the invoked checkout is where neither a completion nor an
+    escalation commits any more, so reading it would compare two repositories
+    still standing at their initial commit.
+    """
+    tree = conftest.run_root_for(target_root, STORY_ID)
     return subprocess.run(
-        ["git", "-C", str(target_root), "log", "-1", "--format=%s"],
+        ["git", "-C", str(tree), "log", "-1", "--format=%s"],
         capture_output=True, text=True, check=True).stdout.strip()

@@ -377,7 +377,10 @@ class Runner:
         # The target's working tree has to move, or the run has nothing to
         # commit and nothing for the clean-clone check to see.
         if stage == self.fixture.stage_names[0]:
-            source = self.target_root / "src" / "app.py"
+            # The tree the stage was invoked in, which since story-117 is the
+            # run's worktree rather than the tree the run was invoked from.
+            tree = Path(cwd) if cwd else Path(self.target_root)
+            source = tree / "src" / "app.py"
             source.write_text(f"print('attempt {call}')\n", encoding="utf-8")
 
         for artifact in story_coordinator.required_artifacts(
