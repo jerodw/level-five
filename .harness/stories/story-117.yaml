@@ -1,0 +1,170 @@
+story:
+  id: story-117
+  title: Planning and running each happen on a worktree and branch of their own
+  description: |
+    Planning and running share one checkout today. l5-plan commits the story
+    artifact on whatever branch the developer happens to be standing on and
+    pushes that branch under its own name, and a run then cuts its story branch
+    in that same checkout. A plan written while a run is in flight therefore
+    lands its commit in the middle of the run's branch, and the two cannot be
+    done at once without mixing the commits. The harness knows nothing about
+    worktrees at all — a search over orchestration, scripts, prompts and
+    workflows finds the word nowhere — so this adds a concept rather than
+    changing one.
+
+    After this story, l5-plan creates a worktree of its own, cut from the
+    repository's default branch, and the whole of planning happens there: the
+    session, the stamp, the validation, the commit and the push. Taking the
+    immediate-run offer continues the run in that same worktree on that same
+    branch. Declining removes the worktree and the local branch once the push
+    has landed, leaving the plan on the remote and the developer's checkout
+    exactly as it was found. A run started independently gets a worktree and a
+    branch of its own by the same mechanism, so several runs and a planning
+    session can be in flight without sharing a working tree.
+
+    The story id is reserved before the session starts, by pushing the story
+    branch's ref to the remote with a claim that succeeds only when the ref does
+    not already exist. Two clones can therefore never plan the same id, and the
+    plan commit consumes the ref it reserved rather than releasing it.
+
+    This is the brief filed under 168, and it is the part of the request
+    "Parallel execution, worktrees, environment locks" that is earned now: the
+    isolation that request has been waiting behind, without the environment
+    locks it also asks for.
+  workflow: story-workflow
+
+tasks:
+  - Add orchestration/worktrees.py, holding the whole worktree concept — resolving where worktrees live, creating one at a start point, finding an existing one for a branch, reporting whether a tree stands on a branch, and removing a worktree and its local branch. Every function returns what happened rather than printing it, the shape plan_commit and plan_run_offer already have.
+  - Add orchestration/story_ids.py, holding id reservation — the highest id known to the stories directory, to local branches and to remote-tracking refs; the claim that pushes a story branch ref with an expectation that the ref does not exist; the retry that takes the next id when a claim is refused; and the release that deletes an unconsumed claim.
+  - Declare worktree_dir in schemas/harness-config.schema.json, resolved against the target root when relative and defaulting to a sibling directory of the target root named for it, so nothing new ever appears inside the repository.
+  - Teach l5-plan to resolve and check the base, reserve an id, create a detached worktree at the base, and run the planning session with that worktree as its working directory and as the target root every step below it is given.
+  - Pass the reserved id into the planner's rendered context and amend prompts/planner.md so the planner is told the id it is planning rather than deriving one from the stories directory.
+  - Name the branch after the session from the id the artifact carries, report a disagreement with the reservation, release an unconsumed claim, and commit and push in the worktree.
+  - Make cleanup conditional on the push having landed — remove the worktree and the local branch when it did, keep both and name them when it did not, keep the worktree when there are artifacts to repair, and remove it when the session wrote nothing.
+  - Give plan_run_offer.launch_run the working directory the run is to be started in, so an accepted offer continues in the planning worktree rather than in the directory l5-plan was invoked from.
+  - Resolve a run root in the coordinator before the run writes anything — the invoked tree when it already stands on the story branch, an existing worktree for that branch when there is one, and a new worktree otherwise — and run the rest of run_story against it.
+  - Resolve a story branch that exists only on the remote, so l5-run given a story id whose artifact is not in the invoked tree fetches the branch the plan was pushed to and cuts its worktree from it.
+  - Give base_problems a way to be asked without its HEAD-standing-on-the-base leg, for a caller that cuts a branch from a named ref rather than from HEAD, keeping one definition of the check and one refusal that prints it.
+  - Read the dirty-tree check against the run root rather than against the invoked tree.
+  - Write the regression module that holds all of it, building a bare repository as the remote so the suite reaches no network.
+  - Record the design in ARCHITECTURE.md and amend the sections this story contradicts.
+
+acceptance_criteria:
+  - Planning a story creates a git worktree at the path worktree_dir resolves to, outside the target root, and the planning session, the stamp, the validation, the commit and the push all happen there.
+  - A planning invocation leaves the developer's own checkout on the branch it started on, with its uncommitted files unchanged, its index unchanged and no commit added to it.
+  - worktree_dir is declared in schemas/harness-config.schema.json and is absent from .harness/config.yaml, and a test varies it to a value the harness would never pick and observes the worktree created there.
+  - Unset, worktree_dir resolves to a sibling directory of the target root named for it, and no path the harness globs, no clean-clone build and no blocked-path list gains an entry for worktrees.
+  - l5-plan claims the id it is about to plan by pushing that story's branch ref to the remote with an expectation that the ref does not exist, and a claim made against a ref that already exists is refused rather than overwriting it.
+  - A refused claim makes the invocation take the next id and claim that instead, and the retry is bounded, with the bound named when it is reached.
+  - The planner is told the reserved id in its rendered context and prompts/planner.md asks it to write that id rather than to derive one from the stories directory.
+  - The branch is created from the id the artifact carries; where that differs from the reservation the disagreement is reported, the branch still carries the artifact's id, and the unused claim is released.
+  - A plan commit pushed onto the ref that was claimed for it consumes that reservation, so a successful planning session releases nothing and leaves no ref behind beyond the story branch itself.
+  - A planning session that writes no artifact releases its claim, and a release that could not be made is reported rather than passed over.
+  - Declining the run offer after a push that landed removes the worktree and the local branch, and says the plan survives on the remote and how to run it.
+  - Declining the run offer after a push that failed removes neither, and names the worktree path and the branch the commit is on.
+  - A session whose artifact was rejected or refused by validation keeps its worktree, and the refusal names the path the artifacts are in.
+  - Accepting the run offer runs the story in the planning worktree on the branch the plan was committed to, creating no second worktree and re-cutting no branch.
+  - l5-run given a story id whose artifact is not in the invoked tree resolves that story's branch, fetches it, and runs in a worktree cut from it.
+  - A run invoked from a tree that already stands on the story branch runs in that tree and creates no worktree.
+  - A run whose branch already has a worktree runs in that worktree rather than creating a second one.
+  - base_problems asks its HEAD-standing-on-the-base leg only for a caller that cuts from HEAD, and a test shows that leg still reported for such a caller; the ref-resolves question and the base-agrees-with-its-remote leg are asked wherever a branch is cut.
+  - A fresh run invoked from a dirty developer checkout is not refused for that dirtiness, and no file from that checkout appears in any commit the run makes.
+  - A resume's dirty-tree check reads the worktree the run works in, and a dirty worktree still refuses the resume.
+  - A configured remote that cannot be reached refuses the planning invocation before a worktree is created, before an agent is invoked and before anything is written.
+  - A repository with no remote configured plans on a local claim instead and says that no reservation was made.
+  - ARCHITECTURE.md carries a section stating where a worktree lives, what reserves an id, what consumes a reservation and what releases one, what cleanup is conditional on, and that a planning session no longer sees the developer's uncommitted work.
+  - The sentence in "The base a story branches from" declaring worktrees and concurrent runs out of scope is amended, and "The tree a run starts from" and "A run stands on its branch before it writes anything" say what the run root is and which tree each check now reads.
+
+technical_plan:
+  implementation_steps:
+    - Write orchestration/worktrees.py first, with no caller, so the concept has one home before anything depends on it. Resolution of worktree_dir, creation at a start point, lookup of an existing worktree for a branch parsed from git worktree list --porcelain, the standing-on-a-branch question, and removal of a worktree together with its local branch. Every failure is returned as a problem list or a result dataclass; nothing raises and nothing prints.
+    - Write orchestration/story_ids.py beside it. The candidate id is the highest known to the stories directory, to local branches under the configured prefix and to remote-tracking refs under it, plus one. The claim pushes the base's commit to the story branch's ref with an expectation that the ref does not exist, so the remote decides; a refused claim increments and tries again under a bound. Release deletes a ref the claim created and the plan never committed onto.
+    - Declare worktree_dir in schemas/harness-config.schema.json in the idiom the other keys use, saying what it is relative to, what it defaults to and why nothing is written inside the repository. declared_config_keys reads the schema, so no second list is edited.
+    - Give base_problems a parameter naming whether the branch is cut from HEAD, defaulting to the behaviour it has today, so every existing caller is unchanged and only a worktree-cutting caller drops the leg. The refusal stays the one _refuse_base already prints.
+    - Rework l5-plan's main so the base is resolved and checked, the id is reserved, and the worktree is created, in that order and all above the session, so a refusal at any of them leaves no worktree, no agent invoked and nothing written. Below the session, the worktree root is the target root every call is given.
+    - Render the reserved id into the planner's context and amend prompts/planner.md to state it as the id to write.
+    - Rework report and offer so branch naming, commit, push, cleanup and the run offer all act on the worktree, and so cleanup consults whether the push landed.
+    - Give launch_run a working directory and pass the worktree.
+    - In run_story, resolve the run root immediately above the act that used to be _checkout_story_branch, so it stays the run's first act and every refusal still happens above it. Read the dirty-tree check against that root. Pass the resolved root down as the target root for the rest of the function.
+    - Amend the coordinator's story read so a story id whose artifact is not in the invoked tree resolves through the story's branch, fetched from the remote, rather than refusing.
+  likely_file_changes:
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: New module holding the whole worktree concept, so no worktree knowledge lives in a script or is spelled twice.
+    - file: orchestration/story_ids.py
+      stage: implementer
+      reason: New module holding id reservation — the candidate, the claim, the retry and the release — kept separate from worktrees because one is about refs and ids and the other about working trees.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Resolve the run root, read the dirty-tree check against it, give base_problems its cut-from-HEAD parameter, and resolve a story that lives only on its branch.
+    - file: orchestration/plan_run_offer.py
+      stage: implementer
+      reason: launch_run must start the run in the planning worktree rather than in the directory l5-plan was invoked from.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Reserve, create the worktree, run the session in it, name the branch, commit and push there, and clean up conditionally on the push.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The planner is told its reserved id instead of deriving one by listing the stories directory.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares worktree_dir, which is what makes it a configured key rather than an undeclared one the pre-flight refuses.
+    - file: tests/test_planning_runs_on_its_own_worktree.py
+      stage: tester
+      reason: The regression module for the whole story — the developer's checkout untouched, the reservation refused on a second claim, the release, the conditional cleanup, the run root resolution and the worktree_dir proof.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A new section for the design, and amendments to the three sections this story contradicts.
+    - file: scripts/l5-run
+      stage: documenter
+      reason: Its docstring describes finding the target repository by walking up from the current directory and says nothing about a worktree or about a story that lives only on its branch.
+
+scope:
+  modify:
+    - orchestration/worktrees.py
+    - orchestration/story_ids.py
+    - orchestration/story_coordinator.py
+    - orchestration/plan_run_offer.py
+    - orchestration/plan_commit.py
+    - scripts/l5-plan
+    - scripts/l5-run
+    - prompts/planner.md
+    - schemas/harness-config.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/config.yaml
+    - workflows/
+    - orchestration/agent_runner.py
+    - templates/
+    - plugin/
+    - hooks/
+
+verification_requirements:
+  - The configured test command passes in a clean clone.
+  - The new module builds a bare repository as its remote and reaches no network, so the claim, the refused second claim and the release are all exercised locally.
+  - The developer's-checkout-untouched property is asserted rather than described: the branch, the working tree and the index of the invoking checkout are compared before and after a planning invocation.
+  - Reverting the coordinator's run-root resolution alone makes the new module fail, so the change is shown non-vacuous.
+  - Reverting base_problems' new parameter alone makes the new module fail, and the leg it drops is still shown reported for a caller that cuts from HEAD.
+  - The worktree_dir proof varies the key to a value the harness would never pick and observes the harness obey it, which is what tests/test_config_keys_are_obeyed.py requires of every declared key.
+  - A run whose developer checkout holds unrelated uncommitted files is shown to commit none of them.
+  - No test bounds how slow the machine is allowed to be; a git operation that must have completed before a question can be asked is a precondition reported through tests/machine_load.py rather than asserted as a wall-clock window.
+
+constraints:
+  - Standard library only, and no third-party runtime dependency.
+  - Scripts stay thin: the worktree and reservation mechanisms live in orchestration/, and scripts/l5-plan and scripts/l5-run parse arguments and hand control to them.
+  - One fact has one home. base_problems keeps a single definition and gains a parameter rather than a second copy, resolve_base and story_branch stay the only derivations of the base and the branch name, and the worktree path is derived in one function.
+  - The harness root and the target root stay separate. Prompts, schemas, workflows and rules are read from the checkout the script was invoked from; the story artifact, the run directory and the history are written in the worktree.
+  - No flag, environment variable or configuration key bypasses any correctness guard, including the base check, the dirty-tree check and the reservation.
+  - Nothing removes a worktree a run is using, and a completed run leaves its worktree in place; reaping worktrees is not this story's subject.
+  - Environment locks and concurrency against a shared external resource are out of scope, and so is any change to what a story branch is named or to the rule that a run refuses a base it was not given.
+  - The clean-clone and revert checks are not changed. They already build scratch clones of their own; that a target root may now be a worktree must not break them, and verification must show a clone built from a worktree still runs.
+  - A resume loads the workflow its state.json records and resolves the run root the same way a fresh run does; no resume is refused for a decision a previous run made.
+  - This story's own run is not governed by what it lands: the coordinator process imports its module at start, so the run that lands this carries the previous behaviour, and enforcement begins with the next story.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-07 22:48:06
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
