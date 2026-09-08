@@ -2225,6 +2225,18 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "sentence this story replaced, and against copies of the shipped "
         "prompts with the violation planted in them, so no assertion here "
         "depends on the live text staying silent for a reason nobody checked",
+    "test_a_brief_is_titled_for_its_end_state.py":
+        "the four documents it resolves are its subject and there is nothing "
+        "else they could be: the claim is that this repository ships one title "
+        "rule to the two agents that write briefs and to the humans who read "
+        "them, so schemas/story-brief.schema.json's title description, "
+        "prompts/inspector.md, prompts/assist.md and the skill under plugin/ "
+        "are read as they ship. A fixture schema would say back only what the "
+        "module had just written into it, and a fixture prompt would say "
+        "nothing about what either writer is told. Every absence it asserts of "
+        "them is controlled against the wordings this story superseded, "
+        "carried here as literals, and against copies of the shipped sections "
+        "with the violation planted in them",
     "test_a_completed_story_is_inspected.py":
         "every run it drives goes through a workflow it builds, against a "
         "target repository it constructs and configures, because the stage "
