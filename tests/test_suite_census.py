@@ -262,7 +262,7 @@ def census_over(root: Path, change, *, command: str | None = None,
     arguments; nothing is routed through a run, because what is being decided
     is the check's verdict rather than the routing on it.
     """
-    run_dir = root / ".harness" / "runs" / STORY_ID
+    run_dir = conftest.run_dir_for(root, STORY_ID)
     run_dir.mkdir(parents=True, exist_ok=True)
     baseline = story_coordinator.capture_stage_baseline(
         run_dir, root, "stage-baseline", "stage", list(paths), accounted_for=set())
@@ -657,7 +657,7 @@ class Runner:
     stage makes the working-tree change the case is about."""
 
     def __init__(self, root: Path, change):
-        self.run_dir = root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(root, STORY_ID)
         self.root = root
         self.change = change
         self.calls: list[str] = []
@@ -681,7 +681,7 @@ def run(root: Path, harness: Path, change=leave_it_alone) -> tuple[int, Runner]:
 
 
 def run_dir_of(root: Path) -> Path:
-    return root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(root, STORY_ID)
 
 
 def record_of(root: Path) -> dict:

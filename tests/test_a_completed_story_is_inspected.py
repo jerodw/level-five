@@ -337,7 +337,17 @@ class Inspector:
     def __init__(self, target: Path, config: dict, journal: Path, *,
                  findings=(), act=None, raises: str = ""):
         self.target = Path(target)
-        self.artifact = inspection.findings_paths(self.target, config)[0]
+        self.config = config
+        # The tree this stand-in reads and writes: the working directory the
+        # inspection hands it, which since story-117 is the worktree the run
+        # works in rather than the checkout the run was invoked from. Taken from
+        # that hand-off at invocation rather than resolved here, because it is
+        # what a real inspection agent would be given and what the findings
+        # artifact is read back out of. Until the first invocation there is
+        # nothing to have been handed, so it starts as the root it was built
+        # for — which is what an invocation driven directly, outside a run, then
+        # confirms it to be.
+        self.tree = self.target
         self.journal = Path(journal)
         self.findings = list(findings)
         self.act = act
@@ -352,16 +362,22 @@ class Inspector:
             "permission_mode": permission_mode, "model": model,
             "allowed_tools": allowed_tools, "max_budget_usd": max_budget_usd,
         })
+        self.tree = Path(cwd)
         with self.journal.open("a", encoding="utf-8") as handle:
-            handle.write(f"inspected at {head_subject(self.target)}\n")
+            handle.write(f"inspected at {head_subject(self.tree)}\n")
         if self.act is not None:
-            self.act(self.target)
+            self.act(self.tree)
         if self.raises:
             raise RuntimeError(self.raises)
         self.artifact.parent.mkdir(parents=True, exist_ok=True)
         self.artifact.write_text(json.dumps({"findings": self.findings}),
                                  encoding="utf-8")
         return AgentResult(ok=True, result_text="inspected")
+
+    @property
+    def artifact(self) -> Path:
+        """Where the findings go, in whichever tree this was last handed."""
+        return inspection.findings_paths(self.tree, self.config)[0]
 
     @property
     def prompt(self) -> str:
@@ -418,7 +434,7 @@ class Runner:
                  fails_at: str | None = None, capacity=None,
                  extra_changed=()):
         self.target_root = Path(target_root)
-        self.run_dir = self.target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(self.target_root, STORY_ID)
         self.journal = Path(journal)
         self.fails_at = fails_at
         self.capacity = capacity
@@ -434,19 +450,24 @@ class Runner:
         if stage == self.fails_at:
             return AgentResult(ok=False, result_text=f"{stage} stopped",
                                capacity=self.capacity)
+        # The source edits go in the tree the coordinator handed this stage,
+        # which since story-117 is the worktree the run works in rather than
+        # the checkout it was invoked from — and it is the tree the run's own
+        # completion commit is taken over.
+        tree = Path(cwd) if cwd else self.target_root
         if stage == WRITING:
             _write(self.run_dir / conftest.CHANGED_FILES,
                    {"modified": [CHANGED_SOURCE, *self.extra_changed],
                     "created": [], "deleted": []})
             (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
-            (self.target_root / CHANGED_SOURCE).write_text(
+            (tree / CHANGED_SOURCE).write_text(
                 "def a():\n    return 11\n", encoding="utf-8")
         elif stage == VALIDATING:
             _write(self.run_dir / conftest.TEST_RESULTS, {"tests_written": 1})
             _write(self.run_dir / conftest.TESTER_CHANGED_FILES,
                    {"modified": [CHANGED_TEST], "created": [], "deleted": []})
-            (self.target_root / CHANGED_TEST).write_text(
+            (tree / CHANGED_TEST).write_text(
                 "def check_a():\n    assert True  # and again\n",
                 encoding="utf-8")
         elif stage == VERIFYING:
@@ -464,7 +485,7 @@ def run(target: Path, harness: Path, runner: Runner) -> int:
 
 
 def run_dir_of(target: Path) -> Path:
-    return target / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target, STORY_ID)
 
 
 def state_of(target: Path) -> dict:
@@ -493,22 +514,45 @@ def journal_lines(journal: Path) -> list[str]:
             if line.strip()]
 
 
+def in_the_runs_tree(root: Path) -> Path:
+    """`root` resolved to the tree a run of this story works in.
+
+    Since story-117 a run commits in a worktree of its own rather than in the
+    checkout it was invoked from, so every question below about what a run
+    committed is asked of that tree. Idempotent: handed the worktree itself it
+    answers the worktree, because a tree already standing on the story branch
+    is its own run root. A root the harness cannot read a configuration out of
+    — the bare tree the broad-mode tests below build — is answered as itself,
+    since there is no run working anywhere else for it. An invocation that
+    drives the inspection directly rather than through a run has no such tree
+    standing anywhere, and is likewise answered as itself.
+    """
+    root = Path(root)
+    try:
+        resolved = conftest.run_root_for(root, STORY_ID)
+    except Exception:
+        return root
+    return resolved if resolved.is_dir() else root
+
+
 def head_subject(root: Path) -> str:
-    return _git(root, "log", "-1", "--format=%s").stdout.strip()
+    return _git(in_the_runs_tree(root), "log", "-1", "--format=%s").stdout.strip()
 
 
 def subjects(root: Path) -> list[str]:
-    return _git(root, "log", "--format=%s").stdout.splitlines()
+    return _git(in_the_runs_tree(root), "log", "--format=%s").stdout.splitlines()
 
 
 def committed_paths(root: Path, revision: str = "HEAD") -> list[str]:
-    listed = _git(root, "show", "--name-only", "--format=", revision)
+    listed = _git(in_the_runs_tree(root), "show", "--name-only", "--format=",
+                  revision)
     return [line for line in listed.stdout.splitlines() if line.strip()]
 
 
 def history_records(target: Path) -> list[dict]:
     """The inspection log's records, found by the declaration that routes this
     kind rather than by a filename written here."""
+    target = in_the_runs_tree(target)
     directory = harness_config.history_dir(target, {})
     found: list[dict] = []
     for relative in story_inspection.record_paths(target, {}):
@@ -522,7 +566,13 @@ def history_records(target: Path) -> list[dict]:
 
 
 def queue_entries(target: Path) -> list[dict]:
-    queue = outbox.queue_dir(target)
+    """Every entry the run's own outbox queue holds.
+
+    Read in the tree the run works in rather than in the checkout it was
+    invoked from: since story-117 a run's inspection files into the worktree's
+    queue, which is where the sweep that ships it looks.
+    """
+    queue = outbox.queue_dir(conftest.run_root_for(target, STORY_ID))
     return [json.loads(path.read_text(encoding="utf-8"))
             for path in outbox.entry_files(queue)]
 
@@ -1502,7 +1552,7 @@ def test_the_record_is_inside_a_commit_rather_than_left_in_the_working_tree(
     assert head_subject(target) == \
         story_inspection.COMMIT_SUBJECT.format(story_id=STORY_ID)
     assert committed_paths(target) == paths
-    assert story_coordinator.dirty_paths(target) == []
+    assert story_coordinator.dirty_paths(in_the_runs_tree(target)) == []
 
 
 def edits_a_file_elsewhere(target: Path) -> None:
@@ -1524,7 +1574,7 @@ def test_the_record_commit_stages_the_record_paths_and_nothing_else(
     assert code == 0
     assert committed_paths(target) == list(
         story_inspection.record_paths(target, {}))
-    assert SIBLING_SOURCE in story_coordinator.dirty_paths(target)
+    assert SIBLING_SOURCE in story_coordinator.dirty_paths(in_the_runs_tree(target))
 
 
 def test_the_record_commit_is_skipped_where_it_would_stage_nothing(
@@ -1582,12 +1632,13 @@ def test_the_tree_a_run_left_clean_is_still_clean_after_the_inspection(
         tmp_path, harness, monkeypatch, name="clean", findings=[finding()])
 
     assert code == 0
-    assert story_coordinator.dirty_paths(target) == []
+    assert story_coordinator.dirty_paths(in_the_runs_tree(target)) == []
     # The control for that emptiness: a file no stage produced is reported by
     # the same reader, so the clean tree is the reader looking rather than a
     # reader that has stopped seeing.
-    (target / SIBLING_SOURCE).write_text("left behind\n", encoding="utf-8")
-    assert story_coordinator.dirty_paths(target) == [SIBLING_SOURCE]
+    (in_the_runs_tree(target) / SIBLING_SOURCE).write_text(
+        "left behind\n", encoding="utf-8")
+    assert story_coordinator.dirty_paths(in_the_runs_tree(target)) == [SIBLING_SOURCE]
 
 
 # ==========================================================================

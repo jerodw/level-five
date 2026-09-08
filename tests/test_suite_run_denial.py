@@ -700,7 +700,7 @@ class Runner:
 
     def __init__(self, target_root: Path):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.calls: list[str] = []
         #: (stage, the suite command it was handed, or NO_SUITE)
         self.suites: list[tuple[str, object]] = []
@@ -719,7 +719,7 @@ class Runner:
         self.suites.append((stage, extra.get("suite_command", NO_SUITE)))
 
         if stage == WRITING:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + f"print('invocation {ordinal + 1}')\n")
             write(self.run_dir / conftest.CHANGED_FILES,
                   json.dumps({"modified": ["src/app.py"], "created": [],

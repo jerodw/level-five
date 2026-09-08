@@ -114,7 +114,7 @@ class StampingRunner:
 
     def __init__(self, target_root: Path, verdicts: list[dict],
                  story_id: str = "story-001", extra_outputs: tuple[str, ...] = ()):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verdicts = list(verdicts)
         self.extra_outputs = extra_outputs
         self.attempt = 1
@@ -178,7 +178,7 @@ class StampingRunner:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def read_state(run_dir: Path) -> dict:

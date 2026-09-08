@@ -142,7 +142,7 @@ def parse(story_text: str) -> dict:
 
 
 def context_for(target_root: Path, harness_root: Path, story_text: str) -> dict:
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     run_dir.mkdir(parents=True, exist_ok=True)
     return context_assembler.build_context(
         story_text=story_text,
@@ -207,7 +207,7 @@ class StageRunner:
 
 def complete_run(target_root: Path, harness_root: Path) -> Path:
     """Run the whole workflow with fake agents and return the run directory."""
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     runner = StageRunner(run_dir)
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, runner
@@ -334,13 +334,13 @@ def test_the_one_read_happens_before_any_run_state_or_branch_exists(
 ):
     """At the moment the artifact is read, nothing has been created yet."""
     install(target_root, AWKWARD_STORY)
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     observed: dict[str, object] = {}
     real = story_coordinator.read_story
 
     def observing(story_text, harness_root=None):
         observed["run_dir"] = run_dir.exists()
-        observed["log"] = (target_root / ".harness" / "logs" / "story-001.log").exists()
+        observed["log"] = conftest.log_path_for(target_root, "story-001").exists()
         observed["branches"] = branches(target_root)
         return real(story_text, harness_root)
 
@@ -373,10 +373,10 @@ def test_a_rejected_story_still_leaves_nothing_behind(target_root, harness_root,
     err = capsys.readouterr().err
     assert "$.scope" in err
 
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     assert not run_dir.exists()
     assert not (run_dir / "state.json").exists()
-    assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
+    assert not conftest.log_path_for(target_root, "story-001").exists()
     assert branches(target_root) == before
 
 
@@ -405,7 +405,7 @@ def test_build_context_requires_a_keyword_only_story_argument(target_root, harne
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
     assert parameter.default is inspect.Parameter.empty
 
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     run_dir.mkdir(parents=True, exist_ok=True)
     with pytest.raises(TypeError):
         context_assembler.build_context(
@@ -446,7 +446,7 @@ def test_the_criteria_value_carries_no_yaml_indentation_or_quoting(
 
 
 def test_absent_acceptance_criteria_renders_as_none(target_root, harness_root):
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     run_dir.mkdir(parents=True, exist_ok=True)
     context = context_assembler.build_context(
         story_text="story:\n  id: story-001\n",

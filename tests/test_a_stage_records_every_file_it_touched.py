@@ -486,8 +486,13 @@ class Runner:
             with open(log_path, "a", encoding="utf-8") as handle:
                 handle.write(f"{stage} invocation {call}\n")
 
+        # The turn edits the tree the coordinator handed this stage, which
+        # since story-117 is the worktree the run works in rather than the
+        # checkout the run was invoked from. Taken from `cwd` rather than
+        # resolved here, because `cwd` is what a real agent would be given and
+        # so is what the changed-files check is going to read.
         record = _nth(self.plan.get(stage, []), call - 1,
-                      Turn()).act(self.target_root)
+                      Turn()).act(Path(cwd))
         verdict = conftest.answering_guidance(
             self.verdicts[min(self.calls.count(VERIFYING) - 1,
                               len(self.verdicts) - 1)],
@@ -908,7 +913,7 @@ def test_the_signature_holds_the_tree_the_first_invocation_found(
     signature = signature_of(run_dir, SPLIT)
 
     assert unrecorded not in signature["paths"]
-    assert (Path(target_root) / unrecorded).is_file()
+    assert (conftest.run_root_for(target_root, STORY_ID) / unrecorded).is_file()
     # It holds a tree rather than nothing, which is what makes the absence
     # above a statement about when the capture happened.
     assert SENTINEL in signature["paths"]
@@ -1106,7 +1111,7 @@ def test_a_path_git_excludes_as_ignored_is_not_reported_as_an_omission(
         {SPLIT: [Turn(writes={IGNORED_PATH: WROTE}, omits=[IGNORED_PATH])]})
     assert code == 0
     assert self_route_records(run_dir) == []
-    assert (quiet / IGNORED_PATH).is_file()
+    assert (conftest.run_root_for(quiet, STORY_ID) / IGNORED_PATH).is_file()
 
     loud = make_target("ignored-control")
     code, runner, control_dir = drive(
@@ -1133,14 +1138,17 @@ def test_the_coordinators_own_agent_log_is_not_reported_against_a_stage(
     coordinator's own directories are subtracted, and nothing else.
     """
     code, runner, run_dir = drive(target_root, harness_root)
-    log = target_root / ".harness" / "logs" / f"{STORY_ID}.log"
-    relative = log.relative_to(target_root).as_posix()
+    # The tree the run works in is where the coordinator writes its log and is
+    # the tree the omission check is taken over, so both are read there.
+    run_root = conftest.run_root_for(target_root, STORY_ID)
+    log = conftest.log_path_for(target_root, STORY_ID)
+    relative = log.relative_to(run_root).as_posix()
 
     assert code == 0
     assert self_route_records(run_dir) == []
     assert log.is_file() and log.read_text(encoding="utf-8")
 
-    assert relative in story_coordinator._tracked_and_untracked(target_root)
+    assert relative in story_coordinator._tracked_and_untracked(run_root)
     assert not story_coordinator.is_blocked(
         relative, harness_config.load_rules(harness_root)["blocked_paths"])
     assert story_coordinator.is_blocked(

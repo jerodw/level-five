@@ -380,7 +380,7 @@ class Runner:
 
     def __init__(self, root: Path, change):
         self.root = root
-        self.run_dir = root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(root, STORY_ID)
         self.change = change
         self.calls: list[str] = []
 
@@ -413,7 +413,7 @@ def run(root: Path, harness: Path, change) -> tuple[int, Runner]:
 
 
 def run_dir_of(root: Path) -> Path:
-    return root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(root, STORY_ID)
 
 
 def artifacts_of(root: Path) -> set[str]:

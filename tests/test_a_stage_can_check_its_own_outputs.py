@@ -226,7 +226,20 @@ def write_fresh(path: Path, text: str) -> str:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
+
+
+def hand_built_run_dir(target_root: Path) -> Path:
+    """A run directory built by this module rather than by a run.
+
+    `stage_turn` below constructs the state a stage's turn ends in without
+    driving a run, so there is no worktree for `run_dir_of` to resolve and the
+    directory has to be somewhere that exists. It goes in the target tree, whose
+    `.harness/config.yaml` is what `l5-check` walks up to find — the tree the
+    directory sits in is an input to that walk rather than the subject here.
+    """
+    config = harness_config.load_config(target_root)
+    return target_root / config.get("runs_dir", ".harness/runs") / STORY_ID
 
 
 def stage_turn(target_root: Path, stage: dict, *, wrote=(), left_behind=(),
@@ -238,7 +251,7 @@ def stage_turn(target_root: Path, stage: dict, *, wrote=(), left_behind=(),
     baseline is taken, which is the only way the stale case exists at all.
     `wrote` is what this invocation wrote, after it.
     """
-    run_dir = run_dir_of(target_root)
+    run_dir = hand_built_run_dir(target_root)
     run_dir.mkdir(parents=True, exist_ok=True)
     story_coordinator.save_state(run_dir, story_coordinator.RunState(
         story_id=STORY_ID, branch=f"story/{STORY_ID}",

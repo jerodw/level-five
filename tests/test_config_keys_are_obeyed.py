@@ -79,6 +79,7 @@ import output_check
 import run_status
 import schema_validator
 import story_coordinator
+import worktrees
 from agent_runner import AgentResult, CapacityStop
 
 REPO_ROOT = Path(harness_config.__file__).resolve().parents[1]
@@ -397,6 +398,10 @@ VARYING: dict[str, object] = {
     "tests_dir": "xyzzy-checks/",
     "verification_runner": "/xyzzy/bin/interpreter",
     "workflow": "xyzzy-workflow",
+    # Relative, so the resolution against the target root is exercised as
+    # well as the value: it lands beside the target rather than in the
+    # sibling directory the harness would have picked for itself.
+    "worktree_dir": "../xyzzy-worktrees",
 }
 
 #: What the harness uses when the key is absent, as written in the code that
@@ -438,6 +443,7 @@ FALLBACKS: dict[str, object] = {
     "test_selection_command": None,
     "tests_dir": None,
     "verification_runner": None,
+    "worktree_dir": None,
     "workflow": "story-workflow",
 }
 
@@ -565,6 +571,9 @@ KEY_PROOFS: dict[str, Proof] = {
     "workflow": Proof(
         "test_workflow_names_the_definition_the_run_actually_executes",
         BEHAVIOURAL),
+    "worktree_dir": Proof(
+        "test_worktree_dir_is_where_a_run_cuts_the_tree_it_works_in",
+        BEHAVIOURAL),
 }
 
 
@@ -626,6 +635,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/filed_query.py",
          "declared_timeout = config.get(TIMEOUT_KEY)",
          "declared_timeout = None"),
+    ),
+    "worktree_dir": (
+        ("orchestration/worktrees.py",
+         "configured = config.get(WORKTREE_DIR_KEY)",
+         "configured = None"),
     ),
     "history_dir": (
         ("orchestration/harness_config.py",
@@ -972,6 +986,7 @@ class Run:
     runner: RecordingRunner
     code: int
     values: dict = field(default_factory=dict)
+    run_root: Path | None = None
 
     @property
     def stages(self) -> list[str]:
@@ -991,6 +1006,19 @@ class Run:
         return json.loads((self.run_dir / "state.json").read_text(encoding="utf-8"))
 
 
+def run_root_of(target: Path) -> Path:
+    """The tree a run of STORY_ID invoked from `target` works in.
+
+    Resolved the way the coordinator resolves it rather than assumed to be the
+    invoked tree: since story-117 a run works in a worktree of its own unless
+    the invoked tree is already standing on the story branch.
+    """
+    config = harness_config.load_config(target)
+    return story_coordinator.resolve_run_root(
+        target, config, story_coordinator.story_branch(config, STORY_ID)
+    ).path
+
+
 def start_run(tmp_path: Path, **overrides: object) -> Run:
     """Build the fixture and execute one story through the fake runner.
 
@@ -1004,11 +1032,17 @@ def start_run(tmp_path: Path, **overrides: object) -> Run:
     target = build_target(tmp_path, values, checkout=checkout,
                           extra_branches=extra_branches)
     config = harness_config.load_config(target)
-    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    # A run works in the tree the coordinator resolves as its run root, which
+    # for a target standing on anything but the story branch is a worktree
+    # outside the target root. The fake runner writes its artifacts into that
+    # run's directory, so the path is resolved the way the coordinator resolves
+    # it rather than assumed to be under the invoked tree.
+    run_root = run_root_of(target)
+    run_dir = run_root / str(values["runs_dir"]) / STORY_ID
     runner = RecordingRunner(run_dir)
     code = story_coordinator.run_story(STORY_ID, harness, target, runner)
     return Run(target=target, harness=harness, config=config, run_dir=run_dir,
-               runner=runner, code=code, values=values)
+               runner=runner, code=code, values=values, run_root=run_root)
 
 
 def complete_run(tmp_path: Path, **overrides: object) -> Run:
@@ -1060,6 +1094,7 @@ EXPECTED_KEYS = (
     "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
     "test_command",
     "test_selection_command", "tests_dir", "verification_runner", "workflow",
+    "worktree_dir",
 )
 
 
@@ -1520,6 +1555,38 @@ def test_branch_prefix_names_the_branch_the_run_creates_and_works_on(tmp_path):
     assert "story/story-001" not in branches(run.target)
     assert story_coordinator.story_branch(run.config, STORY_ID) == \
         "xyzzy-branch/story-001"
+
+
+def test_worktree_dir_is_where_a_run_cuts_the_tree_it_works_in(tmp_path):
+    """The configured directory is where the run's worktree is created.
+
+    Varied to a value the harness would never pick, and relative, so the
+    resolution against the target root is exercised as well as the value: the
+    tree lands beside the target rather than in the sibling directory named for
+    it that the harness picks for itself. What is observed is the run *working*
+    there — its run directory, its state and the branch that tree stands on —
+    rather than a directory merely existing, and the harness's own default path
+    is observed not to have been created at all.
+
+    With the key no longer read the resolution falls back to that default and
+    the run's tree is somewhere else entirely, so the run directory this
+    fixture's fake runner writes into is not the one the coordinator resolves
+    and the run cannot complete.
+    """
+    run = complete_run(tmp_path)
+    configured = run.target.parent / "xyzzy-worktrees" / "xyzzy-branch-story-001"
+    assert run.run_root == configured
+    assert configured.is_dir()
+    assert run.run_dir == configured / str(VARYING["runs_dir"]) / STORY_ID
+    assert (run.run_dir / "state.json").is_file()
+    assert worktrees.standing_branch(configured) == "xyzzy-branch/story-001"
+    # The sibling the harness would have picked for itself, absent because the
+    # configured value is what was obeyed.
+    assert not (run.target.parent / f"{run.target.name}-worktrees").exists()
+    # And the developer's own checkout is left where it was, with no run
+    # directory in it and standing on the branch it started on.
+    assert not (run.target / str(VARYING["runs_dir"]) / STORY_ID).exists()
+    assert worktrees.standing_branch(run.target) == "main"
 
 
 def test_base_branch_is_the_base_the_pre_flight_resolves_and_decides_on(
@@ -2151,7 +2218,11 @@ def test_inspect_after_story_max_files_bounds_what_a_completed_run_inspects(
     _git(target, "add", "-A")
     _git(target, "commit", "-q", "-m", "the tree the story changes")
 
-    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    # The run works in the tree the coordinator resolves as its run root,
+    # so the fake runner writes into that run's directory rather than into
+    # one under the invoked tree.
+    run_root = run_root_of(target)
+    run_dir = run_root / str(values["runs_dir"]) / STORY_ID
     runner = RecordingRunner(run_dir, changed=[CHANGED_SOURCE_FILE])
     code = story_coordinator.run_story(STORY_ID, harness, target, runner)
 
@@ -2188,21 +2259,28 @@ def test_inspect_max_cost_usd_is_the_allowance_each_invocation_is_given(
 
 
 def test_runs_dir_is_where_the_run_state_is_written_and_read_back(tmp_path):
+    """The configured directory, read inside the tree the run works in.
+
+    A run works in the worktree the coordinator resolves as its run root, so
+    the configured directory is resolved against that tree rather than against
+    the invoked one — which is also where the default's absence is checked, for
+    the same reason.
+    """
     run = complete_run(tmp_path)
-    assert (run.target / ".harness" / "xyzzy-runs" / STORY_ID /
+    assert (run.run_root / ".harness" / "xyzzy-runs" / STORY_ID /
             "state.json").is_file()
-    assert not (run.target / ".harness" / "runs").exists()
+    assert not (run.run_root / ".harness" / "runs").exists()
     # The status reader resolves the same directory from the same key, so a
     # run recorded under the configured path is a run `l5-status` can find.
-    assert run_status._runs_dir(run.target) == \
-        run.target / ".harness" / "xyzzy-runs"
+    assert run_status._runs_dir(run.run_root) == \
+        run.run_root / ".harness" / "xyzzy-runs"
 
 
 def test_logs_dir_is_where_the_stage_log_is_written(tmp_path):
     run = complete_run(tmp_path)
-    expected = run.target / ".harness" / "xyzzy-logs" / f"{STORY_ID}.log"
+    expected = run.run_root / ".harness" / "xyzzy-logs" / f"{STORY_ID}.log"
     assert expected.is_file()
-    assert not (run.target / ".harness" / "logs").exists()
+    assert not (run.run_root / ".harness" / "logs").exists()
     assert run.argument("log_path") == [expected] * len(run.stages)
 
 
@@ -2237,7 +2315,11 @@ def refused_for_its_mandate(tmp_path: Path, **overrides: object) -> None:
     story.write_text(stripped + UNRESOLVED_MANDATE, encoding="utf-8")
     _git(target, "add", "-A")
     _git(target, "commit", "-q", "-m", "a mandate that does not resolve")
-    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    # The run works in the tree the coordinator resolves as its run root,
+    # so the fake runner writes into that run's directory rather than into
+    # one under the invoked tree.
+    run_root = run_root_of(target)
+    run_dir = run_root / str(values["runs_dir"]) / STORY_ID
     runner = RecordingRunner(run_dir)
     code = story_coordinator.run_story(STORY_ID, harness, target, runner)
     assert code == 1
@@ -2314,17 +2396,17 @@ def test_history_dir_is_where_the_cross_run_records_are_written(tmp_path):
     `.harness/history`, where the second assertion finds them.
     """
     run = complete_run(tmp_path)
-    configured = run.target / str(VARYING["history_dir"])
+    configured = run.run_root / str(VARYING["history_dir"])
     assert configured.is_dir()
     assert {path.name for path in configured.iterdir()} <= set(HISTORY_LOGS)
     assert {path.name for path in configured.iterdir()}
-    assert not (run.target / harness_config.DEFAULT_HISTORY_DIR).exists()
+    assert not (run.run_root / harness_config.DEFAULT_HISTORY_DIR).exists()
     # The record really is this run's, so the directory is where the harness
     # wrote rather than merely a directory it created.
     written = [json.loads(line) for log in configured.iterdir()
                for line in log.read_text(encoding="utf-8").splitlines() if line]
     assert [record for record in written if record["story_id"] == STORY_ID]
-    assert harness_config.history_dir(run.target, run.config) == configured
+    assert harness_config.history_dir(run.run_root, run.config) == configured
 
 
 def test_history_retention_days_is_the_bound_the_prune_applies(tmp_path):
@@ -2341,7 +2423,11 @@ def test_history_retention_days_is_the_bound_the_prune_applies(tmp_path):
     target = build_target(tmp_path, values)
     seeded_history(target, directory, {"older-record": DROPPED_AT_THE_BOUND,
                                        "newer-record": KEPT_AT_THE_BOUND})
-    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    # The run works in the tree the coordinator resolves as its run root,
+    # so the fake runner writes into that run's directory rather than into
+    # one under the invoked tree.
+    run_root = run_root_of(target)
+    run_dir = run_root / str(values["runs_dir"]) / STORY_ID
     runner = RecordingRunner(run_dir)
     code = story_coordinator.run_story(STORY_ID, harness, target, runner)
 
@@ -2553,7 +2639,11 @@ def paused_run(tmp_path: Path, offset: int) -> tuple[Run, list[float]]:
     harness = build_harness(tmp_path)
     target = build_target(tmp_path, values)
     config = harness_config.load_config(target)
-    run_dir = target / str(values["runs_dir"]) / STORY_ID
+    # The run works in the tree the coordinator resolves as its run root,
+    # so the fake runner writes into that run's directory rather than into
+    # one under the invoked tree.
+    run_root = run_root_of(target)
+    run_dir = run_root / str(values["runs_dir"]) / STORY_ID
     runner = PausingRunner(run_dir, offset)
     slept: list[float] = []
     code = story_coordinator.run_story(

@@ -104,7 +104,7 @@ class FakeRunner:
     def __init__(self, target_root: Path, story_id: str, verifier_verdicts: list[dict],
                  changed_files: dict | None = None,
                  tester_changed_files: dict | None = None):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verifier_verdicts = list(verifier_verdicts)
         self.changed_files = changed_files or {
             "modified": ["src/app.py"], "created": [], "deleted": []
@@ -161,7 +161,7 @@ FAIL = {"status": "failed",
 
 
 def read_state(target_root: Path) -> dict:
-    path = target_root / ".harness" / "runs" / "story-001" / "state.json"
+    path = conftest.run_dir_for(target_root, "story-001") / "state.json"
     return json.loads(path.read_text())
 
 
@@ -173,7 +173,7 @@ def test_happy_path_completes(target_root, harness_root):
     assert state["status"] == "completed"
     assert state["retry_count"] == 0
     assert runner.calls == STAGE_ORDER
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     assert (run_dir / "completion-report.md").is_file()
     assert (run_dir / "verification" / "iteration-1.json").is_file()
     events = (run_dir / "events.log").read_text()
@@ -188,7 +188,7 @@ def test_verification_failure_retries_then_completes(target_root, harness_root):
     assert state["status"] == "completed"
     assert state["retry_count"] == 1
     assert runner.calls == STAGE_ORDER + STAGE_ORDER
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     assert (run_dir / "verification" / "iteration-2.json").is_file()
     ceiling = harness_config.load_rules(harness_root)["max_retries"]
     assert f"retry 1 of {ceiling}" in (run_dir / "events.log").read_text()
@@ -203,7 +203,7 @@ def test_exhausted_retries_escalate(target_root, harness_root):
     assert state["status"] == "escalated"
     assert state["retry_count"] == ceiling
     assert runner.calls.count(WRITING) == ceiling + 1
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     summary = (run_dir / "escalation-summary.md").read_text()
     assert "retries are exhausted" in summary
 
@@ -216,7 +216,7 @@ def test_blocked_path_modification_escalates(target_root, harness_root):
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["status"] == "escalated"
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert "blocked path" in summary
 
 
@@ -228,7 +228,7 @@ def test_tester_blocked_path_modification_escalates(target_root, harness_root):
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["status"] == "escalated"
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert f"{VALIDATING} modified blocked path" in summary
 
 
@@ -244,7 +244,7 @@ def test_missing_tester_changed_files_escalates(target_root, harness_root):
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["status"] == "escalated"
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert conftest.TESTER_CHANGED_FILES in summary
 
 
@@ -257,7 +257,7 @@ def test_missing_artifact_escalates(target_root, harness_root):
     runner = NoArtifactRunner(target_root, "story-001", [])
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert conftest.CHANGED_FILES in summary
 
 
@@ -288,7 +288,7 @@ def assert_rejected_leaving_no_trace(target_root, harness_root, capsys=None):
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 1
     assert runner.calls == []
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     assert not run_dir.exists()
     assert not (run_dir / "state.json").is_file()
     assert branches(target_root) == before
@@ -358,8 +358,8 @@ def test_l5_run_exits_1_on_a_rejected_story_without_invoking_an_agent(
     )
     assert result.returncode == 1
     assert "verification_requirements" in result.stderr
-    assert not (target_root / ".harness" / "runs" / "story-001").exists()
-    assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
+    assert not (conftest.run_dir_for(target_root, "story-001")).exists()
+    assert not conftest.log_path_for(target_root, "story-001").exists()
     assert "story/story-001" not in branches(target_root)
 
 
@@ -421,7 +421,7 @@ def test_schema_invalid_artifact_escalates_immediately(target_root, harness_root
     assert state["retry_count"] == 0
     assert runner.calls == [WRITING]
 
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     events = (run_dir / "events.log").read_text()
     summary = (run_dir / "escalation-summary.md").read_text()
     for text in (events, summary):
@@ -442,7 +442,7 @@ def test_schema_validation_runs_before_the_blocked_paths_check(target_root, harn
     )
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert "$.modified" in summary
     assert "expected type array" in summary
     assert "blocked path" not in summary
@@ -458,7 +458,7 @@ def test_unparseable_artifact_escalates_with_the_decode_error(target_root, harne
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 2
     assert read_state(target_root)["retry_count"] == 0
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert conftest.TEST_RESULTS in summary
     assert "not parseable as JSON" in summary
 
@@ -474,7 +474,7 @@ def test_invalid_verifier_artifact_escalates_without_a_retry(target_root, harnes
     assert code == 2
     assert read_state(target_root)["retry_count"] == 0
     assert runner.calls == STAGE_ORDER
-    summary = (target_root / ".harness" / "runs" / "story-001" / "escalation-summary.md").read_text()
+    summary = (conftest.run_dir_for(target_root, "story-001") / "escalation-summary.md").read_text()
     assert conftest.RETRY_GUIDANCE in summary
     assert "$.retry_scope" in summary
 
@@ -484,7 +484,7 @@ def test_absent_retry_guidance_is_not_a_validation_failure(target_root, harness_
     runner = FakeRunner(target_root, "story-001", [PASS])
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert code == 0
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     assert not (run_dir / conftest.RETRY_GUIDANCE).exists()
     assert read_state(target_root)["status"] == "completed"
 

@@ -169,7 +169,7 @@ class RetryRunner:
     def __init__(self, target_root: Path, verdicts: list[dict],
                  story_id: str = "story-001",
                  delete_history_each_stage: bool = False):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verdicts = list(verdicts)
         self.delete_history_each_stage = delete_history_each_stage
         self.attempt = 1
@@ -228,7 +228,7 @@ class RetryRunner:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def read_state(run_dir: Path) -> dict:

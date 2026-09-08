@@ -101,7 +101,7 @@ class Runner:
     """A fake agent runner that carries each stage's declared artifacts."""
 
     def __init__(self, target_root: Path):
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
@@ -217,7 +217,7 @@ def run(target_root: Path, harness_root: Path) -> tuple[int, Runner]:
 
 
 def events_of(target_root: Path) -> str:
-    return (target_root / ".harness" / "runs" / STORY_ID / "events.log").read_text(
+    return (conftest.run_dir_for(target_root, STORY_ID) / "events.log").read_text(
         encoding="utf-8")
 
 

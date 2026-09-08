@@ -407,7 +407,7 @@ class Runner:
                  verdicts: list | None = None, interrupt: tuple | None = None,
                  story_id: str = "story-001"):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.edits = edits or {}
         self.verdicts = verdicts or [PASS]
         self.interrupt = interrupt
@@ -452,7 +452,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def state_of(target_root: Path) -> dict:

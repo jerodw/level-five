@@ -286,7 +286,7 @@ class Runner:
 
     def __init__(self, target_root: Path, *workflows: dict, verdicts=None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.outputs = {stage["name"]: list(stage.get("outputs", []))
                         for workflow in workflows
                         for stage in workflow["stages"]}
@@ -295,7 +295,7 @@ class Runner:
 
     def _write(self, artifact: str) -> None:
         if artifact == conftest.CHANGED_FILES:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + f"print('call {len(self.calls)}')\n")
             write_json(self.run_dir / artifact,
                        {"modified": ["src/app.py"], "created": [],
@@ -349,7 +349,7 @@ def environment(tmp_path):
 
 
 def run_dir_of(target: Path, story_id: str = STORY_ID) -> Path:
-    return target / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target, story_id)
 
 
 def state_of(target: Path) -> dict:

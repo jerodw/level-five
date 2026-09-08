@@ -48,6 +48,7 @@ import pytest
 
 from conftest import BASELINE, ENDPOINT
 import conftest
+import worktrees
 
 import story_coordinator
 from agent_runner import AgentResult
@@ -218,7 +219,7 @@ def harness_root() -> Path:
 class Runner:
     def __init__(self, target_root: Path, verdicts: list | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdicts = verdicts or [PASS]
         self.calls: list[str] = []
 
@@ -229,6 +230,9 @@ class Runner:
                  permission_mode=None, model=None, allowed_tools=None,
                  max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the coordinator handed this stage, which since story-117 is
+        # the worktree the run works in and the tree its commits are taken over.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if log_path is not None:
             log = Path(log_path)
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +241,7 @@ class Runner:
         attempt = max(1, self.calls.count("implementer"))
 
         if stage == "implementer":
-            write(self.target_root / "src" / "app.py",
+            write(tree /"src" / "app.py",
                   APP_AT_HEAD + f"print('attempt {attempt}')\n")
             write_json(self.run_dir / "changed-files.json", {
                 "modified": ["src/app.py"], "created": [], "deleted": [],
@@ -245,7 +249,7 @@ class Runner:
             write(self.run_dir / "implementation-summary.md",
                   f"Implemented on attempt {attempt}.\n")
         elif stage == "tester":
-            write(self.target_root / "tests" / f"test_attempt_{attempt}.py",
+            write(tree /"tests" / f"test_attempt_{attempt}.py",
                   "def test_attempt():\n    assert True\n")
             write_json(self.run_dir / "test-results.json", {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
@@ -259,7 +263,7 @@ class Runner:
             write_json(self.run_dir / "verification-result.json",
                        self._nth(self.verdicts, self.calls.count(stage) - 1))
         elif stage == "documenter":
-            write(self.target_root / DOC_OUTPUT,
+            write(tree /DOC_OUTPUT,
                   f"# Architecture\n\nDocumented on attempt {attempt}.\n")
             write(self.run_dir / "documentation-report.md", "Documented.\n")
             write_json(self.run_dir / "documenter-changed-files.json",
@@ -275,11 +279,11 @@ def run(target_root: Path, harness: Path = REPO_ROOT, verdicts: list | None = No
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def log_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "logs" / f"{STORY_ID}.log"
+    return conftest.log_path_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:
@@ -292,7 +296,14 @@ def branches(target_root: Path) -> list[str]:
 
 
 def head_branch(target_root: Path) -> str:
-    return git(target_root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    """What the tree a run of this story works in is standing on.
+
+    The run's tree rather than the invoked checkout: since story-117 a run
+    stands on its branch in a worktree of its own and leaves the developer's
+    checkout where it found it.
+    """
+    return git(conftest.run_root_for(target_root, STORY_ID),
+               "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
 def artifacts_in(target_root: Path) -> list[str]:
@@ -388,10 +399,16 @@ def rerun_after_deleting_the_run_directory(target_root: Path,
 
 def abandon_the_branch(target_root: Path) -> None:
     """Reset the story branch back to the base, leaving a branch with no
-    completion commit — a run started and dropped before it finished."""
-    git(target_root, "checkout", "-q", STORY_BRANCH)
-    git(target_root, "reset", "--hard", "-q", DEFAULT_BRANCH)
-    git(target_root, "checkout", "-q", DEFAULT_BRANCH)
+    completion commit — a run started and dropped before it finished.
+
+    Done in the tree the run worked in rather than by checking the branch out
+    here: since story-117 that tree is standing on the story branch, and git
+    moves no branch a worktree has checked out. Resetting it there leaves
+    exactly what a dropped run leaves — the branch back at the base, its tree
+    still standing on it, and the run directory the earlier run wrote in place.
+    """
+    tree = conftest.run_root_for(target_root, STORY_ID)
+    git(tree, "reset", "--hard", "-q", DEFAULT_BRANCH)
 
 
 # --------------------------------------------------------------------------
@@ -445,7 +462,6 @@ def refused(target, harness_root, capsys):
     """A completed story re-run after its run directory was deleted."""
     finished(target, harness_root)
     shutil.rmtree(run_dir_of(target))
-    git(target, "checkout", "-q", DEFAULT_BRANCH)
     before = {
         "head": git(target, "rev-parse", "HEAD").stdout.strip(),
         "branches": branches(target),
@@ -467,7 +483,11 @@ def test_a_rerun_onto_a_finished_branch_refuses_and_leaves_nothing_behind(refuse
     assert not (run_dir_of(target) / "state.json").exists()    # no state
     assert log_of(target).read_text(encoding="utf-8") == before["log"]  # no log line
     assert branches(target) == before["branches"]              # no new branch
-    assert head_branch(target) == DEFAULT_BRANCH               # no checkout
+    # No checkout: the developer's own tree is where it was. Read there rather
+    # than in the run's tree, which stood on the story branch before this run
+    # was asked for and would say so either way.
+    assert git(target, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() \
+        == DEFAULT_BRANCH
     assert git(target, "rev-parse", "HEAD").stdout.strip() == before["head"]
 
 
@@ -533,7 +553,10 @@ def test_the_refusal_is_the_shape_the_other_pre_flight_refusals_take(
     assert listed[0].startswith("  - ")
 
     other = make_target("dirty-target")
-    write(other / "stray.txt", "no stage wrote this\n")
+    # In the tree a run of this story works in, which is the tree the
+    # clean-tree pre-flight reads since story-117.
+    write(conftest.worktree_a_run_left(other, STORY_ID) / "stray.txt",
+          "no stage wrote this\n")
     capsys.readouterr()
     assert run(other, harness_root)[0] == 1
     dirty = capsys.readouterr()
@@ -563,8 +586,10 @@ def test_the_refusal_holds_while_standing_on_the_finished_branch(
     assert runner.calls == []
     assert STORY_BRANCH in capsys.readouterr().err
 
+    # The run's tree is still standing on the story branch, which is where the
+    # check is asked from; abandoning the branch is the only difference.
     abandon_the_branch(target)
-    git(target, "checkout", "-q", STORY_BRANCH)
+    assert head_branch(target) == STORY_BRANCH
     assert run(target, harness_root)[0] == 0
 
 
@@ -582,8 +607,9 @@ def test_a_finished_branch_is_refused_before_a_dirty_tree_is(
     target = make_target("both-wrong-target")
     finished(target, harness_root)
     shutil.rmtree(run_dir_of(target))
-    git(target, "checkout", "-q", DEFAULT_BRANCH)
-    write(target / "stray.txt", "no stage wrote this\n")
+    # Dirty in the tree the run works in, which is the tree both checks read.
+    write(conftest.run_root_for(target, STORY_ID) / "stray.txt",
+          "no stage wrote this\n")
 
     capsys.readouterr()
     assert run(target, harness_root)[0] == 1
@@ -610,7 +636,6 @@ def test_the_branch_the_check_asks_about_comes_from_the_configured_prefix(
     target = make_target("prefixed-target", config=configured)
     finished(target, harness_root)
     shutil.rmtree(run_dir_of(target))
-    git(target, "checkout", "-q", DEFAULT_BRANCH)
 
     capsys.readouterr()
     assert run(target, harness_root)[0] == 1
@@ -726,7 +751,8 @@ def test_a_first_run_of_a_story_whose_branch_does_not_exist_is_unaffected(
     assert state["branch"] == STORY_BRANCH
     assert state["retry_count"] == 0
 
-    assert git(target, "log", "-1", "--format=%B").stdout.rstrip("\n") \
+    assert git(conftest.run_root_for(target, STORY_ID), "log", "-1",
+               "--format=%B").stdout.rstrip("\n") \
         == PRE_EXTRACTION_MESSAGE
 
 
@@ -759,8 +785,11 @@ def test_a_resume_of_an_escalated_run_is_unaffected(make_target, harness_root):
                "--count").stdout.strip() != "0"
     assert story_coordinator.completion_commits(target, STORY_BRANCH, STORY_ID) == []
 
-    write(target / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
-    commit(target, "the developer's fix")
+    # The developer's fix goes in the tree the resume reads, which is the tree
+    # the run worked in.
+    tree = conftest.run_root_for(target, STORY_ID)
+    write(tree / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
+    commit(tree, "the developer's fix")
 
     code, runner = run(target, harness_root, verdicts=[PASS])
     assert code == 0
@@ -807,9 +836,18 @@ def test_a_base_commit_that_restores_a_story_artifact_does_not_refuse(
 
 def completion_commit(target_root: Path, story_id: str = STORY_ID,
                       title: str = STORY_TITLE, branch: str | None = None) -> str:
-    """Put a commit on `branch` shaped exactly as `_complete` writes one."""
+    """Put a commit on `branch` shaped exactly as `_complete` writes one.
+
+    A branch a worktree is already standing on is committed to *there*, because
+    git checks no branch out in two trees at once; a branch nothing is standing
+    on is checked out here as it always was.
+    """
     if branch is not None:
-        git(target_root, "checkout", "-q", "-B", branch)
+        standing = worktrees.find(target_root, branch)
+        if standing is not None:
+            target_root = standing
+        else:
+            git(target_root, "checkout", "-q", "-B", branch)
     message = story_coordinator.completion_commit_message(
         story_coordinator.RunState(story_id=story_id, branch=branch or ""), title)
     git(target_root, "commit", "-q", "--allow-empty", "-m", message)
@@ -1031,9 +1069,11 @@ def test_the_message_a_real_run_commits_is_that_message(target, harness_root):
     parent = git(target, "rev-parse", "HEAD").stdout.strip()
     finished(target, harness_root)
 
-    committed = git(target, "log", "-1", "--format=%B").stdout.rstrip("\n")
+    committed = git(conftest.run_root_for(target, STORY_ID), "log", "-1",
+                    "--format=%B").stdout.rstrip("\n")
     assert committed == PRE_EXTRACTION_MESSAGE
-    assert git(target, "log", "-1", "--format=%B", parent).stdout.rstrip("\n") \
+    assert git(conftest.run_root_for(target, STORY_ID), "log", "-1",
+               "--format=%B", parent).stdout.rstrip("\n") \
         != PRE_EXTRACTION_MESSAGE
 
 

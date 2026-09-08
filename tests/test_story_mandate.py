@@ -515,7 +515,7 @@ class Runner:
 
     def __init__(self, target_root: Path, story_id: str = STORY_ID,
                  capacity_at: int | None = None):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.capacity_at = capacity_at
         self.calls: list[str] = []
 
@@ -587,7 +587,7 @@ def traces(target_root: Path, story_id: str = STORY_ID) -> dict[str, bool]:
     One reader for both halves of the pair below, so the refusal and its
     control are answered by the same question rather than by two.
     """
-    run_dir = target_root / ".harness" / "runs" / story_id
+    run_dir = conftest.run_dir_for(target_root, story_id)
     return {
         "run directory": run_dir.exists(),
         "state.json": (run_dir / "state.json").exists(),
@@ -730,7 +730,7 @@ def test_a_configured_bound_decides_which_chains_are_refused_for_depth(
 
 
 def events(target_root: Path, story_id: str = STORY_ID) -> list[str]:
-    path = target_root / ".harness" / "runs" / story_id / "events.log"
+    path = conftest.run_dir_for(target_root, story_id) / "events.log"
     return [line for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
@@ -787,7 +787,7 @@ def test_a_resume_is_judged_by_the_story_artifact_as_it_is_now(
     assert story_coordinator.run_story(
         STORY_ID, harness_root, target_root, paused) == \
         story_coordinator.PAUSE_EXIT_CODE
-    state = target_root / ".harness" / "runs" / STORY_ID / "state.json"
+    state = conftest.run_dir_for(target_root, STORY_ID) / "state.json"
     assert json.loads(state.read_text(encoding="utf-8"))["status"] == "paused"
 
     install(target_root,

@@ -131,6 +131,10 @@
     "workflow": {
       "type": "string",
       "description": "The name of the workflow definition under workflows/ that a run executes. Defaults to story-workflow."
+    },
+    "worktree_dir": {
+      "type": "string",
+      "description": "The directory the harness creates git worktrees under, so that planning a story and running one each happen on a tree and a branch of their own and several of them can be in flight at once. Resolved against the target root when it is relative, taken as it stands when it is absolute. Unset, it is a sibling directory of the target root named for it — the target root's own name with -worktrees appended. THE DEFAULT IS OUTSIDE THE REPOSITORY DELIBERATELY: a worktree inside the target root would be matched by paths the harness globs, copied into clean-clone builds and reported by the clean-tree pre-flight, so nothing about this mechanism ever appears inside the repository and no blocked-path list gains an entry for it. Within it, a worktree is named for the branch it stands on with the separators flattened, derived in one function so the caller that creates one and the caller that looks for one cannot disagree about where it would be. l5-plan creates one cut from the base and runs the whole of planning there; a run works in the invoked tree when that tree already stands on the story branch, in the existing worktree for that branch when there is one, and in a new one otherwise. Nothing reaps a worktree a run is using and a completed run leaves its worktree in place; what removes one is a planning session whose push landed and whose run offer was declined."
     }
   }
 }

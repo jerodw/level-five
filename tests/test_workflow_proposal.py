@@ -402,7 +402,7 @@ class Runner:
 
     def __init__(self, target_root: Path, *workflows: dict):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.outputs = {stage["name"]: list(stage.get("outputs", []))
                         for workflow in workflows
                         for stage in workflow["stages"]}
@@ -410,7 +410,7 @@ class Runner:
 
     def _write(self, artifact: str) -> None:
         if artifact == conftest.CHANGED_FILES:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + f"print('call {len(self.calls)}')\n")
             write_json(self.run_dir / artifact,
                        {"modified": ["src/app.py"], "created": [],
@@ -492,8 +492,8 @@ def test_a_definition_with_no_statement_is_refused_before_a_stage_is_invoked(
     assert code == 1
     assert ADDING["name"] in capsys.readouterr().err
     assert runner.calls == []
-    assert not (target / ".harness" / "runs" / STORY_ID).exists()
-    assert not (target / ".harness" / "logs" / f"{STORY_ID}.log").exists()
+    assert not conftest.run_dir_for(target, STORY_ID).exists()
+    assert not conftest.log_path_for(target, STORY_ID).exists()
     assert branches(target) == before
 
 
@@ -508,8 +508,8 @@ def test_the_same_definition_carrying_a_statement_runs(preflight):
 
     assert code == 0, runner.calls
     assert runner.calls == stages_of(ADDING)
-    assert (target / ".harness" / "runs" / STORY_ID).is_dir()
-    assert (target / ".harness" / "logs" / f"{STORY_ID}.log").is_file()
+    assert conftest.run_dir_for(target, STORY_ID).is_dir()
+    assert conftest.log_path_for(target, STORY_ID).is_file()
     assert branches(target) - before == {f"story/{STORY_ID}"}
 
 
@@ -1578,7 +1578,7 @@ def test_the_coordinator_still_resolves_an_artifact_naming_no_workflow(
     assert code == 0, runner.calls
     assert runner.calls == stages_of(PRESERVING)
     state = json.loads(
-        (target / ".harness" / "runs" / STORY_ID / "state.json").read_text(
+        (conftest.run_dir_for(target, STORY_ID) / "state.json").read_text(
             encoding="utf-8"))
     assert state["workflow"] == PRESERVING["name"]
 

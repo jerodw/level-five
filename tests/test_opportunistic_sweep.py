@@ -272,7 +272,7 @@ class Runner:
     def __init__(self, target_root: Path, journal: Path, *,
                  fails_at: str | None = None, capacity=None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.journal = journal
         self.fails_at = fails_at
         self.capacity = capacity
@@ -295,7 +295,7 @@ class Runner:
                             "deleted": []}), encoding="utf-8")
             (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
-            (self.target_root / "src" / "app.py").write_text(
+            (Path(cwd) / "src" / "app.py").write_text(
                 "print('the work')\n", encoding="utf-8")
         elif stage == VERIFYING:
             (self.run_dir / conftest.VERIFICATION_RESULT).write_text(
@@ -311,7 +311,7 @@ def run(target: Path, harness: Path, runner: Runner) -> int:
 
 def state_of(target: Path) -> dict:
     return json.loads(
-        (target / ".harness" / "runs" / STORY_ID / "state.json")
+        (conftest.run_dir_for(target, STORY_ID) / "state.json")
         .read_text(encoding="utf-8"))
 
 
@@ -432,7 +432,7 @@ def test_the_preflight_sweep_reports_what_it_did_in_the_runs_events_log(
 
     assert run(target, harness, Runner(target, journal)) == 0
 
-    events = (target / ".harness" / "runs" / STORY_ID / "events.log").read_text(
+    events = (conftest.run_dir_for(target, STORY_ID) / "events.log").read_text(
         encoding="utf-8").splitlines()
     swept = [index for index, line in enumerate(events) if "outbox:" in line]
     assert swept, events

@@ -124,7 +124,7 @@ class HistoryRunner:
                  story_id: str = "story-001",
                  extra_outputs: tuple[str, ...] = (),
                  delete_history_each_stage: bool = False):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verdicts = list(verdicts)
         self.extra_outputs = extra_outputs
         self.delete_history_each_stage = delete_history_each_stage
@@ -178,7 +178,7 @@ class HistoryRunner:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def log_lines(run_dir: Path) -> list[str]:
@@ -415,9 +415,11 @@ def test_a_resumed_run_continues_the_one_stream_it_left_behind(
     correspondence is asserted across the seam rather than only within a
     single process.
     """
-    run_dir = run_dir_of(target_root)
-    run_dir.mkdir(parents=True)
-    (run_dir / "verification").mkdir()
+    # The run this stands in for worked in a worktree of its own, so its run
+    # directory is inside that tree and the tree has to be there for the resume
+    # below to find it.
+    run_dir = conftest.run_directory_a_run_left(target_root)
+    (run_dir / "verification").mkdir(exist_ok=True)
     story_coordinator.save_state(run_dir, story_coordinator.RunState(
         story_id="story-001", branch="story/story-001", current_stage=VALIDATING))
     story_coordinator.append_event(
@@ -936,9 +938,11 @@ def test_a_history_that_restarts_on_resume_is_caught(
         name="restarting_story_coordinator", tmp_path=tmp_path)
     assert "    history = load_history(run_dir)" in COORDINATOR_SOURCE
 
-    run_dir = run_dir_of(target_root)
-    run_dir.mkdir(parents=True)
-    (run_dir / "verification").mkdir()
+    # The run this stands in for worked in a worktree of its own, so its run
+    # directory is inside that tree and the tree has to be there for the resume
+    # below to find it.
+    run_dir = conftest.run_directory_a_run_left(target_root)
+    (run_dir / "verification").mkdir(exist_ok=True)
     module.save_state(run_dir, module.RunState(
         story_id="story-001", branch="story/story-001", current_stage=VALIDATING))
     module.append_event(run_dir, "implementer stage started", kind="stage-started",

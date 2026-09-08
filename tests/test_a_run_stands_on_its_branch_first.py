@@ -276,7 +276,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:
@@ -773,7 +773,7 @@ def test_a_fresh_run_whose_checkout_is_refused_creates_nothing(
     assert code == 1
     assert blocked.calls == []
     assert not run_dir_of(refused_target).exists()
-    assert not (refused_target / ".harness" / "logs" / f"{STORY_ID}.log").exists()
+    assert not conftest.log_path_for(refused_target, STORY_ID).exists()
     assert history_files(refused_target) == {}
     assert current_branch(refused_target) == DEFAULT_BRANCH
     assert git(refused_target, "status", "--porcelain").stdout.strip() == ""

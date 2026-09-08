@@ -275,7 +275,7 @@ def write_json(path: Path, payload) -> None:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def history_of(run_dir: Path) -> list[dict]:
@@ -334,7 +334,7 @@ class Runner:
         self.guidance.setdefault(stage, []).append(
             conftest.guidance_in_force(self.run_dir))
         if stage == WRITING:
-            (self.target_root / "src" / "app.py").write_text(
+            (Path(cwd) / "src" / "app.py").write_text(
                 "print('hello')\n# the story's change\n", encoding="utf-8")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -1073,7 +1073,7 @@ class BreakingRunner(Runner):
         result = super().__call__(prompt, **kwargs)
         if (kwargs["stage"] == DECLARED_ENTRY
                 and self.calls.count(DECLARED_ENTRY) == 2):
-            (self.target_root / BREAKAGE).write_text("", encoding="utf-8")
+            (Path(cwd) / BREAKAGE).write_text("", encoding="utf-8")
             # And the record says so. A stage is answerable for every file it
             # writes into the target tree, so a file written here and named
             # nowhere would be an incomplete record — a different defect from

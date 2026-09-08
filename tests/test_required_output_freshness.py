@@ -284,7 +284,7 @@ class Runner:
 
     def __init__(self, target_root: Path, verdicts: list, plans: dict | None = None,
                  workflow: dict | None = None, story_id: str = STORY_ID):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verdicts = list(verdicts)
         self.plans = plans or {}
         self.stages = (workflow or WORKFLOW)["stages"]
@@ -352,7 +352,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:

@@ -246,7 +246,7 @@ def install_runner(target_root: Path, rel: str, *, status: int,
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def log_lines(run_dir: Path) -> list[str]:

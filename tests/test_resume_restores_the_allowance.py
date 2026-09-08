@@ -258,7 +258,7 @@ class Runner:
 
     def __init__(self, target_root: Path, verdicts: list | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdicts = verdicts or [PASS]
         self.calls: list[str] = []
         #: (stage, state.json as it stood when the stage was entered)
@@ -281,7 +281,7 @@ class Runner:
         ordinal = len(self.calls)
 
         if stage == WRITING:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + f"print('invocation {ordinal}')\n")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -295,7 +295,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:

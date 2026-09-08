@@ -93,6 +93,9 @@ def _build(target_root, harness_root):
     config = harness_config.load_config(target_root)
     rules = harness_config.load_rules(harness_root)
     story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    # A run directory built by this test rather than by a run: nothing here
+    # drives one, so it goes in the target tree, where it is an input to the
+    # context assembly under test rather than a place a run wrote.
     run_dir = target_root / ".harness" / "runs" / "story-001"
     run_dir.mkdir(parents=True, exist_ok=True)
     context = context_assembler.build_context(
@@ -181,6 +184,9 @@ def test_one_file_edit_changes_every_stage(target_root, harness_root, tmp_path):
     config = harness_config.load_config(target_root)
     rules = harness_config.load_rules(harness_root)
     story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    # A run directory built by this test rather than by a run: nothing here
+    # drives one, so it goes in the target tree, where it is an input to the
+    # context assembly under test rather than a place a run wrote.
     run_dir = target_root / ".harness" / "runs" / "story-001"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -227,6 +233,9 @@ def test_harness_layer_renders_none_when_partial_absent(target_root, harness_roo
     config = harness_config.load_config(target_root)
     rules = harness_config.load_rules(harness_root)
     story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
+    # A run directory built by this test rather than by a run: nothing here
+    # drives one, so it goes in the target tree, where it is an input to the
+    # context assembly under test rather than a place a run wrote.
     run_dir = target_root / ".harness" / "runs" / "story-001"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -336,8 +345,10 @@ def rendered_run(target_root, harness_root):
     rendered, so this run is driven against what this repository ships rather
     than against a built workflow. Nothing here invokes a model.
     """
-    run_dir = target_root / ".harness" / "runs" / "story-001"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # Not created here: the run creates it, inside the worktree it cuts, and a
+    # directory standing at that path beforehand is one `git worktree add`
+    # refuses to write into.
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     runner = DeclaredArtifactRunner(run_dir, WORKFLOW)
     code = story_coordinator.run_story("story-001", harness_root, target_root,
                                        runner)
@@ -403,6 +414,10 @@ def planner_prompt(tmp_path: Path) -> str:
     (tmp_path / ".harness").mkdir()
     (tmp_path / ".harness" / "config.yaml").write_text(
         "workflow: story-workflow\ntests_dir: tests/\n", encoding="utf-8")
+    # A repository, because since story-117 planning happens in a worktree cut
+    # from this tree's base and a directory that is no repository is one no
+    # plan can be written in.
+    conftest.init_repository(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_path = tmp_path / "argv.json"
@@ -510,6 +525,9 @@ def test_one_file_edit_changes_the_prose_layer_of_every_prompt_carrying_it(
     rules = harness_config.load_rules(harness_root)
     story_text = (target_root / ".harness" / "stories"
                   / "story-001.yaml").read_text(encoding="utf-8")
+    # A run directory built by this test rather than by a run: nothing here
+    # drives one, so it goes in the target tree, where it is an input to the
+    # context assembly under test rather than a place a run wrote.
     run_dir = target_root / ".harness" / "runs" / "story-001"
     run_dir.mkdir(parents=True, exist_ok=True)
 

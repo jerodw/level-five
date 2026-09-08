@@ -465,7 +465,7 @@ class Runner:
                  verdicts: list | None = None, workflow: dict | None = None,
                  hooks: dict | None = None, tree: dict | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.plan = plan or {}
         self.verdicts = list(verdicts or [PASS])
         self.stages = (workflow or WORKFLOW)["stages"]
@@ -544,7 +544,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:
@@ -1900,7 +1900,7 @@ def created_nothing(target_root: Path) -> list[str]:
         problems.append(f"a run directory exists at {run_dir}")
     if (run_dir / "state.json").exists():
         problems.append("state.json was written")
-    if (target_root / ".harness" / "logs" / f"{STORY_ID}.log").exists():
+    if conftest.log_path_for(target_root, STORY_ID).exists():
         problems.append("a log was written")
     branch = f"story/{STORY_ID}"
     if git(target_root, "branch", "--list", branch).stdout.strip():

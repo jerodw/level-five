@@ -80,15 +80,30 @@ def _arguments(harness_root: Path, story_id: str, base: str | None) -> list[str]
     return argv
 
 
-def launch_run(harness_root: Path, story_id: str, base: str | None = None) -> int:
+def launch_run(
+    harness_root: Path,
+    story_id: str,
+    base: str | None = None,
+    cwd: Path | None = None,
+) -> int:
     """Run the story as a child process, returning its exit status.
 
     No stdout, stderr or capture argument is passed at all, so the run inherits
-    the terminal `l5-plan` was given and nothing buffers its output. The working
-    directory is left alone: `l5-run` finds the target repository by walking up
-    from it, and that is the directory `l5-plan` was started in.
+    the terminal `l5-plan` was given and nothing buffers its output.
+
+    `cwd` is the directory the run is started in, and it is what makes an
+    accepted offer *continue* in the planning worktree rather than start
+    somewhere else: `l5-run` finds the target repository by walking up from
+    where it was started, so a run started in the worktree the plan was written
+    and committed in is a run whose invoked tree already stands on the story
+    branch, and it creates no second worktree and re-cuts no branch. With none
+    the working directory is left alone, which is the directory `l5-plan` was
+    started in and is what every caller got before this argument existed.
     """
-    return subprocess.run(_arguments(harness_root, story_id, base)).returncode
+    return subprocess.run(
+        _arguments(harness_root, story_id, base),
+        cwd=None if cwd is None else str(cwd),
+    ).returncode
 
 
 def run_command(harness_root: Path, story_id: str, base: str | None = None) -> str:

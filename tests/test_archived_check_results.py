@@ -332,8 +332,8 @@ class Runner:
         if stage == WRITING:
             self.attempt = self.calls.count(stage)
             token = token_for(self.attempt)
-            write(self.target_root / GOVERNED_FILE, f"{token}\n")
-            write(self.target_root / TOKEN_FILE, f"{token}\n")
+            write(Path(cwd) / GOVERNED_FILE, f"{token}\n")
+            write(Path(cwd) / TOKEN_FILE, f"{token}\n")
         declaration = next(s for s in self.stages if s["name"] == stage)
         for artifact in story_coordinator.required_artifacts(declaration):
             self._write(artifact, stage)
@@ -376,7 +376,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return Path(target_root) / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(Path(target_root), STORY_ID)
 
 
 def drive(target_root: Path, harness: Path, verdicts: list[dict],

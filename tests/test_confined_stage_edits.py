@@ -266,7 +266,7 @@ class Runner:
 
     def __init__(self, target_root: Path, edit=None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.edit = edit
         self.records: dict[str, dict] = {}
         self.calls: list[str] = []
@@ -306,7 +306,7 @@ def run(target_root: Path, harness: Path, edit=None) -> tuple[int, Runner]:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def record_of(target_root: Path) -> dict:

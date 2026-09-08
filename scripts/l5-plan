@@ -91,7 +91,9 @@ import plan_mandate  # noqa: E402
 import plan_run_offer  # noqa: E402
 import plan_validation  # noqa: E402
 import story_coordinator  # noqa: E402
+import story_ids  # noqa: E402
 import workflow_selection  # noqa: E402
+import worktrees  # noqa: E402
 
 
 def main() -> None:
@@ -138,6 +140,32 @@ def main() -> None:
         request = brief_fetch.render(brief, brief_key)
     else:
         request = " ".join(argv)
+    # The base the planning worktree is cut from, resolved by the coordinator's
+    # own function and printed through the coordinator's own refusal, so l5-run
+    # and l5-plan cannot report the same defect differently. It is asked
+    # *without* its HEAD-standing-on-the-base leg: planning cuts a worktree from
+    # the base by name, so where the developer happens to be standing decides
+    # nothing here and refusing them for it would refuse a plan over a tree this
+    # invocation never touches.
+    #
+    # It sits above the reservation, above the worktree and above every agent
+    # invocation, so a refused base leaves nothing claimed, nothing created and
+    # nothing invoked.
+    resolved_base = story_coordinator.resolve_base(target_root, config, base)
+    base_found = story_coordinator.base_problems(
+        target_root, resolved_base, base is not None, from_head=False
+    )
+    if base_found:
+        story_coordinator._refuse_base(resolved_base, base_found)
+        sys.exit(1)
+    # The id is reserved on the remote, so a remote that cannot be reached means
+    # this invocation cannot do what it was asked to do. Asked here, before a
+    # worktree is created, before an agent is invoked and before anything is
+    # written, because discovering it after a session has run costs the session.
+    remote = plan_commit.resolve_remote(target_root)
+    unreachable = story_ids.remote_unreachable(target_root, remote)
+    if unreachable:
+        sys.exit(refuse_unreachable_remote(remote, unreachable))
     # The workflow the planner is rendered against is the one --workflow named
     # or the one the developer confirmed, and there is no third source: after
     # story-072 no path renders the planner against a name that was neither
@@ -163,6 +191,40 @@ def main() -> None:
         if selected is None:
             sys.exit(1)
     workflow_name = selected
+    # The id this session plans, reserved before the session starts by pushing
+    # the story branch's ref with a claim that succeeds only where the ref does
+    # not already exist. Two clones can therefore never plan the same id: the
+    # remote decides, not a listing of one clone's stories directory. A refused
+    # claim takes the next id, bounded, and the bound is named when it is
+    # reached.
+    reservation = story_ids.reserve(target_root, config, resolved_base, remote)
+    if not reservation.reserved:
+        sys.exit(refuse_reservation(reservation))
+    if reservation.local:
+        print(
+            f"l5-plan: planning {reservation.story_id}; no reservation was "
+            f"made, because this repository configures no remote to claim it on."
+        )
+    else:
+        print(
+            f"l5-plan: reserved {reservation.story_id} on {reservation.remote} "
+            f"as {reservation.branch}."
+        )
+    # The worktree the whole of planning happens in: the session, the stamp, the
+    # validation, the commit and the push. Detached at the base rather than on a
+    # branch, because the branch is named afterwards from the id the artifact
+    # carries rather than from the id this invocation reserved, and the two can
+    # disagree.
+    #
+    # It is outside the target root, so the developer's own checkout is left on
+    # the branch it started on with its uncommitted files and its index
+    # untouched and no commit added to it.
+    worktree = worktrees.worktree_path(target_root, config, reservation.branch)
+    made = worktrees.add_detached(target_root, worktree, resolved_base)
+    if made.problems:
+        release_claim(target_root, remote, reservation, "no worktree was created")
+        sys.exit(refuse_worktree(worktree, made.problems))
+    print(f"l5-plan: planning in {worktree}, cut from {resolved_base}.")
     try:
         workflow = harness_config.load_workflow(HARNESS_ROOT, workflow_name, config)
     except harness_config.UnknownWorkflow as unknown:
@@ -181,6 +243,10 @@ def main() -> None:
     # load_workflow was given rather than a second reading of the definition,
     # so what the prompt says and what was loaded cannot differ.
     context["workflow_name"] = workflow_name
+    # The id the planner writes, told to it rather than derived by it. Listing
+    # the stories directory is a reading of one clone; this is the id the remote
+    # has already agreed nobody else will use.
+    context["story_id"] = reservation.story_id
     # The shared prose partial, resolved through the same helper build_context
     # uses, so the planner is held to the rule every stage that writes prose is
     # held to — the first of the stale counts it exists against was written in
@@ -192,11 +258,16 @@ def main() -> None:
     if prose is not None:
         context["prose_layer"] = prose
     planner_prompt = context_assembler.render(template, context)
-    stories_dir = target_root / config.get("stories_dir", ".harness/stories")
+    # Every step below the session is given the worktree as its target root: the
+    # snapshot that decides what the session produced, the stamp, the
+    # validation, the commit and the push all happen there.
+    stories_dir = worktree / config.get("stories_dir", ".harness/stories")
     # The session runs as a child rather than through os.execvp, so this
     # script outlives it and can commit what it wrote. The argument list is
     # what the exec passed, unchanged, and stdin, stdout and stderr are
-    # inherited, so the developer's terminal is the session's terminal.
+    # inherited, so the developer's terminal is the session's terminal. Its
+    # working directory is the worktree, which is what makes the session write
+    # its artifact there rather than into the developer's own checkout.
     before = plan_commit.snapshot(stories_dir)
     try:
         status = subprocess.run(
@@ -207,7 +278,8 @@ def main() -> None:
                 "--append-system-prompt",
                 planner_prompt,
                 f"Story request: {request}",
-            ]
+            ],
+            cwd=worktree,
         ).returncode
     except KeyboardInterrupt:
         # An interrupted session ends like any other end: whatever it already
@@ -223,15 +295,85 @@ def main() -> None:
     # wins; the commit's is what is left to say when the session ended
     # cleanly and the push did not.
     committing = report(
-        target_root,
+        worktree,
         stories_dir,
         before,
         workflow["stages"],
         config,
         base,
         workflow_name,
+        reservation=reservation,
+        invoked_root=target_root,
+        remote=remote,
     )
     sys.exit(status or committing)
+
+
+def release_claim(
+    invoked_root: Path, remote: str, reservation, why: str
+) -> None:
+    """Give back a reservation no plan commit consumed, and say what happened.
+
+    A claim is consumed by the plan commit that is pushed onto the ref it
+    reserved, so a successful session releases nothing. Anything else — a
+    session that wrote no artifact, an artifact carrying a different id, a
+    worktree that could not be created — leaves a ref nobody can ever use
+    again, so it is given back. A release that could not be made is reported
+    rather than passed over: an unreleased claim is a silently burnt id.
+    """
+    if reservation is None or reservation.local:
+        return
+    released = story_ids.release(invoked_root, remote, reservation.branch)
+    if released.released:
+        print(
+            f"l5-plan: released the claim on {reservation.story_id} "
+            f"({released.branch} on {released.remote}); {why}."
+        )
+    else:
+        print(
+            f"l5-plan: could not release the claim on {reservation.story_id} "
+            f"({released.branch} on {released.remote}): {released.detail}. "
+            f"That id is reserved and unused until the ref is deleted."
+        )
+
+
+def refuse_unreachable_remote(remote: str, detail: str) -> int:
+    """Refuse an invocation whose configured remote cannot be reached.
+
+    The id is reserved by pushing a ref, so a remote that cannot be reached
+    means this invocation cannot do what it was asked to do. Refused here rather
+    than discovered after a session has run: nothing is claimed, no worktree is
+    created, no agent is invoked and nothing is written.
+    """
+    return story_coordinator.refuse(
+        f"l5-plan could not reach {remote} to reserve a story id:",
+        [detail],
+        "The id a session plans is claimed on the remote before the session "
+        "starts, so an unreachable remote refuses the invocation. Nothing was "
+        "claimed, created, invoked or written.",
+    )
+
+
+def refuse_reservation(reservation) -> int:
+    """Refuse an invocation that could not reserve an id to plan under."""
+    return story_coordinator.refuse(
+        f"l5-plan could not reserve a story id on {reservation.remote}:",
+        reservation.problems,
+        "A claim is refused when the remote already holds that story's branch, "
+        "so a refused claim takes the next id. Nothing was created, invoked or "
+        "written.",
+    )
+
+
+def refuse_worktree(worktree: Path, problems) -> int:
+    """Refuse an invocation whose planning worktree could not be created."""
+    return story_coordinator.refuse(
+        f"l5-plan could not create the planning worktree at {worktree}:",
+        list(problems),
+        "The whole of planning happens in a worktree of its own, so a worktree "
+        "that cannot be created refuses the invocation. No agent was invoked "
+        "and nothing was written.",
+    )
 
 
 def refuse_headless(harness_root: Path) -> int:
@@ -512,16 +654,37 @@ def report(
     config=None,
     base=None,
     selected=None,
+    reservation=None,
+    invoked_root: Path | None = None,
+    remote: str = "",
 ) -> int:
     """Say what plan_validation and plan_commit did with the session's artifacts.
 
     Both modules return what happened rather than printing it, so this is
     where the wording lives. The status it returns is only ever this script's
     own, and it is never allowed to unwind anything plan_commit did.
+
+    `target_root` here is the *planning worktree*: every act below happens
+    there, and the developer's own checkout — `invoked_root` — is only ever
+    asked to create and remove the worktree and to give back a claim.
+
+    Cleanup is conditional on the push having landed, and nothing here removes
+    a worktree there is any reason to keep. A push that landed and a run offer
+    that was declined removes it; a push that failed keeps it and names it,
+    because the commit is only there; artifacts to repair keep it and name it,
+    because that is where they are; a session that wrote nothing removes it,
+    because there is nothing in it.
     """
     artifacts = plan_commit.new_artifacts(stories_dir, before)
     if not artifacts:
         print("l5-plan: the session added no story artifact; committed nothing.")
+        release_claim(
+            invoked_root or target_root,
+            remote,
+            reservation,
+            "the session wrote no artifact",
+        )
+        discard_worktree(invoked_root, target_root, "the session wrote nothing")
         return 0
     # A block the session wrote is detected here, immediately after the
     # artifacts are known and above everything that decides anything about
@@ -559,7 +722,9 @@ def report(
     stamping = plan_run_offer.can_prompt(sys.stdin)
     conferred: list = []
     if written and not stamping:
-        return refuse_session_block(written, artifacts)
+        status = refuse_session_block(written, artifacts)
+        keep_worktree(target_root, "the artifacts are in it, unstamped")
+        return status
     if stamping:
         # The developer approves before the schema check runs, and that ordering
         # is forced rather than chosen: the stamp has to precede validation
@@ -569,7 +734,9 @@ def report(
         # everything in the tree to re-run from, and is cheaper than validating
         # against a second, relaxed spelling of the schema.
         if not approve(written, titles):
-            return reject(artifacts, written)
+            status = reject(artifacts, written)
+            keep_worktree(target_root, "the artifacts are in it, unstamped")
+            return status
         # Read after the answer rather than before the question, so conferred_at
         # is when the approval was observed rather than when the session ended.
         approved_at = time.time()
@@ -586,6 +753,7 @@ def report(
                 f"{', '.join(str(path) for path in artifacts)} "
                 "remain in the working tree."
             )
+            keep_worktree(target_root, "the artifacts are in it")
             return 1
     # Validation sits between the snapshot and the commit, so an artifact that
     # would be refused at pre-flight is never committed. It refuses rather
@@ -629,25 +797,41 @@ def report(
             f"{', '.join(str(path) for path in artifacts)} "
             "remain in the working tree."
         )
+        keep_worktree(target_root, "the artifacts are in it, waiting on repair")
         return 1
-    # The base check sits here for the same reason validation does: this script
-    # commits and pushes, and a plan artifact committed onto whatever happened
-    # to be checked out is how a story branch came to be cut from another
-    # story's unaccepted work. The base is resolved by the coordinator's own
-    # function and printed through the coordinator's own refusal, so l5-run and
-    # l5-plan cannot report the same defect differently. Nothing is committed
-    # and nothing is pushed on this path; the artifacts stay where the session
-    # wrote them.
-    resolved_base = story_coordinator.resolve_base(target_root, config or {}, base)
-    base_found = story_coordinator.base_problems(
-        target_root, resolved_base, base is not None
-    )
-    if base_found:
-        story_coordinator._refuse_base(resolved_base, base_found)
+    # The branch is named here, from the id the artifact carries rather than
+    # from the id this invocation reserved, because the artifact is what the run
+    # will be about. Where the two disagree the disagreement is reported, the
+    # branch still carries the artifact's id, and the claim nothing consumed is
+    # released.
+    #
+    # The base check the run-time pre-flight makes is not repeated here: this
+    # worktree was cut from the base above the session and stands where it was
+    # cut, so there is nothing left for it to establish.
+    story_id = artifacts[0].stem
+    branch = story_coordinator.story_branch(config or {}, story_id)
+    if reservation is not None and reservation.story_id not in {
+        artifact.stem for artifact in artifacts
+    }:
         print(
-            "l5-plan: committed nothing; "
-            f"{', '.join(str(path) for path in artifacts)} "
-            "remain in the working tree."
+            f"l5-plan: the session wrote "
+            f"{', '.join(artifact.stem for artifact in artifacts)}, not the "
+            f"reserved {reservation.story_id}; branching as {branch}, which is "
+            f"the id the artifact carries."
+        )
+        release_claim(
+            invoked_root or target_root,
+            remote,
+            reservation,
+            "the artifact carries another id",
+        )
+    named = worktrees.create_branch(target_root, branch)
+    if named:
+        story_coordinator.refuse(
+            f"l5-plan could not name the branch {branch} in {target_root}:",
+            named,
+            "The plan is written and unstamped work is in that worktree; "
+            "committed nothing and pushed nothing.",
         )
         return 1
     # The conferring records go in first, so the artifact commit is still the
@@ -672,16 +856,67 @@ def report(
         print(f"l5-plan: could not commit {', '.join(commit.paths)}: {commit.detail}")
         return 1
     print(f"l5-plan: committed {', '.join(commit.paths)} as {commit.subject}")
-    push = plan_commit.push_commit(target_root)
+    # The remote this invocation already resolved, in the developer's own
+    # checkout, and reserved the id against. The worktree's story branch tracks
+    # nothing, so resolving it again there would answer a different question.
+    push = plan_commit.push_commit(target_root, remote)
     if not push.pushed:
+        # Neither the worktree nor the branch is removed: the commit is only
+        # there, so removing either would be the one act that loses the plan.
+        # Both are named, because a developer whose push failed needs to know
+        # where to push from.
         print(
             f"l5-plan: could not push {push.branch} to "
             f"{push.remote or '<no remote>'}: {push.detail}\n"
             f"l5-plan: the commit is intact on {push.branch}; push it yourself."
         )
+        print(
+            f"l5-plan: kept the worktree {target_root}, which is where "
+            f"{push.branch} is checked out and where the commit is."
+        )
         return 1
     print(f"l5-plan: pushed {push.branch} to {push.remote}")
-    return offer(artifacts, base, titles)
+    return offer(
+        artifacts,
+        base,
+        titles,
+        worktree=target_root,
+        invoked_root=invoked_root,
+        branch=branch,
+    )
+
+
+def keep_worktree(worktree: Path, why: str) -> None:
+    """Say the planning worktree is being kept, and where it is.
+
+    Nothing is removed on any path that leaves work behind: the artifacts to
+    repair are in that tree, and a refusal that did not name it would leave a
+    developer looking for them in their own checkout, where planning no longer
+    happens.
+    """
+    print(f"l5-plan: kept the worktree {worktree}; {why}.")
+
+
+def discard_worktree(
+    invoked_root: Path | None, worktree: Path, why: str
+) -> None:
+    """Remove a planning worktree there is nothing left in to keep.
+
+    Reached where the session wrote nothing, so there is no artifact, and
+    no commit and no branch — nothing this removes anybody could want. A removal
+    that failed is said rather than passed over, because a worktree left behind
+    is one the next plan of that id would collide with.
+    """
+    if invoked_root is None:
+        return
+    removal = worktrees.remove(invoked_root, worktree)
+    if removal.removed:
+        print(f"l5-plan: removed the worktree {worktree}; {why}.")
+    else:
+        print(
+            f"l5-plan: could not remove the worktree {worktree}: "
+            f"{'; '.join(removal.problems)}"
+        )
 
 
 def refuse_session_block(written: Sequence[Path], artifacts: Sequence[Path]) -> int:
@@ -831,6 +1066,9 @@ def offer(
     artifacts: Sequence[Path],
     base: str | None = None,
     titles: dict | None = None,
+    worktree: Path | None = None,
+    invoked_root: Path | None = None,
+    branch: str = "",
 ) -> int:
     """Offer to run the story that was just committed, or say how to run it.
 
@@ -867,7 +1105,32 @@ def offer(
             flush=True,
         )
         if plan_run_offer.should_run(sys.stdin):
-            return plan_run_offer.launch_run(HARNESS_ROOT, story_ids[0], base)
+            # Started *in* the planning worktree, so the run continues on the
+            # branch the plan was committed to rather than cutting a second
+            # worktree and re-cutting the branch: l5-run walks up from where it
+            # was started, finds this worktree as its target, and finds it
+            # already standing on the story branch. Neither the worktree nor the
+            # branch is removed on this path — a run is about to use both.
+            return plan_run_offer.launch_run(
+                HARNESS_ROOT, story_ids[0], base, cwd=worktree
+            )
+    # Declined, or more than one story to choose between. The push landed, so
+    # the plan survives on the remote and the worktree and the local branch have
+    # nothing in them the remote does not have.
+    if invoked_root is not None and worktree is not None:
+        removal = worktrees.remove(invoked_root, worktree, branch)
+        if removal.removed:
+            print(
+                f"l5-plan: removed the worktree {worktree}"
+                + (f" and the local branch {branch}" if removal.branch_removed else "")
+                + "; the plan is on the remote and the run cuts its own worktree."
+            )
+        if removal.problems:
+            print(
+                f"l5-plan: could not remove the worktree {worktree}"
+                + (f" and the local branch {branch}" if branch else "")
+                + f": {'; '.join(removal.problems)}"
+            )
     for story_id in story_ids:
         command = plan_run_offer.run_command(HARNESS_ROOT, story_id, base)
         print(f"l5-plan: run {naming(story_id)} with: {command}")

@@ -960,7 +960,7 @@ class RunnerWritingArtifacts:
     """Stands in for agent_runner.run_agent, writing each stage's outputs."""
 
     def __init__(self, target_root: Path):
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
@@ -1028,7 +1028,7 @@ def test_a_run_completes_and_commits_with_the_queue_pending_and_every_call_faili
 
     assert code == 0, "the run did not complete"
     state = json.loads(
-        (target_root / ".harness" / "runs" / STORY_ID / "state.json")
+        (conftest.run_dir_for(target_root, STORY_ID) / "state.json")
         .read_text(encoding="utf-8"))
     assert state["status"] == "completed"
     assert runner.calls == [WRITING, VERIFYING]

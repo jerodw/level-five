@@ -326,7 +326,7 @@ class Runner:
     def __init__(self, target_root: Path, *, verdicts=None, costs=(None,),
                  skip_outputs=()):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdicts = list(verdicts or [PASS])
         #: One cost per invocation, the last repeating. None means the
         #: invocation reported no cost at all, which is what every fake runner
@@ -359,7 +359,7 @@ class Runner:
 
         if ordinal not in self.skip_outputs:
             if stage == WRITING:
-                write(self.target_root / "src" / "app.py",
+                write(Path(cwd) / "src" / "app.py",
                       APP_AT_HEAD + f"print('invocation {ordinal + 1}')\n")
                 write_json(self.run_dir / conftest.CHANGED_FILES,
                            {"modified": ["src/app.py"], "created": [],
@@ -397,7 +397,7 @@ def run(target: Path, harness: Path, runner: Runner) -> int:
 
 
 def run_dir_of(target: Path) -> Path:
-    return target / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target, STORY_ID)
 
 
 def state_of(target: Path) -> dict:

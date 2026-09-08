@@ -48,6 +48,7 @@ import outbox_sweep
 import story_inspection
 import schema_validator
 import story_parser
+import worktrees
 
 
 @dataclass
@@ -1326,7 +1327,9 @@ def _base_tracking_ref(target_root: Path, base: str) -> str | None:
     return candidate
 
 
-def base_problems(target_root: Path, base: str, declared: bool) -> list[str]:
+def base_problems(
+    target_root: Path, base: str, declared: bool, *, from_head: bool = True
+) -> list[str]:
     """What refuses a run or a plan that would cut a branch from `base`.
 
     The empty list is the whole of "go ahead". A declared base is checked for
@@ -1336,12 +1339,23 @@ def base_problems(target_root: Path, base: str, declared: bool) -> list[str]:
 
     Otherwise two legs, in this order, returning after the first that has
     something to say. Leg one is that HEAD is standing on the base, because a
-    branch is cut from what is checked out. Leg two is that the base matches
-    its remote-tracking counterpart in *either* direction — behind, ahead or
-    diverged — because a branch cut from a local base that is not the shared
-    one is a branch nobody else can see the history of. Only the first is
-    printed when both hold: the second is not actionable until the first is
-    fixed, and two refusals for one act read as two problems.
+    branch cut from HEAD is cut from what is checked out. Leg two is that the
+    base matches its remote-tracking counterpart in *either* direction —
+    behind, ahead or diverged — because a branch cut from a local base that is
+    not the shared one is a branch nobody else can see the history of. Only the
+    first is printed when both hold: the second is not actionable until the
+    first is fixed, and two refusals for one act read as two problems.
+
+    `from_head` says whether the caller cuts the branch from HEAD, and it is the
+    whole of what leg one is about. A caller that cuts from the base *by name* —
+    which since story-117 is every caller that creates a worktree — passes
+    False, because where the developer happens to be standing decides nothing
+    for it, and asking anyway would refuse a plan or a run for a fact about a
+    tree neither is going to touch. It defaults to True so that every caller
+    that cut from HEAD before this parameter existed is unchanged by it, and so
+    that this stays one definition of the check with one refusal that prints
+    it rather than a second copy with one leg removed. The ref-resolves
+    question and leg two are asked wherever a branch is cut.
 
     It carries the one-directional bias `unchanged_since_escalation` and
     `dirty_paths` already take: a root that is not a git repository, a base
@@ -1362,15 +1376,16 @@ def base_problems(target_root: Path, base: str, declared: bool) -> list[str]:
     if declared:
         return []
 
-    head = _git(target_root, "rev-parse", "--abbrev-ref", "HEAD")
-    if head.returncode == 0 and head.stdout.strip():
-        current = head.stdout.strip()
-        if current != base:
-            where = "a detached HEAD" if current == "HEAD" else f"branch {current}"
-            return [
-                f"HEAD is on {where}, not on the base {base}, so a new story "
-                f"branch would be cut from there instead"
-            ]
+    if from_head:
+        head = _git(target_root, "rev-parse", "--abbrev-ref", "HEAD")
+        if head.returncode == 0 and head.stdout.strip():
+            current = head.stdout.strip()
+            if current != base:
+                where = "a detached HEAD" if current == "HEAD" else f"branch {current}"
+                return [
+                    f"HEAD is on {where}, not on the base {base}, so a new story "
+                    f"branch would be cut from there instead"
+                ]
 
     tracking = _base_tracking_ref(target_root, base)
     if tracking is None:
@@ -1444,6 +1459,89 @@ def _checkout_story_branch(
     # problems under it would say only that something went wrong.
     problems = [line.strip() for line in result.stderr.splitlines() if line.strip()]
     return problems or ["git refused the checkout without saying why"]
+
+
+@dataclass(frozen=True)
+class RunRoot:
+    """Where a run works, and how that was decided.
+
+    `path` may not exist yet: resolving where a run works is a *decision* and
+    creating the worktree is an *act*, and this repository keeps every refusal
+    above every act. So the decision is made early — above the run directory,
+    the state read and the dirty-tree check, all of which have to read the tree
+    the run will actually work in — and `create` says whether the act is still
+    owed when the run reaches the point its branch checkout used to sit at.
+    """
+
+    path: Path
+    branch: str
+    reason: str
+    create: bool
+
+
+def resolve_run_root(target_root: Path, config: dict, branch: str) -> RunRoot:
+    """Which tree this run works in: the invoked one, an existing worktree, or a new one.
+
+    Three answers, first winning. The invoked tree when it already stands on
+    the story branch — which is what an accepted plan-time run offer is, since
+    planning left the developer's session standing there, and there is nothing
+    to create. An existing worktree for that branch when there is one, so a
+    resume returns to the tree its earlier entry worked in and two runs of one
+    story never stand in two trees on one branch. Otherwise a new worktree at
+    the path `worktrees.worktree_path` derives, which is outside the repository
+    and is created below, once every refusal has been made.
+
+    The developer's own checkout is therefore left where it is unless it is
+    already standing on the story branch: nothing checks it out, nothing
+    commits to it, and its uncommitted work is neither read nor absorbed.
+    """
+    if worktrees.stands_on(target_root, branch):
+        return RunRoot(target_root, branch, "the invoked tree stands on it", False)
+    found = worktrees.find(target_root, branch)
+    if found is not None:
+        return RunRoot(found, branch, "an existing worktree stands on it", False)
+    return RunRoot(
+        worktrees.worktree_path(target_root, config, branch),
+        branch,
+        "a new worktree for it",
+        True,
+    )
+
+
+def branch_exists(target_root: Path, branch: str) -> bool:
+    """Whether `branch` resolves to a commit in this repository."""
+    return _git(target_root, "rev-parse", "--verify", branch).returncode == 0
+
+
+def fetch_story_branch(target_root: Path, config: dict, branch: str) -> bool:
+    """Bring a story branch that exists only on the remote into this clone.
+
+    A plan is pushed from the worktree it was written in and that worktree is
+    removed when its run offer is declined, so a story's artifact is routinely
+    on its branch on the remote and in no tree here. Fetching it is what makes
+    `l5-run <story-id>` work from a clone that has never seen the story.
+
+    Reported as whether the branch resolves afterwards, never raised, and a
+    repository with no remote simply answers whether it already had it — the
+    one-directional bias every other reader here takes.
+    """
+    if branch_exists(target_root, branch):
+        return True
+    remotes = _git(target_root, "remote")
+    names = remotes.stdout.split() if remotes.returncode == 0 else []
+    if not names:
+        return False
+    remote = "origin" if "origin" in names else names[0]
+    _git(target_root, "fetch", remote, f"{branch}:{branch}")
+    return branch_exists(target_root, branch)
+
+
+def story_on_branch(target_root: Path, branch: str, relative: str) -> str | None:
+    """The story artifact as `branch` carries it, or None when it carries none."""
+    result = _git(target_root, "show", f"{branch}:{relative}")
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def is_blocked(path: str, blocked: list[str]) -> bool:
@@ -6858,11 +6956,34 @@ def run_story(
     # configuration alone, and load_state reads a file rather than requiring a
     # directory — so every refusal below still leaves no run directory, no
     # state.json, no log, no branch and no agent invoked.
-    story_path = target_root / config.get("stories_dir", ".harness/stories") / f"{story_id}.yaml"
-    if not story_path.is_file():
-        print(f"No story artifact at {story_path}. Run l5-plan first.", file=sys.stderr)
-        return 1
-    story_text = story_path.read_text(encoding="utf-8")
+    stories_dir = config.get("stories_dir", ".harness/stories")
+    relative_story = f"{stories_dir}/{story_id}.yaml"
+    story_path = target_root / relative_story
+    invoked_branch = story_branch(config, story_id)
+    if story_path.is_file():
+        story_text = story_path.read_text(encoding="utf-8")
+    else:
+        # The artifact is not in the invoked tree, which is the ordinary state
+        # of a clone that did not plan the story: planning happens in a worktree
+        # of its own, pushes the artifact on the story branch, and removes that
+        # worktree when its run offer is declined. So a story id whose artifact
+        # is not here is resolved through its branch — fetched from the remote
+        # when this clone has never seen it — rather than refused, and the run
+        # root below is cut from that branch.
+        fetched = fetch_story_branch(target_root, config, invoked_branch)
+        from_branch = (
+            story_on_branch(target_root, invoked_branch, relative_story)
+            if fetched
+            else None
+        )
+        if from_branch is None:
+            print(
+                f"No story artifact at {story_path}, and none on branch "
+                f"{invoked_branch} here or on the remote. Run l5-plan first.",
+                file=sys.stderr,
+            )
+            return 1
+        story_text = from_branch
 
     # Pre-flight: refuse a bad story before any run state exists, so a
     # rejection leaves no run directory, no state.json, and no new branch.
@@ -6891,7 +7012,21 @@ def run_story(
     if not resolution.resolved:
         return _refuse_unresolved_mandate(resolution.problems)
 
-    run_dir = target_root / config.get("runs_dir", ".harness/runs") / story_id
+    # Where this run works, decided before anything reads or writes a tree.
+    # Resolving it is a decision and creating a worktree is an act, so the
+    # decision is made here — above the run directory, the state read and the
+    # dirty-tree check, every one of which has to be about the tree the run
+    # will actually work in — and the act waits until the point the branch
+    # checkout used to sit at, with every refusal still above it.
+    #
+    # `invoked_root` is the developer's own checkout and stays the repository
+    # every git question about branches and bases is asked of. `target_root`
+    # becomes the run root below the creation, so the rest of this function —
+    # the run directory, the history, the stage baselines, the checks and both
+    # terminal commits — is against the tree the run works in.
+    invoked_root = target_root
+    run_root = resolve_run_root(invoked_root, config, invoked_branch)
+    run_dir = run_root.path / config.get("runs_dir", ".harness/runs") / story_id
     state = load_state(run_dir)
 
     # Which workflow this run executes, in this order: what a resumed run
@@ -7033,7 +7168,15 @@ def run_story(
     )
     resolved_base = resolve_base(target_root, config, base)
     if not branch_existed:
-        problems = base_problems(target_root, resolved_base, base is not None)
+        # Asked without its HEAD-standing-on-the-base leg: since story-117 a run
+        # cuts its branch in a worktree, from the base *by name*, so where the
+        # developer happens to be standing decides nothing about what the branch
+        # is cut from and refusing them for it would refuse a run over a tree it
+        # never touches. The ref-resolves question and the base-agrees-with-its-
+        # remote leg are asked here exactly as they were.
+        problems = base_problems(
+            target_root, resolved_base, base is not None, from_head=False
+        )
         if problems:
             return _refuse_base(resolved_base, problems)
 
@@ -7057,10 +7200,17 @@ def run_story(
     # commits what the run left, so the tree it leaves is clean and anything
     # uncommitted now is the developer's own. Leaving it out would have the
     # clean-tree check refuse the very resume the pause exists to allow.
+    #
+    # Read against the run root rather than against the invoked tree, because
+    # the run root is the tree the run commits. A fresh run cutting a worktree
+    # of its own is therefore not refused for a developer's uncommitted work —
+    # that work is in a tree the run never touches and no file of it appears in
+    # any commit the run makes — while a resume, whose run root is the worktree
+    # its earlier entry left, is still refused for a dirty one.
     if state is None or state.status in ("escalated", "paused"):
-        dirty = dirty_paths(target_root)
+        dirty = dirty_paths(run_root.path)
         if dirty:
-            return _refuse_dirty_tree(target_root, dirty)
+            return _refuse_dirty_tree(run_root.path, dirty)
 
     if state and state.status == "completed":
         # Name the branch as well as the run directory. _checkout_story_branch
@@ -7109,7 +7259,7 @@ def run_story(
             # on the guard's evidence would refuse the only useful response to
             # the stop.
             evidence = unchanged_since_escalation(
-                state, story_text, target_root, harness_root
+                state, story_text, run_root.path, harness_root
             )
             if evidence:
                 print(
@@ -7160,19 +7310,46 @@ def run_story(
     # from the configured prefix on a fresh run, which is the same expression
     # the base check above already resolved.
     #
-    # A declared base is where the new branch is cut from. Undeclared, the
-    # start point stays HEAD exactly as it was, and the pre-flight above is
-    # what establishes HEAD is the base.
-    start_point = resolved_base if base is not None else None
-    checkout_problems = _checkout_story_branch(
-        target_root, story_branch_name, start_point
-    )
-    if checkout_problems:
-        return _refuse_checkout(story_branch_name, checkout_problems)
+    # A branch that already exists is checked out in the worktree as it stands;
+    # one that does not is cut from the resolved base, which the pre-flight
+    # above has already checked. The developer's own checkout is not moved
+    # either way: nothing here checks a branch out in the invoked tree unless
+    # that tree was already standing on the story branch, in which case there is
+    # nothing to create.
+    if run_root.create:
+        # A base that does not resolve establishes nothing — the harness
+        # guessed, or a target names a branch it does not have — and the branch
+        # is then cut where it was cut before this story: from the invoked
+        # tree's HEAD. A declared base that does not resolve was refused above.
+        start_point = (
+            resolved_base
+            if branch_exists(invoked_root, resolved_base)
+            else "HEAD"
+        )
+        made = worktrees.add(
+            invoked_root,
+            run_root.path,
+            story_branch_name,
+            None if branch_existed else start_point,
+        )
+        if made.problems:
+            return _refuse_checkout(story_branch_name, made.problems)
+
+    # Every act below is against the tree the run works in.
+    target_root = run_root.path
 
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "verification").mkdir(exist_ok=True)
     log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
+    # Created rather than assumed, for the reason the run directory above is.
+    # Until story-117 the run worked in the tree it was invoked from, where the
+    # log directory was whatever the developer's checkout already had; a run now
+    # works in a worktree cut from the base, and a log directory that is ignored
+    # rather than tracked — which is what this repository's own `.gitignore`
+    # makes of `.harness/logs/` — is simply not in a fresh worktree. Without
+    # this the first stage's log append raises FileNotFoundError before any
+    # agent is invoked.
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
     # The cross-run history, established once for the whole run rather than
     # handed to each append_event call: a keyword argument with a default can

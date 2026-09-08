@@ -275,7 +275,7 @@ class Runner:
 
     def __init__(self, target_root: Path, failures: dict | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.failures = dict(failures or {})
         self.calls: list[str] = []
 
@@ -286,12 +286,12 @@ class Runner:
 
         if ordinal in self.failures:
             capacity = self.failures[ordinal]
-            write(self.target_root / "src" / "app.py", APP_MID_STAGE)
+            write(Path(cwd) / "src" / "app.py", APP_MID_STAGE)
             return AgentResult(ok=False, result_text=f"{stage} stopped",
                                capacity=capacity)
 
         if stage == WRITING:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + f"print('invocation {ordinal + 1}')\n")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -335,7 +335,7 @@ def run(target: Path, harness: Path, runner: Runner, *, sleep=None,
 
 
 def run_dir_of(target: Path) -> Path:
-    return target / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target, STORY_ID)
 
 
 def state_of(target: Path) -> dict:

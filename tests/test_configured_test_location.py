@@ -356,7 +356,7 @@ class Runner:
     def __init__(self, target_root: Path, story_id: str = STORY_ID, *,
                  records: dict[str, dict] | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.records = records or {}
         self.calls: list[str] = []
 
@@ -404,7 +404,7 @@ def branches(root: Path) -> set[str]:
 
 
 def evidence(target_root: Path, story_id: str = STORY_ID) -> tuple[str, str]:
-    run_dir = target_root / ".harness" / "runs" / story_id
+    run_dir = conftest.run_dir_for(target_root, story_id)
     return ((run_dir / "events.log").read_text(encoding="utf-8"),
             (run_dir / "escalation-summary.md").read_text(encoding="utf-8"))
 
@@ -448,7 +448,7 @@ def test_that_refusal_leaves_no_run_directory_no_state_no_log_no_branch_no_agent
     assert code == 1
     assert not run_dir.exists()
     assert not (run_dir / "state.json").exists()
-    assert not (elsewhere / ".harness" / "logs" / f"{STORY_ID}.log").exists()
+    assert not conftest.log_path_for(elsewhere, STORY_ID).exists()
     assert branches(elsewhere) == before
     assert runner.calls == []
 
@@ -467,7 +467,7 @@ def test_the_same_fixture_under_a_resolvable_definition_creates_all_five(
     assert run_dir.is_dir()
     assert json.loads((run_dir / "state.json").read_text(
         encoding="utf-8"))["status"] == "completed"
-    assert (elsewhere / ".harness" / "logs" / f"{STORY_ID}.log").is_file()
+    assert conftest.log_path_for(elsewhere, STORY_ID).is_file()
     assert branches(elsewhere) - before == {f"story/{STORY_ID}"}
     assert runner.calls == ["implementer", "tester", "documenter", "verifier"]
 
@@ -674,8 +674,8 @@ class RenamingRunner(Runner):
 
     def __call__(self, prompt, *, stage, **kwargs):
         if stage == "implementer":
-            write(self.target_root / "src" / "app.py", APP_RENAMED)
-            write(self.target_root / CONFIGURED / "test_app.py", SPEC_REPAIRED)
+            write(Path(cwd) / "src" / "app.py", APP_RENAMED)
+            write(Path(cwd) / CONFIGURED / "test_app.py", SPEC_REPAIRED)
             self.records["implementer"] = {
                 "modified": ["src/app.py", f"{CONFIGURED}test_app.py"],
                 "created": [], "deleted": [],

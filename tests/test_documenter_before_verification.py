@@ -432,7 +432,7 @@ class Runner:
     def __init__(self, target_root: Path, verdicts: list | None = None, *,
                  documented: str = DOC_MARKER):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdicts = list(verdicts or [PASS])
         self.documented = documented
         self.calls: list[str] = []
@@ -440,8 +440,12 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the coordinator handed this stage, which since story-117 is
+        # the worktree the run works in rather than the checkout it was invoked
+        # from — and so the tree the clean clone is built from.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
-            write(self.target_root / "src" / "app.py",
+            write(tree / "src" / "app.py",
                   "print('hello')\n# the story's change\n")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -455,7 +459,7 @@ class Runner:
                 "modified": [], "created": ["tests/test_app.py"], "deleted": [],
             })
         elif stage == DOCUMENTING:
-            write(self.target_root / ARCHITECTURE_DOC,
+            write(tree / ARCHITECTURE_DOC,
                   f"# Architecture\n\nThe harness runs stages.\n"
                   f"{self.documented}\n")
             write(self.run_dir / conftest.DOCUMENTATION_REPORT,
@@ -485,7 +489,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def history_of(target_root: Path) -> list[dict]:
@@ -961,7 +965,8 @@ def test_under_the_previous_order_the_clean_clone_lacked_them(
     assert where.is_file(), "the check did not run at all"
     assert DOC_MARKER not in doc.read_text(encoding="utf-8")
     # The documenter did run — after the check, which is the whole point.
-    assert DOC_MARKER in (root / ARCHITECTURE_DOC).read_text(encoding="utf-8")
+    assert DOC_MARKER in (conftest.run_root_for(root, STORY_ID)
+                          / ARCHITECTURE_DOC).read_text(encoding="utf-8")
 
 
 def test_the_check_runs_after_the_documenter_and_before_the_run_completes(
@@ -1069,4 +1074,4 @@ def test_under_the_previous_order_the_same_claim_completed_the_run(
     # And the tree the completed run left behind is one that suite rejects.
     assert subprocess.run(
         ["sh", "-c", f"grep -q {DELETED_MODULE} {ARCHITECTURE_DOC}"],
-        cwd=root).returncode == 0
+        cwd=conftest.run_root_for(root, STORY_ID)).returncode == 0
