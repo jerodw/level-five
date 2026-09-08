@@ -878,6 +878,14 @@ def commit_setup(root: Path, message: str = "setup for this test") -> None:
                    cwd=root, check=True)
 
 
+#: The branch name `story_coordinator.base_branch` falls back to when a
+#: repository states no base and publishes no `origin/HEAD`. Fixture
+#: repositories are built on it so that the base the harness resolves is a
+#: branch that exists, whatever `init.defaultBranch` the machine running the
+#: suite happens to carry.
+BASE_BRANCH_FALLBACK = "main"
+
+
 def init_repository(root: Path,
                     message: str = "the tree this starts from") -> None:
     """Make `root` a git repository with everything under it committed.
@@ -887,8 +895,19 @@ def init_repository(root: Path,
     that drives `scripts/l5-plan` needs: since story-117 planning happens in a
     worktree cut from the base, so a directory that is not a repository is one
     no plan can be written in.
+
+    The initial branch is named rather than inherited. A repository built here
+    publishes no `origin/HEAD` and configures no `base_branch`, so the base
+    resolves to `story_coordinator.base_branch`'s documented last resort, the
+    literal below. Left to `git init`, the branch would be whatever the
+    machine's `init.defaultBranch` says — `main` on a developer's laptop that
+    has set it, `master` on a runner that has not — and a worktree cut from a
+    branch that does not exist refuses the invocation. The fixture states the
+    name so that what these tests exercise is the harness rather than the
+    machine's git configuration.
     """
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q", "-b", BASE_BRANCH_FALLBACK],
+                   cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"],
                    cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
