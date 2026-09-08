@@ -54,6 +54,7 @@ from pathlib import Path
 
 import pytest
 
+import conftest
 import harness_config
 import harness_source
 import story_coordinator
@@ -129,7 +130,7 @@ class Runner:
         with open(log_path, "a", encoding="utf-8") as handle:
             handle.write(f"===== stage: {stage} =====\n")
         if stage == "implementer":
-            (self.target_root / "src" / "app.py").write_text(
+            (Path(cwd) / "src" / "app.py").write_text(
                 "print('hello')\n# the story's change\n", encoding="utf-8")
             _write_json(self.run_dir / "changed-files.json",
                         {"modified": ["src/app.py"], "created": [],
@@ -201,7 +202,7 @@ def branches(root: Path) -> set[str]:
 
 def run(target_root: Path, harness_root: Path, story_id: str = STORY_ID):
     """One story executed through the real coordinator and the fake runner."""
-    run_dir = target_root / ".harness" / "runs" / story_id
+    run_dir = conftest.run_dir_for(target_root, story_id)
     runner = Runner(target_root, run_dir)
     code = story_coordinator.run_story(story_id, harness_root, target_root,
                                        runner)

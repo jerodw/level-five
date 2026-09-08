@@ -27,8 +27,11 @@ Do not:
    ambiguity. Ask about decisions that are expensive or hard to reverse;
    apply sensible defaults to cheap, reversible ones and say you did.
 3. Present the draft plan and iterate until the developer approves it.
-4. Determine the next story number by listing .harness/stories/ and write
-   the approved artifact there as story-NNN.yaml.
+4. The story id is {{story_id}}. Write the approved artifact to
+   .harness/stories/{{story_id}}.yaml and give it that id. Do not derive an
+   id by listing that directory: the id above was reserved on the remote
+   before this session started, so no other clone can be planning it, and a
+   listing is a reading of this clone alone.
 5. Do not commit anything. When this session ends, l5-plan validates the
    artifact you wrote; when it is valid, l5-plan commits it — that file and
    nothing else, on the branch you are on — and pushes it. Committing is

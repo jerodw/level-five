@@ -164,7 +164,7 @@ def resolve_remote(target_root: Path) -> str:
     return "origin" if "origin" in remotes else ""
 
 
-def push_commit(target_root: Path) -> PushResult:
+def push_commit(target_root: Path, remote: str = "") -> PushResult:
     """Push HEAD to the resolved remote, reporting rather than failing.
 
     `git push <remote> HEAD` pushes the branch under its own name without
@@ -172,9 +172,18 @@ def push_commit(target_root: Path) -> PushResult:
     effect of planning. A rejected push and a repository with no remote are
     both reported and neither rolls anything back: the commit stays where it
     is, reachable, exactly as it was before the push was attempted.
+
+    `remote` is the remote a caller has already resolved, and it is the whole
+    of what a caller pushing from somewhere else needs. Since story-117 the
+    commit is made in a planning worktree standing on a story branch that
+    tracks nothing, so resolving the remote *there* would fall through to
+    `origin` and find nothing in a repository whose remote is named anything
+    else — while the reservation, resolved in the developer's own checkout,
+    had already reached it. Passing it keeps the resolution one fact with one
+    home. Omitted, it is resolved here exactly as it always was.
     """
     branch = current_branch(target_root)
-    remote = resolve_remote(target_root)
+    remote = remote or resolve_remote(target_root)
     if not remote:
         return PushResult(False, "", branch, "no remote configured")
     pushed = _git(target_root, "push", remote, "HEAD")

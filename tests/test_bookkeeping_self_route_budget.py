@@ -983,7 +983,7 @@ def test_a_run_under_a_bookkeeping_budget_that_is_not_a_count_is_refused(
     assert repr("two") in message
     assert runner.calls == []
     assert not run_dir_of(target_root).exists()
-    assert not (target_root / ".harness" / "logs" / f"{STORY_ID}.log").exists()
+    assert not conftest.log_path_for(target_root, STORY_ID).exists()
 
 
 def test_the_same_run_under_a_sound_bookkeeping_budget_creates_all_of_it(
@@ -1002,7 +1002,7 @@ def test_the_same_run_under_a_sound_bookkeeping_budget_creates_all_of_it(
 
     assert runner.calls
     assert run_dir_of(target_root).is_dir()
-    assert (target_root / ".harness" / "logs" / f"{STORY_ID}.log").is_file()
+    assert conftest.log_path_for(target_root, STORY_ID).is_file()
 
 
 # --------------------------------------------------------------------------

@@ -313,9 +313,17 @@ def test_resolve_base_reads_and_only_reads(based):
 
 
 @pytest.fixture
-def refused_elsewhere(based, capsys):
-    """A fresh run started from a branch that is not the base."""
+def ran_from_elsewhere(based, capsys):
+    """A fresh run started from a branch that is not the base.
+
+    With a commit of its own on that branch, so "cut from the base" and "cut
+    from where the developer was standing" are two different histories rather
+    than the same commit under two names.
+    """
     elsewhere(based)
+    write(based / "src" / "from_elsewhere.py", "value = 1\n")
+    git(based, "add", "-A")
+    git(based, "commit", "-q", "-m", "work on the branch the developer is on")
     before = {"head": git(based, "rev-parse", "HEAD").stdout.strip(),
               "branches": branches(based)}
     capsys.readouterr()
@@ -324,29 +332,82 @@ def refused_elsewhere(based, capsys):
     return code, runner, based, before, captured.err
 
 
-def test_a_fresh_run_from_a_branch_that_is_not_the_base_is_refused(
-    refused_elsewhere,
+def test_a_fresh_run_from_a_branch_that_is_not_the_base_cuts_from_the_base(
+    ran_from_elsewhere,
 ):
-    code, runner, target, before, err = refused_elsewhere
-    assert code == 1
-    assert ELSEWHERE in err            # the branch actually checked out
-    assert "main" in err               # and the base
+    """Where the developer is standing decides nothing about what the branch
+    is cut from, because since story-117 the run cuts it in a worktree of its
+    own from the base *by name*.
+
+    So the run proceeds, and what it cut from is asserted rather than inferred:
+    the base's tip is in the story branch's history and the branch the
+    developer was standing on is not.
+    """
+    code, runner, target, before, err = ran_from_elsewhere
+    assert code == 0
+    assert runner.calls != []
+    assert ELSEWHERE not in err
+    base_tip = git(target, "rev-parse", DEFAULT_BRANCH).stdout.strip()
+    stood_on = git(target, "rev-parse", ELSEWHERE).stdout.strip()
+    assert git(target, "merge-base", "--is-ancestor", base_tip, STORY_BRANCH,
+               check=False).returncode == 0
+    assert git(target, "merge-base", "--is-ancestor", stood_on, STORY_BRANCH,
+               check=False).returncode != 0
 
 
-def test_that_refusal_leaves_nothing_behind_and_invokes_no_agent(
-    refused_elsewhere,
+def test_that_run_leaves_the_branch_it_was_invoked_from_alone(
+    ran_from_elsewhere,
 ):
-    """Each absence separately, because "exit 1" alone would hold for a run
-    that got as far as creating a directory and then failed."""
-    code, runner, target, before, _ = refused_elsewhere
-    assert runner.calls == []                                 # no agent
-    assert not run_dir_of(target).exists()                    # no run directory
-    assert not (run_dir_of(target) / "state.json").exists()   # no state
-    assert not log_of(target).exists()                        # no log
-    assert branches(target) == before["branches"]             # no new branch
-    assert STORY_BRANCH not in branches(target)
+    """Each thing the developer's own checkout keeps, separately: the run
+    worked somewhere else entirely, so nothing here moved.
+
+    `test_the_head_leg_is_asked_only_of_a_caller_that_cuts_from_head` below is
+    what shows the leg those absences used to come from is still there.
+    """
+    code, runner, target, before, _ = ran_from_elsewhere
+    assert not (target / ".harness" / "runs" / STORY_ID).exists()  # not here
+    assert not (target / ".harness" / "logs" / f"{STORY_ID}.log").exists()
+    assert branches(target) == before["branches"] + [STORY_BRANCH]
     assert git(target, "rev-parse", "HEAD").stdout.strip() == before["head"]
     assert head_branch(target) == ELSEWHERE
+    assert git(target, "status", "--porcelain").stdout == ""
+    # And the run did work, in the tree it cut for itself.
+    assert run_dir_of(target).is_dir()
+    assert (run_dir_of(target) / "state.json").is_file()
+    assert log_of(target).is_file()
+
+
+def test_the_head_leg_is_asked_only_of_a_caller_that_cuts_from_head(based):
+    """The leg is still there, and `from_head` is the whole of what asks it.
+
+    Both directions on one repository in one state: asked as a caller that cuts
+    from HEAD asks it, the leg reports where the developer is standing; asked
+    as a caller that cuts from a named ref asks it — which since story-117 is
+    every caller in the harness — it says nothing, while the other two
+    questions are still asked wherever a branch is cut.
+    """
+    elsewhere(based)
+
+    from_head = story_coordinator.base_problems(based, "main", False)
+    assert len(from_head) == 1
+    assert ELSEWHERE in from_head[0]
+    assert "main" in from_head[0]
+    # The default is the from-HEAD behaviour, so a caller written before the
+    # parameter existed is unchanged by it.
+    assert story_coordinator.base_problems(
+        based, "main", False, from_head=True) == from_head
+
+    assert story_coordinator.base_problems(
+        based, "main", False, from_head=False) == []
+    # The other two questions are asked either way: a ref that does not resolve
+    # and a base that has drifted from its remote both still report.
+    assert story_coordinator.base_problems(
+        based, "no-such-branch", True, from_head=False) != []
+    base_ahead(based)
+    drifted = story_coordinator.base_problems(
+        based, "main", False, from_head=False)
+    assert len(drifted) == 1
+    assert "origin/main" in drifted[0]
 
 
 def test_the_same_run_standing_on_the_base_creates_every_one_of_those(based):
@@ -439,12 +500,16 @@ def test_when_both_conditions_hold_only_the_not_on_base_message_is_printed(
     assert ELSEWHERE in problems[0], "the not-on-base leg is what was reported"
     assert drift[0] not in problems, "the drift leg was reported as well"
 
+    # Driven, where the precedence no longer arises: a run cuts from the base
+    # by name and does not ask the HEAD leg at all, so the sentence it prints
+    # for a repository in this state is the drift one — the leg that is asked
+    # wherever a branch is cut.
     capsys.readouterr()
     code, _ = run(subject)
     err = capsys.readouterr().err
     assert code == 1
-    assert ELSEWHERE in err
-    assert drift[0] not in err
+    assert ELSEWHERE not in err
+    assert drift[0] in err
 
     # The control, run the same way: the drift sentence does reach stderr when
     # it is the leg that has something to say.
@@ -476,7 +541,9 @@ def test_a_declared_base_is_what_the_new_branch_is_cut_from(based):
     assert STORY_BRANCH in branches(based)
     assert git(based, "merge-base", "--is-ancestor", tip, STORY_BRANCH,
                check=False).returncode == 0
-    assert (based / "src" / "from_the_other_branch.py").is_file()
+    # In the tree the run works in, which is where the branch is checked out.
+    assert (conftest.run_root_for(based, STORY_ID) / "src"
+            / "from_the_other_branch.py").is_file()
 
 
 def test_without_the_flag_the_branch_is_not_cut_from_that_ref(based):
@@ -486,7 +553,8 @@ def test_without_the_flag_the_branch_is_not_cut_from_that_ref(based):
     assert run(based)[0] == 0
     assert git(based, "merge-base", "--is-ancestor", tip, STORY_BRANCH,
                check=False).returncode != 0
-    assert not (based / "src" / "from_the_other_branch.py").exists()
+    assert not (conftest.run_root_for(based, STORY_ID) / "src"
+                / "from_the_other_branch.py").exists()
 
 
 def test_a_declared_base_suppresses_both_legs(based):
@@ -613,19 +681,23 @@ def test_the_same_base_state_refuses_when_that_branch_does_not_exist(based):
 
 
 def test_a_resume_of_an_escalated_run_is_not_refused_for_its_base(based):
-    """After an escalation HEAD is on the story branch, which is by
+    """After an escalation the run's tree is on the story branch, which is by
     construction not the base, so a guard that applied to a resume would refuse
     every one of them."""
     code, _ = run(based, verdicts=[FAIL_AT_ONCE])
     assert code == 2
     assert state_of(based)["status"] == "escalated"
-    assert head_branch(based) == STORY_BRANCH
+    # The run's own tree since story-117, rather than the developer's checkout,
+    # which the escalation left where it found it.
+    tree = conftest.run_root_for(based, STORY_ID)
+    assert head_branch(tree) == STORY_BRANCH
 
     # Something establishable has to have changed, or the resume is refused by
-    # story-021's own guard rather than reaching the base question at all.
-    commit(based, "the developer's own repair")
+    # story-021's own guard rather than reaching the base question at all. Done
+    # in that tree, because that is the tree the guard and the clean-tree
+    # pre-flight both read.
+    commit(tree, "the developer's own repair")
     base_ahead(based, DEFAULT_BRANCH)
-    git(based, "checkout", "-q", STORY_BRANCH)
 
     code, runner = run(based)
     assert code == 0, "the resume was refused"

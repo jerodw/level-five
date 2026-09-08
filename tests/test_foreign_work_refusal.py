@@ -51,6 +51,7 @@ from conftest import BASELINE, ENDPOINT
 import conftest
 
 import story_coordinator
+import worktrees
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
@@ -223,7 +224,7 @@ class Runner:
     def __init__(self, target_root: Path, verdicts: list | None = None,
                  story_id: str = STORY_ID):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verdicts = verdicts or [PASS]
         self.calls: list[str] = []
         self.logs: list[Path] = []
@@ -235,6 +236,10 @@ class Runner:
                  permission_mode=None, model=None, allowed_tools=None,
                  max_budget_usd=None, suite_command=None, run_dir=None):
         self.calls.append(stage)
+        # Every edit goes in the tree the coordinator handed this stage, which
+        # since story-117 is the worktree the run works in rather than the
+        # checkout it was invoked from.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if log_path is not None:
             log = Path(log_path)
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -244,9 +249,9 @@ class Runner:
         attempt = max(1, self.calls.count("implementer"))
 
         if stage == "implementer":
-            write(self.target_root / "src" / "app.py",
+            write(tree /"src" / "app.py",
                   APP_AT_HEAD + f"print('attempt {attempt}')\n")
-            write(self.target_root / "src" / f"attempt_{attempt}.py",
+            write(tree /"src" / f"attempt_{attempt}.py",
                   f"value = {attempt}\n")
             write_json(self.run_dir / "changed-files.json", {
                 "modified": ["src/app.py"],
@@ -256,7 +261,7 @@ class Runner:
             write(self.run_dir / "implementation-summary.md",
                   f"Implemented on attempt {attempt}.\n")
         elif stage == "tester":
-            write(self.target_root / "tests" / f"test_attempt_{attempt}.py",
+            write(tree /"tests" / f"test_attempt_{attempt}.py",
                   "def test_attempt():\n    assert True\n")
             write_json(self.run_dir / "test-results.json", {
                 "status": "passed", "tests_written": 1, "tests_run": 1,
@@ -271,7 +276,7 @@ class Runner:
             verdict = self._nth(self.verdicts, self.calls.count(stage) - 1)
             write_json(self.run_dir / "verification-result.json", verdict)
         elif stage == "documenter":
-            write(self.target_root / DOC_OUTPUT,
+            write(tree /DOC_OUTPUT,
                   f"# Architecture\n\nDocumented on attempt {attempt}.\n")
             write(self.run_dir / "documentation-report.md", "Documented.\n")
             write_json(self.run_dir / "documenter-changed-files.json",
@@ -288,12 +293,36 @@ def run(target_root: Path, harness: Path = REPO_ROOT, verdicts: list | None = No
     return code, runner
 
 
+def working_tree(target_root: Path, story_id: str = STORY_ID) -> Path:
+    """The tree a run of this story works in.
+
+    Since story-117 that is a worktree of the run's own rather than the
+    checkout it was invoked from, and it is the tree the clean-tree pre-flight
+    reads, the tree the stages edit and the tree both terminal commits are
+    taken over. Idempotent: a tree already standing on the story branch is its
+    own run root.
+    """
+    return conftest.run_root_for(Path(target_root), story_id)
+
+
+def a_run_worked_here(target_root: Path, story_id: str = STORY_ID) -> Path:
+    """The tree an earlier run of this story left behind, created.
+
+    The clean-tree pre-flight reads the tree the run works in, so foreign work
+    in that tree is the only foreign work it can refuse a run for. A fresh run
+    invoked from a developer's checkout cuts itself a new worktree, which is
+    clean by construction — so a *dirty* tree to be refused for is one an
+    earlier run already cut, and this creates it the way that run would have.
+    """
+    return conftest.worktree_a_run_left(target_root, story_id)
+
+
 def run_dir_of(target_root: Path, story_id: str = STORY_ID) -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def log_of(target_root: Path, story_id: str = STORY_ID) -> Path:
-    return target_root / ".harness" / "logs" / f"{story_id}.log"
+    return conftest.log_path_for(target_root, story_id)
 
 
 def state_of(target_root: Path) -> dict:
@@ -305,12 +334,15 @@ def branches(target_root: Path) -> list[str]:
                   for line in git(target_root, "branch", "--list").stdout.splitlines())
 
 
-def files_in(root: Path, revision: str = "HEAD") -> list[str]:
-    return git(root, "show", "--name-only", "--format=", revision).stdout.split()
+def files_in(root: Path, revision: str = "HEAD", *,
+             story_id: str = STORY_ID) -> list[str]:
+    return git(working_tree(root, story_id), "show", "--name-only", "--format=",
+               revision).stdout.split()
 
 
 def subject_of(root: Path, revision: str = "HEAD") -> str:
-    return git(root, "log", "-1", "--format=%s", revision).stdout.strip()
+    return git(working_tree(root), "log", "-1", "--format=%s",
+               revision).stdout.strip()
 
 
 def messages(target_root: Path) -> list[str]:
@@ -392,13 +424,16 @@ def crashed_run(target_root: Path, stage: str = "tester") -> None:
     Nothing commits when a process dies, so the state says `running` and the
     working tree is whatever that run had got to.
     """
+    # The tree that run was working in, and its run directory inside it: since
+    # story-117 a run works in a worktree of its own, so a run that died
+    # mid-way left one standing on the story branch with its state in it.
+    a_run_worked_here(target_root)
     run_dir_of(target_root).mkdir(parents=True, exist_ok=True)
     story_coordinator.save_state(
         run_dir_of(target_root),
         story_coordinator.RunState(story_id=STORY_ID, branch=STORY_BRANCH,
                                    status="running", current_stage=stage),
     )
-    git(target_root, "checkout", "-q", "-b", STORY_BRANCH)
 
 
 # --------------------------------------------------------------------------
@@ -443,10 +478,18 @@ def coordinator_function(name: str, bound: str) -> str:
 
 @pytest.fixture
 def refused(target, harness_root, capsys):
-    """A fresh run refused for a dirty tree, with what preceded it recorded."""
-    write(target / STRAY, "no stage wrote this\n")
+    """A fresh run refused for a dirty tree, with what preceded it recorded.
+
+    The dirtiness is in the tree the run works in, which is where the
+    pre-flight reads it: since story-117 a run invoked from a developer's own
+    checkout cuts a worktree of its own, so foreign work in that checkout is
+    not the run's to be refused for and the tree that holds it here is one an
+    earlier run already cut.
+    """
+    tree = a_run_worked_here(target)
+    write(tree / STRAY, "no stage wrote this\n")
     before = {
-        "head": git(target, "rev-parse", "HEAD").stdout.strip(),
+        "head": git(tree, "rev-parse", "HEAD").stdout.strip(),
         "branches": branches(target),
     }
     capsys.readouterr()
@@ -473,8 +516,10 @@ def test_a_fresh_run_with_a_dirty_tree_refuses_and_leaves_nothing_behind(refused
     assert not (run_dir_of(target) / "state.json").exists()  # no state
     assert not log_of(target).exists()                     # no log
     assert branches(target) == before["branches"]          # no new branch
-    assert STORY_BRANCH not in branches(target)
-    assert git(target, "rev-parse", "HEAD").stdout.strip() == before["head"]
+    # The tree the refusal read is where it was, with no commit added to it,
+    # and the developer's own checkout was never moved.
+    assert git(working_tree(target), "rev-parse", "HEAD").stdout.strip() \
+        == before["head"]
     assert git(target, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() \
         == DEFAULT_BRANCH
 
@@ -489,8 +534,12 @@ def test_the_same_run_on_a_clean_tree_creates_every_one_of_those(accepted):
     assert (run_dir_of(target) / "state.json").is_file()
     assert log_of(target).is_file()
     assert STORY_BRANCH in branches(target)
+    # The branch stands in the tree the run cut for itself, and the developer's
+    # own checkout is left on the branch it was invoked from.
+    assert git(working_tree(target), "rev-parse", "--abbrev-ref",
+               "HEAD").stdout.strip() == STORY_BRANCH
     assert git(target, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() \
-        == STORY_BRANCH
+        == DEFAULT_BRANCH
 
 
 def test_the_refusal_names_the_dirty_paths_and_says_what_clears_it(
@@ -502,9 +551,10 @@ def test_the_refusal_names_the_dirty_paths_and_says_what_clears_it(
     The control is `src/app.py`, which is left alone and is not named, and then
     the same file made dirty in a second run, where it is.
     """
-    write(target / STRAY, "no stage wrote this\n")
-    write(target / DOC_OUTPUT, "# Architecture\n\nedited by hand\n")
-    (target / "tests" / "test_existing.py").unlink()
+    tree = a_run_worked_here(target)
+    write(tree / STRAY, "no stage wrote this\n")
+    write(tree / DOC_OUTPUT, "# Architecture\n\nedited by hand\n")
+    (tree / "tests" / "test_existing.py").unlink()
 
     capsys.readouterr()
     assert run(target, harness_root)[0] == 1
@@ -515,7 +565,7 @@ def test_the_refusal_names_the_dirty_paths_and_says_what_clears_it(
     assert "Commit or stash them, then run the story again." in message
     assert "src/app.py" not in message              # the absence...
 
-    write(target / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
+    write(tree / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
     capsys.readouterr()
     assert run(target, harness_root)[0] == 1
     assert "src/app.py" in capsys.readouterr().err  # ...and its control
@@ -527,8 +577,9 @@ def test_the_refusal_is_the_shape_the_other_pre_flight_refusals_take(
     """One message per problem under a header, and nothing on stdout — the
     same shape a bad story artifact is refused in, which is asserted beside it
     rather than described."""
-    write(target / STRAY, "x\n")
-    write(target / "src" / "another.py", "y\n")
+    tree = a_run_worked_here(target)
+    write(tree / STRAY, "x\n")
+    write(tree / "src" / "another.py", "y\n")
     capsys.readouterr()
     assert run(target, harness_root)[0] == 1
     dirty = capsys.readouterr()
@@ -560,13 +611,15 @@ def test_a_gitignored_path_is_not_what_the_check_is_about(
     check having stopped looking at untracked files.
     """
     ignored = make_target("ignored-target")
-    write(ignored / ".harness" / "runs" / "leftover.txt", "from an old run\n")
+    write(a_run_worked_here(ignored) / ".harness" / "runs" / "leftover.txt",
+          "from an old run\n")
     assert run(ignored, harness_root)[0] == 0
 
     watched = make_target("watched-target")
     write(watched / ".gitignore", ".harness/logs/\n")
     commit(watched, "stop ignoring the run directory")
-    write(watched / ".harness" / "runs" / "leftover.txt", "from an old run\n")
+    write(a_run_worked_here(watched) / ".harness" / "runs" / "leftover.txt",
+          "from an old run\n")
     assert run(watched, harness_root)[0] == 1
 
 
@@ -668,7 +721,7 @@ def test_each_clean_run_expectation_above_can_fail(target, harness_root):
     So each list is checked against a run that did *not* happen — the same
     repository refused for a dirty tree — and every one of them differs.
     """
-    write(target / STRAY, "no stage wrote this\n")
+    write(a_run_worked_here(target) / STRAY, "no stage wrote this\n")
     code, runner = run(target, harness_root)
 
     assert code == 1
@@ -696,7 +749,8 @@ def test_a_resume_of_an_escalated_run_with_a_dirty_tree_refuses(
     before_state = state_of(target)
     before_artifacts = artifacts_in(target)
     before_events = messages(target)
-    write(target / STRAY, "the developer's fix, not yet committed\n")
+    write(working_tree(target) / STRAY,
+          "the developer's fix, not yet committed\n")
 
     capsys.readouterr()
     code, runner = run(target, harness_root)
@@ -719,9 +773,10 @@ def test_the_same_resume_proceeds_once_that_tree_is_committed(
     change, committed — which is exactly what the refusal asks for."""
     target = make_target("committed-resume-target")
     escalate(target, harness_root)
-    write(target / STRAY, "the developer's fix\n")
-    write(target / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
-    commit(target, "the developer's fix")
+    tree = working_tree(target)
+    write(tree / STRAY, "the developer's fix\n")
+    write(tree / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
+    commit(tree, "the developer's fix")
 
     code, runner = run(target, harness_root, verdicts=[PASS])
     assert code == 0
@@ -736,7 +791,8 @@ def test_a_resume_of_a_run_still_running_is_not_refused_for_a_dirty_tree(
     unfinished work and refusing it would refuse the run its own state."""
     target = make_target("crashed-target")
     crashed_run(target)
-    write(target / STRAY, "the crashed run's own unfinished work\n")
+    write(working_tree(target) / STRAY,
+          "the crashed run's own unfinished work\n")
 
     code, runner = run(target, harness_root)
     assert code == 0
@@ -751,7 +807,7 @@ def test_the_same_dirty_tree_under_an_escalated_state_is_refused(
     recorded stage — one state field apart."""
     target = make_target("escalated-state-target")
     crashed_run(target)
-    write(target / STRAY, "identical to the crashed case\n")
+    write(working_tree(target) / STRAY, "identical to the crashed case\n")
 
     state = story_coordinator.load_state(run_dir_of(target))
     state.status = "escalated"
@@ -778,13 +834,14 @@ def test_the_three_guards_on_an_escalated_resume_say_three_different_things(
     assert run(target, harness_root)[0] == 1
     repeated = capsys.readouterr().err
 
-    write(target / STRAY, "uncommitted\n")
+    tree = working_tree(target)
+    write(tree / STRAY, "uncommitted\n")
     capsys.readouterr()
     assert run(target, harness_root)[0] == 1
     dirty = capsys.readouterr().err
 
-    write(target / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
-    commit(target, "the developer's fix")
+    write(tree / "src" / "app.py", APP_AT_HEAD + "print('by hand')\n")
+    commit(tree, "the developer's fix")
     code, runner = run(target, harness_root, verdicts=[PASS])
 
     assert code == 0 and runner.calls != []
@@ -834,30 +891,37 @@ def state_of_id(target_root: Path, story_id: str) -> dict:
         (run_dir_of(target_root, story_id) / "state.json").read_text())
 
 
-def test_an_uncommitted_story_artifact_refuses_the_run_and_is_named(
-    make_target, harness_root, capsys,
+def test_an_uncommitted_story_artifact_reaches_no_commit_the_run_makes(
+    make_target, harness_root,
 ):
-    """The story artifact is not exempt, so the planner that leaves it behind
-    meets the same refusal as any other uncommitted file.
+    """The guarantee story-021 wrote, kept by what story-117 changed.
 
-    The control is the test above: the same artifact, committed, runs to
-    completion — so this refusal is about the artifact being uncommitted rather
-    than about the story being new.
+    Under story-021 an artifact the planner left uncommitted refused the run,
+    because the run worked in the tree that held it and `git add -A` would have
+    absorbed it. A run now works in a worktree cut from the base, which is a
+    tree that artifact was never written into — so it cannot be absorbed, the
+    run is not refused for it, and the story commit carries what the stages
+    produced and not the artifact.
+
+    The control is the same fixture with the artifact committed, one test
+    above, whose run reaches the same completion: so what is asserted here is
+    where the artifact is not, rather than a run that did not happen.
     """
     target = make_target("unplanned-target")
     path = plan(target, commit_it=False)
     relative = path.relative_to(target).as_posix()
 
-    capsys.readouterr()
     runner = Runner(target, story_id=NEW_STORY_ID)
     code = story_coordinator.run_story(NEW_STORY_ID, harness_root, target, runner)
-    message = capsys.readouterr().err
 
-    assert code == 1
-    assert runner.calls == []
-    assert relative in message
-    assert "Commit or stash them, then run the story again." in message
-    assert not run_dir_of(target, NEW_STORY_ID).exists()
+    assert code == 0
+    assert runner.calls != []
+    assert relative not in files_in(target, story_id=NEW_STORY_ID)
+    assert not (working_tree(target, NEW_STORY_ID) / relative).exists()
+    # And it is still uncommitted where the developer left it, untouched by
+    # the run: nothing checked it in and nothing checked it out.
+    assert path.is_file()
+    assert relative in git(target, "status", "--porcelain").stdout
 
 
 # --------------------------------------------------------------------------
@@ -907,16 +971,24 @@ def test_a_story_artifact_no_longer_reaches_a_story_commit(
     by the assertion below.
     """
     now = make_target("regression-target")
-    plan(now, commit_it=False)
-    runner = Runner(now, story_id=NEW_STORY_ID)
-    assert story_coordinator.run_story(
-        NEW_STORY_ID, harness_root, now, runner) == 1
-
     plan(now, commit_it=True)   # what the planner does since story-023
     runner = Runner(now, story_id=NEW_STORY_ID)
     assert story_coordinator.run_story(
         NEW_STORY_ID, harness_root, now, runner) == 0
-    assert f".harness/stories/{NEW_STORY_ID}.yaml" not in files_in(now)
+    assert f".harness/stories/{NEW_STORY_ID}.yaml" not in files_in(
+        now, story_id=NEW_STORY_ID)
+
+    # And the shape story-013 actually hit — the artifact left uncommitted —
+    # reaches no commit either, for the reason story-117 gives it: the tree the
+    # run works in never held it. Asserted on a second fixture rather than by
+    # running the same one twice, so the two answers cannot mask each other.
+    uncommitted = make_target("regression-target-uncommitted")
+    plan(uncommitted, commit_it=False)
+    runner = Runner(uncommitted, story_id=NEW_STORY_ID)
+    assert story_coordinator.run_story(
+        NEW_STORY_ID, harness_root, uncommitted, runner) == 0
+    assert f".harness/stories/{NEW_STORY_ID}.yaml" not in files_in(
+        uncommitted, story_id=NEW_STORY_ID)
 
     evidence = json.loads(ABSORBED_EVIDENCE.read_text(encoding="utf-8"))
     demonstrated = evidence["reproduction"]["demonstrated"]
@@ -988,6 +1060,9 @@ def history_paths(target_root: Path) -> set[str]:
     """
     import harness_config
 
+    # Read in the tree the run works in, which is where it appends its history
+    # and what its commit is taken over.
+    target_root = working_tree(target_root)
     config = harness_config.load_config(target_root)
     directory = harness_config.history_dir(target_root, config)
     return {
@@ -1003,13 +1078,12 @@ def test_a_completed_runs_commit_holds_what_the_run_produced_and_nothing_older(
     """The commit's contents compared against the stage records plus the
     documenter's output — not merely searched for the stray file.
 
-    The stray file gets its two turns: refused while uncommitted, and then, once
-    the developer commits it deliberately, present in *their* commit and absent
-    from the run's. That commit is the control: it shows the same reading of the
-    same repository does report the file when it is there.
+    The stray file is committed by the developer in their own checkout, and it
+    is then present in *their* commit and absent from the run's. That commit is
+    the control: it shows the same reading of the same repository does report
+    the file when it is there.
     """
     write(target / STRAY, "no stage wrote this\n")
-    assert run(target, harness_root)[0] == 1
     developers = commit(target, "the developer's own file")
 
     code, _ = run(target, harness_root)
@@ -1027,7 +1101,6 @@ def test_an_escalated_runs_commits_hold_what_the_run_produced_and_nothing_older(
     """Both of the escalation's commits, on a fresh run — the same statement as
     above for the other terminal path, with the same control."""
     write(target / STRAY, "no stage wrote this\n")
-    assert run(target, harness_root, verdicts=[FAIL_AT_ONCE])[0] == 1
     developers = commit(target, "the developer's own file")
 
     escalate(target, harness_root)
@@ -1051,9 +1124,10 @@ def test_a_resumed_escalated_runs_commit_carries_nothing_that_predated_it(
     target = make_target("resumed-escalated-target")
     escalate(target, harness_root)
 
-    write(target / STRAY, "dirty when the resume was asked for\n")
+    write(working_tree(target) / STRAY,
+          "dirty when the resume was asked for\n")
     assert run(target, harness_root)[0] == 1
-    developers = commit(target, "the developer's own file")
+    developers = commit(working_tree(target), "the developer's own file")
 
     code, runner = run(target, harness_root, verdicts=[PASS])
     assert code == 0
@@ -1083,7 +1157,8 @@ def test_the_one_remaining_limit_is_a_resumed_crashed_run(
     """
     target = make_target("limit-target")
     crashed_run(target, stage="implementer")
-    write(target / STRAY, "the crashed run's own unfinished work\n")
+    write(working_tree(target) / STRAY,
+          "the crashed run's own unfinished work\n")
 
     code, _ = run(target, harness_root)
     assert code == 0
@@ -1280,14 +1355,15 @@ def test_attempting_the_bypass_does_not_bypass_it(
     # not change it.
     write(config, declared)
     commit(target, "the attempted keys come back out")
-    write(target / STRAY, "no stage wrote this\n")
+    tree = a_run_worked_here(target)
+    write(tree / STRAY, "no stage wrote this\n")
     capsys.readouterr()
     code, runner = run(target, harness_root)
     assert code == 1
     assert runner.calls == []
     assert STRAY in capsys.readouterr().err
 
-    commit(target, "the developer commits it, as the message says")
+    commit(tree, "the developer commits it, as the message says")
     code, runner = run(target, harness_root)
     assert code == 0                                   # the control
     assert runner.calls != []
@@ -1314,14 +1390,15 @@ def test_the_check_creates_no_commit_branch_stash_or_index_change(
 ):
     """Read directly, and then again around the refused run, so the claim
     covers the call and its one caller."""
-    write(target / STRAY, "no stage wrote this\n")
+    tree = a_run_worked_here(target)
+    write(tree / STRAY, "no stage wrote this\n")
 
-    before = snapshot(target)
-    assert story_coordinator.dirty_paths(target) == [STRAY]
-    assert snapshot(target) == before
+    before = snapshot(tree)
+    assert story_coordinator.dirty_paths(tree) == [STRAY]
+    assert snapshot(tree) == before
 
     assert run(target, harness_root)[0] == 1
-    assert snapshot(target) == before
+    assert snapshot(tree) == before
 
 
 @pytest.mark.parametrize("mutation,field", [

@@ -465,7 +465,7 @@ class FakeRunner:
 
     def __init__(self, target_root: Path, verdicts: list[dict],
                  story_id: str = "story-001"):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.verdicts = list(verdicts)
         self.calls: list[str] = []
 
@@ -516,7 +516,7 @@ class FakeRunner:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def log_lines(run_dir: Path) -> list[str]:

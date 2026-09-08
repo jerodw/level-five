@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+import conftest
 import schema_validator
 import story_coordinator
 import story_parser
@@ -377,8 +378,8 @@ def reject(target_root: Path, harness_root: Path, story_text: str) -> int:
     runner = ExplodingRunner()
     code = story_coordinator.run_story("story-001", harness_root, target_root, runner)
     assert runner.calls == []
-    assert not (target_root / ".harness" / "runs" / "story-001").exists()
-    assert not (target_root / ".harness" / "runs" / "story-001" / "state.json").exists()
+    assert not conftest.run_dir_for(target_root, "story-001").exists()
+    assert not (conftest.run_dir_for(target_root, "story-001") / "state.json").exists()
     assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
     assert branch_names(target_root) == before
     assert "story/story-001" not in branch_names(target_root)
@@ -471,7 +472,7 @@ def test_l5_run_exits_1_and_creates_nothing_for_a_rejected_story(target_root):
     )
     assert result.returncode == 1, result.stderr
     assert "tasks" in result.stderr
-    assert not (target_root / ".harness" / "runs" / "story-001").exists()
+    assert not conftest.run_dir_for(target_root, "story-001").exists()
     assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
     assert "story/story-001" not in branch_names(target_root)
 

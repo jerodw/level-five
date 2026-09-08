@@ -275,7 +275,7 @@ class ArtifactRunner:
     """Writes valid artifacts unless an override replaces one of them."""
 
     def __init__(self, target_root: Path, story_id: str = "story-001", **overrides):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.overrides = overrides
         self.calls: list[str] = []
 
@@ -480,7 +480,7 @@ def test_rendered_prompts_carry_the_schema_file_verbatim(
 ):
     import harness_config
 
-    run_dir = target_root / ".harness" / "runs" / "story-001"
+    run_dir = conftest.run_dir_for(target_root, "story-001")
     run_dir.mkdir(parents=True, exist_ok=True)
     story_text = (target_root / ".harness" / "stories" / "story-001.yaml").read_text()
     context = context_assembler.build_context(
@@ -521,7 +521,7 @@ def test_a_missing_schemas_directory_does_not_break_context_assembly(
     context = context_assembler.build_context(
         story_text="story:\n  id: story-001\n",
         story={"story": {"id": "story-001"}},
-        run_dir=target_root / ".harness" / "runs" / "story-001",
+        run_dir=conftest.run_dir_for(target_root, "story-001"),
         target_root=target_root,
         harness_root=fake_root,
         config=harness_config.load_config(target_root),

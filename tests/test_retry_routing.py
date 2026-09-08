@@ -375,7 +375,7 @@ class Runner:
     def __init__(self, target_root: Path, verdicts: list | None = None, *,
                  stage_names: list[str] | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdicts = verdicts or [PASS]
         self.stage_names = list(stage_names or STAGE_NAMES)
         self.calls: list[str] = []
@@ -390,7 +390,7 @@ class Runner:
         names = self.stage_names
 
         if stage == names[0]:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   f"print('attempt {attempt}')\n")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -421,7 +421,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:
@@ -745,9 +745,18 @@ def created_nothing(target_root: Path) -> list[str]:
     branch = f"story/{STORY_ID}"
     if git(target_root, "branch", "--list", branch).stdout.strip():
         problems.append(f"branch {branch} was created")
+    # The tree a run works in is a worktree of its own since story-117, so
+    # what a run leaves standing on the story branch is that tree rather than
+    # the invoked one. A refused run has not created it at all, which is why
+    # the question is asked of the run root and answered as nothing rather
+    # than asked of the invoked tree, whose HEAD is now the same either way.
+    run_root = conftest.run_root_for(target_root, STORY_ID)
+    if run_root.is_dir():
+        standing = git(run_root, "rev-parse", "--abbrev-ref", "HEAD")
+        problems.append(f"the run's tree stands on {standing.stdout.strip()}")
     head = git(target_root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     if head != DEFAULT_BRANCH:
-        problems.append(f"the repository was left on {head}")
+        problems.append(f"the invoked checkout was left on {head}")
     return problems
 
 
@@ -832,7 +841,7 @@ def test_the_same_run_under_an_unmutated_workflow_creates_all_of_it(tmp_path):
         "state.json was written",
         "an event log was appended",
         f"branch story/{STORY_ID} was created",
-        f"the repository was left on story/{STORY_ID}",
+        f"the run's tree stands on story/{STORY_ID}",
     ]
 
 

@@ -69,6 +69,7 @@ import harness_config
 import machine_load
 import plan_mandate
 import story_coordinator
+import worktrees
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 L5_PLAN = HARNESS_ROOT / "scripts" / "l5-plan"
@@ -202,6 +203,46 @@ class Planning:
 
     def session(self) -> dict:
         return json.loads(self.log.read_text(encoding="utf-8"))
+
+    # ----------------------------------------------------------------------
+    # Where a plan lands since story-117
+    #
+    # The whole of planning happens in a worktree of its own, cut from the
+    # base, and a declined run offer removes that worktree and its local branch
+    # once the push has landed. So the invoked checkout's HEAD does not move,
+    # and what survives an invocation is the story branch on the remote. These
+    # three read the plan where it is: on the remote when the push landed, and
+    # on the local branch when it did not — which is the state the two tests
+    # about a failing push leave behind.
+    # ----------------------------------------------------------------------
+
+    def planned_branch(self, story_id: str = "story-900") -> str:
+        return story_coordinator.story_branch(
+            harness_config.load_config(self.root), story_id)
+
+    def planned_in(self, story_id: str = "story-900") -> tuple[Path, str]:
+        """The repository and revision the plan of `story_id` is committed at."""
+        branch = self.planned_branch(story_id)
+        if self.remote is not None \
+                and f"refs/heads/{branch}" in remote_refs(self.remote):
+            return self.remote, f"refs/heads/{branch}"
+        return self.root, branch
+
+    def planned_head(self, story_id: str = "story-900") -> str:
+        repo, revision = self.planned_in(story_id)
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", revision],
+            capture_output=True, text=True).stdout.strip()
+
+    def planned_subject(self, story_id: str = "story-900") -> str:
+        repo, revision = self.planned_in(story_id)
+        return subprocess.run(
+            ["git", "-C", str(repo), "log", "-1", "--format=%s", revision],
+            capture_output=True, text=True).stdout.strip()
+
+    def planned_paths(self, story_id: str = "story-900") -> list[str]:
+        repo, revision = self.planned_in(story_id)
+        return committed_paths(repo, revision)
 
 
 def conferring_paths(planning: "Planning") -> list[str]:
@@ -370,6 +411,19 @@ def bare_remote(tmp_path: Path, planning: Planning, name: str = "origin",
     return remote
 
 
+#: How a refusal names the planning worktree it kept. Since story-117 a session
+#: whose artifacts were rejected or refused keeps its worktree and says where it
+#: is, and that path is where those artifacts are — so a test that wants them
+#: reads the path the refusal gave rather than deriving a second one.
+KEPT_WORKTREE = re.compile(r"kept the worktree (\S+?);")
+
+
+def kept_worktree(result: subprocess.CompletedProcess) -> Path:
+    match = KEPT_WORKTREE.search(result.stdout)
+    assert match, result.stdout
+    return Path(match.group(1))
+
+
 def remote_refs(remote: Path) -> dict:
     listed = subprocess.run(
         ["git", "-C", str(remote), "for-each-ref", "--format=%(refname) %(objectname)"],
@@ -391,8 +445,11 @@ def test_session_that_says_nothing_about_committing_ends_with_the_artifact_commi
         (".harness/stories/story-900.yaml", artifact())))
 
     assert result.returncode == 0, result.stderr
-    assert planning.head() != before
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    assert planning.planned_head() != before
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
+    # And the developer's own checkout is where it was: since story-117 the
+    # commit is made on the story branch in a worktree of planning's own.
+    assert planning.head() == before
     assert planning.status() == ""
     assert "commit" not in STUB  # the stub could not have made it
 
@@ -417,30 +474,36 @@ def test_the_commit_holds_the_artifact_alone_while_the_tree_is_dirty(
     ))
 
     assert result.returncode == 0, result.stderr
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
     after = planning.status()
     assert " M README.md" in after
     assert "?? untracked.txt" in after
     assert "A  staged.txt" in after
-    assert "?? notes.txt" in after
+    # What the session wrote outside stories_dir is not in the commit and is
+    # not in the developer's checkout either: since story-117 the session runs
+    # in a worktree of its own, so anything it wrote and the commit did not take
+    # went with that worktree rather than being left here.
+    assert "notes.txt" not in after
+    assert "notes.txt" not in planning.planned_paths()
 
     # Control: the same reader over a commit that did sweep the tree.
     planning.git("add", "-A")
     planning.git("commit", "-q", "-m", "control: swept the tree")
     swept = committed_paths(planning.root)
-    assert "README.md" in swept and "untracked.txt" in swept and "notes.txt" in swept
+    assert "README.md" in swept and "untracked.txt" in swept \
+        and "staged.txt" in swept
 
 
 def test_the_configured_stories_dir_is_what_is_watched(tmp_path: Path):
     """A repository configuring another stories_dir commits from there."""
     planning = make_planning(tmp_path, stories_dir="plans")
-    bare_remote(tmp_path, planning, upstream=True)
+    planning.remote = bare_remote(tmp_path, planning, upstream=True)
     result = run_plan(planning, L5_STUB_WRITE=writes(
         ("plans/story-901.yaml", artifact("story-901"))))
 
     assert result.returncode == 0, result.stderr
-    assert committed_paths(planning.root) == ["plans/story-901.yaml"]
+    assert planning.planned_paths("story-901") == ["plans/story-901.yaml"]
 
 
 # --------------------------------------------------------------------------
@@ -469,7 +532,7 @@ def test_a_session_that_added_nothing_commits_nothing_and_says_so(
     control = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-900.yaml", artifact())))
     assert control.returncode == 0, control.stderr
-    assert planning.head() != before
+    assert planning.planned_head() != before
     assert remote_refs(remote) != refs_before
 
 
@@ -494,15 +557,19 @@ def test_a_session_that_only_edits_an_existing_artifact_commits_nothing(
     assert result.returncode == 0, result.stderr
     assert planning.head() == before
     assert "committed nothing" in result.stdout
-    assert " M .harness/stories/story-800.yaml" in planning.status()
+    # The edit is where the session made it, in the worktree planning ran in,
+    # and it is not in the developer's checkout: since story-117 the session
+    # never touches that tree.
+    assert " M .harness/stories/story-800.yaml" not in planning.status()
 
     # Control: the same session adding a file as well does produce a commit,
     # holding only the added one.
     control = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-801.yaml", artifact("story-801"))))
     assert control.returncode == 0, control.stderr
-    assert planning.head() != before
-    assert committed_paths(planning.root) == [".harness/stories/story-801.yaml"]
+    assert planning.planned_head("story-801") != before
+    assert planning.planned_paths("story-801") == [
+        ".harness/stories/story-801.yaml"]
 
 
 # --------------------------------------------------------------------------
@@ -520,8 +587,8 @@ def test_a_session_that_wrote_an_artifact_and_failed_still_commits_it(
     )
 
     assert result.returncode == 3, result.stderr
-    assert planning.head() != before
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    assert planning.planned_head() != before
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
 
 def test_the_sessions_exit_status_is_the_scripts_exit_status(planning: Planning):
@@ -575,40 +642,59 @@ def test_no_remote_configured_leaves_the_commit_and_reports_it(tmp_path: Path):
         (".harness/stories/story-900.yaml", artifact())))
 
     assert result.returncode != 0
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
-    assert planning.git("cat-file", "-e", "HEAD").returncode == 0
-    assert "main" in result.stdout
+    # The push had nowhere to go, so the commit is on the local story branch in
+    # the worktree planning kept — which is where the refusal says it is.
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
+    assert planning.git("cat-file", "-e", planning.planned_branch()).returncode == 0
+    assert planning.planned_branch() in result.stdout
     assert "remote" in result.stdout
     assert planning.status() == ""
 
 
 def test_a_rejected_push_leaves_the_commit_intact_and_unamended(
         tmp_path: Path, planning: Planning):
+    """A remote that takes the reservation and then refuses the plan commit.
+
+    Since story-117 the plan is committed on a story branch of its own rather
+    than on `main`, so a diverged `main` is no longer a push this could be
+    rejected by. What rejects it here is the remote itself: a hook that refuses
+    the branch this plan is committed to and accepts everything else, so the
+    reservation still lands and the plan push is what comes back rejected. The
+    subject is unchanged: a rejected push leaves the commit where it is.
+    """
     remote = planning.remote
-    diverged = tmp_path / "diverged"
-    subprocess.run(["git", "clone", "-q", str(remote), str(diverged)],
-                   cwd=tmp_path, check=True)
-    for command in (
-        ["git", "config", "user.email", "other@example.com"],
-        ["git", "config", "user.name", "Other"],
-        ["git", "commit", "-q", "--allow-empty", "-m", "upstream moved on"],
-        ["git", "push", "-q", "origin", "main"],
-    ):
-        subprocess.run(command, cwd=diverged, check=True)
+    refused_branch = story_coordinator.story_branch(
+        harness_config.load_config(planning.root), "story-900")
+    hook = remote / "hooks" / "pre-receive"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        "#!/bin/sh\n"
+        "while read old new ref; do\n"
+        f"  if [ \"$ref\" = \"refs/heads/{refused_branch}\" ]; then\n"
+        "    echo \"refusing $ref\" >&2; exit 1\n"
+        "  fi\n"
+        "done\n"
+        "exit 0\n",
+        encoding="utf-8")
+    hook.chmod(0o755)
     refs_before = remote_refs(remote)
 
     result = run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-900.yaml", artifact())))
 
     assert result.returncode != 0
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
-    assert planning.subject().startswith("Plan story-900")
-    assert "origin" in result.stdout and "main" in result.stdout
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
+    assert planning.planned_subject().startswith("Plan story-900")
+    assert "origin" in result.stdout \
+        and planning.planned_branch() in result.stdout
     # Nothing was rolled back, amended or reset: the artifact is still in the
-    # tree, the tree is otherwise clean, and the remote is where it was.
-    assert (planning.stories_dir / "story-900.yaml").is_file()
-    assert planning.status() == ""
-    assert remote_refs(remote) == refs_before
+    # tree the session wrote it in, that tree is otherwise clean, and the only
+    # ref the remote gained is the reservation the claim created.
+    worktree = worktrees.find(planning.root, planning.planned_branch())
+    assert worktree is not None, "the worktree was removed after a failed push"
+    assert (worktree / ".harness" / "stories" / "story-900.yaml").is_file()
+    assert planning.git("-C", str(worktree), "status", "--porcelain").stdout == ""
+    assert f"refs/heads/{planning.planned_branch()}" not in remote_refs(remote)
 
 
 # --------------------------------------------------------------------------
@@ -619,7 +705,7 @@ def test_a_rejected_push_leaves_the_commit_intact_and_unamended(
 def test_the_subject_names_the_story_and_carries_its_title(planning: Planning):
     run_plan(planning, L5_STUB_WRITE=writes(
         (".harness/stories/story-900.yaml", artifact(title="Stub planned story"))))
-    assert planning.subject() == "Plan story-900: Stub planned story"
+    assert planning.planned_subject() == "Plan story-900: Stub planned story"
 
 
 def test_the_fallback_subject_is_used_when_an_artifact_does_not_parse(tmp_path: Path):
@@ -650,7 +736,11 @@ def test_an_unparseable_artifact_is_not_committed_and_stays_in_the_tree(
 
     assert result.returncode != 0
     assert planning.head() == before
-    assert (planning.stories_dir / "story-902.yaml").is_file()
+    # In the worktree the session wrote it in, which a refusal over artifacts
+    # to repair keeps and names — the developer's own checkout never held it.
+    assert (kept_worktree(result) / ".harness" / "stories"
+            / "story-902.yaml").is_file()
+    assert not (planning.stories_dir / "story-902.yaml").exists()
 
 
 def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning):
@@ -661,7 +751,7 @@ def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning
     ))
 
     assert result.returncode == 0, result.stderr
-    assert committed_paths(planning.root) == [
+    assert planning.planned_paths("story-903") == [
         ".harness/stories/story-903.yaml",
         ".harness/stories/story-904.yaml",
     ]
@@ -669,10 +759,13 @@ def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning
     # what stands beneath them is the record of the mandates l5-plan conferred
     # on them. Both commits are named rather than the count being loosened, so
     # a third commit appearing here still fails.
-    assert planning.git("rev-list", "--count", f"{before}..HEAD").stdout.strip() == "2"
-    assert committed_paths(planning.root, "HEAD~1") == conferring_paths(planning)
-    assert "story-903" in planning.subject()
-    assert "story-904" in planning.subject()
+    repo, revision = planning.planned_in("story-903")
+    assert subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--count", f"{before}..{revision}"],
+        capture_output=True, text=True).stdout.strip() == "2"
+    assert committed_paths(repo, f"{revision}~1") == conferring_paths(planning)
+    assert "story-903" in planning.planned_subject("story-903")
+    assert "story-904" in planning.planned_subject("story-903")
 
 
 # --------------------------------------------------------------------------
@@ -829,7 +922,7 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
     status, _ = drain(process, master)
 
     assert status == 130
-    assert committed_paths(planning.root) == [".harness/stories/story-900.yaml"]
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
 
 # --------------------------------------------------------------------------
@@ -926,16 +1019,37 @@ def test_the_argument_list_handed_to_claude_is_what_the_exec_passed(
     # resolves it rather than written down.
     name = harness_config.load_config(planning.root).get(
         "workflow", "story-workflow")
+    # story-117 gave the planner the id this session reserved, which the old
+    # script does not resolve either: it renders `{{story_id}}` as the literal
+    # None where today's script renders the reserved id. Subtracted in the same
+    # shape, with the id read off the prompt the new script rendered rather
+    # than written down, so nothing here has to know what the remote answered.
+    reserved = re.search(r"The story id is (\S+)\.",
+                         after["argv"][after["argv"].index(
+                             "--append-system-prompt") + 1])
+    assert reserved, "the planner was not told the id it is planning"
     prompt_at = after["argv"].index("--append-system-prompt") + 1
     without_prose = list(after["argv"])
     without_prose[prompt_at] = (
         without_prose[prompt_at]
         .replace(prose, "None")
         .replace(f"\n{name}\n", "\nNone\n")
+        # The two places the id is injected, rather than every occurrence of
+        # the string: an id like `story-001` also appears inside the schema
+        # descriptions this prompt carries, and those are not this render.
+        .replace(f"The story id is {reserved.group(1)}.",
+                 "The story id is None.")
+        .replace(f".harness/stories/{reserved.group(1)}.yaml",
+                 ".harness/stories/None.yaml")
     )
     assert without_prose == before["argv"]
     assert after["argv"] != before["argv"]  # the partial really did reach it
-    assert after["cwd"] == before["cwd"]
+    # The working directory is the planning worktree since story-117, which is
+    # exactly what the old script did not have; the two are compared as "both
+    # inside the repository the plan is for" rather than as one path.
+    assert Path(after["cwd"]) != Path(before["cwd"])
+    assert Path(after["cwd"]).parent == worktrees.worktree_root(
+        planning.root, harness_config.load_config(planning.root))
     assert "--append-system-prompt" in after["argv"]
     assert f"Story request: {request}" in after["argv"]
 

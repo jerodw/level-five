@@ -808,8 +808,13 @@ RESTATED = [
     pytest.param(
         "tests/test_story_021_validation.py",
         "test_a_story_artifact_no_longer_reaches_a_story_commit",
-        "            return _refuse_dirty_tree(target_root, dirty)",
-        "            pass",
+        # Since story-117 what keeps the artifact out of the story commit is
+        # that the run works in a worktree the artifact was never written into,
+        # rather than a refusal for the developer's dirty tree. So the edit
+        # that violates the subject is the one that puts the run back in the
+        # tree it was invoked from, where `git add -A` reaches the artifact.
+        "    if worktrees.stands_on(target_root, branch):",
+        "    if True:",
         id="021-artifact-absorbed"),
     pytest.param(
         "tests/test_story_027_validation.py",

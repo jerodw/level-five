@@ -276,7 +276,7 @@ class Runner:
     def __init__(self, target_root: Path, *, verdict: dict = PASS,
                  capacity: dict | None = None, cost: float | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdict = verdict
         self.capacity = dict(capacity or {})
         self.cost = cost
@@ -290,13 +290,13 @@ class Runner:
         if ordinal in self.capacity:
             # A stage stopped part-way through still left something in the
             # working tree, which is what the pause commit exists to protect.
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + "print('half-written when capacity ran out')\n")
             return AgentResult(ok=False, result_text=f"{stage} stopped",
                                capacity=self.capacity[ordinal])
 
         if stage == WRITING:
-            write(self.target_root / "src" / "app.py",
+            write(Path(cwd) / "src" / "app.py",
                   APP_AT_HEAD + f"print('invocation {ordinal + 1}')\n")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -320,7 +320,7 @@ def environment(tmp_path):
 
 
 def run_dir_of(target: Path) -> Path:
-    return target / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target, STORY_ID)
 
 
 def history_dir_of(target: Path) -> Path:

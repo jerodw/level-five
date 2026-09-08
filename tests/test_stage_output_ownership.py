@@ -116,7 +116,7 @@ class Runner:
                  records: dict[str, dict] | None = None,
                  verdicts: list[dict] | None = None,
                  skip_outputs: tuple[str, ...] = ()):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.records = records or {}
         self.verdicts = list(verdicts or [PASS])
         self.skip_outputs = skip_outputs
@@ -148,7 +148,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path, story_id: str = "story-001") -> Path:
-    return target_root / ".harness" / "runs" / story_id
+    return conftest.run_dir_for(target_root, story_id)
 
 
 def state_of(target_root: Path, story_id: str = "story-001") -> dict:
@@ -558,7 +558,7 @@ def assert_refused_leaving_no_trace(target_root, harness_root, runner):
     run_dir = run_dir_of(target_root)
     assert not run_dir.exists()
     assert not (run_dir / "state.json").is_file()
-    assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
+    assert not conftest.log_path_for(target_root, "story-001").exists()
     assert branches(target_root) == before
     assert "story/story-001" not in branches(target_root)
 
@@ -609,7 +609,7 @@ def test_the_refusal_reaches_the_entry_point_the_same_way(target_root, tmp_path)
     assert result.returncode == 1
     assert "reviewer" in result.stderr
     assert not run_dir_of(target_root).exists()
-    assert not (target_root / ".harness" / "logs" / "story-001.log").exists()
+    assert not conftest.log_path_for(target_root, "story-001").exists()
     assert "story/story-001" not in branches(target_root)
 
 

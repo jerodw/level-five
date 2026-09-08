@@ -372,7 +372,7 @@ def check(root: Path, *, base: str = DEFAULT_BRANCH, story_id: str = STORY_ID,
     about both: the coordinator computes a result and the run directory is
     where the verifier meets it.
     """
-    run_dir = run_dir or (root / ".harness" / "runs" / story_id)
+    run_dir = run_dir or conftest.run_dir_for(root, story_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     result = story_coordinator.claim_support_check(
         run_dir, root, harness_config.load_config(root), ARTIFACT, base,
@@ -459,7 +459,7 @@ class Runner:
                  documented: str = "The harness runs four stages.",
                  second: str | None = None):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdicts = list(verdicts or [PASS])
         self.documented = documented
         self.second = second
@@ -468,8 +468,12 @@ class Runner:
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
+        # The tree the coordinator handed this stage, which since story-117 is
+        # the worktree the run works in rather than the checkout it was invoked
+        # from — and so the tree the claim-support check reads the documents in.
+        tree = Path(cwd) if cwd else Path(self.target_root)
         if stage == WRITING:
-            write(self.target_root / "src" / "app.py",
+            write(tree / "src" / "app.py",
                   "print('hello')\n# the story's change\n")
             write_json(self.run_dir / conftest.CHANGED_FILES,
                        {"modified": ["src/app.py"], "created": [], "deleted": []})
@@ -484,9 +488,9 @@ class Runner:
             })
         elif stage == DOCUMENTING:
             touched = [PRIMARY_DOC]
-            add_to_document(self.target_root, self.documented)
+            add_to_document(tree, self.documented)
             if self.second is not None:
-                add_to_document(self.target_root, self.second, SECOND_DOC)
+                add_to_document(tree, self.second, SECOND_DOC)
                 touched.append(SECOND_DOC)
             write(self.run_dir / conftest.DOCUMENTATION_REPORT,
                   "# Documentation report\n\nWrote it.\n")
@@ -511,7 +515,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def record_of(target_root: Path) -> dict:

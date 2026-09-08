@@ -373,7 +373,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return Path(target_root) / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(Path(target_root), STORY_ID)
 
 
 def drive(target_root: Path, harness: Path, plan: dict | None = None,

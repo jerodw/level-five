@@ -310,7 +310,7 @@ class Runner:
     def __init__(self, target_root: Path, verdict: dict = FAIL, *,
                  edit: bool = True):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
         self.verdict = verdict
         self.edit = edit
         self.calls: list[str] = []
@@ -321,7 +321,7 @@ class Runner:
         if stage == WRITING:
             record = {"modified": [], "created": [], "deleted": []}
             if self.edit:
-                write(self.target_root / "src" / "app.py",
+                write(Path(cwd) / "src" / "app.py",
                       APP_AT_HEAD + "print('implemented')\n")
                 record["modified"] = ["src/app.py"]
             write_json(self.run_dir / conftest.CHANGED_FILES, record)
@@ -345,7 +345,7 @@ class Runner:
 
 
 def run_dir_of(target_root: Path) -> Path:
-    return target_root / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target_root, STORY_ID)
 
 
 def state_of(target_root: Path) -> dict:

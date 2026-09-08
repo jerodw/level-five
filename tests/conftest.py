@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness_config  # noqa: E402
 import plan_mandate  # noqa: E402
 import story_coordinator  # noqa: E402
+import worktrees  # noqa: E402
 
 # --------------------------------------------------------------------------
 # The ceiling on inconclusive results.
@@ -876,6 +877,109 @@ def commit_setup(root: Path, message: str = "setup for this test") -> None:
     subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message],
                    cwd=root, check=True)
 
+
+def init_repository(root: Path,
+                    message: str = "the tree this starts from") -> None:
+    """Make `root` a git repository with everything under it committed.
+
+    `target_root` above does this inline for the target it builds. This is the
+    same act for a root a module built itself, and it is what every fixture
+    that drives `scripts/l5-plan` needs: since story-117 planning happens in a
+    worktree cut from the base, so a directory that is not a repository is one
+    no plan can be written in.
+    """
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message],
+                   cwd=root, check=True)
+
+
+#: The story every target this file builds carries, and so the story every
+#: helper below resolves a run root for unless a caller names another.
+SAMPLE_STORY_ID = "story-001"
+
+
+def run_root_for(root: Path, story_id: str = SAMPLE_STORY_ID) -> Path:
+    """The tree a run of `story_id` invoked from `root` works in.
+
+    Since story-117 a run does not work in the tree it was invoked from. It
+    works in a worktree of its own, cut from the base and living outside the
+    repository, unless the invoked tree is already standing on the story branch
+    or a worktree for that branch already exists. So `root / runs_dir /
+    story_id` is no longer where a run writes, and a fixture that computes it
+    that way hands its fake runner a directory the coordinator is not reading.
+
+    Resolved through the coordinator's own `resolve_run_root` rather than
+    rebuilt here, so that a test and the run it drives cannot disagree about
+    where the run works, and so this stays one derivation rather than a second
+    one beside the harness's. It answers the same path before the run — where
+    the worktree is going to be cut — and after it, where `worktrees.find` then
+    finds the tree standing on the branch, so a fixture may resolve it once and
+    use it on both sides of the run.
+    """
+    config = harness_config.load_config(root)
+    branch = story_coordinator.story_branch(config, story_id)
+    return story_coordinator.resolve_run_root(root, config, branch).path
+
+
+def run_dir_for(root: Path, story_id: str = SAMPLE_STORY_ID) -> Path:
+    """The run directory a run of `story_id` invoked from `root` writes into.
+
+    `run_root_for` above says which tree, and the configured `runs_dir` under
+    it says where in that tree, exactly as `run_story` composes the two.
+    """
+    config = harness_config.load_config(root)
+    runs_dir = config.get("runs_dir", ".harness/runs")
+    return run_root_for(root, story_id) / runs_dir / story_id
+
+
+def worktree_a_run_left(root: Path, story_id: str = SAMPLE_STORY_ID) -> Path:
+    """The tree a run of `story_id` worked in, created as that run would have.
+
+    Since story-117 a run that got anywhere has a worktree of its own, standing
+    on the story branch and holding its run directory. A test standing in for a
+    run that got that far — a crashed one, an escalated one, one whose tree the
+    test wants to dirty — needs that tree to exist, and creating a plain
+    directory at its path is not the same thing: it is exactly what the next
+    run's `git worktree add` refuses to write into.
+    """
+    tree = run_root_for(root, story_id)
+    if not tree.exists():
+        config = harness_config.load_config(root)
+        branch = story_coordinator.story_branch(config, story_id)
+        start = None if story_coordinator.branch_exists(Path(root), branch) \
+            else "HEAD"
+        made = worktrees.add(Path(root), tree, branch, start)
+        assert not made.problems, made.problems
+    return tree
+
+
+def run_directory_a_run_left(root: Path,
+                             story_id: str = SAMPLE_STORY_ID) -> Path:
+    """The run directory of a run a test is standing in for, created.
+
+    The tree above, with the run directory inside it, which is where a test
+    that hand-writes a state.json has to write it for the next run to read it.
+    """
+    worktree_a_run_left(root, story_id)
+    directory = run_dir_for(root, story_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def log_path_for(root: Path, story_id: str = SAMPLE_STORY_ID) -> Path:
+    """The stage log a run of `story_id` invoked from `root` appends to.
+
+    The run root's, for `run_dir_for`'s reason: the log is written in the tree
+    the run works in. A refused run has no such tree, so the same expression
+    says both "the log a run wrote" and "the log a refusal did not write".
+    """
+    config = harness_config.load_config(root)
+    logs_dir = config.get("logs_dir", ".harness/logs")
+    return run_root_for(root, story_id) / logs_dir / f"{story_id}.log"
 
 
 # --------------------------------------------------------------------------

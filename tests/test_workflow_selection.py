@@ -385,7 +385,7 @@ class Runner:
     def __init__(self, target_root: Path, *workflows: dict,
                  verdicts=None, story_id: str = STORY_ID):
         self.target_root = target_root
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.outputs = {stage["name"]: list(stage.get("outputs", []))
                         for workflow in workflows
                         for stage in workflow["stages"]}
@@ -397,7 +397,7 @@ class Runner:
 
     def _write(self, artifact: str) -> None:
         if artifact == conftest.CHANGED_FILES:
-            write(self.target_root / "src" / "app.py",
+            write(self.tree / "src" / "app.py",
                   APP_AT_HEAD + f"print('call {len(self.calls)}')\n")
             write_json(self.run_dir / artifact,
                        {"modified": ["src/app.py"], "created": [],
@@ -419,6 +419,10 @@ class Runner:
                  max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
         self.prompts.append((stage, prompt))
+        # The tree the coordinator handed this stage, which since story-117 is
+        # the worktree the run works in rather than the checkout it was invoked
+        # from. Held on the runner because the writes happen a call below.
+        self.tree = Path(cwd) if cwd else Path(self.target_root)
         # Written exactly as the real runner writes it, so "the refusal left
         # no log" is an observation of a file somebody would otherwise have
         # written rather than of one nothing ever writes.
@@ -441,7 +445,7 @@ def run(target: Path, harness: Path, runner: Runner | None = None,
 
 
 def run_dir_of(target: Path) -> Path:
-    return target / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target, STORY_ID)
 
 
 def state_of(target: Path) -> dict:
@@ -450,7 +454,7 @@ def state_of(target: Path) -> dict:
 
 
 def log_of(target: Path) -> Path:
-    return target / ".harness" / "logs" / f"{STORY_ID}.log"
+    return conftest.log_path_for(target, STORY_ID)
 
 
 def branches(target: Path) -> set[str]:
@@ -1225,7 +1229,9 @@ def test_l5_plan_without_the_argument_and_without_a_terminal_is_refused(
                                       planned(CONFIGURED["name"])))
                 ).returncode == 0
     assert planning.log.exists()
-    assert planning.head() != head
+    # The plan is committed on the story branch, in the worktree planning ran
+    # in, and pushed from there — the developer's own checkout does not move.
+    assert planning.planned_head(PLANNED_ID) != head
 
 
 def test_the_planner_prompt_carries_the_name_of_the_selected_workflow(
@@ -1368,7 +1374,9 @@ def test_a_session_whose_artifact_names_the_workflow_it_ran_under_commits(
                                         planned(SELECTED["name"]))))
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert planning.head() != head
+    # The plan is committed on the story branch, in the worktree planning ran
+    # in, and pushed from there — the developer's own checkout does not move.
+    assert planning.planned_head(PLANNED_ID) != head
     assert untracked(planning) == []
 
 
@@ -1447,7 +1455,9 @@ def test_a_session_naming_the_configured_workflow_still_holds_its_artifact_to_it
                 L5_STUB_WRITE=writes((relative_artifact(),
                                       planned(CONFIGURED["name"])))
                 ).returncode == 0
-    assert planning.head() != head
+    # The plan is committed on the story branch, in the worktree planning ran
+    # in, and pushed from there — the developer's own checkout does not move.
+    assert planning.planned_head(PLANNED_ID) != head
 
 
 def test_an_artifact_naming_no_workflow_is_committed_by_any_session(
@@ -1461,4 +1471,6 @@ def test_an_artifact_naming_no_workflow_is_committed_by_any_session(
                   L5_STUB_WRITE=writes((relative_artifact(), planned(None))))
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert planning.head() != head
+    # The plan is committed on the story branch, in the worktree planning ran
+    # in, and pushed from there — the developer's own checkout does not move.
+    assert planning.planned_head(PLANNED_ID) != head

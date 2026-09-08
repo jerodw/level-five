@@ -371,7 +371,7 @@ class Runner:
 
     def __init__(self, target_root: Path, *, costs: dict | None = None):
         self.target_root = Path(target_root)
-        self.run_dir = self.target_root / ".harness" / "runs" / STORY_ID
+        self.run_dir = conftest.run_dir_for(self.target_root, STORY_ID)
         self.costs = dict(costs or {})
         self.calls: list[str] = []
 
@@ -384,7 +384,7 @@ class Runner:
                    {"modified": [CHANGED_SOURCE], "created": [], "deleted": []})
             (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
-            (self.target_root / CHANGED_SOURCE).write_text(
+            (Path(cwd) / CHANGED_SOURCE).write_text(
                 "def a():\n    return 11\n", encoding="utf-8")
         elif stage == VERIFYING:
             _write(self.run_dir / conftest.VERIFICATION_RESULT, PASSED)
@@ -402,7 +402,7 @@ def run(target: Path, harness: Path, runner: Runner) -> int:
 
 
 def run_dir_of(target: Path) -> Path:
-    return target / ".harness" / "runs" / STORY_ID
+    return conftest.run_dir_for(target, STORY_ID)
 
 
 def state_of(target: Path) -> dict:

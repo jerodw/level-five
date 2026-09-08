@@ -9,6 +9,7 @@ import json
 import shutil
 from pathlib import Path
 
+import conftest
 import story_coordinator
 from agent_runner import AgentResult
 
@@ -25,7 +26,7 @@ class StageRunner:
                  write_tester_record: bool = True,
                  documenter_record: dict | None = None,
                  write_documenter_record: bool = True):
-        self.run_dir = target_root / ".harness" / "runs" / story_id
+        self.run_dir = conftest.run_dir_for(target_root, story_id)
         self.tester_record = tester_record or {
             "modified": [], "created": ["tests/test_app.py"], "deleted": []
         }
