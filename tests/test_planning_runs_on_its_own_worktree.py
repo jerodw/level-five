@@ -198,7 +198,12 @@ def build_target(root: Path, *, with_remote: bool = True) -> Target:
         # `cwd` stated, as every git call in this suite must state where it
         # runs: the path argument says what to create, and this says the call
         # is not about the repository the suite is running in.
-        subprocess.run(["git", "init", "--bare", "-q", str(remote)],
+        # The bare repository's HEAD is named rather than inherited. Left to
+        # `git init`, HEAD points at the machine's `init.defaultBranch`, which
+        # this fixture then never creates — so a clone of this remote checks
+        # out nothing and every file the clone is asked for is absent.
+        subprocess.run(["git", "init", "--bare", "-q", "-b", DEFAULT_BRANCH,
+                        str(remote)],
                        cwd=str(root.parent), check=True)
         git(root, "remote", "add", "origin", str(remote))
         git(root, "push", "-q", "-u", "origin", DEFAULT_BRANCH)
