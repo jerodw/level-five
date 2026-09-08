@@ -152,6 +152,11 @@ TOKEN_EXEMPT: dict[str, str] = {
         "and refused by l5-inspect when it is not one, so it cannot carry a "
         "word"
     ),
+    "inspect_min_severity": (
+        "the value is a severity the brief schema's own scale defines, parsed "
+        "to an integer in that range and refused by l5-inspect when it is not "
+        "one, so it cannot carry a word"
+    ),
     "inspect_after_story_max_files": (
         "the value is a count of files one post-story inspection may take into "
         "scope, parsed to a positive integer and — because that inspection may "
@@ -282,6 +287,11 @@ ITEMS_THE_COMMAND_ANSWERS_WITH = FILED_QUERY_MAX_ITEMS + 2
 DEFAULT_FILED_QUERY_TIMEOUT = filed_query.DEFAULT_TIMEOUT_SECONDS
 DEFAULT_FILED_QUERY_MAX_ITEMS = filed_query.DEFAULT_MAX_ITEMS
 
+#: The shape a finding the fixture writes must satisfy, loaded as it ships so
+#: this module spells no enum member of its own — the severity the findings
+#: carry and the floor the fixture configures are both read off it.
+INSPECT_BRIEF = schema_validator.load_schema(inspection.BRIEF_SCHEMA)
+
 #: How many briefs the fixture allows one inspection to file. A bound no
 #: harness would pick: the default written in harness source is ten and this
 #: repository configures none. It stands in for the token the value cannot
@@ -300,10 +310,27 @@ FINDINGS_THE_INVOCATION_WRITES = INSPECT_MAX_FINDINGS + 2
 #: allowance the invocation was given.
 INSPECT_MAX_COST = 0.29
 
+#: The severity the fixture floors one inspection at, and the severity every
+#: finding this module's inspections write carries. A floor no harness would
+#: pick: it is the lowest severity the scale defines, which is no floor at all,
+#: where the default written in harness source is a real one and this
+#: repository configures none. It stands in for the token the value cannot
+#: carry, and its proof pins it from both sides at once — the finding the
+#: fixture writes is filed under the configured floor and dropped beneath the
+#: default — so what is observed is this number rather than merely a number the
+#: reader did not refuse.
+#:
+#: It is also why every other inspection proof in this module still observes
+#: what it observed before the key existed: the findings they write sit at that
+#: severity, and under the harness default the floor would drop them all before
+#: the cap, the scopes or the allowance could be asked about.
+INSPECT_MIN_SEVERITY = min(INSPECT_BRIEF["properties"]["severity"]["enum"])
+
 #: The defaults the fallback comparison and the ordering above are stated
 #: against, read off the inspection module rather than written here.
 DEFAULT_INSPECT_MAX_FINDINGS = inspection.DEFAULT_MAX_FINDINGS
 DEFAULT_INSPECT_MAX_COST = inspection.DEFAULT_MAX_COST_USD
+DEFAULT_INSPECT_MIN_SEVERITY = inspection.DEFAULT_MIN_SEVERITY
 
 #: How many files the fixture allows one post-story inspection to take into
 #: scope. A bound no harness would pick: there is no default at all — the key's
@@ -352,6 +379,7 @@ VARYING: dict[str, object] = {
     "inspect_after_story_max_files": str(INSPECT_AFTER_STORY_MAX_FILES),
     "inspect_max_cost_usd": str(INSPECT_MAX_COST),
     "inspect_max_findings": str(INSPECT_MAX_FINDINGS),
+    "inspect_min_severity": str(INSPECT_MIN_SEVERITY),
     "logs_dir": ".harness/xyzzy-logs",
     "mandate_max_depth": str(MANDATE_DEPTH),
     "max_pause_wait_seconds": str(PAUSE_WAIT),
@@ -393,6 +421,7 @@ FALLBACKS: dict[str, object] = {
     "inspect_after_story_max_files": None,
     "inspect_max_cost_usd": DEFAULT_INSPECT_MAX_COST,
     "inspect_max_findings": DEFAULT_INSPECT_MAX_FINDINGS,
+    "inspect_min_severity": DEFAULT_INSPECT_MIN_SEVERITY,
     "logs_dir": ".harness/logs",
     "mandate_max_depth": story_coordinator.DEFAULT_MANDATE_MAX_DEPTH,
     "max_pause_wait_seconds": story_coordinator.NO_PAUSE_WAIT,
@@ -480,6 +509,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "inspect_max_findings": Proof(
         "test_inspect_max_findings_is_the_bound_on_what_one_inspection_files",
+        BEHAVIOURAL),
+    "inspect_min_severity": Proof(
+        "test_inspect_min_severity_is_the_floor_on_what_an_inspection_files",
         BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
@@ -624,6 +656,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "inspect_max_findings": (
         ("orchestration/inspection.py",
          "declared = config.get(MAX_FINDINGS_KEY)",
+         "declared = None"),
+    ),
+    "inspect_min_severity": (
+        ("orchestration/inspection.py",
+         "declared = config.get(MIN_SEVERITY_KEY)",
          "declared = None"),
     ),
     "logs_dir": (
@@ -1017,7 +1054,7 @@ EXPECTED_KEYS = (
     "census_command", "filed_query_command", "filed_query_max_items",
     "filed_query_timeout_seconds", "history_dir", "history_retention_days",
     "inspect_after_story_max_files",
-    "inspect_max_cost_usd", "inspect_max_findings",
+    "inspect_max_cost_usd", "inspect_max_findings", "inspect_min_severity",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "source_dirs", "standards_dir",
     "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
@@ -1425,6 +1462,13 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
     # value excludes findings where the default would file every one of them.
     assert 0 < INSPECT_MAX_FINDINGS < FINDINGS_THE_INVOCATION_WRITES \
         < DEFAULT_INSPECT_MAX_FINDINGS
+    # And the severity floor, pinned by the finding its proof writes: the
+    # configured floor sits below the default written in harness source and the
+    # finding sits at the configured floor, so it is filed under the configured
+    # value and dropped beneath the default.
+    assert INSPECT_MIN_SEVERITY < DEFAULT_INSPECT_MIN_SEVERITY
+    assert INSPECT_MIN_SEVERITY == \
+        min(INSPECT_BRIEF["properties"]["severity"]["enum"])
     # The cost allowance is handed to the invocation rather than pinning
     # anything the harness later decides, so what makes it a number no harness
     # would pick is that it is neither the default nor a whole dollar.
@@ -1864,11 +1908,6 @@ def test_filed_query_max_items_is_the_bound_on_what_one_answer_carries(tmp_path)
     assert str(dropped) in stated, stated
 
 
-#: The shape a finding the fixture writes must satisfy, loaded as it ships so
-#: this module spells no enum member of its own.
-INSPECT_BRIEF = schema_validator.load_schema(inspection.BRIEF_SCHEMA)
-
-
 def inspection_finding(ordinal: int) -> dict:
     """One conforming finding, distinguishable from the ones beside it.
 
@@ -1933,8 +1972,14 @@ class Inspection:
         return outbox.entry_files(outbox.queue_dir(self.target))
 
 
-def inspected(tmp_path: Path, *, findings: int = 1, **overrides) -> Inspection:
+def inspected(tmp_path: Path, *, findings: int = 1, omit: tuple = (),
+              **overrides) -> Inspection:
     """Build the fixture and inspect it through a fake runner.
+
+    `omit` deletes keys from the fixture's configuration, which is how a proof
+    observes what the harness does with a key the target never declared — the
+    other half of pinning a bound, beside configuring a value no harness would
+    pick.
 
     The two bounds an invocation runs under are read in
     `orchestration/inspection.py`, which is the only module that resolves a
@@ -1943,6 +1988,8 @@ def inspected(tmp_path: Path, *, findings: int = 1, **overrides) -> Inspection:
     bounded by is a different question and is proven through a run, below.
     """
     values = fixture_config(**overrides)
+    for key in omit:
+        values.pop(key, None)
     harness = build_harness(tmp_path)
     target = build_target(tmp_path, values)
     source = target / INSPECT_SOURCE_FILE
@@ -1999,6 +2046,38 @@ def test_inspect_max_findings_is_the_bound_on_what_one_inspection_files(
     for drop in excluded:
         assert drop.severity is not None
         assert "xyzzy-defect-" in drop.detail
+
+
+def test_inspect_min_severity_is_the_floor_on_what_an_inspection_files(
+        tmp_path):
+    """The configured floor decides which severities reach the queue.
+
+    Pinned from both sides in one test, because the two sides need two
+    configurations rather than two findings: the finding the invocation writes
+    carries the lowest severity the scale defines, which is what the fixture
+    floors at, so it is filed — and the same inspection with the key deleted
+    runs under the default written in harness source, which is a real floor,
+    drops that same finding beneath it and files nothing. A harness that had
+    stopped reading the key would fail the first half.
+
+    Observed at the queue as well as at the report, so what is asserted is the
+    filing rather than a partition the report happened to describe.
+    """
+    configured = inspected(tmp_path / "at-the-configured-floor")
+
+    assert [one.slug for one in configured.report.filed] == \
+        [inspection_finding(0)["slug"]]
+    assert len(configured.entries) == 1
+    assert configured.report.dropped_for(inspection.BENEATH_THE_FLOOR) == ()
+
+    defaulted = inspected(tmp_path / "with-the-key-deleted",
+                          omit=(inspection.MIN_SEVERITY_KEY,))
+
+    assert defaulted.report.filed == ()
+    assert defaulted.entries == []
+    dropped = defaulted.report.dropped_for(inspection.BENEATH_THE_FLOOR)
+    assert len(dropped) == 1
+    assert dropped[0].severity == INSPECT_MIN_SEVERITY
 
 
 #: Where the fixture puts the files a completed run's inspection reads, and the

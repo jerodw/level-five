@@ -472,6 +472,7 @@ def _summary(story_id: str, report, excluded, trimmed) -> str:
         inspection.ALREADY_QUEUED,
         inspection.MALFORMED,
         inspection.UNKNOWN_WORKFLOW,
+        inspection.BENEATH_THE_FLOOR,
         inspection.PAST_THE_CAP,
         inspection.LOST_BY_THE_QUEUE,
         inspection.NO_ARTIFACT,
@@ -611,7 +612,13 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     # cap, one queue call, one set of named reasons — rather than under a
     # second copy of them. It is also why nothing here names the queue.
     filed, over = inspection.file_findings(
-        target_root, result.found, bound.max_findings
+        target_root, result.found, bound.max_findings,
+        # The same floor, resolved from the same key by the same `bounds` call
+        # the broad mode makes. Passed rather than defaulted, because
+        # `file_findings` defaults it to no floor so that every construction
+        # that predates it is unchanged — a producer with a resolved bound in
+        # its hand has to hand it over.
+        min_severity=bound.min_severity,
     )
     report = inspection.Report(
         scopes=(scope,),
@@ -621,6 +628,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         dedupe=(result.dedupe,) if result.dedupe is not None else (),
         cost_usd=result.cost_usd,
         scope_files=result.scope_files,
+        min_severity=bound.min_severity,
     )
     findings, filed_count, dropped_count = _counts(report)
     _say(
