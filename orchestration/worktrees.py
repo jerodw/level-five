@@ -38,7 +38,7 @@ from pathlib import Path
 #: reads rather than one the pre-flight refuses.
 WORKTREE_DIR_KEY = "worktree_dir"
 
-#: Appended to the target root's own name to make the default sibling
+#: Appended to the primary working tree's own name to make the default sibling
 #: directory. A sibling rather than a child, so nothing this mechanism creates
 #: ever appears inside the repository: no path the harness globs, no clean-clone
 #: build and no blocked-path list gains an entry for worktrees.
@@ -223,9 +223,16 @@ def worktree_root(target_root: Path, config: dict) -> Path:
 
     The configured value when there is one, resolved against the target root
     when it is relative so a target may name a path inside its own parent
-    without knowing where that parent is. Unset, a sibling of the target root
-    named for it — outside the repository, so nothing the harness globs and no
-    clean clone ever meets a worktree.
+    without knowing where that parent is. Unset, a sibling of the repository's
+    *primary* working tree, named for that tree — so the answer is the same
+    asked from any tree of the repository, and the tree a run happens to be
+    invoked from does not decide where the repository's trees live. Asked from
+    a linked worktree at `<repo>-worktrees/story-x`, deriving from the target
+    root itself would answer `<repo>-worktrees/story-x-worktrees` and nest a
+    second directory of working trees inside the first.
+
+    Either way the directory is outside the repository, so nothing the harness
+    globs and no clean clone ever meets a worktree.
     """
     configured = config.get(WORKTREE_DIR_KEY)
     if configured:
@@ -236,7 +243,8 @@ def worktree_root(target_root: Path, config: dict) -> Path:
         # target root's own parent reads as the directory it is rather than
         # as a path with a `..` in the middle of it.
         return Path(os.path.normpath(target_root / path))
-    return target_root.parent / f"{target_root.name}{DEFAULT_SUFFIX}"
+    primary = primary_root(target_root)
+    return primary.parent / f"{primary.name}{DEFAULT_SUFFIX}"
 
 
 def worktree_path(target_root: Path, config: dict, branch: str) -> Path:
@@ -274,12 +282,13 @@ def primary_root(root: Path) -> Path:
     """The repository's primary working tree, for a path anywhere inside it.
 
     A linked worktree and the checkout it was cut from share one repository,
-    and some things belong to the repository rather than to a tree of it — the
-    durable filing queue and its receipt index among them, since a queue read
-    by nothing that outlives the tree that filed into it is a queue nothing
-    reads. This is where "which tree is the repository's own" is answered,
-    once. This module names no queue and reaches none: it answers a question
-    about working trees, and the module that owns the queue is what asks it.
+    and some things belong to the repository rather than to a tree of it —
+    where its worktrees are created among them, since a tree cut beside
+    whichever tree happened to invoke the harness nests one worktree inside
+    another. This is where "which tree is the repository's own" is answered
+    for that question. The durable filing queue asks the same question and
+    reaches its own answer by its own route; this function is not what it
+    calls, and this module names no queue and reaches none.
 
     Git is asked for the common directory, which is the primary tree's `.git`
     whichever tree the question is asked from; a relative answer is resolved
