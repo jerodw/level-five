@@ -1,0 +1,126 @@
+story:
+  id: story-120
+  title: One rule decides which remote this repository uses, wherever it is asked
+  description: |
+    Three functions answer "which remote does this repository use" and they do
+    not agree. `plan_commit.resolve_remote` returns `"origin" if "origin" in
+    remotes else ""`, so a repository whose only remote is named anything else
+    resolves to no remote at all. `story_coordinator._base_tracking_ref` and
+    `story_coordinator.fetch_story_branch` both fall back to the first remote
+    instead. Since story-117 that disagreement decides whether a story id is
+    reserved: in a clone whose single remote is, say, `upstream`, and whose
+    checked-out branch tracks nothing, `scripts/l5-plan` resolves the empty
+    string, `story_ids.reserve` takes the local-claim branch, and the
+    invocation prints that this repository configures no remote to claim an id
+    on and pushes nothing — so two clones can plan the same id, which is the
+    exact failure the reservation mechanism was built to remove. The same
+    repository's run path fetches story branches from `upstream` quite happily.
+
+    This story gives the question one answer. A new `orchestration/git_remote.py`
+    holds the single resolver, and the three sites call it rather than each
+    composing their own: the remote the branch is configured to track, else
+    `origin` where a remote of that name exists, else the first remote git
+    lists, else the empty string. `plan_commit.resolve_remote` goes away rather
+    than becoming a second name for it.
+
+    What moves is that an `upstream`-only clone reserves its id on `upstream`
+    instead of falling to a local claim, and that `fetch_story_branch` gains
+    the branch-tracking leg it never had — which is what one rule, wherever it
+    is asked, means. A repository with genuinely no remote behaves exactly as
+    it does today on every path, and a repository with `origin` resolves to
+    `origin` as it always has.
+
+    This story was planned from the brief filed under 175.
+  workflow: story-workflow
+
+tasks:
+  - Add orchestration/git_remote.py, holding `resolve(target_root, branch=None)` and `current_branch(target_root)`, in the shape plan_commit, story_ids and worktrees already have — every function returns what happened, nothing raises and nothing prints.
+  - Delete `resolve_remote` and `current_branch` from orchestration/plan_commit.py and point `push_commit` at the shared resolver for the remote a caller omitted, leaving its `PushResult` and its reporting of a repository with no remote exactly as they are.
+  - Point scripts/l5-plan at the shared resolver for the remote it reserves the story id against, so the id it claims and the remote the plan is pushed to are the one fact they already intend to be.
+  - Point story_coordinator._base_tracking_ref at the shared resolver for its second leg, keeping its `@{upstream}` rev-parse first and its answer of None where nothing resolves.
+  - Point story_coordinator.fetch_story_branch at the shared resolver, so a clone whose branch tracks a remote fetches a story branch from that remote and a clone with no remote answers, as it does today, only whether it already had the branch.
+  - Write tests/test_one_rule_resolves_the_remote.py as a standing module: the resolver driven directly over throwaway repositories, the three call sites shown answering alike, l5-plan driven end to end in an upstream-only clone through the stub session the planning fixtures already build, and a source scan that the decision is composed in one place, with a planted second site as the demonstration the scan can fail.
+  - Give the new test module whatever entry the standing conventions in tests/ require of a module under tests/, so no existing scan over the test directory goes red on it.
+  - Document the resolver in .harness/docs/ARCHITECTURE.md, revising the two paragraphs that currently state the origin-only fallback as the rule.
+
+acceptance_criteria:
+  - orchestration/git_remote.py exists and defines `resolve(target_root, branch=None)`, which returns the remote that branch is configured to track, else "origin" where a remote of that name exists, else the first remote git lists, else the empty string. Where `branch` is omitted the branch asked about is the one checked out, and a detached HEAD is a branch that tracks nothing rather than a failure.
+  - A test drives `resolve` over throwaway repositories covering each leg: no remote configured resolves to the empty string; a single remote named `upstream` resolves to `upstream`; `origin` beside `upstream` resolves to `origin`; a branch configured to track `upstream` in a repository that also has `origin` resolves to `upstream`; a detached HEAD in an `upstream`-only clone resolves to `upstream`; and an explicit `branch` argument naming a branch that tracks a remote resolves to that remote.
+  - orchestration/plan_commit.py defines neither `resolve_remote` nor `current_branch`, and `push_commit` resolves an omitted remote through `git_remote.resolve`.
+  - scripts/l5-plan resolves the remote it reserves the story id against through `git_remote.resolve` and names `plan_commit.resolve_remote` nowhere.
+  - story_coordinator._base_tracking_ref and story_coordinator.fetch_story_branch each resolve their remote through `git_remote.resolve` and compose no `"origin" in ...` choice of their own.
+  - Exactly one file under orchestration/ and scripts/ runs `git remote` to choose which remote answers for the repository, asserted by a scan over that source rather than by a listing, and the same scan reports two sites when a second one is planted in a copy of that source.
+  - In a clone whose single remote is named `upstream` and whose checked-out branch tracks nothing, an l5-plan invocation that writes an artifact reserves the story id on `upstream` — the story branch's ref is on that remote afterwards — and prints no line saying the repository configures no remote to claim an id on.
+  - In a clone with no remote configured at all, the same invocation still plans on a local claim and still says so, and `push_commit` still reports that no remote is configured with the commit left where it is.
+  - In one repository, `git_remote.resolve`, the remote `_base_tracking_ref` resolves its counterpart under, and the remote `fetch_story_branch` fetches from are the same remote, asserted for an `upstream`-only clone and for a clone holding both `origin` and `upstream`.
+  - The existing assertions in tests/test_plan_commit.py about a branch that tracks a non-origin remote, a branch that tracks nothing beside an `origin` that exists, and a repository with no remote all pass unchanged, with no assertion weakened, skipped or deleted.
+
+technical_plan:
+  implementation_steps:
+    - Write orchestration/git_remote.py with a module `_git` helper in the shape plan_commit and story_ids use, `current_branch(target_root)` returning the abbreviated HEAD or the empty string, and `resolve(target_root, branch=None)` reading `branch.<name>.remote` for the branch in question and falling back through the `git remote` listing.
+    - In orchestration/plan_commit.py, import git_remote, delete `resolve_remote` and `current_branch`, and have `push_commit` take its branch and its omitted remote from git_remote. The docstring paragraph explaining why `push_commit` takes a caller's remote stays true and stays.
+    - In scripts/l5-plan, replace the `plan_commit.resolve_remote(target_root)` call with `git_remote.resolve(target_root)` and add the import beside the others. The comment above it explains why the remote is resolved before a worktree exists; it is unchanged by this.
+    - In orchestration/story_coordinator.py, replace `_base_tracking_ref`'s second leg with a call to `git_remote.resolve(target_root, base)`, keeping its `@{upstream}` rev-parse ahead of it and its None where the candidate ref does not verify, and replace `fetch_story_branch`'s remote listing with `git_remote.resolve(target_root)`, keeping its answer of False where nothing resolves.
+    - Write tests/test_one_rule_resolves_the_remote.py, reusing the target-and-bare-remote fixtures tests/test_plan_commit.py and tests/test_planning_runs_on_its_own_worktree.py already build rather than composing a third of them. No test in it reaches the network — every remote is a bare repository in a temporary directory — and none invokes a model.
+    - Revise the plan_commit paragraph and the push_commit paragraph in .harness/docs/ARCHITECTURE.md, which both state the origin-only fallback as the rule, and add the git_remote.py entry beside the other orchestration modules.
+  likely_file_changes:
+    - file: orchestration/git_remote.py
+      stage: implementer
+      reason: The new module holding the one resolver and the current-branch read it needs.
+    - file: orchestration/plan_commit.py
+      stage: implementer
+      reason: Loses `resolve_remote` and `current_branch`; `push_commit` resolves an omitted remote through the shared module.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: `_base_tracking_ref` and `fetch_story_branch` each drop their own fallback and call the shared resolver.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Resolves the remote it reserves the story id against through the shared module rather than through plan_commit.
+    - file: tests/test_one_rule_resolves_the_remote.py
+      stage: tester
+      reason: The standing module holding the resolver's legs, the three call sites agreeing, the end-to-end reservation in an upstream-only clone, and the one-site scan with its planted control.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The plan_commit and push_commit paragraphs state the origin-only fallback as the rule and are stale the moment this lands; the new module needs its entry.
+
+scope:
+  modify:
+    - orchestration/git_remote.py
+    - orchestration/plan_commit.py
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_ids.py
+    - orchestration/worktrees.py
+    - orchestration/harness_config.py
+    - workflows/
+    - prompts/
+    - schemas/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm orchestration/git_remote.py holds the resolver, that its legs are the four the acceptance criteria name, and that it raises nothing and prints nothing.
+  - Confirm by reading the source that `resolve_remote` is defined nowhere, that the three call sites reach git_remote, and that no site under orchestration/ or scripts/ other than git_remote.py lists remotes to choose between them.
+  - Confirm the end-to-end assertion that an upstream-only clone reserves its id on `upstream`, and that it is asserted by the ref on the bare remote rather than by the wording l5-plan printed.
+  - Confirm the remoteless clone still takes the local claim and still says so, so the local-claim path was narrowed to the repositories it was meant for rather than removed.
+  - Confirm the one-site scan has a planted second site beside it that the same scan reports, so the absence it asserts is demonstrated able to fail.
+  - Confirm the full suite passes and that no existing assertion was weakened, skipped or deleted to reach it.
+  - Confirm .harness/docs/ARCHITECTURE.md no longer states the origin-only fallback as the rule anywhere, and that the new module is documented beside the others.
+
+constraints:
+  - Python 3.10+ and the standard library only; type hints on public functions, and no third-party runtime dependency.
+  - Every function in the new module returns what happened rather than printing it, and nothing in it raises — the shape plan_commit, story_ids and worktrees already have.
+  - A repository with no remote configured behaves on every path exactly as it does today: `push_commit` reports no remote and leaves the commit where it is, and l5-plan plans on a local claim and says the claim is local.
+  - What a claim is, how an id is reserved, how a claim is released, and every message l5-plan prints about a reservation are untouched.
+  - `resolve_base`'s reading of `refs/remotes/origin/HEAD` is a different question — which branch is the default, not which remote answers — and it stays exactly as it is.
+  - No coordinator behaviour outside remote resolution changes: `_base_tracking_ref` still answers None where nothing resolves, and `fetch_story_branch` still answers only whether the branch resolves afterwards.
+  - Tests live under tests/, run under the configured test command, reach no network, and invoke no model.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-08 20:20:28
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
