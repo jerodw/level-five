@@ -1,0 +1,101 @@
+story:
+  id: story-123
+  title: A run invoked from a worktree creates its worktree where the repository's other trees already stand
+  description: |
+    `orchestration/worktrees.py` holds two derivations of where repository-level
+    state lives, and they disagree about which tree the repository is.
+    `primary_root` asks git for the common directory and answers with the
+    repository's primary working tree whichever tree it is asked from, which is
+    what makes the outbox queue one per repository. `worktree_root` answers,
+    when `worktree_dir` is unset, with the sibling of whichever tree it was
+    asked from.
+
+    So `l5-run` invoked from inside a linked worktree at
+    `<repo>-worktrees/story-story-118` derives its worktree root as
+    `<repo>-worktrees/story-story-118-worktrees` and creates the new story's
+    tree there — a second directory of working trees nested inside the first —
+    while that same run's queue resolves to the primary checkout.
+    `resolve_run_root` resolves the run root through `worktrees.worktree_path`
+    before `target_root` is rebound, so the invoking directory is what decides.
+    `worktrees.find` still locates an existing tree for a branch, so this bites
+    a branch that has no tree yet — a fresh run — rather than a resume.
+
+    This story makes `worktree_root` derive its default from
+    `primary_root(target_root)`, so a run or a planning session invoked from a
+    linked worktree creates its tree beside that worktree rather than nested
+    under it. Running the harness from a worktree is not hypothetical: it is how
+    an assist or inspection session in a story's own tree invokes it, and
+    story-118 has just made the queue answer correctly from there.
+
+    This story depends on story-118, which is where `worktrees.primary_root` is
+    defined. story-118 was pushed but not merged when this story was planned, so
+    the function is not on this story's base. The run must be started after
+    story-118 merges to main; started before, the implementer finds no such
+    function.
+
+    This story was planned from the brief filed under the key 185.
+  workflow: story-workflow
+
+tasks:
+  - Change the unset-`worktree_dir` branch of `worktrees.worktree_root` to derive its directory from `worktrees.primary_root(target_root)` rather than from `target_root` itself, and correct the docstring that describes the answer as a sibling of the target root.
+  - Add a test module asserting where a worktree is created from a linked worktree, from the primary tree, and under each configured form of `worktree_dir`, for a run and for a planning session alike.
+  - Record in `.harness/docs/ARCHITECTURE.md` that worktree placement is answered from the repository's primary tree rather than from the invoking tree.
+
+acceptance_criteria:
+  - Asked from a linked worktree with no `worktree_dir` configured, `worktrees.worktree_root` answers the sibling of the repository's primary working tree, named for that tree, and not the sibling of the linked worktree it was asked from.
+  - Asked from the repository's primary working tree with no `worktree_dir` configured, `worktrees.worktree_root` answers exactly what it answered before this story.
+  - A configured `worktree_dir` still decides the answer in both its forms — an absolute value answered verbatim, a relative one resolved against the target root — unchanged by this story.
+  - A fresh run invoked from a linked worktree, for a branch no working tree stands on, creates its worktree as a sibling of the primary tree's own worktree directory rather than nested inside the invoking worktree.
+  - A planning session invoked from a linked worktree creates its detached worktree in that same directory, since it derives its path through the same function.
+  - A run invoked from a linked worktree for a branch an existing worktree already stands on still works in that existing worktree, because `worktrees.find` and not `worktree_root` is what answers there.
+  - The failure this story fixes is demonstrated rather than asserted in the abstract: reverting the change in `worktrees.py` alone makes the new test module fail.
+
+technical_plan:
+  implementation_steps:
+    - Confirm `worktrees.primary_root` is present on the run's base; it is defined by story-118 and this story calls it.
+    - In `worktrees.worktree_root`, replace `target_root.parent / f"{target_root.name}{DEFAULT_SUFFIX}"` with the same expression over `primary_root(target_root)`, leaving the configured branch above it untouched.
+    - Rewrite the sentence of that docstring describing the unset answer, so it says the sibling is named for the repository's primary working tree and answered the same from any tree of the repository, and says why — the tree a run is invoked from must not decide where the repository's trees live.
+    - Leave `story_coordinator.resolve_run_root` alone; it already routes through `worktrees.worktree_path`, so the corrected derivation reaches it unchanged.
+    - Write the test module against the public functions and against a run and a planning session driven end to end, reusing the existing fixtures that cut a linked worktree.
+    - Record the placement rule in `.harness/docs/ARCHITECTURE.md` beside what is already written there about worktrees.
+  likely_file_changes:
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: The one derivation this story changes, and the docstring describing it.
+    - file: tests/test_a_run_creates_its_worktree_beside_the_others.py
+      stage: tester
+      reason: The new module holding the correctness claim, which nothing asserts today.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that worktree placement is answered from the repository's primary tree rather than from the invoking tree.
+
+scope:
+  modify:
+    - orchestration/worktrees.py
+    - tests/test_a_run_creates_its_worktree_beside_the_others.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The `worktree_dir` configuration key, its schema declaration, and the branch of `worktree_root` that reads it — both its absolute and its relative form already name a directory explicitly.
+    - orchestration/story_coordinator.py
+    - orchestration/outbox.py
+
+verification_requirements:
+  - The full suite passes with the new module in it.
+  - The new module fails when the change to `worktrees.worktree_root` is reverted and passes with it, so it demonstrates the defect rather than restating the implementation.
+  - No test asserts a path built by repeating the implementation's own expression against the same inputs; the expected primary tree is named by the fixture that built the repository.
+  - Every test that compares two worktree paths resolves both sides, as this repository's existing worktree tests do, since a temporary directory may be reached through a symlink.
+  - Nothing outside `orchestration/worktrees.py` changed in the implementer's stage.
+
+constraints:
+  - A configured `worktree_dir` keeps its current meaning exactly; this story changes only what is answered when the key is unset.
+  - Asked from the repository's primary working tree, the answer is unchanged, so no existing worktree moves and no story in flight is disturbed.
+  - `primary_root`'s existing bias is preserved by relying on it rather than working around it: where git cannot say which tree is primary it answers the root it was given, and `worktree_root` then answers what it answered before this story.
+  - Nothing in this story raises or prints; `worktrees` reports what happened and a caller decides what it is worth.
+  - The resume path is untouched: a run whose branch already has a worktree still finds it through `worktrees.find`.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-08 20:30:12
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
