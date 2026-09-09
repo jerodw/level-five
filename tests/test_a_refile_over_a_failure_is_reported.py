@@ -49,6 +49,7 @@ import pytest
 
 import inspection
 import outbox
+import worktrees
 
 import test_inspection as producer
 import test_outbox as queue_tests
@@ -597,14 +598,19 @@ def test_every_queue_this_module_drives_is_one_the_test_built(tmp_path):
 
     The control is the same predicate pointed at this repository's own root,
     which it reports — so silence for the fixture target is a fact about where
-    the entry went rather than about a check that answers nothing.
+    the entry went rather than about a check that answers nothing. Since
+    story-118 a repository's queue sits beneath its *primary* working tree
+    rather than beneath whichever tree asked for it, and this suite is run from
+    a worktree, so the control names that tree — the one this repository's
+    queue actually belongs to — with the predicate and its strictness
+    unchanged.
     """
     repository = Path(outbox.__file__).resolve().parents[1]
     owned = tmp_path / "a-queue-this-test-owns"
     key = refused_entry(owned, FAILED_IDENTITY)
 
     assert repository not in outbox.queue_dir(owned).parents
-    assert repository in outbox.queue_dir(repository).parents
+    assert worktrees.primary_root(repository) in outbox.queue_dir(repository).parents
     assert outbox.local_index(owned).failed == frozenset({key})
     assert json.loads(outbox.entry_path(outbox.queue_dir(owned), key)
                       .read_text(encoding="utf-8"))["state"] == FAILED

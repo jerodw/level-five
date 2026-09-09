@@ -1,0 +1,116 @@
+story:
+  id: story-118
+  title: The outbox queue and receipt index belong to the repository rather than to the working tree
+  description: |
+    Planned from the brief filed under key 173.
+
+    The outbox queue and the receipt index are gitignored directories, so
+    since story-117 gave planning and running worktrees of their own they are
+    per-working-tree, and the design's own statement about a pending entry no
+    longer holds. `orchestration/story_coordinator.py:6889` says a crashed,
+    escalated or paused run "leaves its entries for the next run or for an
+    explicit l5-sync", and both readers named there look somewhere else: the
+    in-run sweep reads the run root's queue, below the rebinding of
+    `target_root` to the worktree, and the next run is a run of a different
+    story in a different worktree; `scripts/l5-sync` resolves its root from the
+    invoking directory, which is the developer's checkout and not any
+    worktree. So a brief filed by a run whose transport was unreachable sits in
+    a directory nothing later reads, and local dedupe restarts from empty in
+    every new worktree, which lets the same brief be filed repeatedly.
+
+    This makes the queue and the index belong to the repository: both resolve
+    to the repository's primary working tree, so a run in a worktree, an
+    explicit drain from the developer's checkout, an assist session anywhere
+    in the repository and the read-only l5-status listing all name one queue
+    and one index. Every caller already reaches them through
+    `outbox.queue_dir` and `outbox.receipts_dir`, so the derivation changes in
+    one place and no call site does — which is the point, because a second
+    derivation is how the two would drift apart again.
+
+    The cost is stated rather than hidden: a run working in a worktree now
+    writes a gitignored file into the developer's checkout. Nothing tracked is
+    written, so no clean-tree pre-flight sees it, and it is what makes the
+    queue outlive the worktree that filed into it.
+  workflow: story-workflow
+
+tasks:
+  - Add a derivation of the repository's primary working tree to orchestration/worktrees.py, reporting rather than raising, and answering with the root it was given wherever git cannot say.
+  - Resolve outbox.queue_dir and outbox.receipts_dir through that derivation, leaving receipts_beside and every caller unchanged.
+  - Rewrite the design statement in orchestration/story_coordinator.py about where a crashed, escalated or paused run leaves its entries, so it names the readers that now read them.
+  - Cover the property with a test module that files an entry from inside a worktree and drains it from another tree.
+  - Record in .harness/docs/ARCHITECTURE.md that the queue and the index are one per repository, where they live, and what that costs.
+
+acceptance_criteria:
+  - orchestration/worktrees.py exposes a function that answers with the repository's primary working tree for a path inside a linked worktree, and with the path it was given for a directory that is not a git repository, for a repository whose primary is bare, and for a git invocation that fails.
+  - outbox.queue_dir and outbox.receipts_dir, called with a linked worktree's path, answer with the queue and the index beneath the repository's primary working tree.
+  - outbox.queue_dir and outbox.receipts_dir, called with a directory that is not a git repository, answer with the queue and the index beneath that directory, which is what they answer today.
+  - An entry enqueued through outbox.queue_dir from inside a worktree is found and landed by a drain that resolves its queue from the primary working tree.
+  - A landed entry filed from one worktree is held by outbox.local_state as landed when it is asked from a second worktree of the same repository, so local dedupe no longer restarts from empty in a new tree.
+  - outbox.receipts_beside applied to the queue outbox.queue_dir returns for any tree of a repository gives the same path outbox.receipts_dir returns for that tree.
+  - No call site of outbox.queue_dir or outbox.receipts_dir outside orchestration/outbox.py passes a root it resolved through the new derivation itself, so the repository holds one derivation of where the queue lives.
+  - The statement in orchestration/story_coordinator.py about what a crashed, escalated or paused run leaves behind names the queue as the repository's and does not describe a per-tree queue.
+  - The two coordinator sweeps and scripts/l5-sync are unchanged in which function they call and what they hand it.
+
+technical_plan:
+  implementation_steps:
+    - Add `primary_root(root)` to orchestration/worktrees.py. It asks git for the common directory from `root`, resolves a relative answer against `root`, and takes that directory's parent as the primary working tree. It answers with `root` unchanged when git fails, when the answer does not resolve to an existing directory, and when the derived parent is not a working tree — a bare primary has none — which is the one-directional bias `standing_branch` and `working_trees` already take in that module.
+    - Resolve `queue_dir` and `receipts_dir` in orchestration/outbox.py through `primary_root`, imported inside the functions in the idiom that module already uses for its deferred import of the coordinator, so a caller that never asks for a queue pays nothing for the capability and no import cycle is introduced. Leave `receipts_beside` deriving the index from the queue it is handed: the two derivations still agree, because both roots are now the same root.
+    - Extend the QUEUE_DIR and RECEIPTS_DIR comments in orchestration/outbox.py to say that the pair is one per repository and why — a worktree's queue is read by nothing that outlives the worktree — and that a directory git cannot answer for keeps its own queue beneath itself.
+    - Rewrite the sweep comment in `_complete` in orchestration/story_coordinator.py that states what a crashed, escalated or paused run leaves behind, so it says the entries are in the repository's one queue, read by the next run's pre-flight sweep whichever tree that run works in and by an explicit l5-sync whichever tree it is invoked from. Change no sweep call site.
+    - Write the test module covering the property end to end: a repository with a linked worktree, an entry enqueued from inside the worktree with a transport that cannot deliver, a drain resolved from the primary working tree that finds and lands it, a re-file from a second worktree that the receipt suppresses, and the non-repository directory whose queue stays beneath itself.
+    - State in .harness/docs/ARCHITECTURE.md where the queue and the index live, that they are one per repository rather than one per working tree, that every reader converges because they share one derivation, and that a run in a worktree therefore writes a gitignored file into the developer's checkout.
+  likely_file_changes:
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: Gains the derivation of the repository's primary working tree, beside the worktree lookup and the standing-branch question it belongs with.
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: queue_dir and receipts_dir resolve through the new derivation, and the constants' comments say what the pair now is.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The design statement about where a crashed, escalated or paused run leaves its entries names readers that look elsewhere.
+    - file: tests/test_the_outbox_belongs_to_the_repository.py
+      stage: tester
+      reason: The standing module holding the property: an entry filed in a worktree is drained from the primary tree, the receipt is seen from a third tree, and a non-repository directory keeps its own queue.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the queue and the index are one per repository, where they live, and what a run writing into the developer's checkout costs.
+
+scope:
+  modify:
+    - orchestration/worktrees.py
+    - orchestration/outbox.py
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - scripts/l5-sync
+    - orchestration/outbox_sweep.py
+    - orchestration/run_status.py
+    - orchestration/brief_filing.py
+    - orchestration/inspection.py
+    - .gitignore
+    - schemas/
+    - workflows/
+
+verification_requirements:
+  - Confirm that a queue and an index derived from inside a linked worktree resolve beneath the repository's primary working tree, and that a queue derived from a directory that is not a git repository resolves beneath that directory.
+  - Confirm that an entry enqueued from a worktree is landed by a drain whose queue was resolved from the primary working tree, and that the receipt then suppresses a re-file asked from another tree of the same repository.
+  - Confirm the repository holds one derivation of where the queue lives: the callers of queue_dir and receipts_dir outside orchestration/outbox.py pass the root they already had.
+  - Confirm scripts/l5-sync, orchestration/outbox_sweep.py, orchestration/run_status.py, orchestration/brief_filing.py and orchestration/inspection.py are unchanged.
+  - Confirm the full suite passes, including the existing outbox, filed-query, brief-filing and worktree modules, whose tmpdir fixtures depend on the answer for a directory that is not a repository.
+
+constraints:
+  - The sweep inside a run must stay total: it returns a Summary on every path, raises on none, and offers no value a call site could read as a reason to stop. A derivation that raises or that leaves a caller nothing to do would make the queue the thing that blocks a run.
+  - orchestration/worktrees.py keeps its rule that every function returns what happened and none raises, so a git that failed, a path that is not a repository and a bare primary are answers rather than errors.
+  - The derivation is a constant of the harness and gains no configuration key: nothing about where the queue lives is a target's choice, which is what the QUEUE_DIR comment already says.
+  - The queue and the index stay gitignored, so no pending entry is reported by a clean-tree pre-flight.
+  - The behaviour of a repository with no worktrees is unchanged: the queue and the index stay beneath its own root, at the paths they are at today.
+  - Nothing here plans, files or drains differently: what changes is which directory a filing and a drain name, not what an entry means, when it is retried, or what lands, fails or poisons it.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-08 15:39:33
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan

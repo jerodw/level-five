@@ -270,6 +270,59 @@ def stands_on(root: Path, branch: str) -> bool:
     return bool(branch) and standing_branch(root) == branch
 
 
+def primary_root(root: Path) -> Path:
+    """The repository's primary working tree, for a path anywhere inside it.
+
+    A linked worktree and the checkout it was cut from share one repository,
+    and some things belong to the repository rather than to a tree of it — the
+    durable filing queue and its receipt index among them, since a queue read
+    by nothing that outlives the tree that filed into it is a queue nothing
+    reads. This is where "which tree is the repository's own" is answered,
+    once. This module names no queue and reaches none: it answers a question
+    about working trees, and the module that owns the queue is what asks it.
+
+    Git is asked for the common directory, which is the primary tree's `.git`
+    whichever tree the question is asked from; a relative answer is resolved
+    against `root`, and that directory's parent is the primary working tree.
+
+    It answers with `root` unchanged wherever git cannot say: a git that
+    failed, a directory that is not a repository, an answer that does not
+    resolve to a directory that exists, and a derived parent that is not itself
+    a working tree — which is what a repository whose primary is bare has. That
+    is the one-directional bias `standing_branch` and `working_trees` already
+    take in this module: nothing establishable is answered with the path we
+    were given rather than with something false, and nothing here raises.
+
+    For a linked worktree the answer is git's own spelling of the primary tree,
+    which on a platform whose temporary directories are reached through a
+    symlink is the resolved one. A caller comparing it against a path it built
+    itself resolves both sides, which is what every worktree comparison in this
+    repository's suite already does.
+    """
+    common = _git(root, "rev-parse", "--git-common-dir")
+    if common.returncode != 0:
+        return root
+    answer = common.stdout.strip()
+    if not answer:
+        return root
+    git_dir = Path(answer)
+    if not git_dir.is_absolute():
+        git_dir = root / git_dir
+    if not git_dir.is_dir():
+        return root
+    candidate = git_dir.parent
+    # A directory beside a git directory is not thereby a working tree: a bare
+    # repository's parent is whatever it happens to sit in. Git is asked which
+    # tree that directory belongs to, and the answer has to be that directory
+    # itself for it to be the primary working tree.
+    toplevel = _git(candidate, "rev-parse", "--show-toplevel")
+    if toplevel.returncode != 0 or not toplevel.stdout.strip():
+        return root
+    if Path(toplevel.stdout.strip()).resolve() != candidate.resolve():
+        return root
+    return candidate
+
+
 def working_trees(root: Path) -> list[tuple[Path, str]]:
     """Every working tree this repository has, as (path, branch) pairs.
 
