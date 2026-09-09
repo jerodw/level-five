@@ -1,0 +1,101 @@
+story:
+  id: story-125
+  title: How the common git directory is found from a working tree is derived in one place in worktrees.py
+  description: |
+    `orchestration/worktrees.py` asks git for the repository's common git
+    directory in two places. `_exclude_file` runs `rev-parse --git-common-dir`
+    against a root and resolves a relative answer against that root;
+    `primary_root` does the same two steps again, in the same module, ten lines
+    of code further down. The module's own header says it holds the whole
+    worktree concept so none of it is spelled twice.
+
+    The two copies have already diverged. `worktree_root`'s configured branch
+    normalises before returning, and says why: a path with a `..` in the middle
+    of it must read as the directory it is. `primary_root` does not normalise,
+    and it is the caller that takes `.parent` and hands the result to an
+    expression reading `.name`. Where git answers the common directory
+    relatively with a `..` in it, `primary_root` answers `<root>/../..`,
+    `primary.name` is the string `..`, and the default worktree directory
+    becomes a directory literally named `..-worktrees` one level above the
+    tree. Git answers absolutely from a linked worktree today, so this is not
+    firing; what makes it worth closing is that the two copies are free to be
+    corrected one at a time and nothing goes red when they disagree.
+
+    This story extracts one helper that returns the resolved, normalised common
+    git directory, and composes both callers over it: `_exclude_file` appends
+    `info/exclude` to it, `primary_root` takes its parent. The normalisation is
+    then stated once and reaches both callers, which is what removes the latent
+    `..-worktrees` answer. Behaviour is otherwise unchanged, and the existing
+    worktree and build-state tests already cover both callers, which is why
+    this is refactor-workflow.
+
+    Planned from the brief filed under 189.
+  workflow: refactor-workflow
+
+tasks:
+  - Add one private helper to orchestration/worktrees.py that runs `git rev-parse --git-common-dir` against a given root, resolves a relative answer against that root, normalises the result, and reports git's own words when the command failed or said nothing.
+  - Compose `_exclude_file` over that helper, appending `info/exclude` to what it returns and continuing to answer its caller with a path-or-None together with git's problems.
+  - Compose `primary_root` over that helper, taking the parent of what it returns and continuing to answer its caller with the root it was given wherever git cannot say.
+  - Update the docstrings on both callers and on the new helper so the derivation is described where it now lives rather than described twice.
+
+acceptance_criteria:
+  - The text `rev-parse` paired with `--git-common-dir` appears exactly once in orchestration/worktrees.py, and the resolution of a relative answer against the root appears exactly once with it.
+  - `_exclude_file` and `primary_root` each reach the common git directory through the new helper and neither runs the git command itself.
+  - The normalisation is applied inside the helper, so both callers receive a path with no `..` component left in the middle of it.
+  - `_exclude_file` still answers `(None, problems)` when git could not name the common directory, with git's own words one problem per line and the existing fallback wording when git said nothing.
+  - `primary_root` still answers with the root it was given for a git that failed, an answer that does not resolve to a directory that exists, and a derived parent that is not itself a working tree.
+  - `primary_root` still confirms the derived parent is the primary working tree by asking git for that directory's toplevel and comparing the resolved paths, unchanged.
+  - Asked from a linked worktree of a repository whose git answers absolutely, `primary_root` returns the same path it returned before this story, and `link_build_state` writes to the same exclude file it wrote to before this story.
+  - The expression `worktree_root` composes for an unset `worktree_dir` is byte-for-byte unchanged, so the source-text anchor in tests/test_a_run_creates_its_worktree_beside_the_others.py still finds it.
+  - The whole suite passes with no assertion removed, weakened or skipped.
+
+technical_plan:
+  implementation_steps:
+    - Write the helper beside `_exclude_file` in orchestration/worktrees.py, returning the resolved and normalised common git directory together with git's problems, in the `tuple[Path | None, list[str]]` shape `_exclude_file` already answers in, so nothing raises and nothing prints.
+    - Normalise inside the helper with `os.path.normpath`, the same call and for the same stated reason as the configured branch of `worktree_root`, and say in the docstring that this is where the normalisation lives for both callers.
+    - Reduce `_exclude_file` to calling the helper and appending `info/exclude`, keeping its returned problems as they are.
+    - Reduce `primary_root` to calling the helper, answering `root` when it reports no directory, and continuing from `git_dir.parent` through the existing toplevel check unchanged.
+    - Leave `worktree_root`, `worktree_path`, `standing_branch`, `stands_on`, `working_trees`, `find`, `add`, `add_detached`, `create_branch` and `remove` untouched.
+  likely_file_changes:
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: The duplicated derivation lives here, and the new helper and both rewritten callers are the whole of the change.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The document describes the two derivations separately, around the build-state exclude file and around the outbox queue's primary-tree question, and each passage says the caller asks git itself. Both should say the derivation now has one home.
+
+scope:
+  modify:
+    - orchestration/worktrees.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - tests/
+    - workflows/
+    - prompts/
+    - schemas/
+
+verification_requirements:
+  - Confirm the git command that names the common git directory, and the resolution of a relative answer against the root, each appear once in orchestration/worktrees.py.
+  - Confirm both callers reach that directory through the shared helper.
+  - Confirm the normalisation is stated once, inside the helper, and that it therefore reaches `primary_root` as well as `_exclude_file`.
+  - Confirm the one-directional bias is intact: `primary_root` answers with the root it was given, and never raises, for every case it answered that way before.
+  - Confirm the failure-reporting difference between the callers is intact: `_exclude_file` hands its caller git's problems, `primary_root` hands its caller a path.
+  - Confirm the existing worktree and build-state tests exercise both callers and pass unchanged, with no assertion removed, weakened or skipped.
+  - Confirm the clean-clone check passes, so the change stands up in a tree that holds tracked files alone.
+
+constraints:
+  - Behaviour is preserved for every answer git produces today: this is a consolidation, and the only difference is the normalisation reaching `primary_root`, which changes nothing for an absolute answer.
+  - A caller that cannot establish the primary tree goes on being answered with the root it gave. The one-directional bias is not turned into a raise, a None or a report.
+  - The failure-reporting difference between the two callers stays as it is: `_exclude_file` owes its caller problems, `primary_root` owes its caller a path.
+  - Nothing in orchestration/worktrees.py raises and nothing prints; every function returns what happened.
+  - No third-party dependency, standard library only, type hints on what the module exposes.
+  - No test module is added or renamed by this story: the claim rests on the coverage that already exists for both callers.
+  - The public surface of the module is unchanged; the helper is private and no caller outside the module is asked to change.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 00:15:28
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
