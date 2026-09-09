@@ -282,12 +282,13 @@ def primary_root(root: Path) -> Path:
     """The repository's primary working tree, for a path anywhere inside it.
 
     A linked worktree and the checkout it was cut from share one repository,
-    and some things belong to the repository rather than to a tree of it — the
-    durable filing queue and its receipt index among them, since a queue read
-    by nothing that outlives the tree that filed into it is a queue nothing
-    reads. This is where "which tree is the repository's own" is answered,
-    once. This module names no queue and reaches none: it answers a question
-    about working trees, and the module that owns the queue is what asks it.
+    and some things belong to the repository rather than to a tree of it —
+    where its worktrees are created among them, since a tree cut beside
+    whichever tree happened to invoke the harness nests one worktree inside
+    another. This is where "which tree is the repository's own" is answered
+    for that question. The durable filing queue asks the same question and
+    reaches its own answer by its own route; this function is not what it
+    calls, and this module names no queue and reaches none.
 
     Git is asked for the common directory, which is the primary tree's `.git`
     whichever tree the question is asked from; a relative answer is resolved
