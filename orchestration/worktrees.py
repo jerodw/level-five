@@ -38,7 +38,7 @@ from pathlib import Path
 #: reads rather than one the pre-flight refuses.
 WORKTREE_DIR_KEY = "worktree_dir"
 
-#: Appended to the target root's own name to make the default sibling
+#: Appended to the primary working tree's own name to make the default sibling
 #: directory. A sibling rather than a child, so nothing this mechanism creates
 #: ever appears inside the repository: no path the harness globs, no clean-clone
 #: build and no blocked-path list gains an entry for worktrees.
@@ -223,9 +223,16 @@ def worktree_root(target_root: Path, config: dict) -> Path:
 
     The configured value when there is one, resolved against the target root
     when it is relative so a target may name a path inside its own parent
-    without knowing where that parent is. Unset, a sibling of the target root
-    named for it — outside the repository, so nothing the harness globs and no
-    clean clone ever meets a worktree.
+    without knowing where that parent is. Unset, a sibling of the repository's
+    *primary* working tree, named for that tree — so the answer is the same
+    asked from any tree of the repository, and the tree a run happens to be
+    invoked from does not decide where the repository's trees live. Asked from
+    a linked worktree at `<repo>-worktrees/story-x`, deriving from the target
+    root itself would answer `<repo>-worktrees/story-x-worktrees` and nest a
+    second directory of working trees inside the first.
+
+    Either way the directory is outside the repository, so nothing the harness
+    globs and no clean clone ever meets a worktree.
     """
     configured = config.get(WORKTREE_DIR_KEY)
     if configured:
@@ -236,7 +243,8 @@ def worktree_root(target_root: Path, config: dict) -> Path:
         # target root's own parent reads as the directory it is rather than
         # as a path with a `..` in the middle of it.
         return Path(os.path.normpath(target_root / path))
-    return target_root.parent / f"{target_root.name}{DEFAULT_SUFFIX}"
+    primary = primary_root(target_root)
+    return primary.parent / f"{primary.name}{DEFAULT_SUFFIX}"
 
 
 def worktree_path(target_root: Path, config: dict, branch: str) -> Path:
@@ -268,6 +276,59 @@ def standing_branch(root: Path) -> str:
 def stands_on(root: Path, branch: str) -> bool:
     """Whether `root` is a working tree standing on `branch`."""
     return bool(branch) and standing_branch(root) == branch
+
+
+def primary_root(root: Path) -> Path:
+    """The repository's primary working tree, for a path anywhere inside it.
+
+    A linked worktree and the checkout it was cut from share one repository,
+    and some things belong to the repository rather than to a tree of it — the
+    durable filing queue and its receipt index among them, since a queue read
+    by nothing that outlives the tree that filed into it is a queue nothing
+    reads. This is where "which tree is the repository's own" is answered,
+    once. This module names no queue and reaches none: it answers a question
+    about working trees, and the module that owns the queue is what asks it.
+
+    Git is asked for the common directory, which is the primary tree's `.git`
+    whichever tree the question is asked from; a relative answer is resolved
+    against `root`, and that directory's parent is the primary working tree.
+
+    It answers with `root` unchanged wherever git cannot say: a git that
+    failed, a directory that is not a repository, an answer that does not
+    resolve to a directory that exists, and a derived parent that is not itself
+    a working tree — which is what a repository whose primary is bare has. That
+    is the one-directional bias `standing_branch` and `working_trees` already
+    take in this module: nothing establishable is answered with the path we
+    were given rather than with something false, and nothing here raises.
+
+    For a linked worktree the answer is git's own spelling of the primary tree,
+    which on a platform whose temporary directories are reached through a
+    symlink is the resolved one. A caller comparing it against a path it built
+    itself resolves both sides, which is what every worktree comparison in this
+    repository's suite already does.
+    """
+    common = _git(root, "rev-parse", "--git-common-dir")
+    if common.returncode != 0:
+        return root
+    answer = common.stdout.strip()
+    if not answer:
+        return root
+    git_dir = Path(answer)
+    if not git_dir.is_absolute():
+        git_dir = root / git_dir
+    if not git_dir.is_dir():
+        return root
+    candidate = git_dir.parent
+    # A directory beside a git directory is not thereby a working tree: a bare
+    # repository's parent is whatever it happens to sit in. Git is asked which
+    # tree that directory belongs to, and the answer has to be that directory
+    # itself for it to be the primary working tree.
+    toplevel = _git(candidate, "rev-parse", "--show-toplevel")
+    if toplevel.returncode != 0 or not toplevel.stdout.strip():
+        return root
+    if Path(toplevel.stdout.strip()).resolve() != candidate.resolve():
+        return root
+    return candidate
 
 
 def working_trees(root: Path) -> list[tuple[Path, str]]:
