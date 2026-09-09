@@ -1508,6 +1508,42 @@ def resolve_run_root(target_root: Path, config: dict, branch: str) -> RunRoot:
     )
 
 
+def link_configured_build_state(
+    source_root: Path, destination: Path, config: dict
+) -> worktrees.BuildState:
+    """Give `destination` the build state the target's configured commands name.
+
+    The directories come from the commands the target already configures — the
+    first word of `test_command`, and `verification_runner` — so no directory
+    name is written into the harness and a target naming its environments
+    differently needs no change. This is the whole of the configuration reading;
+    `worktrees.interpreter_roots` decides which words have a root to link and
+    `worktrees.link_build_state` does the linking, so the clean-clone path and
+    this one share both.
+
+    Reported, never raised, and no caller refuses on the result: a command word
+    that is absolute, that is a bare name looked up on PATH, or whose root is
+    absent from the source leaves nothing linked and every existing report for a
+    command that could not be run exactly as it was.
+    """
+    command = config.get("test_command")
+    words: list[str | None] = []
+    if command:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            # A command the harness cannot split is a command it cannot derive
+            # a root from. Whatever else that breaks is the existing reports'
+            # business; nothing new is refused here.
+            argv = []
+        if argv:
+            words.append(argv[0])
+    words.append(config.get("verification_runner"))
+    return worktrees.link_build_state(
+        source_root, destination, worktrees.interpreter_roots(words)
+    )
+
+
 def branch_exists(target_root: Path, branch: str) -> bool:
     """Whether `branch` resolves to a commit in this repository."""
     return _git(target_root, "rev-parse", "--verify", branch).returncode == 0
@@ -2664,21 +2700,16 @@ def _link_interpreter_roots(target_root: Path, clone: Path, interpreters: list[s
     environment the suite needs is present without the clone's working tree
     reporting anything the target's does not. A `.gitignore` entry for a
     directory does not cover a symlink standing in its place.
+
+    Since story-119 the derivation and the linking are `worktrees`', not this
+    function's: a worktree has the same absence for the same reason, and one
+    fact with one home is what stops a clone and a worktree disagreeing about
+    what an interpreter's root is. This keeps its signature, its callers and its
+    effect on the clone; what it lost is a second copy of the reasoning.
     """
-    linked = []
-    for interpreter in interpreters:
-        path = Path(interpreter)
-        if path.is_absolute() or len(path.parts) < 2:
-            continue
-        source, destination = target_root / path.parts[0], clone / path.parts[0]
-        if source.is_dir() and not destination.exists():
-            destination.symlink_to(source, target_is_directory=True)
-            linked.append(path.parts[0])
-    if linked:
-        exclude = clone / ".git" / "info" / "exclude"
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        with open(exclude, "a", encoding="utf-8") as handle:
-            handle.write("\n".join(["", *linked]) + "\n")
+    worktrees.link_build_state(
+        target_root, clone, worktrees.interpreter_roots(interpreters)
+    )
 
 
 def run_clean_clone(
@@ -7341,6 +7372,23 @@ def run_story(
 
     # Every act below is against the tree the run works in.
     target_root = run_root.path
+
+    if run_root.path != invoked_root:
+        # The build state the configured commands name, linked from the tree the
+        # harness was invoked from, for the reason the log directory below is
+        # created: a fresh worktree holds tracked files alone, and an
+        # interpreter the target configures inside its own tree is gitignored
+        # and therefore not there. Without it the coordinator's own suite run
+        # resolves a relative first word against a directory that has no such
+        # file, and the clean-clone check's runner resolves to nothing.
+        #
+        # Guarded on the run root not being the invoked tree rather than on
+        # run_root.create, so a resume into a worktree cut before story-119
+        # gains the links it was missing; the linking skips a path the
+        # destination already has, so a second run over the same worktree does
+        # nothing. A failure to link is not a refusal — it leaves the existing
+        # reports for a command that could not be run exactly as they are.
+        link_configured_build_state(invoked_root, run_root.path, config)
 
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "verification").mkdir(exist_ok=True)

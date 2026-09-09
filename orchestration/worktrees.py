@@ -9,7 +9,17 @@ could not be done at once without mixing the commits.
 This module holds the whole worktree concept, so no worktree knowledge lives in
 a script and none of it is spelled twice: where worktrees live, creating one at
 a start point, finding an existing one for a branch, reporting whether a tree
-stands on a branch, and removing a worktree together with its local branch.
+stands on a branch, removing a worktree together with its local branch, and
+giving a tree the build state the target's configured commands name.
+
+That last one is not only a worktree's problem, which is why it lives here
+rather than beside either caller. A fresh worktree holds tracked files alone, so
+an interpreter the target configures inside its own tree — gitignored, and
+therefore absent — is not there; a fresh clone has the same absence for the same
+reason, which is why the clean-clone check has linked those directories in since
+before worktrees existed. `interpreter_roots` and `link_build_state` are that
+one derivation with one home, read by the clone path and by the worktree path
+alike, so the two cannot disagree about what an interpreter's root is.
 
 Every function returns what happened rather than printing it, the shape
 `plan_commit` and `plan_run_offer` already have. Nothing here raises and nothing
@@ -19,6 +29,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,6 +81,26 @@ class Removal:
     problems: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class BuildState:
+    """What an attempt to give a tree the build state its commands name did.
+
+    `linked` is the names a symlink was newly created for, `excluded` the names
+    newly appended to the repository's common exclude file. Both are empty on a
+    second call over the same tree, which is what makes the linking idempotent:
+    a name already present is neither relinked nor re-excluded.
+
+    `problems` is what could not be done, in git's own words or the operating
+    system's. It is reported rather than raised because no caller refuses on it:
+    an interpreter that could not be linked leaves the existing reports for a
+    command that could not be run exactly as they are.
+    """
+
+    linked: list[str] = field(default_factory=list)
+    excluded: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(root), *args], capture_output=True, text=True
@@ -84,6 +115,107 @@ def _problems(result: subprocess.CompletedProcess, fallback: str) -> list[str]:
     """
     lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
     return lines or [fallback]
+
+
+def interpreter_roots(words: Sequence[str | None]) -> list[str]:
+    """The top-level directory each configured command word lives under.
+
+    A word that is absolute names something outside the tree, and one with a
+    single component is a bare name looked up on PATH; neither has a root inside
+    the tree to link, so neither contributes. What is left is the first path
+    component, deduplicated and in the order the words were given.
+
+    This is the derivation the clean-clone path made inline before story-119,
+    moved here so a worktree and a clone cannot disagree about what an
+    interpreter's root is. No directory name is written down: the names come
+    from the commands the target already configures, so a target naming its
+    environments differently needs no change.
+    """
+    roots: list[str] = []
+    for word in words:
+        if not word:
+            continue
+        path = Path(word)
+        if path.is_absolute() or len(path.parts) < 2:
+            continue
+        root = path.parts[0]
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _exclude_file(root: Path) -> tuple[Path | None, list[str]]:
+    """The repository's common exclude file for the tree at `root`.
+
+    Found with `git rev-parse --git-common-dir` resolved against the root, which
+    answers the per-worktree `.git` file correctly — a worktree's own git
+    directory holds no `info/exclude` git reads — and answers `.git` for an
+    ordinary clone. One derivation therefore serves both callers.
+    """
+    result = _git(root, "rev-parse", "--git-common-dir")
+    if result.returncode != 0:
+        return None, _problems(result, "git could not name the common git directory")
+    common = Path(result.stdout.strip())
+    if not common.is_absolute():
+        common = root / common
+    return common / "info" / "exclude", []
+
+
+def link_build_state(
+    source_root: Path, destination: Path, names: Sequence[str]
+) -> BuildState:
+    """Link named directories from `source_root` into `destination`, excluded.
+
+    For each name the source holds as a directory and the destination does not
+    already have, a symlink is created and the name appended to the
+    repository's common exclude file — the exclusion being what keeps the link
+    invisible to git, since a `.gitignore` entry naming a directory does not
+    match a symlink standing in its place.
+
+    A name already on a line of that file is not appended again, because for a
+    worktree that file belongs to the developer's own repository and a run must
+    not grow it. Together with skipping a destination that already has the path,
+    that makes a second call over the same tree do nothing at all.
+
+    Nothing is created, moved or removed under `source_root`: it is read for
+    what it holds and linked to.
+    """
+    wanted = [
+        name
+        for name in names
+        if (source_root / name).is_dir() and not (destination / name).exists()
+    ]
+    if not wanted:
+        return BuildState()
+    exclude, problems = _exclude_file(destination)
+    if exclude is None:
+        # Nothing is linked where the exclusion cannot be written: a link with
+        # no exclusion beside it is a path git reports, and dirtying the tree a
+        # run commits is worse than an interpreter that is not there.
+        return BuildState(problems=problems)
+
+    linked: list[str] = []
+    for name in wanted:
+        try:
+            (destination / name).symlink_to(
+                source_root / name, target_is_directory=True
+            )
+        except OSError as error:
+            problems.append(f"could not link {name} into {destination}: {error}")
+            continue
+        linked.append(name)
+
+    already = set()
+    if exclude.is_file():
+        already = {
+            line.strip() for line in exclude.read_text(encoding="utf-8").splitlines()
+        }
+    excluded = [name for name in linked if name not in already]
+    if excluded:
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with open(exclude, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(["", *excluded]) + "\n")
+    return BuildState(linked, excluded, problems)
 
 
 def worktree_root(target_root: Path, config: dict) -> Path:

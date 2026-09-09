@@ -13,6 +13,14 @@ worktree for that branch when there is one, and a new worktree otherwise.
 So an invocation from a checkout with uncommitted work leaves that work
 alone and commits none of it.
 
+A worktree holds tracked files alone, so the run gives it the build
+state the configured commands name: the directories the first word of
+test_command and verification_runner live under are linked in from this
+tree and excluded, so they never dirty the worktree or reach a commit.
+The source directories are only read from — removing a worktree leaves
+them alone — and a word with no root inside the tree links nothing and
+refuses nothing.
+
 A story whose artifact is not in this tree is not refused for that. It is
 the ordinary state of a clone that did not plan the story, because
 planning pushes its artifact on the story branch and removes its own
