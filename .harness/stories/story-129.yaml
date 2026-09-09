@@ -1,0 +1,118 @@
+story:
+  id: story-129
+  title: The Status field's name is matched the same way when it is read and when it is written
+  description: |
+    Planned from the brief filed under key 117.
+
+    The sync script asks "is this the field this target configured?" in three
+    places, and they do not agree. Reading what the board currently says
+    normalizes both sides — spaces removed, case ignored — so a target that
+    configures STATUS_FIELD="status" against a board whose field is titled
+    "Status" reads the value successfully. Resolving the id to write with does
+    not normalize at all: it matches the configured name verbatim against the
+    names the board reports. So the read succeeds, finds the field empty, and
+    the write then resolves no id.
+
+    For Status that ends the filing: the guard exits 75, the entry stays
+    pending, and it is retried for ever without ever landing. The same two
+    lookups serve the five classification fields, where the failure is quieter
+    — the field is skipped with a line on stderr, the filing exits 0, and the
+    board is simply missing the value. Any difference in case or internal
+    spacing that the read tolerates and the write does not produces one of
+    those two outcomes.
+
+    This story gives field-name matching a single definition and has all three
+    lookups refer to it, so the three sites cannot drift apart again. The
+    option-name half of the option lookup is untouched: options continue to
+    match the board verbatim.
+
+    The suite cannot see the defect today because the one configuration it
+    drives cannot exhibit it. THIS_TARGETS_STATUS_FIELD names the configured
+    value, and seeded_board() names the board's field from that same constant,
+    so the two are the same string by construction; the existing test for a
+    field name carrying a space renames both halves together for the same
+    reason. The new test deliberately makes them differ.
+
+  workflow: story-workflow
+
+tasks:
+  - Define, once, in templates/sync/github.sh, what makes two field names the same — the configured name and the board's name compared with their spaces removed and their case ignored — and have the read of the item's current value and both id lookups refer to that one definition rather than each carrying its own rule.
+  - Leave the option-name comparison in the option lookup matching the board verbatim; only the field-name half of that lookup adopts the shared rule.
+  - Apply the identical edit to .harness/sync/github.sh, which is this repository's installed copy of that template and is held to differing from it in nothing but the constant assignments at the top.
+  - Add coverage to tests/test_filed_query.py driving a configured field name that differs from the board's in case, for the Status field and for one classification field, over both sync copies.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - templates/sync/github.sh carries one definition of what makes two field names the same, and the lookup that reads the item's current value, the lookup that resolves a field's id, and the field-name half of the lookup that resolves an option's id each refer to that definition rather than spelling a rule of their own.
+  - The option-name comparison in the option lookup still matches the configured option value against the board's option names verbatim, unchanged by this story.
+  - .harness/sync/github.sh carries the same edit, and the standing assertion that the installed copy differs from its template only in constant assignments still holds.
+  - A filing driven with the Status field name configured in a case the board does not use resolves the field, sets the item's Status to the configured option, and exits 0 — where before this story it exited 75 saying the project has no field of that name.
+  - A filing driven with a classification field name configured in a case the board does not use writes that field's value onto the board — where before this story the field was skipped and the value was written nowhere.
+  - Both of those cases are driven against the template and against the installed copy, in the shape the module's existing board tests use for that pairing.
+  - The new test fails against the code as it stands before this story and passes after it, so it holds the rule rather than describing it.
+  - The full suite passes.
+
+technical_plan:
+  implementation_steps:
+    - In templates/sync/github.sh, introduce a single named definition of the field-name comparison beside the three lookups, expressing the rule the read already applies: both the board's name and the configured name have their spaces removed and their case ignored before they are compared.
+    - Rewrite the lookup that reads the item's current field value to use that definition in place of the normalization it spells inline today, so the rule has one home rather than one of its three.
+    - Rewrite the lookup that resolves a field's id to compare under that definition instead of matching the configured name verbatim. This lookup serves both the Status write and every classification-field write, so one edit reaches all six configured names.
+    - Rewrite the field-name half of the lookup that resolves an option's id the same way, and leave its option-name half comparing verbatim.
+    - Say in the script's own comments what the rule is and that all three lookups share it, so the next reader does not have to infer the sharing from the code.
+    - Copy the edit into .harness/sync/github.sh unchanged, leaving its constant assignments as they are — the two files are held byte-identical outside those constants, so an edit to one is an edit to both.
+    - In tests/test_filed_query.py, add a case that seeds the board with the field names it already uses, drives a filing with the Status field name configured in a different case, and asserts the item lands in the configured column and the script exits 0.
+    - Add the companion case for one classification field, driven the same way, asserting the value reaches the board rather than being skipped.
+    - Drive both cases over the template and the installed copy, following the existing parametrization over the two sync copies, and drive the configured-name override through the mechanism the module already uses to override a constant for one filing.
+    - Record in .harness/docs/ARCHITECTURE.md what the two halves disagreed about, what one rule replaced them, and why the existing tests could not have caught it.
+  likely_file_changes:
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: Holds the three lookups that disagree; the shared definition and all three call sites are added here.
+    - file: .harness/sync/github.sh
+      stage: implementer
+      reason: This repository's installed copy of that template, held to differing from it only in constant assignments, so the same edit must land here or the standing assertion reddens.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: Where the sync script's board behaviour is driven; gains the cases for a configured name differing from the board's in case, for Status and for a classification field.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the change and why the existing coverage could not exhibit the defect.
+
+scope:
+  modify:
+    - templates/sync/github.sh
+    - .harness/sync/github.sh
+    - tests/test_filed_query.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - templates/query/github.sh
+    - .harness/query/github.sh
+    - .harness/config.yaml
+    - orchestration/
+    - schemas/
+    - prompts/
+    - workflows/
+
+verification_requirements:
+  - Confirm that templates/sync/github.sh states the field-name rule once and that all three lookups refer to that one statement, rather than three sites that happen to agree today.
+  - Confirm the option-name comparison still matches verbatim against the board's option names, and that the story changed only the field-name half of that lookup.
+  - Confirm .harness/sync/github.sh carries the same edit and that the existing assertion comparing it to its template passes.
+  - Confirm the new test cases drive a configured field name that differs from the board's in case for both the Status field and a classification field, and that they are driven over both sync copies.
+  - Confirm the new cases fail against the pre-story scripts — the Status case by the filing exiting 75, the classification case by the value not reaching the board — so the coverage holds the rule rather than restating it.
+  - Confirm the full suite passes.
+
+constraints:
+  - A configured name and a board name that already match exactly must keep resolving exactly as they do today; this story widens what matches and narrows nothing.
+  - The option-name rule is untouched. An option value that does not match the board's option names verbatim must still resolve to nothing, and must still cost the Status filing an exit 75 and cost a classification field that field alone.
+  - The two failure classifications are unchanged: a Status field that resolves to no id remains transient, and a classification field that resolves to no id remains a line on stderr with the filing exiting 0.
+  - The board is still written only where the item reports the field empty; nothing in this story writes over a value a person set.
+  - The key marker, the path marker prefix and the payload marker prefix are untouched, as is the pairing between the sync script and templates/query/github.sh.
+  - The project, its field list and the item's field values are still each read at most once per filing.
+  - .harness/sync/github.sh keeps its own constant values; only the lines it shares with its template change.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 09:14:32
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan

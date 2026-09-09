@@ -125,7 +125,11 @@ Every absence asserted here carries a demonstration that it can fail:
     the template differing in a line of mechanics, which the same predicate
     reports;
   * "neither sync script invokes git" sits beside a rendering of one with a
-    commit added, which the same scan reports.
+    commit added, which the same scan reports;
+  * "no field-name lookup states a rule of its own" sits beside two renderings
+    of the template — one whose id lookup matches the board verbatim and one
+    whose read spells the normalization inline — each of which the scan that
+    exists to catch it reports.
 
 Every command driven as a `filed_query_command` here is a file this module
 wrote, and `fixture_command_problems` is what makes that a checked property
@@ -1289,8 +1293,8 @@ LEDGER_VARIABLE = "L5_STUB_LEDGER"
 
 #: How a test tells the stub to break on purpose. Two variables rather than
 #: one, because the two failures they cause are different claims: a call that
-#: fails is a tracker the sync cannot write to, and a listing that reports
-#: nothing is a board the sync cannot *read* — which the script must not
+#: fails is a tracker the sync cannot write to, and a read that answers with no
+#: such node is a board the sync cannot *read* — which the script must not
 #: mistake for an item whose Status is empty.
 #:
 #: What the first names is a call rather than a project subcommand: the label
@@ -1304,7 +1308,18 @@ FAIL_VARIABLE = "L5_STUB_FAILS_AT"
 #: `item-edit`.
 LABEL_CREATE_CALL = "label-create"
 LABEL_ADD_CALL = "issue-edit"
-OMIT_VARIABLE = "L5_STUB_ITEM_LIST_REPORTS_NOTHING"
+
+#: How the ledger names the read the sync makes of one item's own field values.
+#: The project subcommands are recorded under their own names; this one is not
+#: a project subcommand, so — like the two label calls above — it carries a
+#: name of the stub's rather than one taken from an argument.
+GRAPHQL_CALL = "api-graphql"
+
+#: What makes that read answer with no such node while the item is in fact on
+#: the board. That is what a tracker whose read has not caught up with an add
+#: looks like, and it is the case the script must answer transiently rather
+#: than read as a set of empty fields.
+OMIT_VARIABLE = "L5_STUB_ITEM_READ_REPORTS_NOTHING"
 
 STUB_GH = '''#!INTERPRETER
 """A stub `gh`, standing in for a tracker and its project board. It reaches no
@@ -1337,11 +1352,17 @@ second implementation:
   project item-add    adds the url to a project, or reports the item already
                       there rather than adding a second one, which is the
                       behaviour the sync script's retry depends on.
-  project item-list   the project's items. A field an item has no value for
-                      carries no key at all, which is how gh reports one, so a
-                      script that read a missing key as an empty string and a
-                      script that could not tell them apart are distinguishable
-                      here.
+  api graphql         one item's own field values, looked up by the node id the
+                      invocation carries. A field the item has no value for
+                      contributes no node at all, which is how the real answer
+                      reports one, and an empty node stands beside them for a
+                      value of a type the query's fragment does not match — so
+                      a script that read a missing field as an empty string and
+                      a script that could not tell them apart are
+                      distinguishable here. An item the read cannot resolve is
+                      answered with a null node rather than with an empty list
+                      of values, which is the distinction the sync script's
+                      transient exit rests on.
   project view        the project's node id.
   project field-list  the project's fields and their options, by name.
   project item-edit   sets one single-select field on one item, by ids. The
@@ -1351,10 +1372,13 @@ second implementation:
                       field by field rather than as one column.
 
 The ledger holds the issues, the repository's labels, the projects and every
-project invocation that was made, so a test can assert on a call that was *not*
-made as well as on one that was. FAIL_VARIABLE names calls that must exit
-non-zero, and OMIT_VARIABLE makes `item-list` report a project with no items in
-it.
+board invocation that was made — the project subcommands under their own names
+and the item read under GRAPHQL_CALL — so a test can assert on a call that was
+*not* made as well as on one that was. A subcommand this stub does not
+implement is recorded before it is refused, so an invocation the sync script
+must no longer make is visible in the ledger rather than only in its exit
+status. FAIL_VARIABLE names calls that must exit non-zero, and OMIT_VARIABLE
+makes the item read answer with no such node.
 """
 import json
 import os
@@ -1481,6 +1505,37 @@ elif argv[:2] == ["issue", "list"]:
     else:
         print(json.dumps([{name: issue.get(name) for name in fields}
                           for issue in matched]))
+elif argv[:2] == ["api", "graphql"]:
+    # One item's own field values, by the node id the invocation carries.
+    # Recorded in the same ledger the project subcommands are, so "the read was
+    # made once" and "the listing was not made at all" are both readable there.
+    state["calls"].append({"command": "GRAPHQL_CALL", "argv": argv})
+    save()
+    if told_to_fail("GRAPHQL_CALL"):
+        refuse("the stub was told to fail at api graphql")
+    variables = dict(pair.split("=", 1)
+                     for index, pair in enumerate(argv)
+                     if index and argv[index - 1] == "-f" and "=" in pair)
+    wanted = variables.get("item")
+    holding = [project for project in projects.values()
+               for one in project["items"] if one["id"] == wanted]
+    if os.environ.get("OMIT_VARIABLE") or not holding:
+        # No such node: a well formed answer that describes no item. It is
+        # deliberately not an item carrying an empty list of values, because
+        # those two are what the sync script must tell apart.
+        print(json.dumps({"data": {"node": None}}))
+    else:
+        project = holding[0]
+        item = [one for one in project["items"] if one["id"] == wanted][0]
+        # An empty node stands for a field value of a type the query's inline
+        # fragment does not match, which is what the real answer carries for
+        # every value that is not a single select.
+        nodes = [{}]
+        for field in project["fields"]:
+            held = item.get(board_key(field["name"]))
+            if held:
+                nodes.append({"name": held, "field": {"name": field["name"]}})
+        print(json.dumps({"data": {"node": {"fieldValues": {"nodes": nodes}}}}))
 elif argv[:1] == ["project"]:
     subcommand = argv[1]
     # Recorded before the refusal below, so a call a test told the stub to fail
@@ -1530,20 +1585,6 @@ elif argv[:1] == ["project"]:
                 save()
             print(json.dumps({"id": item["id"], "type": "Issue",
                               "url": item["url"]}))
-        elif subcommand == "item-list":
-            limit = int(flag(argv, "--limit", "30"))
-            reported = ([] if os.environ.get("OMIT_VARIABLE")
-                        else project["items"][:limit])
-            listed = []
-            for one in reported:
-                shown = {"id": one["id"],
-                         "content": {"type": "Issue", "url": one["url"]}}
-                for field in project["fields"]:
-                    key = board_key(field["name"])
-                    if one.get(key):
-                        shown[key] = one[key]
-                listed.append(shown)
-            print(json.dumps({"items": listed}))
         else:
             refuse("the stub was asked for something it does not do: %s"
                    % " ".join(argv))
@@ -1623,6 +1664,7 @@ def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
                         .replace("LEDGER_VARIABLE", LEDGER_VARIABLE)
                         .replace("FAIL_VARIABLE", FAIL_VARIABLE)
                         .replace("OMIT_VARIABLE", OMIT_VARIABLE)
+                        .replace("GRAPHQL_CALL", GRAPHQL_CALL)
                         .replace("LABEL_CREATE_CALL", LABEL_CREATE_CALL)
                         .replace("LABEL_ADD_CALL", LABEL_ADD_CALL))
     ledger.write_text(json.dumps(
@@ -1681,7 +1723,12 @@ def board_items(ledger: Path) -> list[dict]:
 
 
 def project_calls(ledger: Path, command: str | None = None) -> list[dict]:
-    """Every project invocation the stub was made, optionally by subcommand."""
+    """Every board invocation the stub was made, optionally by name.
+
+    The project subcommands are recorded under their own names and the read of
+    one item's field values under `GRAPHQL_CALL`, so an assertion that a
+    particular call was *not* made is made of the same ledger either way.
+    """
     return [call for call in ledger_state(ledger)["calls"]
             if command is None or call["command"] == command]
 
@@ -1829,6 +1876,18 @@ BOTH_SYNC_COPIES = [
 PROJECT_SUBCOMMANDS = sorted(set(re.findall(
     r"gh project ([a-z-]+)", TEMPLATE_SYNC.read_text(encoding="utf-8"))))
 
+#: How the script asks for one item's own field values, read off the script for
+#: the same reason. The read is not a project subcommand, so it is not among the
+#: names above and would otherwise drop out of the sweep of every call made
+#: after the issue exists.
+GRAPHQL_INVOCATIONS = re.findall(
+    r"gh api graphql", TEMPLATE_SYNC.read_text(encoding="utf-8"))
+
+#: Every board call the script makes, under the names the ledger records them
+#: by. The project subcommands answer to their own names and the item read
+#: answers to the stub's.
+BOARD_CALLS = tuple(PROJECT_SUBCOMMANDS) + (GRAPHQL_CALL,)
+
 #: What the transport reads as "the entry stays pending and a later sweep
 #: retries it". Named rather than written as a bare 75 beside each assertion.
 TRANSIENT_EXIT = 75
@@ -1887,9 +1946,11 @@ def sync_to_the_board(script: Path, tmp_path: Path, environment: dict, *,
                       breaking: dict | None = None):
     """One invocation of `script` against the stub's board.
 
-    `breaking` is whatever the stub is to be broken with for this invocation
-    alone, so a test can drive the same key twice with the board failing the
-    first time and answering the second.
+    `breaking` is whatever this invocation alone is driven with beside the
+    board values — most often what the stub is to be broken with, so a test can
+    drive the same key twice with the board failing the first time and
+    answering the second, and sometimes a board value overridden for one
+    invocation.
     """
     return run_the_sync(
         script, tmp_path, environment, key=key, payload=payload or AN_ENTRY,
@@ -1912,6 +1973,9 @@ def test_the_template_declares_the_constants_the_board_tests_override():
     for name in OVERRIDDEN_CONSTANTS:
         assert TEMPLATE_CONSTANTS[name][0].startswith(SYNC_VARIABLE_PREFIX), name
     assert PROJECT_SUBCOMMANDS, "the script invokes no project subcommand"
+    assert GRAPHQL_INVOCATIONS, \
+        "the script asks for no item's field values, so the sweep over the " \
+        "calls it makes after the issue exists would not cover that read"
 
 
 def test_every_axis_the_classification_is_written_over_carries_values():
@@ -1952,16 +2016,18 @@ def test_an_entry_filed_with_a_project_configured_lands_on_the_board(
 
 @needs_jq
 @pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
-@pytest.mark.parametrize("subcommand", PROJECT_SUBCOMMANDS)
+@pytest.mark.parametrize("subcommand", BOARD_CALLS)
 def test_every_failure_after_the_issue_exists_is_transient(
         subcommand, script, tmp_path):
     """The issue is the record and the board is a view of it.
 
-    Each project call the script makes is failed in turn, and each must exit 75
-    rather than 0 or 1: a zero would report an entry as landed with the board
-    call lost, and a non-zero that is not 75 would fail the entry terminally
-    and lose it. The issue is filed either way, which is what makes the retry
-    the next sweep performs find it rather than create a second one.
+    Each board call the script makes is failed in turn — the project
+    subcommands and the read of the item's own field values alike — and each
+    must exit 75 rather than 0 or 1: a zero would report an entry as landed
+    with the board call lost, and a non-zero that is not 75 would fail the
+    entry terminally and lose it. The issue is filed either way, which is what
+    makes the retry the next sweep performs find it rather than create a second
+    one.
     """
     environment, ledger = stub_tracker(tmp_path)
     result = sync_to_the_board(script, tmp_path, environment, key="k-fails",
@@ -1970,7 +2036,7 @@ def test_every_failure_after_the_issue_exists_is_transient(
     assert result.returncode == TRANSIENT_EXIT, (result.returncode, result.stderr)
     assert len(ledger_state(ledger)["issues"]) == 1
     assert project_calls(ledger, subcommand), \
-        f"the script never invoked project {subcommand}"
+        f"the script never made the {subcommand} call"
 
 
 @needs_jq
@@ -2063,35 +2129,98 @@ def test_an_item_whose_status_the_board_reports_is_left_where_it_is(
     assert project_calls(ledger, "item-edit") == []
 
 
+#: The two ways the item's own field values can fail to be obtained, as the
+#: stub is told to produce them: a read that answers with no such node while
+#: the item is in fact there, and a read that fails outright. Both are a
+#: failure to know rather than a set of empty fields, and the script must
+#: answer both the same way.
+WAYS_OF_NOT_KNOWING = [
+    pytest.param({OMIT_VARIABLE: "1"}, id="no-such-node"),
+    pytest.param({FAIL_VARIABLE: GRAPHQL_CALL}, id="read-failed"),
+]
+
+
 @needs_jq
 @pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
-def test_an_item_the_listing_did_not_report_is_a_failure_to_know(
-        script, tmp_path):
-    """A listing that did not return the item is not an empty Status.
+@pytest.mark.parametrize("breaking", WAYS_OF_NOT_KNOWING)
+def test_an_item_whose_field_values_were_not_obtained_is_a_failure_to_know(
+        breaking, script, tmp_path):
+    """A read that did not describe the item is not an empty Status.
 
-    The stub reports a project with no items in it while the item is in fact
-    there, which is what a listing bounded too short or a tracker answering
-    partially looks like. Read as an empty Status it would be overwritten; read
-    as a failure to know it is answered transiently and left alone.
+    The item is on the board and the read either fails or answers with no such
+    node — which is what a tracker whose read has not caught up with the add
+    looks like. Read as an empty Status the item would be written into; read as
+    a failure to know it is answered transiently and left exactly as it was.
 
-    The control is the same drive with the listing answering, below the
-    assertion: there the `item-edit` is made and the Status is written, so the
+    The control is the same drive with the read answering, below the
+    assertions: there the `item-edit` is made and the Status is written, so the
     absence here is the guard and not a write that never happens.
     """
     environment, ledger = stub_tracker(tmp_path)
-    blind = sync_to_the_board(script, tmp_path, environment, key="k-unlisted",
-                              breaking={OMIT_VARIABLE: "1"})
+    brief = a_filed_brief()
+    blind = sync_to_the_board(script, tmp_path, environment, key="k-unread",
+                              payload=brief, breaking=breaking)
 
     assert blind.returncode == TRANSIENT_EXIT, (blind.returncode, blind.stderr)
     items = board_items(ledger)
     assert len(items) == 1, items
     assert "status" not in items[0], items[0]
+    for axis in CLASSIFICATION:
+        assert board_field_value(ledger, axis.field_name) == "", axis.field_name
     assert project_calls(ledger, "item-edit") == []
 
-    seeing = sync_to_the_board(script, tmp_path, environment, key="k-unlisted")
+    seeing = sync_to_the_board(script, tmp_path, environment, key="k-unread",
+                               payload=brief)
     assert seeing.returncode == 0, seeing.stderr
     assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
-    assert len(project_calls(ledger, "item-edit")) == 1
+    for axis in CLASSIFICATION:
+        assert board_field_value(ledger, axis.field_name) == \
+            str(brief[axis.payload_field]), axis.field_name
+    assert len(project_calls(ledger, "item-edit")) == 1 + len(CLASSIFICATION)
+
+
+def digits_beside(message: str, *names: str) -> str:
+    """Every digit in `message` that is not part of one of `names`.
+
+    The transient message is required to name the item and the project, both of
+    which are spelled with digits on this board, so "and no count of items" is
+    asserted of what is left once those two are taken out.
+    """
+    for name in sorted(names, key=len, reverse=True):
+        message = message.replace(name, " ")
+    return "".join(character for character in message if character.isdigit())
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+@pytest.mark.parametrize("breaking", WAYS_OF_NOT_KNOWING)
+def test_the_transient_answer_names_the_item_and_the_project_and_no_count(
+        breaking, script, tmp_path):
+    """A developer reading that line is not told about a bound.
+
+    The message the script used to give named the size of a listing, which was
+    the wrong cause on every board smaller than it — so what is asserted is
+    that the item and the project are named and that no other number is.
+
+    The absence of a number is controlled beside itself: the same reduction
+    over the message this one replaced, constructed here rather than read out
+    of the tree, does report a number.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    blind = sync_to_the_board(script, tmp_path, environment, key="k-unread",
+                              breaking=breaking)
+    assert blind.returncode == TRANSIENT_EXIT, blind.stderr
+
+    item_id = board_items(ledger)[0]["id"]
+    said = blind.stderr.strip()
+    assert item_id in said, said
+    assert THIS_TARGETS_PROJECT in said, said
+    assert digits_beside(said, item_id, THIS_TARGETS_PROJECT) == "", said
+
+    superseded = (f"item {item_id} was not in the first 5000 items of project "
+                  f"{THIS_TARGETS_PROJECT}, so its fields are unknown")
+    assert digits_beside(superseded, item_id, THIS_TARGETS_PROJECT) != "", \
+        "the reduction reports no number in a message that names a bound"
 
 
 @needs_jq
@@ -2506,22 +2635,370 @@ def test_a_field_whose_options_lack_the_value_costs_that_field_alone(
 
 @needs_jq
 @pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
-def test_the_project_the_fields_and_the_listing_are_read_once_per_filing(
+def test_the_project_the_fields_and_the_item_are_read_once_per_filing(
         script, tmp_path):
     """Six writes rather than six reads each.
 
     Each of the three reads is asserted to have been made exactly once: an
     upper bound alone would pass a script that made none of them, and this
-    filing needs all three, so the equality carries both halves.
+    filing needs all three, so the equality carries both halves. The third is
+    the read of this item's own field values, which every one of the six writes
+    consults and which none of them may repeat.
+
+    The item-edit count beside them is what makes "six writes" the premise
+    rather than an assumption.
     """
     environment, ledger = stub_tracker(tmp_path)
     result = sync_to_the_board(script, tmp_path, environment, key="k-read-once",
                                payload=a_filed_brief())
     assert result.returncode == 0, result.stderr
 
-    for subcommand in ("view", "field-list", "item-list"):
+    assert len(project_calls(ledger, "item-edit")) == 1 + len(CLASSIFICATION)
+    for subcommand in ("view", "field-list", GRAPHQL_CALL):
         assert len(project_calls(ledger, subcommand)) == 1, \
             (subcommand, project_calls(ledger, subcommand))
+
+    read = project_calls(ledger, GRAPHQL_CALL)[0]
+    assert board_items(ledger)[0]["id"] in " ".join(read["argv"]), read
+
+
+#: A field name with a space in it. The board this module seeds has none, and
+#: the two spellings of such a name — as the board declares it and as the
+#: listing used to key it — are what the lookup has to reconcile, so a board
+#: carrying one is built here rather than assumed absent.
+A_FIELD_NAME_CARRYING_A_SPACE = "Some Category"
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_field_whose_name_carries_a_space_is_written_once_and_then_left(
+        script, tmp_path):
+    """A board naming a field with a space resolves as one naming it without.
+
+    The read keys a value by the field's name as the board declares it, and the
+    listing it replaces keyed the same value by that name with the spaces taken
+    out — so a lookup tolerant of only one of those spellings writes such a
+    field on every sweep for ever, moving a value a person set.
+
+    Both halves are driven: the first filing finds the field empty and writes
+    it, and the second over the same entry reads back what it wrote and makes
+    no edit at all. The write is what controls the absence.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    axis = CLASSIFICATION[0]
+    brief = a_filed_brief()
+
+    def rename(project):
+        for field in project["fields"]:
+            if field["name"] == axis.field_name:
+                field["name"] = A_FIELD_NAME_CARRYING_A_SPACE
+    rewrite_the_board(ledger, rename)
+    spaced = {TEMPLATE_CONSTANTS[axis.constant][0]:
+              A_FIELD_NAME_CARRYING_A_SPACE}
+
+    first = sync_to_the_board(script, tmp_path, environment, key="k-spaced",
+                              payload=brief, breaking=spaced)
+    assert first.returncode == 0, first.stderr
+    written = board_field_value(ledger, A_FIELD_NAME_CARRYING_A_SPACE)
+    assert written == str(brief[axis.payload_field]), written
+
+    state = ledger_state(ledger)
+    state["calls"] = []
+    ledger.write_text(json.dumps(state), encoding="utf-8")
+
+    again = sync_to_the_board(script, tmp_path, environment, key="k-spaced",
+                              payload=brief, breaking=spaced)
+    assert again.returncode == 0, again.stderr
+    assert board_field_value(ledger, A_FIELD_NAME_CARRYING_A_SPACE) == written
+    assert project_calls(ledger, "item-edit") == [], \
+        "a field the board already reports was written over"
+
+
+def in_a_case_the_board_does_not_use(name: str) -> str:
+    """The same name, spelled in a case the board does not spell it in.
+
+    Derived from whatever the board calls the field rather than written out, so
+    a field renamed on the seeded board is still driven at a name differing
+    from it in case alone. Both halves of that are asserted here: a name that
+    came back identical would make the filings below the ordinary filings every
+    test above already makes, and a name that differed in anything but case
+    would be asking a wider question than the one these tests ask.
+    """
+    swapped = name.swapcase()
+    assert swapped != name, name
+    assert swapped.lower() == name.lower(), (swapped, name)
+    return swapped
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_status_field_configured_in_another_case_is_resolved_and_written(
+        script, tmp_path):
+    """A target that configures `status` against a board titled `Status` files.
+
+    The read of the item's current value has always ignored case, so the field
+    read as empty; the lookup that resolves the id to write with matched the
+    board verbatim, so the write resolved nothing and the filing exited
+    transiently — leaving the entry pending and retried for ever without ever
+    landing. One rule shared by both lookups is what makes the name the read
+    tolerates a name the write resolves.
+
+    The board keeps the field names it is seeded with, and only the configured
+    name is spelled differently, so what resolves the field can only be the
+    comparison and not a board rewritten to suit it.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    named = {TEMPLATE_CONSTANTS["STATUS_FIELD"][0]:
+             in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_FIELD)}
+
+    result = sync_to_the_board(script, tmp_path, environment,
+                               key="k-status-in-another-case",
+                               payload=a_filed_brief(), breaking=named)
+
+    assert result.returncode == 0, result.stderr
+    assert len(board_items(ledger)) == 1
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_classification_field_configured_in_another_case_reaches_the_board(
+        script, tmp_path):
+    """The same disagreement on a classification field, where it was quieter.
+
+    A classification field whose id resolves to nothing is said on stderr and
+    skipped, so the filing exits 0 and the value is simply written nowhere —
+    the failure a developer reads as a board that is merely missing a column's
+    value. Driven at the same axis the rest of the brief is driven at, so the
+    value on the board can only have come from the payload.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    axis = CLASSIFICATION[0]
+    brief = a_filed_brief()
+    named = {TEMPLATE_CONSTANTS[axis.constant][0]:
+             in_a_case_the_board_does_not_use(axis.field_name)}
+
+    result = sync_to_the_board(script, tmp_path, environment,
+                               key="k-classification-in-another-case",
+                               payload=brief, breaking=named)
+
+    assert result.returncode == 0, result.stderr
+    assert board_field_value(ledger, axis.field_name) == \
+        str(brief[axis.payload_field]), result.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_status_option_configured_in_another_case_still_resolves_to_nothing(
+        script, tmp_path):
+    """What the field-name rule widened, the option-name rule did not.
+
+    An option is the value a person reads off the board, and the board's own
+    spelling of it is the one that goes there — so an option value that does
+    not match the board verbatim still resolves to nothing, and for the Status
+    field that still costs the filing a transient exit with the entry left
+    pending. The field name here is configured exactly as the board spells it,
+    so the only thing differing is the option.
+
+    That the item's Status is left unwritten is controlled by the ordinary
+    filing above, where the same drive with the option spelled as the board
+    spells it writes it.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    configured = in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_OPTION)
+
+    result = sync_to_the_board(script, tmp_path, environment,
+                               key="k-option-in-another-case",
+                               breaking={TEMPLATE_CONSTANTS["STATUS_OPTION"][0]:
+                                         configured})
+
+    assert result.returncode == TRANSIENT_EXIT, result.stderr
+    assert configured in result.stderr
+    assert board_items(ledger)[0].get("status", "") == ""
+
+
+#: The three lookups that match a configured field name against the board's,
+#: by the names the sync scripts give them: the read of this item's current
+#: value, the resolution of a field's id, and the resolution of an option's id.
+#: Written here rather than derived from the script, because the claim is about
+#: these three in particular — a list read off the script would grow with a
+#: fourth lookup and go on passing whatever that fourth one did.
+FIELD_NAME_LOOKUPS = ("board_value", "field_id_for", "option_id_for")
+
+#: How a jq program spells the comparison this story gave one home: a name
+#: matched with its spaces removed and its case ignored. Anywhere but inside
+#: the shared definition, one of these is a lookup carrying a rule of its own.
+NORMALIZING_IDIOM = re.compile(r'gsub\(" "; ""\)|ascii_downcase')
+
+#: The shared definition itself: a jq function of two names, up to the `;` that
+#: closes it. Matched by its shape rather than by its name, so what is asserted
+#: is that the script states the rule once and defers to it — not that it
+#: chose a particular name for it.
+SHARED_FIELD_NAME_RULE = re.compile(
+    r"""def (?P<name>[a-z_]+)\(\$[a-z]+; *\$[a-z]+\):(?P<rule>.*?);(?=['"]|[ \t]*$)""",
+    re.DOTALL | re.MULTILINE)
+
+
+def sync_function_body(text: str, name: str) -> str:
+    """One shell function's body, as the sync scripts lay them out."""
+    found = re.search(
+        r"^[ \t]*%s\(\) \{\n(?P<body>.*?)^[ \t]*\}$" % re.escape(name),
+        text, re.MULTILINE | re.DOTALL)
+    assert found, f"the script declares no {name}"
+    return found.group("body")
+
+
+def rules_of_sameness_outside_the_shared_one(text: str) -> list[str]:
+    """Every line stating what makes two field names the same, other than the
+    one statement of it the script is supposed to hold.
+
+    The shared definition is cut out of the text and what is scanned is what is
+    left, so a lookup that spelled the normalization inline is a line reported
+    here whether or not it also calls the shared one.
+    """
+    stated = SHARED_FIELD_NAME_RULE.search(text)
+    assert stated, "the script states no shared field-name comparison at all"
+    assert NORMALIZING_IDIOM.search(stated.group("rule")), stated.group("rule")
+    elsewhere = text[:stated.start()] + text[stated.end():]
+    return [line for line in elsewhere.splitlines()
+            if NORMALIZING_IDIOM.search(line)]
+
+
+def lookups_not_deferring_to_the_shared_rule(text: str) -> list[str]:
+    """Every field-name lookup whose body does not call the shared rule."""
+    stated = SHARED_FIELD_NAME_RULE.search(text)
+    assert stated, "the script states no shared field-name comparison at all"
+    return [name for name in FIELD_NAME_LOOKUPS
+            if stated.group("name") not in sync_function_body(text, name)]
+
+
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_every_field_name_lookup_defers_to_one_statement_of_sameness(script):
+    """Both are shipped artifacts and both are the subject here.
+
+    What the two filings above assert is that the three lookups agree today.
+    What this asserts is why they cannot come to disagree tomorrow: the script
+    says once what makes two field names the same, no line outside that
+    statement says it again, and each of the three lookups defers to it rather
+    than carrying a rule of its own. Three sites that happened to agree would
+    pass the filings and fail this.
+    """
+    text = script.read_text(encoding="utf-8")
+
+    assert rules_of_sameness_outside_the_shared_one(text) == []
+    assert lookups_not_deferring_to_the_shared_rule(text) == []
+
+
+def test_those_scans_report_a_lookup_that_went_its_own_way(tmp_path):
+    """The control for both absences above, over two renderings of the template
+    that this repository does not ship.
+
+    The first has the id lookup matching the configured name against the board
+    verbatim, which is the drift this story removed; the second has the read of
+    the item's value spelling the normalization inline, which is where the rule
+    used to live. Each is reported by the scan that exists to catch it, so
+    silence over the shipped copies is the copies and not a scan that stopped
+    seeing anything.
+    """
+    text = TEMPLATE_SYNC.read_text(encoding="utf-8")
+    stated = SHARED_FIELD_NAME_RULE.search(text)
+    assert stated, "the template states no shared field-name comparison at all"
+    calling = f'{stated.group("name")}(.name; $name)'
+
+    drifted = text.replace(f"select({calling}) | .id",
+                           "select(.name == $name) | .id")
+    assert drifted != text, "the id lookup was not found to drift"
+    assert lookups_not_deferring_to_the_shared_rule(drifted) == ["field_id_for"]
+
+    inline = text.replace(
+        f'select({stated.group("name")}(.key; $name))',
+        'select((.key | gsub(" "; "") | ascii_downcase)'
+        ' == ($name | gsub(" "; "") | ascii_downcase))')
+    assert inline != text, "the read was not found to spell a rule inline"
+    reported = rules_of_sameness_outside_the_shared_one(inline)
+    assert reported, "the scan sees no rule stated outside the shared one"
+    assert all("ascii_downcase" in line for line in reported), reported
+
+
+#: The subcommand that listed a whole project to find one item in it. Written
+#: here rather than derived, because what is asserted is that no script and no
+#: filing names it any more — a name derived from the scripts would be the
+#: empty string and the assertion would hold of everything.
+THE_RETIRED_LISTING = "item-list"
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_filing_that_writes_every_field_lists_no_project(script, tmp_path):
+    """The board is never listed, however many fields are written.
+
+    A filing that sets the Status and all five classification fields is driven,
+    and the ledger must hold no listing at all. The absence is controlled twice
+    over: the read that replaces the listing *is* in the same ledger, asserted
+    above; and the stub is then invoked with the listing directly, which the
+    ledger does record — so silence here is the script and not a ledger that
+    cannot see a listing.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    result = sync_to_the_board(script, tmp_path, environment, key="k-no-list",
+                               payload=a_filed_brief())
+    assert result.returncode == 0, result.stderr
+
+    assert project_calls(ledger, THE_RETIRED_LISTING) == []
+    assert [call for call in project_calls(ledger)
+            if THE_RETIRED_LISTING in call["argv"]] == []
+    assert project_calls(ledger, GRAPHQL_CALL), \
+        "the ledger holds no board read at all, so it saw nothing either way"
+
+    subprocess.run(
+        [sys.executable, str(tmp_path / "stub-bin" / "gh"), "project",
+         THE_RETIRED_LISTING, THIS_TARGETS_PROJECT,
+         "--owner", THIS_TARGETS_PROJECT_OWNER, "--format", "json"],
+        capture_output=True, text=True, timeout=60, env=environment)
+    assert project_calls(ledger, THE_RETIRED_LISTING), \
+        "the ledger does not record a listing that was in fact made"
+
+
+#: A board with more items on it than the listing the scripts used to make was
+#: ever bounded at. Not derived from either copy: the bound this story retired
+#: is gone from both of them, so this is the size of the board the test builds
+#: rather than a number read off anything.
+A_BOARD_LARGER_THAN_THE_RETIRED_BOUND = 5001
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_board_larger_than_the_retired_bound_files_the_item_added_last(
+        script, tmp_path):
+    """The board a bounded listing could never have reported this item on.
+
+    The item a filing adds sits at the end of the board's order, so on a board
+    past the retired bound it was exactly the item the listing could not
+    report, and the entry stayed pending for ever. Asked for by its own node id
+    there is no size to outgrow, so the filing lands.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+
+    def crowd(project):
+        project["items"] = [
+            {"id": "PVTI_%d" % (number + 1),
+             "url": "https://tracker.invalid/issues/already-%d" % (number + 1)}
+            for number in range(A_BOARD_LARGER_THAN_THE_RETIRED_BOUND)]
+    rewrite_the_board(ledger, crowd)
+
+    result = sync_to_the_board(script, tmp_path, environment, key="k-crowded",
+                               payload=a_filed_brief())
+    assert result.returncode == 0, result.stderr
+
+    items = board_items(ledger)
+    assert len(items) == A_BOARD_LARGER_THAN_THE_RETIRED_BOUND + 1
+    filed = items[-1]
+    assert filed["url"] == result.stdout.strip().splitlines()[-1]
+    assert filed["status"] == THIS_TARGETS_STATUS_OPTION
+    for axis in CLASSIFICATION:
+        assert filed.get(axis.field_name.replace(" ", "").lower()) == \
+            str(a_filed_brief()[axis.payload_field]), axis.field_name
 
 
 @needs_jq
@@ -2715,6 +3192,52 @@ def test_that_comparison_reports_a_difference_that_is_not_a_constant(tmp_path):
     reported = differences_that_are_not_constant_values(template, tampered)
     assert reported, "the comparison sees no difference it should report"
     assert any("fail_transient_renamed" in line for line in reported), reported
+
+
+# --------------------------------------------------------------------------
+# Neither copy lists a project, and neither carries a bound on doing so
+# --------------------------------------------------------------------------
+
+
+#: The constant that bounded the listing, and the invocation it bounded. Both
+#: are written here rather than derived: the whole claim is that neither
+#: appears, and a name derived from the files being scanned would be the empty
+#: string, which appears in every file there is.
+THE_RETIRED_BOUND = "ITEM_LIST_LIMIT"
+THE_RETIRED_INVOCATION = f"gh project {THE_RETIRED_LISTING}"
+
+
+def listing_mentions(text: str) -> list[str]:
+    """Every line naming the retired bound or the listing it bounded."""
+    return [line for line in text.splitlines()
+            if THE_RETIRED_BOUND in line or THE_RETIRED_INVOCATION in line]
+
+
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_no_sync_script_lists_a_project_or_bounds_a_listing(script):
+    """A shipped artifact and the subject.
+
+    Neither copy may name the bound or make the invocation, and the two are
+    scanned for together because deleting one without the other leaves a
+    constant nothing reads or a listing nothing bounds. The control is below:
+    the same scan over a rendering of the same script with the listing put back
+    reports both lines, so silence here is the file rather than a scan that
+    matches nothing.
+    """
+    assert listing_mentions(script.read_text(encoding="utf-8")) == []
+
+
+def test_that_scan_reports_a_listing_put_back_into_a_sync_script():
+    """The control, on a rendering rather than on the tree."""
+    restored = TEMPLATE_SYNC.read_text(encoding="utf-8").replace(
+        'echo "$url"',
+        f'{THE_RETIRED_BOUND}=5000\n'
+        f'{THE_RETIRED_INVOCATION} "$PROJECT" --limit "${THE_RETIRED_BOUND}"\n'
+        'echo "$url"')
+    reported = listing_mentions(restored)
+
+    assert any(THE_RETIRED_BOUND in line for line in reported), reported
+    assert any(THE_RETIRED_INVOCATION in line for line in reported), reported
 
 
 # --------------------------------------------------------------------------
