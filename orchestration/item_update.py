@@ -22,12 +22,20 @@ edit made on the item reaches nothing. Nothing in a run reads this back, and no
 coordinator, resume, sweep or pre-flight path reaches this module.
 
 **One command rather than two, because the status half shares it.** The command
-takes an optional status beside the optional document, and nothing in this
-harness sends one yet. The sibling work that moves an item's status as its
-story runs is about the same item, and two scripts that must agree about one
-item are two scripts that can disagree — so the contract declares both halves
-now and that work fills its half in, rather than adding a second key and a
+takes an optional status beside an optional document, and a question carries
+each only where a caller supplied one — a publish with nothing to say about
+status, a status move with nothing to publish, or both at once. The sibling
+work that moves an item's status as its story runs is about the same item, and
+two scripts that must agree about one item are two scripts that can disagree,
+which is why it fills this half in rather than bringing a second key and a
 second script.
+
+**The harness does not know what a status is.** The three tokens below are the
+words on the wire and nothing more: no code here or above branches on which one
+was sent to decide anything about a tracker, nothing composes a sentence from
+one, and no status is ever parsed back out of the command. What a token means
+in a tracker — an issue label, a project-board column, a row in a markdown
+table — is the invoked command's business, exactly as what a key means is.
 
 **The key is opaque.** It is sent exactly as it was given and nothing here
 resolves it, normalizes it, joins it against a root, checks that it exists or
@@ -71,6 +79,32 @@ TIMEOUT_KEY = "item_update_timeout_seconds"
 #: The item's key, in the invoked command's environment. Taken from the same
 #: value as the copy inside the document on stdin, so the two cannot disagree.
 KEY_ENVIRONMENT_VARIABLE = "L5_ITEM_KEY"
+
+#: The three moments the work reaches, as the tokens that go on the wire. They
+#: are named here, beside the contract they belong to, so the words a call site
+#: sends and the words the schema declares are one fact rather than two.
+#:
+#: They are snake-case tokens rather than display text because a target's
+#: script compares them, and because the harness's other seams are spelled that
+#: way — the outbox's own states are pending, landed and failed. THE HARNESS
+#: ATTACHES NO MEANING TO ANY OF THEM beyond composing the document that
+#: carries it: nothing branches on which was sent, and no status is read back.
+
+#: The planning session's artifact has been committed and pushed.
+PLANNED = "planned"
+
+#: The run for that story has begun. Sent on a fresh run only — a resumed run
+#: has already been announced, and nothing here knows whether the tracker moved
+#: the item on since.
+IN_PROGRESS = "in_progress"
+
+#: The run completed, so there is a branch to review.
+READY_TO_MERGE = "ready_to_merge"
+
+#: The three, in the order the work reaches them. Written once so a reader —
+#: and a target's script — meets the whole vocabulary in one place. Nothing in
+#: this module reads it to decide anything; it is the list, not a check.
+STATUSES = (PLANNED, IN_PROGRESS, READY_TO_MERGE)
 
 #: How long the command may run when the target configures no bound. A real
 #: duration rather than zero, for `sync_timeout_seconds`' reason: zero here
@@ -190,25 +224,38 @@ def _kill_group(process: subprocess.Popen) -> None:
             pass
 
 
-def publish(key: str, story_id: str, document: str, config: dict,
+def publish(key: str, story_id: str, document: str | None, config: dict,
             target_root: Path | None = None,
             status: str | None = None) -> Published:
-    """Publish `document` onto the item `key` names, or say why it did not.
+    """Say something about the item `key` names, or say why nothing was said.
 
     Raises on nothing: every failure comes back as a result carrying its
     reason. The caller decides what a failure is worth, and in this harness it
-    is worth one printed line — the commit and the push have already landed by
-    the time this is invoked, and neither is reconsidered on its answer.
+    is worth one reported line — the commit, the push, the run and the
+    completion this follows have already landed by the time this is invoked,
+    and none of them is reconsidered on its answer.
 
-    The question is one JSON document on stdin carrying the item's key, the
-    story id and the projected document, and a status only where a caller
-    supplied one. The key goes into it verbatim and into the environment as
+    The question is one JSON document on stdin carrying the item's key and the
+    story id, a `document` only where one was given and a `status` only where
+    one was given. At least one of the two is always there: a call giving
+    neither has nothing to say and is reported rather than invoking anything,
+    in this module's own shape of returning a result carrying a reason. The
+    signature keeps its order, so a caller that publishes a document reads
+    exactly as it did before a status could be sent.
+
+    The key goes into the question verbatim and into the environment as
     `L5_ITEM_KEY`, from the same value.
 
-    Nothing reads the command's stdout. Zero means published; any other exit
-    code means it did not publish, with a bounded tail of its stderr as the
-    reason, and no code is read as a retry, because nothing retries.
+    Nothing reads the command's stdout. Zero means it was done; any other exit
+    code means it was not, with a bounded tail of its stderr as the reason, and
+    no code is read as a retry, because nothing retries.
     """
+    if document is None and status is None:
+        return _not_published(
+            "the question carried neither a document nor a status, so there "
+            "was nothing to say about that item and no command was invoked"
+        )
+
     command = config.get(COMMAND_KEY)
     if not command:
         return _not_published(
@@ -222,11 +269,14 @@ def publish(key: str, story_id: str, document: str, config: dict,
             f"the configuration a publish runs under was refused: {problem}"
         )
 
-    question = {"key": key, "story_id": story_id, "document": document}
+    # Each half is carried only where a caller supplied one, and at least one
+    # of the two is always there — a question with neither was refused above.
+    # A status is a token this composes into a document and nothing more: no
+    # branch here reads which one it is, and none ever should.
+    question = {"key": key, "story_id": story_id}
+    if document is not None:
+        question["document"] = document
     if status is not None:
-        # Carried only where a caller supplied one. The status half of this
-        # contract is declared and unsent: nothing in this harness sends a
-        # status yet, and the harness parses none and infers none either.
         question["status"] = status
 
     try:

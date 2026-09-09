@@ -668,13 +668,27 @@ PLANNING_SCRIPT = str(Path("scripts") / "l5-plan")
 THE_QUEUE = ("outbox", "outbox_sweep", "command_transport")
 
 
-def test_the_seams_only_caller_is_the_planning_script():
-    """Nothing a run, a resume, a sweep or a pre-flight reaches imports it.
+#: Who may reach the seam, each with what earns it. story-126 shipped it with
+#: one caller and story-127 gave it a second: the coordinator announces the two
+#: run-time moments, so a run does reach it now, and what stays true is that no
+#: sweep and no pre-flight does and that a resume announces nothing. Declared
+#: rather than asserted loosely, so a third caller has to be added here
+#: deliberately.
+MAY_REACH_THE_SEAM = {
+    PLANNING_SCRIPT: "publishes the projection and moves the item to planned",
+    str(Path("orchestration") / "story_coordinator.py"):
+        "moves the item at the run's start and at its completion",
+}
 
-    A set equality in both directions, so a second caller fails here and a
-    caller that stopped importing fails here too.
+
+def test_the_seams_callers_are_the_ones_declared():
+    """Only the declared callers reach it, and each of them still does.
+
+    A set equality in both directions, so a caller that is not declared fails
+    here and a declared caller that stopped importing fails here too.
     """
-    assert sources_importing("item_update", REPO_ROOT) == {PLANNING_SCRIPT}
+    assert sources_importing("item_update", REPO_ROOT) == \
+        set(MAY_REACH_THE_SEAM)
 
 
 def test_the_import_scan_reports_a_caller_when_there_is_one(tmp_path):
@@ -735,8 +749,11 @@ def test_the_scan_reports_a_module_that_did_reach_the_queue(module, tmp_path):
 #: How the script's own story markers are spelled, read off the script rather
 #: than written here — the script is what decides where a projection lives, and
 #: a test that wrote the marker down would stop testing that.
-BEGIN_ASSIGNMENT = re.compile(r'^begin="(?P<marker>.*)"$', re.MULTILINE)
-END_ASSIGNMENT = re.compile(r'^end="(?P<marker>.*)"$', re.MULTILINE)
+#: Leading whitespace is allowed because the assignments sit inside the
+#: script's document branch since story-127 gave it a status branch beside
+#: one; what is read is still the assignment the script makes, indented or not.
+BEGIN_ASSIGNMENT = re.compile(r'^[ \t]*begin="(?P<marker>.*)"$', re.MULTILINE)
+END_ASSIGNMENT = re.compile(r'^[ \t]*end="(?P<marker>.*)"$', re.MULTILINE)
 
 #: How the sync script's own markers are spelled. Every marker constant it
 #: declares, whatever it is called, so a marker added to that script is one
@@ -1147,18 +1164,22 @@ def test_the_published_key_is_the_one_the_brief_was_fetched_under(
     assert question["environment_key"] == KEY
 
 
-def test_a_planning_session_supplies_no_status(publishing, planning_harness):
-    """Nothing in this story sends the status half.
+def test_a_planning_session_supplies_the_planned_status(publishing,
+                                                        planning_harness):
+    """The status half rides on the publish this session already makes.
 
-    Its control is the seam test above, where a caller that supplies one has it
-    carried — so an absent field here is the script not supplying one.
+    story-126 asserted here that nothing supplied a status, which story-127
+    deliberately supersedes: the claim it stood for — that one item edit
+    happens where one happened before — is what the single-question assertion
+    below still carries, and what changed is that the one question now says
+    which of the three moments this is.
     """
     status, output = plan_session(publishing, planning_harness, "--brief", KEY)
     assert status == 0, output
 
     document = one_question(publishing.questions)["document"]
-    assert "status" not in document
-    assert set(document) == {"key", "story_id", "document"}
+    assert document["status"] == item_update.PLANNED
+    assert set(document) == {"key", "story_id", "document", "status"}
 
 
 def test_the_publish_happens_after_the_push_landed(publishing,

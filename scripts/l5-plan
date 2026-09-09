@@ -22,21 +22,27 @@ render and above the stories directory snapshot -- so a refused fetch leaves
 nothing invoked and nothing written. The key is opaque and is sent exactly as
 it was given.
 
-The brief is read at plan time and nowhere else. It is not written into the
-story artifact, not stored and not re-read; the only trace of it after the
-session is its key in the story's description, as prose, which the request text
-asks the planner to record. Planning still happens the way it always has: the
+The brief itself is read at plan time and nowhere else: it is not stored and
+not re-read, and what survives the session is its key — recorded on the
+artifact's brief_key field by this script, which already holds it, and named in
+the story's description as prose by the planner. Planning still happens the way
+it always has: the
 interview happens, the developer approves, and the mandate is stamped from what
 this process observed them answer.
 
-On that same path the planned story is published back onto the item it was
-planned from, after the push has landed and before the run offer, so no
-projection ever names a story that exists only in one clone. What is published
-is a copy stamped with the story id it was taken from, saying that the artifact
-in the repository is what runs and that an edit made on the item reaches
-nothing; a run reads it back on no path. A publish that fails prints one line
-and changes this script's exit status on no path — the commit and the push have
-already landed, and neither is reconsidered on a tracker's answer.
+On that same path the brief's key is recorded on the artifact — after the
+approval, so a rejected session's artifact is left exactly as the session wrote
+it, and before the validation, so what is checked and committed is what carries
+the key — and the planned story is published back onto the item it was planned
+from, after the push has landed and before the run offer, so no projection ever
+names a story that exists only in one clone. What is published is a copy
+stamped with the story id it was taken from, saying that the artifact in the
+repository is what runs and that an edit made on the item reaches nothing; a
+run reads it back on no path. That same invocation moves the item to planned,
+rather than a second one: one item edit happens where one happened before, and
+a publish that fails moves no status either. A publish that fails prints one
+line and changes this script's exit status on no path — the commit and the push
+have already landed, and neither is reconsidered on a tracker's answer.
 
 A brief names the workflow it should be planned under, so on that path the
 workflow selector is not invoked: the brief's workflow is the proposal, put to
@@ -93,6 +99,7 @@ HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
 import brief_fetch  # noqa: E402
+import brief_key as brief_key_field  # noqa: E402
 import context_assembler  # noqa: E402
 import harness_config  # noqa: E402
 import item_update  # noqa: E402
@@ -781,6 +788,15 @@ def report(
             )
             keep_worktree(target_root, "the artifacts are in it")
             return 1
+        # The brief's key goes onto the artifact here, beside the stamp: after
+        # the approval, because a rejected session's artifact is left exactly
+        # as the session wrote it, and before the validation and the commit,
+        # so the artifact that is checked and committed is the one carrying
+        # the key. It is written by this process rather than asked of the
+        # planner, for the reason the block above it is: a key a model retypes
+        # into prose is a key that can be retyped wrong, and this process
+        # already holds the one it was given.
+        record_keys(artifacts, brief_key)
     # Validation sits between the snapshot and the commit, so an artifact that
     # would be refused at pre-flight is never committed. It refuses rather
     # than warning — a warning here is a warning nobody sees, because the
@@ -954,27 +970,62 @@ def publish(
                 f"committed artifact could not be read: {error}"
             )
             continue
-        # No status is supplied, and nothing in this harness supplies one: the
-        # status half of that contract is declared so that the work which moves
-        # an item as its story runs fills it in, rather than adding a second key
-        # and a second script beside this one.
+        # The first of the three moments rides on the invocation that already
+        # publishes the projection rather than being a second one: one item
+        # edit happens where one happened before. The cost is stated and
+        # accepted — a publish that fails moves no status either, and the
+        # developer sees one failure line rather than two.
         published = item_update.publish(
             brief_key,
             story_id,
             item_update.projection(story_id, committed),
             config,
             worktree,
+            status=item_update.PLANNED,
         )
         if published.published:
             print(
-                f"l5-plan: published {story_id} onto {brief_key}; it is a copy, "
-                f"and the artifact in the repository is what runs."
+                f"l5-plan: published {story_id} onto {brief_key} and moved it "
+                f"to {item_update.PLANNED}; the projection is a copy, and the "
+                f"artifact in the repository is what runs."
             )
         else:
             print(
-                f"l5-plan: did not publish {story_id} onto {brief_key}: "
-                f"{published.reason}. The story is committed and pushed; "
-                f"nothing about the plan depends on this."
+                f"l5-plan: did not publish {story_id} onto {brief_key} or move "
+                f"it to {item_update.PLANNED}: {published.reason}. The story is "
+                f"committed and pushed; nothing about the plan depends on this."
+            )
+
+
+def record_keys(artifacts: Sequence[Path], brief_key: str | None) -> None:
+    """Record the brief's key on each artifact this session wrote.
+
+    Only where --brief named one: a session planned from request text has no
+    key to record, and its artifact carries the field not at all, which is the
+    ordinary case rather than an omission.
+
+    Every judgement is `brief_key`'s and every word is this script's, which is
+    the division `report` already keeps with `plan_commit`, `plan_validation`
+    and `item_update`. Recording on an artifact that already carries a key is
+    reported rather than performed — it keeps the key it was committed with —
+    and neither that nor any other way of writing nothing refuses anything:
+    the artifact still goes to the validation and the commit below, carrying
+    whichever key it has.
+    """
+    if brief_key is None:
+        return
+    for artifact in artifacts:
+        recorded = brief_key_field.record(artifact, brief_key)
+        if recorded.recorded:
+            print(
+                f"l5-plan: {artifact.stem} carries "
+                f"{brief_key_field.FIELD}: {brief_key}, the brief it was "
+                f"planned from."
+            )
+        else:
+            print(
+                f"l5-plan: did not record {brief_key_field.FIELD} on "
+                f"{artifact.stem}: {recorded.detail}."
             )
 
 

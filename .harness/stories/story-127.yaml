@@ -1,0 +1,233 @@
+story:
+  id: story-127
+  title: A story carries its brief's key, and three moments move the item's status
+  description: |
+    A brief filed in a tracker is what a human looks at to know what is
+    happening, and today its status never moves. It is filed once, planned
+    once, and left where it was filed while a story is written from it, run,
+    and finished with an open pull request, so a reader of the tracker sees a
+    backlog of things nobody has started while the only record of the truth is
+    a run directory on one developer's machine.
+
+    Nothing links a story back to its brief. brief_fetch states the current
+    contract outright at orchestration/brief_fetch.py:41-46 -- the brief is a
+    plan-time input, nothing stores it or reads it back, and the only trace of
+    it after the planning session is its key in the story's description, as
+    prose. There is no field on the story artifact holding that key, so a run
+    has nothing to name even if it wanted to; grep brief scripts/l5-run
+    orchestration/story_coordinator.py returns nothing, because the run side of
+    the harness has never heard of a brief.
+
+    The transport this needs already exists. story-126 built the item-update
+    seam -- item_update_command, item_update_timeout_seconds and
+    orchestration/item_update.py, which spawns the target's command in its own
+    session, kills its process group on the bound, carries a tail of its stderr
+    back and raises on nothing. That seam was deliberately built with a status
+    half declared and unsent: schemas/harness-config.schema.json says the
+    question carries a status "only where a caller supplied one" and that "the
+    sibling work that moves an item's status as its story runs is about the
+    same item, and two scripts that must agree about one item are two scripts
+    that can disagree", and templates/item/github.sh says the same in its own
+    header. THIS IS THAT SIBLING WORK, AND IT FILLS THAT HALF IN RATHER THAN
+    ADDING A SECOND KEY AND A SECOND SCRIPT.
+
+    So what this story adds is small and specific: a brief_key field on the
+    story artifact, written by l5-plan because l5-plan already holds the key;
+    three status tokens; a question document that may carry a status without a
+    document; and three call sites that send one.
+
+    The three moments are planned, when the planning session's artifact is
+    committed and pushed; in_progress, when the run for that story begins; and
+    ready_to_merge, when the run completes. The tokens on the wire are those
+    snake-case ones rather than display text, because a target's script
+    compares them and the harness's other seams are spelled that way -- the
+    outbox's own states are pending, landed and failed. THE HARNESS MUST NOT
+    KNOW WHAT A STATUS IS. It knows a key and which of three moments the work
+    has reached, and the target's command decides what that means in its
+    tracker -- an issue label, a project-board column, a row in a markdown
+    table, a row in a database. No status is ever parsed back.
+
+    PLANNED RIDES ON THE PUBLISH THAT IS ALREADY MADE. l5-plan already invokes
+    the command once per artifact after the push has landed and before the run
+    offer, handing it the projection; that same invocation carries the status
+    now, so one item edit happens where one happened before. The cost is
+    stated and accepted: a publish that fails moves no status either, and the
+    developer sees one failure line rather than two.
+
+    IN_PROGRESS IS ANNOUNCED ON A FRESH RUN ONLY, and that is a decision rather
+    than an omission. A resumed run has already been announced, and the
+    coordinator has no way to know whether the tracker moved the item on since;
+    re-announcing on every escalated, crashed and capacity resume would make
+    the harness the author of a status history nobody asked for. The cost is
+    stated: a story that escalated and was resumed shows no fresh movement in
+    the tracker for the second half of its life, and the moment that follows is
+    the completion.
+
+    A STATUS UPDATE THAT FAILS MUST NOT FAIL THE THING IT REPORTED ON. A run
+    that finished is finished whether or not its tracker heard, and the
+    plan-time update happens after the artifact is already committed and
+    pushed, so refusing there would refuse a session whose work has landed.
+    Every site reports and continues, and where each one reports is part of
+    what this story is checked on -- particularly the completion site, which
+    must report on stderr and append nothing, because a line appended after the
+    completion commit leaves the tree dirty for the next run's clean-tree
+    pre-flight to refuse, which is the rule the completion sweep beside it
+    already follows.
+
+    This supersedes story-115, which planned this same brief before story-126
+    landed and therefore planned to build a fourth configured command, a second
+    transport module and a third reference script that the item seam now
+    provides. That artifact is left on main as the record of what was planned
+    then; it is not the plan to run, and this one is.
+
+    This is the first half of a larger request. The second half -- a session
+    given typed request text filing a brief for itself, so that after l5-plan
+    every story has a tracker item behind it -- is filed separately as
+    https://github.com/jerodw/level-five/issues/164 and is not in scope here.
+    This one is useful on its own; that one is not useful without it.
+
+    This request is the brief filed under
+    https://github.com/jerodw/level-five/issues/160.
+  workflow: story-workflow
+
+tasks:
+  - Declare brief_key in schemas/story.schema.json as an optional top-level string holding the key of the brief the story was planned from, opaque and sent exactly as it was given, saying that it is written by l5-plan rather than by the planner and that a story planned from typed request text carries none.
+  - Write orchestration/brief_key.py, the one place the field's name lives - the function that records a brief key on a story artifact by appending it and refuses rather than rewriting one already there, and the reader that takes it back off a parsed story - so l5-plan's writer and the coordinator's readers cannot drift about what the field is called.
+  - Name the three status tokens as constants in orchestration/item_update.py, beside the contract they belong to, since that module already owns what is said to an item.
+  - Let item_update.publish be asked a question that carries a status and no document, so a caller with a status and nothing to publish can ask it - the question carrying document only where there is one and status only where there is one, and at least one of the two always present.
+  - Record the brief key on each artifact in scripts/l5-plan's report, beside the mandate stamp - after the approval and before the validation - so the artifact that is validated and committed is the one carrying the key, and a rejected session's artifact is left exactly as the session wrote it.
+  - Send the status planned from scripts/l5-plan on the invocation that already publishes the projection, rather than as a second invocation, and say in the line it prints that the item was moved as well as published.
+  - Send the status in_progress from the coordinator at the pre-flight sweep, on a fresh run only, decided by the same loaded state that decides the resume, and report what happened into the run's events.log through the coordinator's own append.
+  - Send the status ready_to_merge from the coordinator's _complete, beside the completion sweep, reporting on stderr and appending nothing to any file.
+  - Amend the item_update_command description in schemas/harness-config.schema.json where it says the status half is declared and unsent and where it says the question always carries a document, so the declared contract and the sent one are the same contract.
+  - Fill in the status half of templates/item/github.sh and of this repository's own .harness/item/github.sh - moving the item's Status field where a status is given, publishing where a document is given, and doing both where both are - and amend both headers where they say nothing in the harness sends a status.
+  - Write the standing regression module for this behaviour, covering the artifact field, the shape of the question at each of the three sites, the fresh-run-only rule, where each site reports, and every failure the module absorbs.
+  - Record in the architecture document what a brief key on a story artifact is for, the three moments, why planned rides on the publish, the failure policy, and why in_progress is announced on a fresh run only.
+
+acceptance_criteria:
+  - With no item_update_command configured, l5-plan, a fresh run and a completing run each invoke nothing, announce nothing and refuse nothing, and behave exactly as they did before this story.
+  - A story artifact carrying no brief_key causes no command to be invoked at either of the two run-time call sites, whatever item_update_command is set to.
+  - A planning session started with --brief writes the fetched key into the committed artifact's brief_key field, byte for byte as it was given, with no resolution, normalization or joining against the target root.
+  - A planning session given request text rather than --brief commits an artifact carrying no brief_key field at all, and the artifact still satisfies the story schema and still parses.
+  - The brief key is recorded on the artifact after the developer's approval and before the plan-time validation, so an artifact refused by that validation and an artifact a developer rejected are both left in the working tree with the key recorded or not exactly as that ordering implies, and nothing is committed in either case.
+  - Recording a key on an artifact that already carries one changes that artifact on no byte and is reported rather than performed, so a re-planned artifact keeps the key it was committed with.
+  - With an item_update_command configured, a planning session started with --brief invokes it exactly once per artifact, and the single JSON document that invocation is given carries the projection under document and the string planned under status.
+  - A fresh run of a story carrying a brief_key invokes the command once with a question carrying that key, the story id and the status in_progress, and carrying no document field at all.
+  - A run that completes invokes the command once with the status ready_to_merge and no document field.
+  - A resumed run - escalated, crashed or capacity-paused - invokes the command not at all at the run-start site.
+  - The command is given the brief key in its environment as L5_ITEM_KEY, and that value is taken from the same field as the copy on stdin, so the two cannot disagree.
+  - A command that exits non-zero, that cannot be launched, that runs past its bound, or that is configured with a bound that is not a positive number leaves l5-plan's exit status unchanged, does not refuse a run, does not fail a run that reached completion, and is reported with a reason naming which of those it was.
+  - A command that runs past its bound is killed together with the children it spawned, so a command that backgrounded a process leaves none of them behind.
+  - A tail of what the command said on stderr is carried into what is reported, bounded in length.
+  - The plan-time failure is reported on l5-plan's stdout; the run-start failure is reported in the run's events.log; the completion failure is reported on stderr and appends nothing to events.log, execution-history.json or any other file.
+  - The completion call site leaves the working tree exactly as clean as it was after the completion commit, so a target that tracks its run directory is not refused by the next run's clean-tree pre-flight.
+  - item_update.publish raises into no caller for any behaviour of the configured command, including one that cannot be launched, one that exits non-zero, one that is killed on its bound and one that writes nothing at all, and that holds for a question carrying a status exactly as it holds for one carrying a document.
+  - The reference item script moves the item's Status field to the option each of the three tokens names, publishes a projection where a document is given, does both where both are given, and reports on stderr and exits non-zero where the board, the field or the option it was asked for could not be reached.
+  - The reference item script leaves the markers sync_command writes and filed_query_command searches for exactly as it found them when it is given a status, so filing, dedupe and brief fetch keep finding what they wrote.
+  - No harness code branches on the value of a status token beyond composing the document that carries it, and nothing reads a status back out of the command.
+
+technical_plan:
+  implementation_steps:
+    - Add brief_key to schemas/story.schema.json as a top-level optional string. Top-level rather than nested inside the story object because l5-plan writes it by appending, the way plan_mandate.block does; inserting a line into an existing indented block would be text surgery on a session's artifact for no gain. Its description says the key is opaque, that l5-plan writes it because a key a model retypes into prose is a key that can be retyped wrong, and that its absence is ordinary.
+    - Write orchestration/brief_key.py holding the field's name as a constant, a record that appends the key to a story artifact and reports whether it did, refusing rather than rewriting where the artifact already carries one, and a reader that takes the key off a story parsed by story_parser. Small deliberately - the module exists so that one name is spelled in one place, which is why story_ids.py and plan_mandate.py exist.
+    - Add the three status tokens to orchestration/item_update.py as named constants beside COMMAND_KEY and KEY_ENVIRONMENT_VARIABLE, so the words on the wire are written once where the contract they belong to is written.
+    - Let item_update.publish take a document that may be absent - the question composed with document only where one was given and status only where one was given - and refuse, in the module's own shape of returning a result carrying a reason, a call that gives it neither. The signature keeps its order so story-126's call site reads unchanged.
+    - Amend the item_update_command description in schemas/harness-config.schema.json where it declares the status half unsent, and where it says the question carries the document, so what it declares is what is sent. The paragraph on what a status means stays exactly as it is - the harness still parses none and infers none.
+    - In scripts/l5-plan, thread the brief key from main into report, record it on each artifact immediately after the mandate stamp, and pass item_update's planned token to the publish call that already exists, widening the line it prints to say the item was moved as well as published and the line it prints on failure to say neither happened.
+    - In story_coordinator.run_story, read the brief key off the story already parsed there, capture whether this entry is a fresh run from the state already loaded for the resume decision, and announce in_progress beside the pre-flight sweep, appending what happened through append_event.
+    - In story_coordinator._complete, announce ready_to_merge beside the completion sweep, printing what happened on stderr and appending nothing, for the reason the sweep there reports into no run directory.
+    - Fill in the status half of templates/item/github.sh - the document required only where no status is given, the board's Status field written to the option the token names, with the option names taken from the environment so a board that spells them differently is a configuration rather than an edit - and mirror it into .harness/item/github.sh, which is this repository's own installed copy. The project-id, field and option lookups are the ones templates/sync/github.sh already performs; they are duplicated between the two scripts, which is the subject of a brief already filed rather than of this story.
+    - Write tests/test_a_brief_follows_its_story.py against a fake command that records the documents it was given, covering the artifact field, the shape of the question at each site, the fresh-run-only rule, the reporting sinks and every failure the module absorbs.
+    - Record the mechanism in the architecture document.
+  likely_file_changes:
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: declares brief_key as an optional top-level string on the story artifact.
+    - file: orchestration/brief_key.py
+      stage: implementer
+      reason: the new module - the field's name, the appender that records it and the reader that takes it back.
+    - file: orchestration/item_update.py
+      stage: implementer
+      reason: names the three status tokens and lets a question carry a status without a document.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: amends the item-update contract where it declares the status half unsent and the document always present.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: records the brief key on the artifacts it is about to validate and commit, and sends planned on the publish it already makes.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: announces in_progress on a fresh run beside the pre-flight sweep, and ready_to_merge beside the completion sweep.
+    - file: templates/item/github.sh
+      stage: implementer
+      reason: fills in the status half of the reference implementation and corrects its header where it says nothing sends a status.
+    - file: .harness/item/github.sh
+      stage: implementer
+      reason: this repository's own installed copy of that script, which must not drift from the template it was installed from.
+    - file: tests/test_a_brief_follows_its_story.py
+      stage: tester
+      reason: the standing regression module for the field, the question at each site, the fresh-run-only rule and where each site reports.
+    - file: tests/test_no_test_bounds_the_machine.py
+      stage: tester
+      reason: classifies the new module there where it reads a clock, which the scan requires of any module under tests/ that does.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records what a brief key on a story artifact is for, the three moments, why planned rides on the publish, and why in_progress is announced on a fresh run only.
+
+scope:
+  modify:
+    - schemas/story.schema.json
+    - schemas/harness-config.schema.json
+    - orchestration/brief_key.py
+    - orchestration/item_update.py
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - templates/item/github.sh
+    - .harness/item/github.sh
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/story-brief.schema.json
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/brief_filing.py
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - orchestration/brief_fetch.py
+    - templates/sync/github.sh
+    - templates/query/github.sh
+    - .harness/sync/github.sh
+    - .harness/query/github.sh
+    - templates/config.yaml
+    - scripts/l5-init
+    - scripts/l5-run
+
+verification_requirements:
+  - Confirm that with no item_update_command configured nothing is invoked and nothing is announced at any of the three sites, and that a story artifact carrying no brief_key invokes nothing at either run-time site whatever the command is set to.
+  - Confirm that the plan-time invocation is one invocation carrying both the projection and the status planned, rather than two.
+  - Confirm that the question at the two run-time sites carries the key, the story id and a status and carries no document field, and that the key it carries is byte for byte what --brief was given.
+  - Confirm that L5_ITEM_KEY carries the same value as the question's key field at every site.
+  - Confirm that a fresh run announces in_progress and that an escalated, a crashed and a capacity-paused resume each announce nothing.
+  - Confirm that every failure of the command - a non-zero exit, a launch failure, a run past the bound, a bound that is not a positive number - leaves l5-plan's exit status unchanged, refuses no run, and fails no run that reached completion, and that each is reported with a reason naming which it was.
+  - Confirm that the completion call site appends to no file, so the working tree after a completed run is exactly as clean as the completion commit left it.
+  - Confirm that item_update.publish raises into no caller for any behaviour of the configured command, for a question carrying a status as well as for one carrying a document.
+  - Confirm that recording a brief key on an artifact that already carries one leaves that artifact unchanged.
+  - Confirm that the regression module fails when the fresh-run-only rule, the reporting sinks, the shape of the question or the totality of the module is broken, rather than passing on a behaviour it does not exercise.
+
+constraints:
+  - The harness attaches no meaning to a status token beyond composing the document that carries it. No harness code may branch on which token was sent to decide anything about a tracker, and no status is ever parsed back out of the command.
+  - The key is opaque. Nothing resolves it, normalizes it, joins it against the target root, checks that it exists or decides anything from its form, which is exactly how brief_fetch and item_update already treat it.
+  - A status update may never block, delay past its bound, or refuse a plan, a run or a completion. Every path through item_update returns what happened, and no call site branches on it to stop anything.
+  - The completion call site appends to no log and writes no file, because a write after the completion commit is what the next run's clean-tree pre-flight refuses on - the rule the completion sweep beside it already obeys.
+  - The planner is not asked to write brief_key. It is written by l5-plan, which already holds the key, for the reason the mandate block is written by l5-plan: a required field a model retypes is a field that can be retyped wrong.
+  - No fourth configured command and no second reference script. The item-update seam story-126 built carries both halves, and its own contract says so; two scripts that must agree about one item are two scripts that can disagree.
+  - Nothing about the outbox changes. A status update is not queued and not retried, so no exit code is read as a retry, which is what item_update already does.
+  - The existing behaviour of the publish story-126 built is preserved: a story planned from a brief still gets its projection published, still after the push and before the run offer, still once per artifact, and still stamped with the story id it was taken from.
+  - The existing behaviour of sync_command, filed_query_command and brief_fetch is untouched, including the plan-time instruction that puts the brief's key in the story's description as prose.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 07:58:21
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan

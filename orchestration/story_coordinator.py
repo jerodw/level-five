@@ -42,8 +42,10 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import agent_runner
+import brief_key
 import context_assembler
 import harness_config
+import item_update
 import outbox_sweep
 import story_inspection
 import schema_validator
@@ -6806,6 +6808,58 @@ def resume_from_capacity(run_dir: Path, state: RunState) -> None:
     _resumed(run_dir, state, note=" after a capacity pause")
 
 
+def announce_item_status(
+    story: dict | None, config: dict, target_root: Path, status: str
+) -> item_update.Published | None:
+    """Move the item this story was planned from to `status`, if there is one.
+
+    Returns `None` where nothing was invoked, and a result where something
+    was — so a caller reports what happened without asking a second question
+    about whether anything did. Two things make it `None`, and both are
+    ordinary rather than failures: a story artifact carrying no brief key,
+    which is every story planned from typed request text, and a target
+    configuring no item-update command, which is every target that tracks its
+    work somewhere the harness has not been told about. Neither is announced,
+    because a run that invoked nothing has nothing to say.
+
+    Nothing here raises, nothing here refuses, and nothing here prints. The
+    caller decides where a result is reported, which differs between the two
+    call sites: a run's start reports into its own events.log, and a run's
+    completion reports on stderr and appends nothing at all, because a line
+    written after the completion commit leaves the tree dirty for the next
+    run's clean-tree pre-flight to refuse on.
+
+    `status` is a token composed into the question and read by nothing here:
+    no branch anywhere in the harness decides anything from which of the three
+    was sent, and no status is ever read back out of the command.
+    """
+    key = brief_key.key_of(story)
+    if not key or not config.get(item_update.COMMAND_KEY):
+        return None
+    return item_update.publish(
+        key,
+        state_story_id(story),
+        # No document: there is nothing new to publish at either of these
+        # moments, and the projection the planning session published is
+        # already on the item.
+        None,
+        config,
+        target_root,
+        status=status,
+    )
+
+
+def state_story_id(story: dict | None) -> str:
+    """The story id a parsed story names, or the empty string for none.
+
+    Taken off the reading the caller already has rather than from a second
+    parse, and answering emptily rather than raising, because what it feeds is
+    a report about a tracker and never a routing decision.
+    """
+    value = (story or {}).get("story", {}).get("id", "")
+    return value if isinstance(value, str) else ""
+
+
 def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
               *, config: dict | None = None,
               harness_root: Path | None = None,
@@ -6934,6 +6988,30 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     # and reports nowhere. What it did is observable where it can be observed
     # without writing: at the transport, which is called after the commit.
     outbox_sweep.sweep(target_root, config or {}, harness_root)
+    # The third of the three moments, beside that sweep and reported the way it
+    # is reported: on stderr, appending nothing to events.log, to
+    # execution-history.json or to any other file. A line appended after the
+    # completion commit leaves the tree dirty for the next run's clean-tree
+    # pre-flight to refuse on, which is the rule the sweep above already obeys
+    # and the one thing this report may not break — a run that finished is
+    # finished whether or not its tracker heard, so a status update must not be
+    # able to fail the thing it reported on.
+    #
+    # Nothing branches on it: the return below is 0 whatever it found, and a
+    # story carrying no brief key or a target configuring no command invokes
+    # nothing and says nothing.
+    moved = announce_item_status(
+        story, config or {}, target_root, item_update.READY_TO_MERGE
+    )
+    if moved is not None:
+        print(
+            f"item status {item_update.READY_TO_MERGE} sent for "
+            f"{state.story_id}"
+            if moved.published
+            else f"item status {item_update.READY_TO_MERGE} was not sent for "
+            f"{state.story_id}: {moved.reason}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -7063,6 +7141,11 @@ def run_story(
     run_root = resolve_run_root(invoked_root, config, invoked_branch)
     run_dir = run_root.path / config.get("runs_dir", ".harness/runs") / story_id
     state = load_state(run_dir)
+    # Whether this entry is a fresh run rather than a resume, read off the same
+    # loaded state the resume decision below is made from — captured here
+    # because that state is replaced by the fresh run's own RunState further
+    # down, and one reading of it is what keeps the two decisions agreeing.
+    fresh_run = state is None
 
     # Which workflow this run executes, in this order: what a resumed run
     # recorded loading, then what the story artifact names, then what the
@@ -7657,6 +7740,36 @@ def run_story(
     # this run's events.log, which is safe here and is not safe after the
     # completion commit — see the sweep at the end of `_complete`.
     outbox_sweep.sweep(target_root, config, harness_root, run_dir=run_dir)
+
+    # The second of the three moments, beside that sweep and on a fresh run
+    # only. A resumed run has already been announced, and nothing here knows
+    # whether the tracker moved the item on since, so re-announcing on every
+    # escalated, crashed and capacity resume would make the harness the author
+    # of a status history nobody asked for. The cost is stated: a story that
+    # escalated and was resumed shows no fresh movement in the tracker for the
+    # second half of its life, and the moment that follows is the completion.
+    #
+    # Whether this entry is a fresh run is decided by the same loaded state
+    # that decides the resume, captured before that state was replaced.
+    #
+    # It may not refuse, for the reason the sweep above it may not: an item
+    # that cannot be moved is not a reason to refuse the run it was reporting
+    # on. Nothing branches on the result — what it did is reported into this
+    # run's events.log, which is safe here and is not safe after the
+    # completion commit, and a run that invoked nothing says nothing.
+    if fresh_run:
+        moved = announce_item_status(
+            reading.parsed, config, target_root, item_update.IN_PROGRESS
+        )
+        if moved is not None:
+            append_event(
+                run_dir,
+                f"item status {item_update.IN_PROGRESS} sent for {story_id}"
+                if moved.published
+                else f"item status {item_update.IN_PROGRESS} was not sent for "
+                f"{story_id}: {moved.reason}",
+                kind="note",
+            )
 
     # A branch that already existed was cut from the base as it stood then, and
     # the base has moved since or it has not. Say so once, as a note: what to

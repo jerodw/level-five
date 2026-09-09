@@ -1334,7 +1334,9 @@ second implementation:
   issue list --search matches the search text against each issue's body.
   issue view          prints one issue's body by the key the create printed --
                       the invocation the query script makes to answer a
-                      brief-fetch question.
+                      brief-fetch question -- or its url where url is the one
+                      field asked for, which is what the item-update script's
+                      status branch needs to name the issue to a board.
   issue edit          given --body-file, replaces the issue's whole body with
                       that file, which is the one edit the item-update script
                       makes; given --add-label,
@@ -1445,7 +1447,13 @@ elif argv[:2] == ["issue", "view"]:
              if wanted in (issue["url"], str(issue["number"]))]
     if not found:
         refuse("no issue is filed under %s" % wanted)
-    print(found[0]["body"])
+    # Which field was asked for. The body is what the query script and the
+    # item-update script's document branch ask for, and stays the answer to a
+    # view naming no field at all; the url is what the item-update script's
+    # status branch asks for, because a board takes an issue by url rather
+    # than by body.
+    asked_for = (flag(argv, "--json", "") or "").split(",")
+    print(found[0]["url"] if asked_for == ["url"] else found[0]["body"])
 elif argv[:2] == ["issue", "edit"]:
     # The one edit the sync script makes: a label added beside the ones the
     # issue carries rather than replacing them.

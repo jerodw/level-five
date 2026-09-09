@@ -703,6 +703,14 @@ def modules_reaching_the_outbox(sources: dict[str, str]) -> list[str]:
 #:                         scripts/l5-inspect and from the suite and from
 #:                         nothing a run executes, so it enqueues and never
 #:                         drains.
+#:   item_update.py        names the queue in prose and reaches it not at all,
+#:                         for story_brief.py's reason: it says why the status
+#:                         tokens it defines are spelled the way they are, by
+#:                         pointing at the queue's own states as the harness's
+#:                         other seam spelled the same way. It imports nothing
+#:                         from the queue, calls none of its operations, and
+#:                         queues and retries nothing — a status update is sent
+#:                         once and never filed.
 #:   outbox_sweep.py       the seam itself: the one module that calls the
 #:                         queue's drain, and the only route a run has to it.
 #:   run_status.py         reads the queue as data for the l5-status listing,
@@ -725,6 +733,7 @@ MODULES_THAT_MAY_NAME_THE_QUEUE = (
     "brief_filing.py",
     "command_transport.py",
     "inspection.py",
+    "item_update.py",
     f"{outbox_sweep.__name__}.py",
     "run_status.py",
     "story_brief.py",
