@@ -1,0 +1,207 @@
+story:
+  id: story-130
+  title: One file answers every question this target's tracker is asked
+  description: |
+    Three scripts answer this target's tracker — one files a brief as an issue
+    and puts it on the board, one asks what is already filed, and one updates
+    an item that exists — and they share most of what they know. Each carries
+    the project number and owner, the field name to look for, how to match that
+    name against what the board reports, and how to resolve a field's id and an
+    option's id from a listing. The sync and item scripts both set field values
+    on a board item; that resolution is written twice.
+
+    The duplication has already cost a fix twice. story-129 made a field's name
+    match case-insensitively, so that a board titled Status and a target
+    configuring status are the same field; it changed the sync script. The item
+    script, landed by story-127, compares verbatim, so the same board and the
+    same configuration disagree depending on which command is asking. Applying
+    the rule to the item script by hand would have been a third writing of it,
+    and it was dropped rather than landed for that reason. The values are
+    duplicated the same way: pointing this deployment at project 1 was done by
+    editing the sync script's installed copy when story-105 landed, and the item
+    script needs the same value and has no copy of it, so on this target every
+    status move it is asked to make reports a failure.
+
+    This story merges the three into one file with three entry points,
+    templates/scripts/github.sh, installed by l5-init into .harness/scripts/.
+    A configured command is split into words before it is run — all three call
+    sites already shlex.split it — so the harness needs nothing new: it still
+    invokes three commands and still interprets three sets of exit codes. The
+    project settings, the markers, the field-matching rule and the id
+    resolution are declared once at the top; the three jobs are branches below.
+    The behaviour that changes on this deployment is a consequence of the
+    merge rather than its object: one project constant serves all three
+    branches, so status moves stop failing, and one field-matching rule serves
+    both writers, so a field name resolves the same way whichever command asks.
+
+    This story was planned from the brief filed under 205.
+  workflow: refactor-workflow
+
+tasks:
+  - Write templates/scripts/github.sh — one file dispatching on its first argument to sync, query and item — by merging templates/sync/github.sh, templates/query/github.sh and templates/item/github.sh. Declare once at the top what all three share: the project, its owner and the Status field name as L5_TRACKER_PROJECT, L5_TRACKER_PROJECT_OWNER and L5_TRACKER_STATUS_FIELD; the path and payload markers; the same_field_name jq definition story-129 wrote; and the resolution of a field's id, an option's id, the project id and the field list.
+  - Keep per-job what is genuinely per-job. The label, the column a newly filed item lands in, the five classification field names and the category-label prefix belong to the sync branch. The three moment options belong to the item branch. The search limit belongs to the query branch. Keep the failure vocabularies distinct: the sync branch alone has a transient exit 75, because nothing retries behind the query and item branches.
+  - Make the dispatcher refuse rather than guess. A first argument that is not one of the three jobs, and no first argument at all, each exit non-zero saying so, so a mistyped configuration is reported rather than silently answering as some other job.
+  - Write .harness/scripts/github.sh, this repository's installed copy: the template with this deployment's values filled into the constant assignments at the top and differing from it in nothing else. It names project 1, the Backlog column a filing lands in, and the five classification field names the sync script's installed copy names today.
+  - Remove templates/sync/github.sh, templates/query/github.sh, templates/item/github.sh and their installed copies .harness/sync/github.sh, .harness/query/github.sh and .harness/item/github.sh, together with the directories that held them.
+  - Update scripts/l5-init to create .harness/scripts/ instead of .harness/sync/, .harness/query/ and .harness/item/, and to install templates/scripts/*.sh into it through one pass of the loop it already walks a directory with.
+  - Update .harness/config.yaml so that sync_command, filed_query_command and item_update_command name .harness/scripts/github.sh with the sync, query and item arguments, and so that the comments above them name the merged file rather than the three that are gone.
+  - Update templates/config.yaml, the starter config a fresh target is given, so that its commented-out sync_command and filed_query_command lines name the merged file, and add a commented-out item_update_command line beside them naming it too.
+  - Update the prose in the harness that names the paths that are gone — the descriptions in schemas/filed-items.schema.json and schemas/harness-config.schema.json, and the module docstrings in orchestration/command_transport.py, orchestration/filed_query.py and scripts/l5-sync.
+  - Retarget the standing tests at the merged file rather than dropping them. The marker-drift assertions in tests/test_filed_query.py and tests/test_brief_fetch.py read their marker out of two files that are now one; the installed-copy comparisons hold one file to one template; the l5-init installation assertions in tests/test_filed_query.py and tests/test_a_planned_story_is_published_onto_its_item.py name one directory; and the modules that resolve an installed script from this repository's configuration split the configured command into words before treating its first word as a path.
+  - Convert the byte-identity assertion holding .harness/item/github.sh to its template into the comparison the sync half already uses: every line the installed copy and the template do not share must be one of the editable constant assignments at the top, with a control that plants a non-constant difference and requires it reported.
+  - Write the three claims this merge makes newly checkable: that the item branch resolves a configured field name against a board that spells it with different case, that the dispatcher exits non-zero for an unrecognised first argument and for none, and that this repository's installed copy names a project for the item branch as well as the sync branch.
+
+acceptance_criteria:
+  - templates/scripts/github.sh exists, is executable, and answers to sync, query and item as its first argument. templates/sync/github.sh, templates/query/github.sh and templates/item/github.sh do not exist.
+  - .harness/scripts/github.sh exists and is executable. .harness/sync/github.sh, .harness/query/github.sh and .harness/item/github.sh do not exist.
+  - The project, its owner and the Status field name are each assigned exactly once in templates/scripts/github.sh, under the names L5_TRACKER_PROJECT, L5_TRACKER_PROJECT_OWNER and L5_TRACKER_STATUS_FIELD, and no L5_SYNC_PROJECT, L5_SYNC_PROJECT_OWNER, L5_SYNC_STATUS_FIELD, L5_ITEM_PROJECT, L5_ITEM_PROJECT_OWNER or L5_ITEM_STATUS_FIELD assignment remains in the file.
+  - The rule that decides whether a configured field name and a board's field name are the same is written once in templates/scripts/github.sh, and both the sync branch and the item branch resolve a field's id through it.
+  - A test drives the item branch against a board whose Status field is titled with different case from the configured field name, and the item is moved. The same test fails against the item script as story-127 left it, which is the regression this merge removes.
+  - The resolution of a field's id from a project's field listing, and the resolution of an option's id, are each written once in templates/scripts/github.sh and used by both the sync branch and the item branch.
+  - The sync branch exits 75 for a transient failure and the query and item branches use no exit code that any call site reads as a retry. A test asserts the sync branch's transient exits are unchanged by the merge.
+  - templates/scripts/github.sh exits non-zero, saying what it was given, when its first argument is not one of the three jobs and when it is given no argument, and neither case performs any of the three jobs.
+  - .harness/scripts/github.sh differs from templates/scripts/github.sh only in lines that are constant assignments at the top of the file, asserted by a test that compares the pair and requires every differing line to be one, with a control that plants a non-constant difference and requires it reported.
+  - .harness/config.yaml names .harness/scripts/github.sh sync, .harness/scripts/github.sh query and .harness/scripts/github.sh item as sync_command, filed_query_command and item_update_command.
+  - scripts/l5-init creates .harness/scripts/ and installs templates/scripts/*.sh into it executable, and creates none of .harness/sync/, .harness/query/ or .harness/item/. A test initializes a target and asserts what it finds under .harness/scripts/ against what templates/scripts/ holds.
+  - templates/config.yaml names the merged file in its commented-out sync_command and filed_query_command lines and carries a commented-out item_update_command line naming it.
+  - No file outside .harness/stories/, .harness/history/ and .harness/runs/ names templates/sync/, templates/query/, templates/item/, .harness/sync/, .harness/query/ or .harness/item/.
+  - The suite census the implementer stage runs reports no counter falling. Every assertion the three scripts' tests made before this story is either retargeted at the merged file or replaced by one making the same claim about it; none is deleted to make the suite pass.
+  - orchestration/outbox.py, orchestration/filed_query.py and orchestration/item_update.py have no behavioural change: the harness still invokes three commands, still reads a reference off the sync command's stdout, still reads one JSON document off the query command's stdout, still reads nothing off the item command's stdout, and still interprets the same exit codes at each of the three call sites.
+  - The path marker and the payload marker are each written and searched for as the same string, asserted by tests reading the assignment out of the file, and the string is what it was before this story so items already filed stay findable.
+
+technical_plan:
+  implementation_steps:
+    - Read the three templates whole before writing anything. They carry contract prose in their headers that the harness relies on and cannot enforce — the sync command's idempotency-given-the-key promise and its must-not-commit rule, the query command's one-document-on-stdout rule and its policy on which items to report, the item command's idempotency-given-the-story-id rule and its obligation not to disturb the other two scripts' markers. None of it may be lost in the merge; a merged file's header states all three contracts and says which branch each belongs to.
+    - Write templates/scripts/github.sh top to bottom - a header stating the three contracts, then the shared constants under L5_TRACKER_ names, then the two markers, then the shared jq definitions and lookup helpers, then the three job branches, then a dispatcher on the first argument. Keep each branch's body as close to the script it came from as the shared declarations allow, so that a reviewer comparing the merged file against the three it replaces can see that the behaviour did not move.
+    - Fill the constants in .harness/scripts/github.sh with the values .harness/sync/github.sh carries today - project 1, the Backlog column, and the Category, Severity, Confidence, Effort and Workflow field names - plus the project owner and Status field name the merged file now shares. Take the values from the installed copy rather than retyping them.
+    - Update scripts/l5-init - one directory in the mkdir list and one directory in the install loop - then .harness/config.yaml, then templates/config.yaml.
+    - Sweep the prose that names the old paths - the two schema descriptions, the two module docstrings, and the l5-sync docstring - and update each to name the merged file.
+    - Retarget the tests. The modules that resolve an installed script from this repository's own configuration now read a command carrying an argument, so they split it into words the way the call sites do before treating the first word as a path. Convert the item byte-identity assertion into the constants-only comparison rather than deleting it.
+    - Write the new tests last, against the merged file - the case-insensitive field name through the item branch, the dispatcher's refusals, and this deployment's installed copy naming a project for the item branch.
+    - Delete the six old files and the directories that held them once nothing names them.
+  likely_file_changes:
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: The merged reference implementation, carrying the shared declarations once and the three jobs as branches below them.
+    - file: .harness/scripts/github.sh
+      stage: implementer
+      reason: This repository's installed copy of that file, differing from it only in the constant assignments this deployment sets.
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: Removed; its contents and its contract prose move into the merged file's sync branch and header.
+    - file: templates/query/github.sh
+      stage: implementer
+      reason: Removed; its contents and its contract prose move into the merged file's query branch and header.
+    - file: templates/item/github.sh
+      stage: implementer
+      reason: Removed; its contents and its contract prose move into the merged file's item branch and header.
+    - file: .harness/sync/github.sh
+      stage: implementer
+      reason: Removed; the values it carries move into the merged file's installed copy.
+    - file: .harness/query/github.sh
+      stage: implementer
+      reason: Removed; it was byte-identical to its template, which is gone.
+    - file: .harness/item/github.sh
+      stage: implementer
+      reason: Removed; the item branch of the merged installed copy answers in its place, with a project number it never had.
+    - file: scripts/l5-init
+      stage: implementer
+      reason: Creates .harness/scripts/ and installs templates/scripts/*.sh into it, instead of three directories and three families.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: The three command keys name the merged file with the sync, query and item arguments, and the comments above them describe one file rather than three.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The starter config's commented-out command lines name paths l5-init no longer creates; it also gains a commented-out item_update_command line, which is free once the file is installed anyway.
+    - file: schemas/filed-items.schema.json
+      stage: implementer
+      reason: Its description names templates/query/github.sh as where a script author meets the policy on which items to report.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Its descriptions name the reference commands by their old paths.
+    - file: orchestration/command_transport.py
+      stage: implementer
+      reason: Its module docstring names templates/sync/github.sh as the reference implementation.
+    - file: orchestration/filed_query.py
+      stage: implementer
+      reason: Its module docstring names templates/query/github.sh as where a script author meets the reporting policy.
+    - file: scripts/l5-sync
+      stage: implementer
+      reason: Its docstring says the reference implementation ships at templates/sync/github.sh and is installed into .harness/sync/.
+    - file: tests/test_filed_query.py
+      stage: implementer
+      reason: It holds the sync and query halves - the marker-drift assertion, the installed-copy comparison, the l5-init installation assertions and the end-to-end drives through the installed copy - and every one of them now names one file and one directory.
+    - file: tests/test_brief_fetch.py
+      stage: implementer
+      reason: It holds the payload marker to the same string in two files that are now one.
+    - file: tests/test_a_planned_story_is_published_onto_its_item.py
+      stage: implementer
+      reason: It resolves the installed item command from this repository's configuration, which now carries an argument, asserts the l5-init installation of the item directory, and holds the installed copy byte-identical to its template.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: It describes the three-script family across several paragraphs - the pair, the third member, the installation loop, the split between generic mechanics and target values - and each is now a statement about one file.
+
+scope:
+  modify:
+    - templates/scripts/github.sh
+    - templates/sync/github.sh
+    - templates/query/github.sh
+    - templates/item/github.sh
+    - templates/config.yaml
+    - .harness/scripts/github.sh
+    - .harness/sync/github.sh
+    - .harness/query/github.sh
+    - .harness/item/github.sh
+    - .harness/config.yaml
+    - .harness/docs/ARCHITECTURE.md
+    - scripts/l5-init
+    - scripts/l5-sync
+    - schemas/filed-items.schema.json
+    - schemas/harness-config.schema.json
+    - orchestration/command_transport.py
+    - orchestration/filed_query.py
+    - tests/
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/item_update.py
+    - orchestration/story_coordinator.py
+    - .harness/census.py
+    - workflows/
+    - prompts/
+    - schemas/story.schema.json
+    - schemas/story-brief.schema.json
+    - schemas/outbox-entry.schema.json
+    - schemas/fetched-brief.schema.json
+
+verification_requirements:
+  - Confirm the harness side did not move. orchestration/outbox.py, orchestration/outbox_sweep.py and orchestration/item_update.py are unchanged, and the changes to orchestration/filed_query.py are confined to its docstring. No configuration key was added, removed or renamed, and no schema gained or lost a field.
+  - Confirm the three call sites still read what they read. The sync command's reference is still the last non-empty line of its stdout, the query command's answer is still one JSON document on its stdout, the item command's stdout is still unread, and the exit codes each call site interprets are unchanged - in particular that exit 75 still means retry at the sync call site and that neither of the other two gained a code read as a retry.
+  - Confirm the merged file resolves a field name identically for the sync branch and the item branch, by driving both against a board whose field name differs from the configured one in case, and confirm that the item branch's behaviour before this story was the verbatim comparison this removes.
+  - Confirm the dispatcher performs none of the three jobs when its first argument is unrecognised or absent, and exits non-zero in both cases.
+  - Confirm the markers are unchanged as strings, so items filed by the scripts this story removes are still found by the file that replaces them.
+  - Confirm .harness/scripts/github.sh and templates/scripts/github.sh differ only in constant assignments, and that the control planting a non-constant difference is reported.
+  - Confirm a freshly initialized target gets .harness/scripts/ holding what templates/scripts/ holds, executable, and gets none of .harness/sync/, .harness/query/ or .harness/item/.
+  - Confirm no assertion was lost. Read the implementer's census result and confirm no counter fell, and confirm by inspection that each assertion the three scripts' tests made was retargeted at the merged file rather than deleted.
+  - Confirm nothing outside .harness/stories/, .harness/history/ and .harness/runs/ still names the six removed paths.
+
+constraints:
+  - The three failure rules at the call sites are properties of the call site and not of where the code lives. A failed sync is retried, a failed query costs only dedupe, and a failed item update stops nothing. None of them changes.
+  - The sync branch stays idempotent given the key - it searches for the key before it creates anything, and an invocation that finds an existing issue falls through to the board work rather than answering and returning. The item branch stays idempotent given the story id - the projection lives between markers naming the story, replaced where they are found and appended where they are not.
+  - The item branch must not disturb the markers the sync branch writes and the query branch searches for. It replaces only the region between its own markers and appends after everything else, and a question carrying a status and no document rewrites no body at all.
+  - The sync branch sets a Status only where it finds one empty, and the item branch writes over whatever the field already says. That difference is deliberate and survives the merge.
+  - The template names no project number and no target-specific field or column value. Those live in the installed copy alone.
+  - The query branch prints one JSON document on stdout and nothing else, and says everything else on stderr.
+  - No branch commits to the repository.
+  - Whether these values should live in config.yaml rather than at the top of the merged file is a separate decision and is not made here.
+  - Whether an installed copy should be held byte-identical to its template is filed on its own brief. This story converts the item assertion to the constants-only comparison because there is no longer a separate item script, and rules on nothing beyond that.
+  - .harness/census.py stays where it is. Moving it into .harness/scripts/ is filed as its own brief.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 17:07:15
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 205
