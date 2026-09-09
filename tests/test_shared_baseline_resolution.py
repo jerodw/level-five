@@ -300,17 +300,11 @@ def test_the_five_resolvers_keep_their_signatures():
     default or moved a parameter between positional and keyword-only reports a
     different string here. The `HARNESS_ROOT` default renders as the repository
     path, which would make this a machine-specific literal, so it is folded
-    back to the name it is written under. The `Path` annotation is folded for
-    the same reason and it is an interpreter difference rather than a machine
-    one: 3.13 split `pathlib` internally and renders the annotation as
-    `pathlib._local.Path`, where 3.10 and 3.14 render `pathlib.Path`. The type
-    is the same type, so the fold keeps this an assertion about the resolvers'
-    signatures rather than about which interpreter read them.
+    back to the name it is written under.
     """
     for name, expected in RESOLVER_SIGNATURES.items():
         rendered = str(inspect.signature(getattr(conftest, name)))
         rendered = rendered.replace(repr(conftest.HARNESS_ROOT), "HARNESS_ROOT")
-        rendered = rendered.replace("pathlib._local.Path", "pathlib.Path")
         assert rendered == expected, name
 
     # The control: the comparison can differ. A resolver's signature read
