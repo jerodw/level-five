@@ -21,8 +21,9 @@ human meant by it.
 A target files an entry by configuring sync_command, one command the harness
 invokes per entry and knows nothing else about the tracker through: the entry
 on stdin, a reference on stdout, and an exit code saying landed, retry or
-stop. A reference implementation ships at templates/sync/github.sh, installed
-into a target's .harness/sync/ by l5-init. With no sync_command configured
+stop. A reference implementation ships at templates/scripts/github.sh — one file
+answering all three of a target's tracker commands, dispatching on its first
+argument — installed into a target's .harness/scripts/ by l5-init. With no sync_command configured
 this says that no transport is configured, reports the queue as it stands,
 and applies the same exit rule.
 """

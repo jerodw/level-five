@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -73,7 +74,11 @@ TEMPLATES = REPO_ROOT / "templates"
 #: Where a target's sync commands are installed, and the reference command
 #: itself, derived from what the harness ships rather than written here: the
 #: template directory is the declaration of what l5-init installs.
-SYNC_DIR = "sync"
+#: Where a target's tracker commands are installed. Since story-130 one file
+#: answers all three of them, dispatching on its first argument, so the sync
+#: command is that file plus the word that names its job.
+SYNC_DIR = "scripts"
+SYNC_JOB = "sync"
 REFERENCE_SCRIPTS = sorted(path.name for path in (TEMPLATES / SYNC_DIR).glob("*.sh"))
 
 #: What the transport says it will do, read off the module so this file names
@@ -926,7 +931,7 @@ def test_l5_init_installs_the_reference_command_executable(initialized):
     installed = initialized / ".harness" / SYNC_DIR
     assert installed.is_dir()
     assert sorted(path.name for path in installed.iterdir()) == REFERENCE_SCRIPTS
-    assert REFERENCE_SCRIPTS, "the harness ships no reference sync command"
+    assert REFERENCE_SCRIPTS, "the harness ships no reference tracker command"
     for name in REFERENCE_SCRIPTS:
         copy = installed / name
         assert copy.read_bytes() == (TEMPLATES / SYNC_DIR / name).read_bytes()
@@ -1025,7 +1030,12 @@ def test_this_repository_carries_the_installed_script_and_both_live_keys():
     assert config["sync_timeout_seconds"]
     assert float(config["sync_timeout_seconds"]) > 0
 
-    command = REPO_ROOT / config["sync_command"]
+    # A configured command is split into words before it is run, so the first
+    # word is the path and the rest are the command's own arguments — which
+    # since story-130 is the job this one file is being asked for.
+    configured = shlex.split(config["sync_command"])
+    assert configured[1:] == [SYNC_JOB], configured
+    command = REPO_ROOT / configured[0]
     assert command.is_file()
     assert os.access(command, os.X_OK)
     for name in REFERENCE_SCRIPTS:

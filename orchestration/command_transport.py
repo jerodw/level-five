@@ -21,7 +21,7 @@ stdin and in the environment, and the command is expected to search by that
 key before it creates. That is what makes the ambiguous write — created,
 response lost — safe to retry. The harness cannot enforce it, so it is
 documented here as a contract and demonstrated by the reference
-implementation shipped at `templates/sync/github.sh`. It is also why this
+implementation shipped at the sync branch of `templates/scripts/github.sh`. It is also why this
 transport offers **no `look_up` at all**: an ambiguous write is resolved by
 re-invoking an idempotent command, not by a second call the harness makes,
 and `outbox._look_up` already reports no problem for a transport offering

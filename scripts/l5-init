@@ -30,8 +30,7 @@ def main() -> int:
         print(f"{harness_dir} already initialized.", file=sys.stderr)
         return 1
 
-    for sub in ("standards", "docs", "stories", "runs", "logs", "sync", "query",
-                "item"):
+    for sub in ("standards", "docs", "stories", "runs", "logs", "scripts"):
         (harness_dir / sub).mkdir(parents=True, exist_ok=True)
 
     config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")
@@ -43,22 +42,20 @@ def main() -> int:
             template.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
-    # The reference sync, query and item commands, installed executable because
-    # the harness launches one as a command rather than reading it. A target
-    # opts in by naming one in sync_command, filed_query_command or
-    # item_update_command; installing them files nothing, asks nothing and
-    # publishes nothing. All three are installed together because they are one
-    # family over one item: the sync script records a path and a payload in a
-    # tracker item, the query script searches for what it recorded, and the
-    # item script publishes a planned story onto that same item without
-    # disturbing either marker. A target that got one without the others would
-    # have filing with no dedupe behind it, or a projection nothing could be
-    # planned from.
-    for directory in ("sync", "query", "item"):
-        for script in sorted((TEMPLATES / directory).glob("*.sh")):
-            installed = harness_dir / directory / script.name
-            installed.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
-            installed.chmod(0o755)
+    # The reference tracker commands, installed executable because the harness
+    # launches one as a command rather than reading it. One file answers all
+    # three jobs — it dispatches on its first argument — so the sync, query and
+    # item commands cannot be installed apart from each other: they are one
+    # family over one item, the sync job records a path and a payload in a
+    # tracker item, the query job searches for what it recorded, and the item
+    # job publishes a planned story onto that same item without disturbing
+    # either marker. A target opts in by naming one in sync_command,
+    # filed_query_command or item_update_command; installing the file files
+    # nothing, asks nothing and publishes nothing.
+    for script in sorted((TEMPLATES / "scripts").glob("*.sh")):
+        installed = harness_dir / "scripts" / script.name
+        installed.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
+        installed.chmod(0o755)
 
     print(f"Initialized {harness_dir}")
     print("Next: replace the starter standards in .harness/standards/, then plan a story with l5-plan.")

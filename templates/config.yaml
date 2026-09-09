@@ -23,11 +23,13 @@ test_command: {test_command}
 # non-zero code fails it terminally. The command must be idempotent given the
 # key — it searches by that key before it creates — which is what makes a lost
 # response safe to retry, and it must not commit. l5-init installs a reference
-# implementation at .harness/sync/github.sh; read its header for the whole
-# contract before writing your own. Both keys are commented out so a freshly
-# initialized repository opts in to filing rather than discovering that it
-# files: uncomment sync_command and nothing else changes until you do.
-# sync_command: .harness/sync/github.sh
+# implementation at .harness/scripts/github.sh — one file answering all three
+# of this target's tracker commands, dispatching on its first argument; read
+# its header for the whole contract before writing your own. Both keys are
+# commented out so a freshly initialized repository opts in to filing rather
+# than discovering that it files: uncomment sync_command and nothing else
+# changes until you do.
+# sync_command: .harness/scripts/github.sh sync
 # How long that command may run before it is killed, in seconds. The kill
 # reaches its process group, so a command that spawned children leaves none
 # behind. Delete the key and the bound is 60 seconds — a real one, because a
@@ -58,11 +60,13 @@ test_command: {test_command}
 # means it could not. A failed dedupe question cannot fail a run — it costs
 # dedupe and nothing else — while a failed fetch refuses that l5-plan invocation
 # before anything is written, and the request can be given as text instead.
-# l5-init installs a reference implementation at .harness/query/github.sh beside
-# the sync one. THE TWO ARE A PAIR the harness requires and cannot enforce —
-# they must agree about where a path and a payload are recorded in a tracker
-# item, and a target that sets one without the other simply gets no dedupe.
-# filed_query_command: .harness/query/github.sh
+# l5-init installs a reference implementation at .harness/scripts/github.sh,
+# the same file the sync command is, reached by its own argument. THE TWO ARE A
+# PAIR the harness requires and cannot enforce — they must agree about where a
+# path and a payload are recorded in a tracker item, and a target that sets one
+# without the other simply gets no dedupe. Being one file is what keeps them
+# agreeing: each marker is declared there once.
+# filed_query_command: .harness/scripts/github.sh query
 # How long that command may run before it is killed, in seconds. The kill
 # reaches its process group, so a command that spawned children leaves none
 # behind. Delete the key and the bound is 30 seconds — a real one, because a
@@ -72,6 +76,23 @@ test_command: {test_command}
 # keeping the command's own order, and what was dropped is named in the answer
 # rather than truncated silently. Delete the key and the bound is 50.
 # filed_query_max_items: 50
+# The third member of that family: how a planned story is published onto the
+# tracker item it was planned from, and how that item is moved as the story is
+# planned, run and finished. WHAT GOES ONTO THE ITEM IS A PROJECTION AND NOT A
+# MOVE — the artifact in the stories directory stays what a run reads, because
+# it governs the run rather than describing it, and an edit made on the item
+# reaches nothing. The question goes to it on stdin as one JSON document
+# carrying the item's key and the story id, a document only where the caller
+# had one and a status only where the caller had one; the three status tokens
+# are planned, in_progress and ready_to_merge, and what one means in a tracker
+# is this command's decision and never the harness's. Its stdout is not read,
+# exit 0 means published and any other code means it did not — none of them is
+# read as a retry, because nothing retries. A failure refuses nothing at any of
+# the three moments. l5-init installs a reference implementation at
+# .harness/scripts/github.sh, the same file the two commands above are, reached
+# by its own argument; it must not disturb the markers those two depend on,
+# which is another thing being one file keeps true.
+# item_update_command: .harness/scripts/github.sh item
 # The parts of this repository's own source l5-inspect covers when you name no
 # scope on the command line. One agent invocation is made per entry, so
 # declaring them is what turns an inspection into several coherent invocations

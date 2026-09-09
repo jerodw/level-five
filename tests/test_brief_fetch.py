@@ -49,8 +49,9 @@ implementation. The subjects are kept apart deliberately:
     is held to is `schemas/story-brief.schema.json` and nothing else, so a
     malformed brief is required to be named by the field that failed.
 
-  * **the reference pair.** `templates/sync/github.sh` and
-    `templates/query/github.sh` are live harness artifacts and are read as
+  * **the reference commands.** `templates/scripts/github.sh` is a live
+    harness artifact — one file whose sync branch records the payload and
+    whose query branch reads it back — and is read as
     they ship, then run against the stub tracker `tests/test_filed_query.py`
     already writes -- so "a filed brief comes back whole" is a fact about what
     the pair does rather than about what its headers say.
@@ -105,11 +106,12 @@ from test_filed_query import (  # noqa: F401 - shared fixtures and idioms
     LEDGER_VARIABLE,
     LONGER_THAN_ANY_BOUND,
     PATIENCE_SECONDS,
-    QUERY_DIR,
+    QUERY_JOB,
     REPO_ROOT,
-    SYNC_DIR,
-    TEMPLATES,
+    SYNC_JOB,
+    TEMPLATE_SCRIPT,
     bodies,
+    branch_source,
     declared_marker,
     exits,
     file_through_the_reference_sync,
@@ -902,10 +904,9 @@ def test_the_fetch_reads_no_configuration_key_of_its_own(tmp_path):
 # test_filed_query.py` writes, first on PATH, so nothing reaches a network.
 # ==========================================================================
 
-#: How the payload marker is stated in each reference script. One assignment on
-#: one line in each file, which is what makes the two comparable without either
-#: script being parsed as a shell program -- the shape the path-marker pair is
-#: already held in.
+#: How the payload marker is stated in the reference script. One assignment on
+#: one line, which is what makes it readable without the script being parsed as
+#: a shell program -- the shape the path-marker assertion is already held in.
 PAYLOAD_ASSIGNMENT = re.compile(r'^PAYLOAD_MARKER_PREFIX="(?P<marker>.*)"$',
                                 re.MULTILINE)
 
@@ -915,28 +916,45 @@ def declared_payload_marker(text: str) -> str | None:
     return None if found is None else found.group("marker")
 
 
-def script_text(directory: str) -> str:
-    return (TEMPLATES / directory / "github.sh").read_text(encoding="utf-8")
+def script_text() -> str:
+    return TEMPLATE_SCRIPT.read_text(encoding="utf-8")
+
+
+#: The string a filed brief's payload has been recorded under since story-096,
+#: written here rather than read out of the subject: the claim is that the
+#: merge left it alone, so a brief already filed can still be fetched.
+PAYLOAD_MARKER = "l5-payload: "
 
 
 def test_the_pair_records_and_reads_the_same_payload_marker():
-    """Read out of both shipped scripts, so they cannot drift apart unnoticed.
+    """Declared once in the one shipped script, so there is nothing to drift.
 
-    The harness requires the agreement and cannot enforce it, which is why it
-    is held here beside the path marker's own comparison.
+    The harness requires the agreement between what records a payload and what
+    reads it back, and cannot enforce it; that the two branches are one file
+    with one declaration is what makes the agreement hold rather than a
+    comparison of two files.
     """
-    records = declared_payload_marker(script_text(SYNC_DIR))
-    reads = declared_payload_marker(script_text(QUERY_DIR))
+    shipped = script_text()
+    records = declared_payload_marker(shipped)
 
-    assert records, "the sync script declares no payload marker"
-    assert reads, "the query script declares no payload marker"
-    assert records == reads
+    assert records, "the script declares no payload marker"
+    assert len(PAYLOAD_ASSIGNMENT.findall(shipped)) == 1, \
+        "the payload marker is stated more than once"
+    assert records == PAYLOAD_MARKER
+
+    # Both branches refer to that one statement rather than restating it.
+    writes = branch_source(shipped, "do_sync")
+    reads = branch_source(shipped, "do_query")
+    assert "PAYLOAD_MARKER_PREFIX" in writes
+    assert "PAYLOAD_MARKER_PREFIX" in reads
+    for branch in (writes, reads):
+        assert PAYLOAD_ASSIGNMENT.search(branch) is None
 
 
 def test_the_payload_marker_comparison_reports_a_pair_that_drifted():
     """The control: the same extraction over a rendering of one script with its
     marker changed, which must come back different."""
-    shipped = script_text(SYNC_DIR)
+    shipped = script_text()
     drifted = PAYLOAD_ASSIGNMENT.sub(
         'PAYLOAD_MARKER_PREFIX="l5-other-payload: "', shipped, count=1)
 
@@ -949,8 +967,8 @@ def test_the_payload_marker_is_not_the_path_marker():
     """Two markers doing two jobs: one searchable per path, one carrying the
     whole payload. A pair that collapsed them would answer a path search with
     a payload."""
-    assert declared_payload_marker(script_text(SYNC_DIR)) != \
-        declared_marker(script_text(SYNC_DIR))
+    assert declared_payload_marker(script_text()) != \
+        declared_marker(script_text())
 
 
 def with_the_reference_command(environment: dict, call):
@@ -990,7 +1008,7 @@ def test_a_brief_filed_through_the_reference_pair_comes_back_whole(tmp_path,
     answer = with_the_reference_command(
         environment,
         lambda: brief_fetch.fetch(
-            url, {COMMAND_KEY: reference_script(QUERY_DIR)}, tmp_path, harness))
+            url, {COMMAND_KEY: reference_script(QUERY_JOB)}, tmp_path, harness))
 
     assert answer.fetched is True, answer.reason
     assert answer.brief == brief
@@ -1010,7 +1028,7 @@ def test_an_item_carrying_no_payload_answers_that_the_key_did_not_resolve(
     brief = a_brief()
     url = file_through_the_reference_sync(tmp_path, environment,
                                           key="brief-2", payload=brief)
-    marker = declared_payload_marker(script_text(SYNC_DIR))
+    marker = declared_payload_marker(script_text())
     assert any(marker in body for body in bodies(ledger))
 
     # Read and written back through the shared shape rather than as a bare
@@ -1025,7 +1043,7 @@ def test_an_item_carrying_no_payload_answers_that_the_key_did_not_resolve(
     answer = with_the_reference_command(
         environment,
         lambda: brief_fetch.fetch(
-            url, {COMMAND_KEY: reference_script(QUERY_DIR)}, tmp_path, harness))
+            url, {COMMAND_KEY: reference_script(QUERY_JOB)}, tmp_path, harness))
 
     assert refused(answer)
     assert "did not resolve" in answer.reason
@@ -1048,10 +1066,10 @@ def test_the_query_script_answers_both_questions_and_neither_changed_the_other(
 
     def both():
         dedupe = filed_query.query(
-            brief["paths"], {COMMAND_KEY: reference_script(QUERY_DIR)},
+            brief["paths"], {COMMAND_KEY: reference_script(QUERY_JOB)},
             target_root=tmp_path)
         fetch = brief_fetch.fetch(
-            url, {COMMAND_KEY: reference_script(QUERY_DIR)}, tmp_path, harness)
+            url, {COMMAND_KEY: reference_script(QUERY_JOB)}, tmp_path, harness)
         return dedupe, fetch
 
     dedupe, fetch = with_the_reference_command(environment, both)
@@ -1060,7 +1078,7 @@ def test_the_query_script_answers_both_questions_and_neither_changed_the_other(
     assert [item.key for item in dedupe.items] == [url]
     assert dedupe.items[0].title == brief["title"]
     assert set(dedupe.items[0].paths) == set(brief["paths"])
-    marker = declared_payload_marker(script_text(QUERY_DIR))
+    marker = declared_payload_marker(script_text())
     assert marker not in dedupe.items[0].summary
 
     assert fetch.fetched is True, fetch.reason
