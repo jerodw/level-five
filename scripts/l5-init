@@ -30,7 +30,8 @@ def main() -> int:
         print(f"{harness_dir} already initialized.", file=sys.stderr)
         return 1
 
-    for sub in ("standards", "docs", "stories", "runs", "logs", "sync", "query"):
+    for sub in ("standards", "docs", "stories", "runs", "logs", "sync", "query",
+                "item"):
         (harness_dir / sub).mkdir(parents=True, exist_ok=True)
 
     config = (TEMPLATES / "config.yaml").read_text(encoding="utf-8")
@@ -42,14 +43,18 @@ def main() -> int:
             template.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
-    # The reference sync and query commands, installed executable because the
-    # harness launches one as a command rather than reading it. A target opts
-    # in by naming one in sync_command or filed_query_command; installing them
-    # files nothing and asks nothing. Both halves are installed together
-    # because they are a pair: the sync script records a path in a tracker item
-    # and the query script searches for what it recorded, so a target that got
-    # one without the other would have filing with no dedupe behind it.
-    for directory in ("sync", "query"):
+    # The reference sync, query and item commands, installed executable because
+    # the harness launches one as a command rather than reading it. A target
+    # opts in by naming one in sync_command, filed_query_command or
+    # item_update_command; installing them files nothing, asks nothing and
+    # publishes nothing. All three are installed together because they are one
+    # family over one item: the sync script records a path and a payload in a
+    # tracker item, the query script searches for what it recorded, and the
+    # item script publishes a planned story onto that same item without
+    # disturbing either marker. A target that got one without the others would
+    # have filing with no dedupe behind it, or a projection nothing could be
+    # planned from.
+    for directory in ("sync", "query", "item"):
         for script in sorted((TEMPLATES / directory).glob("*.sh")):
             installed = harness_dir / directory / script.name
             installed.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")

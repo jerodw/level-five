@@ -29,6 +29,15 @@ asks the planner to record. Planning still happens the way it always has: the
 interview happens, the developer approves, and the mandate is stamped from what
 this process observed them answer.
 
+On that same path the planned story is published back onto the item it was
+planned from, after the push has landed and before the run offer, so no
+projection ever names a story that exists only in one clone. What is published
+is a copy stamped with the story id it was taken from, saying that the artifact
+in the repository is what runs and that an edit made on the item reaches
+nothing; a run reads it back on no path. A publish that fails prints one line
+and changes this script's exit status on no path — the commit and the push have
+already landed, and neither is reconsidered on a tracker's answer.
+
 A brief names the workflow it should be planned under, so on that path the
 workflow selector is not invoked: the brief's workflow is the proposal, put to
 the developer through the same confirmation where there is a terminal and taken
@@ -86,6 +95,7 @@ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 import brief_fetch  # noqa: E402
 import context_assembler  # noqa: E402
 import harness_config  # noqa: E402
+import item_update  # noqa: E402
 import plan_commit  # noqa: E402
 import plan_mandate  # noqa: E402
 import plan_run_offer  # noqa: E402
@@ -319,6 +329,7 @@ def main() -> None:
         reservation=reservation,
         invoked_root=target_root,
         remote=remote,
+        brief_key=brief_key,
     )
     sys.exit(status or committing)
 
@@ -671,6 +682,7 @@ def report(
     reservation=None,
     invoked_root: Path | None = None,
     remote: str = "",
+    brief_key: str | None = None,
 ) -> int:
     """Say what plan_validation and plan_commit did with the session's artifacts.
 
@@ -890,6 +902,12 @@ def report(
         )
         return 1
     print(f"l5-plan: pushed {push.branch} to {push.remote}")
+    # The projection goes onto the item here: after the push has landed, so no
+    # projection ever names a story that exists only in one clone, and before
+    # the run offer, so it is done whether or not the developer runs the story
+    # now. A commit that failed and a push that failed each returned above and
+    # publish nothing.
+    publish(brief_key, artifacts, config or {}, target_root)
     return offer(
         artifacts,
         base,
@@ -898,6 +916,66 @@ def report(
         invoked_root=invoked_root,
         branch=branch,
     )
+
+
+def publish(
+    brief_key: str | None,
+    artifacts: Sequence[Path],
+    config: dict,
+    worktree: Path,
+) -> None:
+    """Publish each committed artifact onto the item it was planned from.
+
+    Only where --brief named an item: a session planned from request text has
+    no item to publish onto, so this invokes the command on no path. Every
+    judgement is `item_update`'s and every word here is this script's, which is
+    the division `report` already keeps with `plan_commit` and `plan_validation`.
+
+    What is published is the artifact **as committed** — read from disk here,
+    after the mandate was stamped and the commit made — so the projection
+    carries what the run will read rather than what the session first wrote. A
+    session that wrote more than one artifact publishes each of them, keyed by
+    its own story id, because the item's reader wants to see everything that was
+    planned from it.
+
+    Returns nothing, deliberately: there is no value a caller could read as a
+    reason to stop. A failure prints one line naming the story and the reason,
+    and the commit, the push and the run offer are untouched by it.
+    """
+    if brief_key is None:
+        return
+    for artifact in artifacts:
+        story_id = artifact.stem
+        try:
+            committed = artifact.read_text(encoding="utf-8")
+        except OSError as error:
+            print(
+                f"l5-plan: did not publish {story_id} onto {brief_key}: the "
+                f"committed artifact could not be read: {error}"
+            )
+            continue
+        # No status is supplied, and nothing in this harness supplies one: the
+        # status half of that contract is declared so that the work which moves
+        # an item as its story runs fills it in, rather than adding a second key
+        # and a second script beside this one.
+        published = item_update.publish(
+            brief_key,
+            story_id,
+            item_update.projection(story_id, committed),
+            config,
+            worktree,
+        )
+        if published.published:
+            print(
+                f"l5-plan: published {story_id} onto {brief_key}; it is a copy, "
+                f"and the artifact in the repository is what runs."
+            )
+        else:
+            print(
+                f"l5-plan: did not publish {story_id} onto {brief_key}: "
+                f"{published.reason}. The story is committed and pushed; "
+                f"nothing about the plan depends on this."
+            )
 
 
 def keep_worktree(worktree: Path, why: str) -> None:

@@ -102,6 +102,11 @@ CARRIES_PRECONDITIONS = "carries a precondition reported through the helper"
 #: than inferred, so that a module which quietly acquires a wall-clock claim is
 #: a module whose classification a human had to write down.
 CLASSIFICATION = {
+    # Elapsed after a kill, and a generous poll for a marker to appear: the
+    # command was asked to run far longer than the bound, so a return inside
+    # the ceiling can only be the kill, and a loaded machine makes that more
+    # true rather than less.
+    "test_a_planned_story_is_published_onto_its_item.py": BOUNDS_ONLY_SLOWNESS,
     # A reset time handed to a fake capacity stop, never compared against a
     # real elapsed interval.
     "test_a_run_commits_the_history_it_writes.py": BOUNDS_ONLY_SLOWNESS,
