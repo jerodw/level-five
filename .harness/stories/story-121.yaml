@@ -1,0 +1,124 @@
+story:
+  id: story-121
+  title: l5-status finds the run of a story in the tree that run is working in
+  description: |
+    Planned from the brief filed under 176.
+
+    Since story-117 a fresh run does not work in the tree it was invoked
+    from: `resolve_run_root` at orchestration/story_coordinator.py:1482 puts
+    it in a worktree outside the repository, and
+    orchestration/story_coordinator.py:7060 composes the run directory under
+    that tree. The status reader did not move with it.
+    orchestration/run_status.py:152 lists `target_root / runs_dir` and
+    orchestration/run_status.py:188-191 raises `no run found` for anything not
+    under it, so `l5-status` invoked from a developer's checkout reports no
+    runs while a run of that repository is in flight, and naming the story
+    fares no better. tests/test_planning_runs_on_its_own_worktree.py:778
+    asserts precisely that the invoked tree holds no such directory after a
+    fresh run.
+
+    The cost is a reader told something false about their own repository. This
+    story makes both status paths ask the question the coordinator already
+    answers: the listing scans every working tree the repository has, and the
+    detail view resolves the story's run root the way `run_story` does. The
+    listing gains a WHERE column carrying the tree each run works in, so a
+    reader is never told a run exists without being told which tree holds it,
+    and the not-found refusal names every runs directory it searched.
+
+    tests/conftest.py:924-955 already added `run_root_for`/`run_dir_for` for
+    this reason on the test side; the observability path did not get the
+    equivalent. Nothing in the coordinator changes — it is already right.
+  workflow: story-workflow
+
+tasks:
+  - Add a candidate-tree resolver to orchestration/run_status.py that answers the working trees a status request must look in - the invoked target root first, then every tree `worktrees.working_trees` names, deduplicated by resolved path and with the invoked root's position preserved. A target that is not a git repository, and one whose repository has no additional worktrees, both yield the invoked root alone.
+  - Change `format_listing` to scan `_runs_dir(tree)` for each candidate tree rather than the invoked tree alone, and to print a WHERE column carrying the working tree each run was found in. Rows order by story id and then by tree path, so a story id present in two trees prints a row for each rather than one arbitrary row.
+  - Change `format_detail` to resolve the story's run root through `story_coordinator.story_branch` and `story_coordinator.resolve_run_root`, falling back to the remaining candidate trees when that root holds no run directory, so a stale run directory in the developer's checkout cannot shadow the run that is actually in flight. Add a `run directory` field to the fields it prints.
+  - Change the `format_detail` refusal for an unfound story to name every runs directory that was searched, one per line, rather than the invoked tree's alone.
+  - Write a standing test module asserting the property this story adds - a run whose directory lives in a worktree is found by both the listing and the detail view when `l5-status` is invoked from a checkout that does not hold it.
+  - Update the `run_status.py` bullet in .harness/docs/ARCHITECTURE.md so the description of what the listing and the detail view read matches what they now read.
+
+acceptance_criteria:
+  - "`run_status.format_listing`, called on a target root whose repository has a worktree holding a run directory, prints a row for that run naming its story id, and the invoked tree holds no such run directory."
+  - "`run_status.format_detail`, called on a target root with a story id whose run directory lives in a worktree of that repository, returns that run's state rather than raising `RunStatusError`."
+  - The listing carries a column headed WHERE whose cell on each row is the working tree that run's directory was found under.
+  - "A story id present in the invoked tree and in a worktree produces a row for each in the listing, and `format_detail` for that id reports the run under the tree `resolve_run_root` names rather than the one in the invoked tree."
+  - "The `RunStatusError` raised for a story id no candidate tree holds names every runs directory that was searched."
+  - The detail view prints a `run directory` field whose value is the directory the reported state was read from.
+  - "A target root that is not a git repository lists exactly the runs under its own configured runs directory, and `l5-status` exits 0 for it."
+  - "`_runs_dir` keeps its `(target_root: Path) -> Path` signature and its `config.get(\"runs_dir\", \".harness/runs\")` expression verbatim, so the assertions in tests/test_config_keys_are_obeyed.py that name both continue to hold."
+  - A test module under tests/ fails when orchestration/run_status.py is reverted to reading the invoked tree alone.
+  - "The `run_status.py` bullet in .harness/docs/ARCHITECTURE.md describes the cross-tree read and the WHERE column."
+
+technical_plan:
+  implementation_steps:
+    - "Import `worktrees` in orchestration/run_status.py and add a function answering the candidate working trees for a target root: `[target_root]` followed by each path `worktrees.working_trees(target_root)` returns, deduplicated on `Path.resolve()` while keeping first-seen order. `working_trees` already returns [] for a path that is not a git tree, so the non-git case needs no branch of its own."
+    - "Add a function pairing each candidate tree with the run directories under its `_runs_dir(tree)`, skipping a tree whose runs directory is absent or unlistable, so a worktree removed between the git call and the read costs the listing nothing."
+    - "Rewrite `format_listing`'s row assembly over those pairs: the header gains WHERE, each row gains the tree path, and rows sort by (story id, tree path). The queue and receipt sections below it are untouched and still print in every case."
+    - "Rewrite `format_detail`'s lookup: derive the branch with `story_coordinator.story_branch(config, story_id)`, take `story_coordinator.resolve_run_root(target_root, config, branch).path` as the first tree to try, then the remaining candidate trees in order; the first whose `_runs_dir(tree) / story_id` is a directory is the run reported. Add the run directory to the printed fields and give the not-found refusal the list of directories searched."
+    - "Adapt the existing format assertions in tests/test_run_status.py and tests/test_l5_status_cli.py to the WHERE column and the new refusal text. These are the assertions the format change breaks; nothing is deleted or weakened."
+    - "Write tests/test_status_finds_runs_in_their_worktree.py: build a target with a real worktree holding a run directory, and assert the listing and the detail view both find it from the invoked root, that the WHERE cell names the worktree, that a story present in both trees reports the worktree's run, and that the refusal names every directory searched."
+    - Update the `run_status.py` bullet in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/run_status.py
+      stage: implementer
+      reason: The whole behaviour change - the candidate-tree resolver, the listing's cross-tree scan and WHERE column, the detail view's run-root resolution and run directory field, and the refusal that names what it searched.
+    - file: tests/test_run_status.py
+      stage: implementer
+      reason: Its listing assertions compare split rows against a four-cell header and its unknown-story assertion matches the single-directory refusal text, both of which the format change in run_status.py invalidates.
+      reverting_breaks_the_suite: These edits adapt assertions to the WHERE column and the multi-directory refusal that this same story adds to orchestration/run_status.py. Reverting them restores assertions that compare against the old four-column row and the old one-line refusal, which the changed implementation no longer produces, so the suite goes red.
+    - file: tests/test_l5_status_cli.py
+      stage: implementer
+      reason: It invokes the real CLI and asserts on its printed listing, which now carries the WHERE column.
+      reverting_breaks_the_suite: These edits adapt end-to-end assertions on the CLI's printed output to the WHERE column this same story adds to the listing. Reverted, they assert the pre-story output against a CLI that prints the new one, so the suite goes red.
+    - file: tests/test_status_finds_runs_in_their_worktree.py
+      stage: tester
+      reason: The standing regression module for this story's property - a run in a worktree is found from a checkout that does not hold it. Validation belongs to the stage that validates, so the tester creates it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Its `run_status.py` bullet says the listing reads the configured runs directory of the target and describes the four columns, which stops being true.
+
+scope:
+  modify:
+    - orchestration/run_status.py
+    - tests/test_run_status.py
+    - tests/test_l5_status_cli.py
+    - tests/test_status_finds_runs_in_their_worktree.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/worktrees.py
+    - orchestration/harness_config.py
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - scripts/l5-status
+    - scripts/l5-run
+    - workflows/
+    - prompts/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm that a run directory created inside a real worktree of a target repository is reported by both `run_status.format_listing` and `run_status.format_detail` called on the invoked target root, and that the invoked root holds no such run directory at the time.
+  - Confirm the WHERE column exists in the listing and that its cell names the working tree each run's directory was found under.
+  - Confirm a target root that is not a git repository still lists exactly the runs under its own runs directory and exits 0, so the pre-existing fixtures and behaviour are intact.
+  - Confirm the refusal for an unfound story id names every runs directory searched.
+  - Confirm `_runs_dir` still takes a single target root and still contains the literal `config.get("runs_dir", ".harness/runs")`, and that tests/test_config_keys_are_obeyed.py passes.
+  - Confirm the outbox queue and receipt sections still print below the runs in every listing, unchanged.
+  - Confirm orchestration/story_coordinator.py carries no edit from this story.
+  - Confirm the full suite passes with the command .harness/config.yaml names in `test_command`.
+
+constraints:
+  - orchestration/run_status.py writes nothing, to run directories or anywhere else, and this story does not change that.
+  - "`l5-status` stays instant and offline: the only cost this story adds is a single `git worktree list --porcelain` through `worktrees.working_trees`, and no new subprocess, transport or configuration key is introduced."
+  - The runs directory is derived from the `runs_dir` configuration key through `_runs_dir` and nowhere else, so a target configuring another name is read under that name in every tree.
+  - Where the repository already answers a question, the answer is reused rather than rebuilt - the working trees through `worktrees.working_trees`, the run root through `story_coordinator.resolve_run_root`, the branch through `story_coordinator.story_branch`, and state parsing through `story_coordinator.load_state`.
+  - scripts/l5-status stays a thin entry point that parses arguments and delegates; all logic stays in orchestration/run_status.py.
+  - A tree that cannot be read - removed between the git call and the listing, or holding an unlistable runs directory - contributes nothing and does not fail the command, which is the bias the queue section already takes.
+  - No existing assertion is deleted or weakened; the test edits in this story adapt assertions to output the story deliberately changes.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-08 20:19:35
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
