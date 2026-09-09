@@ -1,0 +1,133 @@
+story:
+  id: story-128
+  title: One item's Status is read by its own id, so filing survives a board of any size
+  description: |
+    Planned from the brief filed under key 118.
+
+    To learn what a board already says about the item it just added, the sync
+    script lists the whole project and selects one object out of the listing.
+    Two things follow from that, and both have been paid.
+
+    The listing is bounded at 5000 items, and a newly added item sits at the
+    end of the board's order, so once a board grows past the bound the item
+    this invocation just added is exactly the one the listing cannot report.
+    The script then exits transiently, correctly, on the reading that a
+    listing which did not mention the item is a failure to know rather than an
+    empty Status -- but the entry it leaves pending is retried on every sweep
+    and can never succeed, because the next sweep reads the same bound against
+    the same board. The comment describing that cost as "a pending entry and
+    never an overwritten value" reads as bounded; the real cost is that the
+    deployment stops filing anything, permanently, with no state telling it
+    apart from a board that is briefly unreachable.
+
+    The bound is not the only way this fails, and it was not the first one met.
+    On 2026-09-07 a brief's issue was created and added to project 1, and the
+    listing that followed did not contain the item -- on a board of 49 items.
+    The add had been accepted; the listing had not caught up. The entry
+    deferred saying the item "was not in the first 5000 items", which named a
+    bound that had nothing to do with it, and a re-run moments later found the
+    item and set every field on the first attempt.
+
+    Both are answered by asking for the one item rather than for the board.
+    Its node id is already in hand, so a graphql read of that node's field
+    values answers the same question in one request: consistent by id rather
+    than against an index that lags, and with no size to outgrow. The read is
+    shared by the Status write and the five classification writes, so all six
+    become bound-free and race-free together, and the bound and the comment
+    that misdescribes it are deleted.
+
+    What the fix must not disturb is the reading the guard rests on: an answer
+    that was not obtained stays distinct from a field the board reports empty,
+    and the script still writes only into a field it read as empty. What
+    changes about that guard is its message, which stops naming a bound
+    because there is no longer one to name.
+
+    The shipped reference implementation is templates/sync/github.sh, and this
+    repository files its own briefs through the copy installed at
+    .harness/sync/github.sh, which a later harness change does not update. The
+    two carry identical mechanics and differ only in the constants a target
+    sets, so the fix lands in both.
+  workflow: story-workflow
+
+tasks:
+  - Replace the project listing in read_the_item in templates/sync/github.sh with a gh api graphql read of the item's own node id, returning that item's single-select field values keyed by the field names the board declares.
+  - Delete ITEM_LIST_LIMIT and the comment block that describes its cost, since neither a bound nor its cost survives the change.
+  - Rewrite the transient message for an item whose fields could not be obtained so that it names the item and the project and no item count.
+  - Make the same mechanical change in the installed copy .harness/sync/github.sh, leaving its own L5_SYNC_ constant values as they are.
+  - Adapt tests/test_filed_query.py so its stub gh answers a graphql read of an item node, and so the assertions that were written against the listing are made against the read that replaces it.
+  - Add assertions that a filing to a board makes no project item-list invocation at all, and that the transient answer for an unobtainable item mentions no item count.
+
+acceptance_criteria:
+  - A filing that sets Status and all five classification fields on a board completes with no gh project item-list invocation recorded by the stub tracker.
+  - The item's field values are obtained through a single gh api graphql read that carries the item's node id, and that read is made at most once per filing however many fields are written.
+  - An item whose field values cannot be obtained -- the read failing, or answering with no such node -- exits 75, makes no item-edit call, and leaves every field on the board as it was.
+  - The stderr of that transient answer names the item and the project and contains no number of items, so a developer is not told about a bound as the cause.
+  - A board holding more items than the retired bound files correctly, including an item added at the end of that board's order.
+  - A field the board reports no value for is still read as empty and is the only case written into; a field the board already carries a value for is left alone, for Status and for each classification field.
+  - ITEM_LIST_LIMIT appears in neither templates/sync/github.sh nor .harness/sync/github.sh, and neither file invokes gh project item-list.
+  - templates/sync/github.sh and .harness/sync/github.sh differ only in the values of the editable constant assignments at the top, which is what the existing comparison in tests/test_filed_query.py already asserts.
+  - The existing suite passes, including the marker-agreement checks that hold the sync, query and item scripts to the same strings.
+
+technical_plan:
+  implementation_steps:
+    - Read read_the_item and board_value in templates/sync/github.sh, and the calls into them from the Status write and from set_board_field, so the replacement keeps the same contract - a shell variable holding this item's field values, read at most once, empty where the board reports nothing.
+    - Replace the gh project item-list call with gh api graphql, passing the item's node id as a variable, selecting the item node's fieldValues and taking the single-select values with the name of the field each belongs to. Only single-select values are needed, because those are the only ones this script writes.
+    - Reduce that answer with jq to one object mapping field name to value, dropping any entry missing either half, so a field the board reports no value for contributes no key and reads as empty exactly as it does today.
+    - Keep board_value tolerant of both spellings - match the requested field name against the keys with spaces removed and case lowered on both sides - so a board whose field names carry spaces resolves the same way it did under the listing.
+    - Answer transiently where the read fails and where it resolves to no such node, with a message naming the item and the project and no count, since a bound is no longer among the reasons.
+    - Delete ITEM_LIST_LIMIT and the comment block above it, and check the file's remaining header prose for any sentence that describes the read as bounded.
+    - Apply the identical mechanical change to .harness/sync/github.sh, changing none of its constant values.
+    - In tests/test_filed_query.py, teach the stub gh to answer an api graphql invocation by looking the item up by its node id across the projects it holds and reporting that item's field values in the shape the real graphql answer has, recording the call in the ledger as the project subcommands already are.
+    - Repoint the variable that made the old listing report nothing so that it makes the node read report no such item, and keep the test built on it - the claim it makes, that a failure to know is not an empty Status, is unchanged and is the guard the story preserves.
+    - Add the new assertions - no item-list invocation is made during a filing, the transient stderr carries no item count, and a board seeded with more items than the retired bound still files.
+  likely_file_changes:
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: The shipped reference implementation carrying the bounded listing, the ITEM_LIST_LIMIT constant and the comment that misdescribes its cost.
+    - file: .harness/sync/github.sh
+      stage: implementer
+      reason: This repository's installed copy of the same mechanics, which a change to the template does not reach and which is the copy that filed the entry that failed.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: Holds the stub tracker and every assertion written against the project listing, so it grows graphql support and the assertions that the listing is no longer read.
+
+scope:
+  modify:
+    - templates/sync/github.sh
+    - .harness/sync/github.sh
+    - tests/test_filed_query.py
+  do_not_modify:
+    - templates/query/github.sh
+    - templates/item/github.sh
+    - .harness/query/github.sh
+    - .harness/item/github.sh
+    - orchestration/
+    - schemas/
+    - templates/config.yaml
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm that neither sync script invokes gh project item-list and that neither mentions ITEM_LIST_LIMIT.
+  - Confirm from the stub tracker's ledger that a complete filing records no item-list call and exactly one graphql read of the item.
+  - Confirm that an item whose field values cannot be obtained still exits 75, still makes no item-edit call, and leaves the board's fields untouched.
+  - Confirm that the transient message for that case contains no number of items.
+  - Confirm the write-only-into-an-empty-field rule still holds for Status and for each of the five classification fields, in both directions - written where the board reports empty, left alone where the board reports a value.
+  - Confirm that a board holding more items than the retired bound files an item added at the end of its order.
+  - Confirm the two sync copies still differ only in the values of their editable constants.
+  - Confirm the whole suite passes with the test command the harness configuration names.
+
+constraints:
+  - An answer that was not obtained must stay distinct from a field the board reports empty. The transient exit for an unobtainable item is the correct reading and survives the change.
+  - The rule that a value is written only into a field the board reports empty stays exactly as it is, for Status and for the classification fields alike.
+  - The Status write keeps its standing as the one write this script may not quietly decline to make, and the classification writes keep theirs of being skipped with a note on stderr.
+  - The key marker, the per-path markers and the payload marker are untouched, so filing, dedupe and brief fetch keep finding what this script writes.
+  - The sync command commits nothing to the repository.
+  - The template carries mechanics and no target's values; the installed copy keeps its own values and gains no mechanics of its own.
+  - The script keeps requiring only gh and jq, and reaches for no additional tool.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 08:02:40
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
