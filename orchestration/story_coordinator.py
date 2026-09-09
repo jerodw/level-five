@@ -6917,8 +6917,12 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     # nobody can drain turn a finished story into a failed one. Its result is
     # read by nothing — the return below is 0 whatever the sweep found — and
     # `_escalate` and `_pause` sweep nothing at all, so a crashed, escalated or
-    # paused run leaves its entries for the next run or for an explicit
-    # l5-sync.
+    # paused run leaves its entries in the repository's one queue. That queue
+    # is the repository's rather than this working tree's, which is what makes
+    # leaving them safe: both readers named here reach the same directory
+    # whichever tree they stand in — the next run's pre-flight sweep, whatever
+    # story it is running and whatever worktree it works in, and an explicit
+    # l5-sync, wherever in the repository it is invoked from.
     #
     # It is the one sweep that reports into no run directory, and that is the
     # same rule seen from the other side rather than an inconsistency. Every

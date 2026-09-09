@@ -130,6 +130,7 @@ import outbox
 import schema_validator
 import test_no_target_stack_in_harness_source as stack_module
 import workflow_selection
+import worktrees
 from agent_runner import AgentResult
 
 REPO_ROOT = Path(inspection.__file__).resolve().parents[1]
@@ -2244,13 +2245,17 @@ def test_every_entry_this_suite_filed_went_to_a_queue_the_test_owns(tmp_path):
 
     The control is the same predicate pointed at this repository, which it
     reports — so the silence for the fixture target is a fact about where the
-    queue is rather than about a comparison that cannot fail.
+    queue is rather than about a comparison that cannot fail. Since story-118
+    the queue of a repository sits beneath the repository's *primary* working
+    tree rather than beneath whichever tree asked for it, and the suite is run
+    from a worktree, so the control names that tree — which is the tree this
+    repository's queue actually belongs to, with the predicate unchanged.
     """
     found = inspecting(tmp_path, act=writes(brief()))
     assert found.entries
     assert REPO_ROOT not in found.queue.parents
     assert Path(tmp_path) in found.queue.parents
-    assert REPO_ROOT in outbox.queue_dir(REPO_ROOT).parents
+    assert worktrees.primary_root(REPO_ROOT) in outbox.queue_dir(REPO_ROOT).parents
 
 
 # --------------------------------------------------------------------------
