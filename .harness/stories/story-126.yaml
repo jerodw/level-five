@@ -1,0 +1,162 @@
+story:
+  id: story-126
+  title: A planned story is published onto the brief it was planned from
+  description: |
+    When a brief is planned, the story artifact is written to the stories
+    directory, committed and pushed, and the tracker item the developer has
+    been watching is unchanged: it still shows the brief, and nothing about the
+    plan that was approved from it. Anyone reading the tracker to see what was
+    decided has to be told the story id and then go and find the repository.
+
+    This story gives the harness a way to publish the planned story onto that
+    item, and has l5-plan use it. What goes onto the item is a PROJECTION and
+    not a move. The story artifact stays the source of truth and stays what a
+    run reads, because the artifact governs the run rather than describing it:
+    scope.modify and scope.do_not_modify decide which edits a stage may make,
+    and mandate records who approved what and when. A document living in a
+    tracker is editable by anyone at any moment, including during a run, so a
+    mandate held there would stop being a record of what was approved; and a
+    run that had to read it would stop working whenever the tracker was
+    unreachable, in a harness whose every other tracker interaction is
+    explicitly allowed to fail without stopping anything. So the item gets a
+    copy, stamped with the story id it was taken from, saying plainly that the
+    artifact in the repository is what runs and that an edit made on the item
+    reaches nothing.
+
+    The publish stands on the same seam every other tracker interaction stands
+    on: a JSON document in, an exit code as the answer, and no harness
+    knowledge of whether the target appended to a body, added a comment or
+    wrote a file. It is one command rather than two, taking an optional status
+    beside the optional document, because the sibling brief that moves an
+    item's status as its story runs shares this command -- and two scripts that
+    must agree about the same item are two scripts that can disagree. Nothing
+    in this story sends the status half; the key declares it so that work fills
+    in the other half rather than adding a second key and a second script.
+
+    This request is the brief filed under 165.
+  workflow: story-workflow
+
+tasks:
+  - Declare item_update_command and item_update_timeout_seconds in the harness config schema, describing the whole contract the command is held to, including the status half that nothing sends yet and why it is declared now.
+  - Add orchestration/item_update.py, which builds the question document, invokes the configured command under its bound, and returns what happened rather than printing it.
+  - Have l5-plan publish the committed artifact onto the item on the --brief path, after the push has landed and before the run offer, and word the outcome.
+  - Add templates/item/github.sh, a reference implementation that is idempotent given the story id, and note the third member of the family in templates/sync/github.sh.
+  - Have l5-init install the new reference command beside the sync and query commands.
+  - Wire this repository up to its own installed copy, so the script the harness ships is the script this repository is exercised by.
+  - Document the projection in the architecture document: what it is, why it is a copy rather than a move, and what it may not become.
+
+acceptance_criteria:
+  - schemas/harness-config.schema.json declares item_update_command and item_update_timeout_seconds, and harness_config.declared_config_keys() answers with both, so a target naming either is not refused at pre-flight and a target mistyping either still is.
+  - The question document the harness sends carries the item's key, the story id, and the projected document, and carries a status only where a caller supplied one -- and nothing in this story supplies one.
+  - The item's key is opaque: it is sent exactly as it was given, and nothing resolves it, normalizes it, joins it against the target root, checks that it exists, or decides anything from its form.
+  - The key is also in the invoked command's environment as L5_ITEM_KEY, taken from the same field as the copy inside the document on stdin, so the two cannot disagree.
+  - Exit zero means published and any other exit code means it did not publish, with a bounded tail of the command's stderr carried back as the reason. No exit code is read as a retry, because nothing retries.
+  - The command's stdout is not read: no reference is recorded, nothing is parsed, and a command that printed nothing publishes exactly as one that printed a page.
+  - The invocation is bounded in time by item_update_timeout_seconds, which defaults to a real duration rather than zero when the target configures none, and the kill reaches the command's process group rather than the command alone.
+  - orchestration/item_update.py raises on nothing: an unset command, a command line that cannot be split, one that cannot be launched, one that exits non-zero and one that runs past its bound each come back as a result carrying a reason.
+  - l5-plan publishes only where --brief named an item. A session planned from request text invokes the command on no path, because there is no item to publish onto.
+  - l5-plan publishes after the push has landed and before the run offer, so no projection ever names a story that exists only in one clone. A commit that failed and a push that failed each publish nothing.
+  - What is published is the artifact as committed, read from disk after the mandate was stamped and the commit made, so the projection carries what the run will read rather than what the session first wrote.
+  - The projection is headed by the story id it was taken from, and by the statement that the artifact in the repository is what runs and that an edit made here reaches nothing.
+  - A publish that fails prints one line naming the story and the reason and changes l5-plan's exit status on no path. A planning session whose work is committed and pushed is never refused for a tracker.
+  - A session that wrote more than one artifact publishes each of them, keyed by its own story id.
+  - templates/item/github.sh is idempotent given the story id: it searches the item for that story's marker before it writes, and a second invocation for the same story replaces the projection rather than adding a second one.
+  - templates/item/github.sh writes nothing that would disturb the markers templates/sync/github.sh and templates/query/github.sh depend on, so filing, dedupe and brief fetch still find what they wrote after an item has been published onto.
+  - l5-init creates the item directory and installs the reference command into it, executable, exactly as it does for the sync and query commands.
+  - This repository's .harness/config.yaml names its own installed copy under item_update_command, and .harness/item/github.sh is that copy.
+  - No sync command, filed-query command, outbox entry or transport is changed by this story: publishing is a separate invocation and enters no queue.
+
+technical_plan:
+  implementation_steps:
+    - Declare the two keys in schemas/harness-config.schema.json, following the descriptive depth sync_command and filed_query_command already set. Say what the document carries, that the status half is declared and unsent, that the key is opaque, that stdout is unread, that no code means retry, and that failure to publish refuses nothing.
+    - Write orchestration/item_update.py in the shape filed_query.py and brief_fetch.py already take. It resolves the command and the bound from config, builds the JSON document, invokes the command in a new session with the document on stdin and L5_ITEM_KEY in the environment, kills the process group on timeout, and returns a frozen result carrying whether it published and the reason it did not. Nothing here prints.
+    - Thread the brief key from l5-plan's main() through to report(), and call item_update on the path immediately after push.pushed is true and before offer(). Read each artifact from disk there rather than reusing the pre-stamp text that report() already holds. Word the outcome in l5-plan, which is where every word a developer reads from these modules already lives.
+    - Write templates/item/github.sh against the same contract, carrying its own story-id marker constant, searching the item for that marker and replacing the block it delimits rather than appending. Follow the shipped scripts' convention that the board and repository constants are the target's to edit and the mechanics are the template's.
+    - Add a paragraph to templates/sync/github.sh naming the item command as the third member of the family and what it must not disturb, in the shape of the paragraph that already names templates/query/github.sh as its pair.
+    - Add item to the two loops in scripts/l5-init that create the sub-directories and install the reference commands.
+    - Install the copy at .harness/item/github.sh and name it in .harness/config.yaml, with the comment that key deserves.
+  likely_file_changes:
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares item_update_command and item_update_timeout_seconds, and carries the whole contract the command is held to.
+    - file: orchestration/item_update.py
+      stage: implementer
+      reason: New. Builds the question document, invokes the configured command under its bound, and returns what happened.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Threads the brief key through to report, publishes after the push has landed and before the run offer, and words the outcome.
+    - file: templates/item/github.sh
+      stage: implementer
+      reason: New. The reference implementation of the contract, idempotent given the story id.
+    - file: templates/sync/github.sh
+      stage: implementer
+      reason: A note naming the item command as the third member of the family and what it must not disturb.
+    - file: scripts/l5-init
+      stage: implementer
+      reason: Creates the item directory and installs the reference command into it, beside sync and query.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Names this repository's own installed copy, so the shipped script is the one this repository is exercised by.
+    - file: .harness/item/github.sh
+      stage: implementer
+      reason: New. This repository's installed copy of the reference command.
+    - file: tests/test_item_update.py
+      stage: tester
+      reason: New. Covers the document the harness sends, the opaque key, the environment variable, the exit-code reading, the bound and its process-group kill, the totality of the module, and that a failed publish changes no exit status.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The two new keys need proofs, or its set-equality assertion against the declared key set goes red.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the projection: what it is, why it is a copy rather than a move, and what it may not become.
+
+scope:
+  modify:
+    - schemas/harness-config.schema.json
+    - orchestration/item_update.py
+    - scripts/l5-plan
+    - scripts/l5-init
+    - templates/item/github.sh
+    - templates/sync/github.sh
+    - .harness/config.yaml
+    - .harness/item/github.sh
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/command_transport.py
+    - orchestration/brief_filing.py
+    - orchestration/filed_query.py
+    - orchestration/brief_fetch.py
+    - templates/query/github.sh
+    - .harness/sync/github.sh
+    - .harness/query/github.sh
+    - schemas/story.schema.json
+    - workflows/
+
+verification_requirements:
+  - Confirm that a planning session given --brief invokes the configured command once per artifact, after the push landed, and that a session planned from request text invokes it on no path.
+  - Confirm that the document the command receives carries the item key, the story id and the projection, and carries no status, and that the projection is the artifact as committed rather than as the session first wrote it.
+  - Confirm that every way the command can fail -- unset, unlaunchable, non-zero, timed out -- leaves l5-plan's exit status exactly what it would have been, and leaves the commit, the push and the run offer untouched.
+  - Confirm that the process-group kill leaves no child of a timed-out command behind.
+  - Confirm that harness_config.declared_config_keys() answers with both new keys and that a target configuring either is not refused at pre-flight.
+  - Confirm that a second publish for the same story id through templates/item/github.sh replaces the projection rather than adding a second one, and that the sync and query markers on that item still resolve afterwards.
+  - Confirm that the suite passes, including the config-key coverage that asserts set equality in both directions.
+
+constraints:
+  - Nothing in a run may read a story back from a tracker. No coordinator, resume, sweep or pre-flight path may reach the new module, and an edit made to a projection must reach nothing by design.
+  - The story artifact stays the source of truth and stays where it is. Nothing here moves it, mirrors it back, or marks a story planned in the repository from what a tracker says.
+  - A failed publish refuses nothing and unwinds nothing. The commit and the push have already landed by the time the command is invoked, and neither is reconsidered on its answer.
+  - The item's key stays opaque end to end.
+  - The harness parses no tracker status and infers none, here as everywhere else. The status field is declared and left unsent; nothing in this story reads or writes one.
+  - The publish enters no queue. The outbox, its sweeps, its transport and the sync command keep exactly the behaviour they have.
+  - The existing filing and dedupe path keeps working over an item that has been published onto: the markers templates/sync/github.sh writes and templates/query/github.sh searches for stay findable.
+  - Every word a developer reads stays in the script, and every judgement stays in the module, which is the division plan_commit, plan_validation and brief_fetch already keep with l5-plan.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 00:38:53
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
