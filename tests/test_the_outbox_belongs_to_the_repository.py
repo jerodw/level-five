@@ -28,11 +28,15 @@ implementation. The subjects are kept apart deliberately:
     when a third tree asks. Nothing here reaches a network.
 
   * **the one derivation.** A scan over `orchestration/` and `scripts/` for the
-    derivation's own name, and a comparison of the sweep call sites against the
-    same call sites at this story's baseline, resolved through
-    `conftest.story_commit_range`. The shipped modules are the subject of these
-    assertions — the claim is about what this repository holds — so they are
-    read rather than mirrored.
+    derivation's own name, and a reading of every call site that asks the pair
+    or the sweep seam for a queue, each of which must hand over a root it was
+    already given rather than one it worked out in the argument. The shipped
+    modules are the subject of these assertions — the claim is about what this
+    repository holds — so they are read rather than mirrored. Where the root
+    comes from is asked of the sources as they ship rather than of this
+    repository's commit graph: what a call site *does* is the property, and a
+    diff against a baseline would answer instead with what some commit range
+    happened to contain.
 
   * **the design statement.** The comment in `story_coordinator._complete` that
     says what a crashed, escalated or paused run leaves behind is extracted and
@@ -49,12 +53,10 @@ Every absence asserted here carries a demonstration that it can fail:
   * "no module outside the queue resolves the primary tree for itself" sits
     beside the same scan over the same sources with the derivation planted in
     one of them, which the scan reports;
-  * "the sweep call sites are the ones this story found" sits beside the same
-    comparison over a source whose sweep is handed a different root, which the
-    comparison reports;
-  * "this story changed neither the drain script nor the seam nor the queue's
-    other readers" sits beside the same diff over the module this story
-    rewrote, which is not empty;
+  * "no sweep call site resolves its own root" and "no reader of the pair
+    resolves its own root" each sit beside the same reading over the same
+    source with the derivation planted into the argument, which the reading
+    reports;
   * "the design statement no longer describes a per-tree queue" sits beside the
     same statement with its naming of the repository substituted out, which the
     same reading reports.
@@ -83,10 +85,12 @@ REPO_ROOT = Path(outbox.__file__).resolve().parents[1]
 COORDINATOR = "orchestration/story_coordinator.py"
 DRAIN_SCRIPT = "scripts/l5-sync"
 
-#: The readers this story must have left alone, named as the story's scope
-#: names them: the drain script, the seam every run reaches the queue through,
-#: and the three modules that read or write the queue as data.
-UNCHANGED_READERS = (
+#: Every shipped source that asks the pair where the queue is, named as the
+#: story's scope names them: the drain script, the seam every run reaches the
+#: queue through, and the three modules that read or write the queue as data.
+#: The coordinator is deliberately not among them — it reaches the queue only
+#: through the seam — and the loop below asserts exactly that split.
+READERS_THAT_ASK_FOR_A_QUEUE = (
     DRAIN_SCRIPT,
     f"orchestration/{outbox_sweep.__name__}.py",
     "orchestration/run_status.py",
@@ -94,10 +98,9 @@ UNCHANGED_READERS = (
     "orchestration/inspection.py",
 )
 
-#: The module this story rewrote, which is the control for the diff above: a
-#: comparison reporting nothing for the readers has to be one that reports
-#: something for a file that did change.
-THE_MODULE_THIS_STORY_REWROTE = f"orchestration/{outbox.__name__}.py"
+#: The pair itself, read off the module that defines it rather than spelled
+#: here, so this module writes no name of the queue's own.
+THE_PAIR = (outbox.queue_dir.__name__, outbox.receipts_dir.__name__)
 
 #: The derivation's own name, read off the module that defines it so this
 #: module spells no function name of its own.
@@ -442,12 +445,14 @@ def test_the_scan_reports_a_second_derivation_planted_in_a_caller():
     assert victim in modules_naming_the_derivation(sources)
 
 
-def sweep_call_sites(source: str) -> list[str]:
-    """Every call through the sweep seam in one source, as it is written.
+def calls_through(source: str, module: str,
+                  functions: tuple[str, ...] | None = None) -> list[ast.Call]:
+    """Every call in `source` to `module`, parsed rather than matched as text.
 
-    The function called and the arguments handed to it, rendered back from the
-    parse rather than compared as text, so a reformatting is not read as a
-    change of what a call site does and a changed argument is.
+    Restricted to `functions` when they are given, so a source that reaches a
+    module for several things is asked only about the calls in question. Parsed
+    rather than searched for, so a reformatting is not read as a change of what
+    a call site does and a changed argument is.
     """
     found = []
     for node in ast.walk(ast.parse(source)):
@@ -456,48 +461,81 @@ def sweep_call_sites(source: str) -> list[str]:
         target = node.func
         if not (isinstance(target, ast.Attribute)
                 and isinstance(target.value, ast.Name)
-                and target.value.id == outbox_sweep.__name__):
+                and target.value.id == module):
             continue
-        found.append(ast.unparse(node))
-    return sorted(found)
+        if functions is None or target.attr in functions:
+            found.append(node)
+    return found
 
 
-def test_the_coordinator_sweeps_call_what_they_called_and_hand_what_they_handed():
-    """The sweeps are unchanged in which function they call and what they hand
-    it, compared against this story's own baseline rather than against a
-    listing written here — a listing is a second copy of the answer.
+def call_sites_that_resolved_their_own_root(calls: list[ast.Call]) -> list[str]:
+    """The call sites among `calls` that work their root out in the argument.
+
+    A call site handing a name it already holds passes a root it was given; a
+    call site handing a *call* worked the root out for itself, which is the
+    second derivation of where the queue lives that this story exists to
+    prevent. Rendered back from the parse, so a reported site names itself.
     """
-    shipped = (REPO_ROOT / COORDINATOR).read_text(encoding="utf-8")
-    before = conftest.repository_file_at(
-        COORDINATOR, validation_file=Path(__file__), bound=conftest.BASELINE)
-    calls = sweep_call_sites(shipped)
+    return sorted(ast.unparse(call) for call in calls
+                  if call.args and isinstance(call.args[0], ast.Call))
+
+
+def test_the_coordinator_sweeps_hand_the_seam_a_root_they_already_had():
+    """The sweeps reach the queue through the seam and hand it the root they
+    were given, so which directory a run sweeps is the derivation's answer
+    rather than a second answer composed at the call site."""
+    calls = calls_through((REPO_ROOT / COORDINATOR).read_text(encoding="utf-8"),
+                          outbox_sweep.__name__)
     assert calls, "the coordinator reaches the queue through the seam"
-    assert calls == sweep_call_sites(before)
+    assert call_sites_that_resolved_their_own_root(calls) == []
 
 
-def test_that_comparison_reports_a_sweep_handed_a_different_root():
-    """Control: the equality above must mean the call sites are unchanged, not
-    that the comparison has stopped reading them."""
+def test_that_reading_reports_a_sweep_that_resolved_its_own_root():
+    """Control: the silence above must mean the call sites hand a root they
+    already had, not that the reading has stopped seeing them."""
     shipped = (REPO_ROOT / COORDINATOR).read_text(encoding="utf-8")
-    calls = sweep_call_sites(shipped)
-    moved = shipped.replace(f"{outbox_sweep.__name__}.sweep(target_root",
-                            f"{outbox_sweep.__name__}.sweep(primary", 1)
-    assert moved != shipped
-    assert sweep_call_sites(moved) != calls
+    planted = shipped.replace(
+        f"{outbox_sweep.__name__}.sweep(target_root",
+        f"{outbox_sweep.__name__}.sweep("
+        f"{worktrees.__name__}.{DERIVATION}(target_root)", 1)
+    assert planted != shipped
+    assert call_sites_that_resolved_their_own_root(
+        calls_through(planted, outbox_sweep.__name__))
 
 
-def test_this_story_changed_neither_the_drain_script_nor_the_queues_readers():
-    """The drain script and the four modules the story's scope holds shut,
-    asked of the story's own commit range rather than of the working tree."""
-    assert conftest.story_diff(list(UNCHANGED_READERS),
-                               validation_file=Path(__file__)) == ""
+def test_every_reader_of_the_pair_hands_it_a_root_it_already_had():
+    """The drain script and the four modules the story's scope holds shut, read
+    as they ship: each asks the pair for a queue and hands it the root it was
+    given, which is what leaves the repository one derivation.
+
+    The readers are asserted to call the pair at all before the silence is
+    asserted of them, since a loop over sources that call nothing would be
+    silent for the wrong reason.
+    """
+    calling = {}
+    for relative in (COORDINATOR, *READERS_THAT_ASK_FOR_A_QUEUE):
+        calls = calls_through(
+            (REPO_ROOT / relative).read_text(encoding="utf-8"),
+            outbox.__name__, THE_PAIR)
+        if calls:
+            calling[relative] = calls
+        assert call_sites_that_resolved_their_own_root(calls) == [], relative
+
+    assert set(calling) == set(READERS_THAT_ASK_FOR_A_QUEUE)
 
 
-def test_that_diff_reports_the_module_this_story_rewrote():
-    """Control for the emptiness above: the same comparison over the module the
-    story did change is not empty."""
-    assert conftest.story_diff([THE_MODULE_THIS_STORY_REWROTE],
-                               validation_file=Path(__file__)) != ""
+def test_that_reading_reports_a_reader_that_resolved_its_own_root():
+    """Control for the silence above, planted into a reader that really asks
+    for a queue — derived from the loop's own answer rather than named here."""
+    relative = READERS_THAT_ASK_FOR_A_QUEUE[0]
+    shipped = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    planted = shipped.replace(
+        f"{outbox.__name__}.{outbox.queue_dir.__name__}(target_root",
+        f"{outbox.__name__}.{outbox.queue_dir.__name__}("
+        f"{worktrees.__name__}.{DERIVATION}(target_root)", 1)
+    assert planted != shipped
+    assert call_sites_that_resolved_their_own_root(
+        calls_through(planted, outbox.__name__, THE_PAIR))
 
 
 # --------------------------------------------------------------------------
