@@ -18,7 +18,16 @@ jobs:
       # from a real one, and that distinction is the reason to run three.
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12']
+        # The floor, and the two the developer actually works on. 3.10 is what
+        # the clean-clone check runs, deliberately older than the working
+        # environment so an incompatibility is found before CI rather than by
+        # it; 3.14 is the interpreter every local suite run uses, and until
+        # 2026-09-09 nothing in CI covered it or the release below it. The
+        # versions between the floor and the ceiling are dropped rather than
+        # kept: a defect present in one of them and in neither end is rarer
+        # than a defect in the version the developer runs all day and CI never
+        # saw.
+        python-version: ['3.10', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
         with:
