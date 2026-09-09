@@ -125,7 +125,11 @@ Every absence asserted here carries a demonstration that it can fail:
     the template differing in a line of mechanics, which the same predicate
     reports;
   * "neither sync script invokes git" sits beside a rendering of one with a
-    commit added, which the same scan reports.
+    commit added, which the same scan reports;
+  * "no field-name lookup states a rule of its own" sits beside two renderings
+    of the template — one whose id lookup matches the board verbatim and one
+    whose read spells the normalization inline — each of which the scan that
+    exists to catch it reports.
 
 Every command driven as a `filed_query_command` here is a file this module
 wrote, and `fixture_command_problems` is what makes that a checked property
@@ -2700,6 +2704,213 @@ def test_a_field_whose_name_carries_a_space_is_written_once_and_then_left(
     assert board_field_value(ledger, A_FIELD_NAME_CARRYING_A_SPACE) == written
     assert project_calls(ledger, "item-edit") == [], \
         "a field the board already reports was written over"
+
+
+def in_a_case_the_board_does_not_use(name: str) -> str:
+    """The same name, spelled in a case the board does not spell it in.
+
+    Derived from whatever the board calls the field rather than written out, so
+    a field renamed on the seeded board is still driven at a name differing
+    from it in case alone. Both halves of that are asserted here: a name that
+    came back identical would make the filings below the ordinary filings every
+    test above already makes, and a name that differed in anything but case
+    would be asking a wider question than the one these tests ask.
+    """
+    swapped = name.swapcase()
+    assert swapped != name, name
+    assert swapped.lower() == name.lower(), (swapped, name)
+    return swapped
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_status_field_configured_in_another_case_is_resolved_and_written(
+        script, tmp_path):
+    """A target that configures `status` against a board titled `Status` files.
+
+    The read of the item's current value has always ignored case, so the field
+    read as empty; the lookup that resolves the id to write with matched the
+    board verbatim, so the write resolved nothing and the filing exited
+    transiently — leaving the entry pending and retried for ever without ever
+    landing. One rule shared by both lookups is what makes the name the read
+    tolerates a name the write resolves.
+
+    The board keeps the field names it is seeded with, and only the configured
+    name is spelled differently, so what resolves the field can only be the
+    comparison and not a board rewritten to suit it.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    named = {TEMPLATE_CONSTANTS["STATUS_FIELD"][0]:
+             in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_FIELD)}
+
+    result = sync_to_the_board(script, tmp_path, environment,
+                               key="k-status-in-another-case",
+                               payload=a_filed_brief(), breaking=named)
+
+    assert result.returncode == 0, result.stderr
+    assert len(board_items(ledger)) == 1
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_classification_field_configured_in_another_case_reaches_the_board(
+        script, tmp_path):
+    """The same disagreement on a classification field, where it was quieter.
+
+    A classification field whose id resolves to nothing is said on stderr and
+    skipped, so the filing exits 0 and the value is simply written nowhere —
+    the failure a developer reads as a board that is merely missing a column's
+    value. Driven at the same axis the rest of the brief is driven at, so the
+    value on the board can only have come from the payload.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    axis = CLASSIFICATION[0]
+    brief = a_filed_brief()
+    named = {TEMPLATE_CONSTANTS[axis.constant][0]:
+             in_a_case_the_board_does_not_use(axis.field_name)}
+
+    result = sync_to_the_board(script, tmp_path, environment,
+                               key="k-classification-in-another-case",
+                               payload=brief, breaking=named)
+
+    assert result.returncode == 0, result.stderr
+    assert board_field_value(ledger, axis.field_name) == \
+        str(brief[axis.payload_field]), result.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_a_status_option_configured_in_another_case_still_resolves_to_nothing(
+        script, tmp_path):
+    """What the field-name rule widened, the option-name rule did not.
+
+    An option is the value a person reads off the board, and the board's own
+    spelling of it is the one that goes there — so an option value that does
+    not match the board verbatim still resolves to nothing, and for the Status
+    field that still costs the filing a transient exit with the entry left
+    pending. The field name here is configured exactly as the board spells it,
+    so the only thing differing is the option.
+
+    That the item's Status is left unwritten is controlled by the ordinary
+    filing above, where the same drive with the option spelled as the board
+    spells it writes it.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    configured = in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_OPTION)
+
+    result = sync_to_the_board(script, tmp_path, environment,
+                               key="k-option-in-another-case",
+                               breaking={TEMPLATE_CONSTANTS["STATUS_OPTION"][0]:
+                                         configured})
+
+    assert result.returncode == TRANSIENT_EXIT, result.stderr
+    assert configured in result.stderr
+    assert board_items(ledger)[0].get("status", "") == ""
+
+
+#: The three lookups that match a configured field name against the board's,
+#: by the names the sync scripts give them: the read of this item's current
+#: value, the resolution of a field's id, and the resolution of an option's id.
+#: Written here rather than derived from the script, because the claim is about
+#: these three in particular — a list read off the script would grow with a
+#: fourth lookup and go on passing whatever that fourth one did.
+FIELD_NAME_LOOKUPS = ("board_value", "field_id_for", "option_id_for")
+
+#: How a jq program spells the comparison this story gave one home: a name
+#: matched with its spaces removed and its case ignored. Anywhere but inside
+#: the shared definition, one of these is a lookup carrying a rule of its own.
+NORMALIZING_IDIOM = re.compile(r'gsub\(" "; ""\)|ascii_downcase')
+
+#: The shared definition itself: a jq function of two names, up to the `;` that
+#: closes it. Matched by its shape rather than by its name, so what is asserted
+#: is that the script states the rule once and defers to it — not that it
+#: chose a particular name for it.
+SHARED_FIELD_NAME_RULE = re.compile(
+    r"""def (?P<name>[a-z_]+)\(\$[a-z]+; *\$[a-z]+\):(?P<rule>.*?);(?=['"]|[ \t]*$)""",
+    re.DOTALL | re.MULTILINE)
+
+
+def sync_function_body(text: str, name: str) -> str:
+    """One shell function's body, as the sync scripts lay them out."""
+    found = re.search(
+        r"^[ \t]*%s\(\) \{\n(?P<body>.*?)^[ \t]*\}$" % re.escape(name),
+        text, re.MULTILINE | re.DOTALL)
+    assert found, f"the script declares no {name}"
+    return found.group("body")
+
+
+def rules_of_sameness_outside_the_shared_one(text: str) -> list[str]:
+    """Every line stating what makes two field names the same, other than the
+    one statement of it the script is supposed to hold.
+
+    The shared definition is cut out of the text and what is scanned is what is
+    left, so a lookup that spelled the normalization inline is a line reported
+    here whether or not it also calls the shared one.
+    """
+    stated = SHARED_FIELD_NAME_RULE.search(text)
+    assert stated, "the script states no shared field-name comparison at all"
+    assert NORMALIZING_IDIOM.search(stated.group("rule")), stated.group("rule")
+    elsewhere = text[:stated.start()] + text[stated.end():]
+    return [line for line in elsewhere.splitlines()
+            if NORMALIZING_IDIOM.search(line)]
+
+
+def lookups_not_deferring_to_the_shared_rule(text: str) -> list[str]:
+    """Every field-name lookup whose body does not call the shared rule."""
+    stated = SHARED_FIELD_NAME_RULE.search(text)
+    assert stated, "the script states no shared field-name comparison at all"
+    return [name for name in FIELD_NAME_LOOKUPS
+            if stated.group("name") not in sync_function_body(text, name)]
+
+
+@pytest.mark.parametrize("script", BOTH_SYNC_COPIES)
+def test_every_field_name_lookup_defers_to_one_statement_of_sameness(script):
+    """Both are shipped artifacts and both are the subject here.
+
+    What the two filings above assert is that the three lookups agree today.
+    What this asserts is why they cannot come to disagree tomorrow: the script
+    says once what makes two field names the same, no line outside that
+    statement says it again, and each of the three lookups defers to it rather
+    than carrying a rule of its own. Three sites that happened to agree would
+    pass the filings and fail this.
+    """
+    text = script.read_text(encoding="utf-8")
+
+    assert rules_of_sameness_outside_the_shared_one(text) == []
+    assert lookups_not_deferring_to_the_shared_rule(text) == []
+
+
+def test_those_scans_report_a_lookup_that_went_its_own_way(tmp_path):
+    """The control for both absences above, over two renderings of the template
+    that this repository does not ship.
+
+    The first has the id lookup matching the configured name against the board
+    verbatim, which is the drift this story removed; the second has the read of
+    the item's value spelling the normalization inline, which is where the rule
+    used to live. Each is reported by the scan that exists to catch it, so
+    silence over the shipped copies is the copies and not a scan that stopped
+    seeing anything.
+    """
+    text = TEMPLATE_SYNC.read_text(encoding="utf-8")
+    stated = SHARED_FIELD_NAME_RULE.search(text)
+    assert stated, "the template states no shared field-name comparison at all"
+    calling = f'{stated.group("name")}(.name; $name)'
+
+    drifted = text.replace(f"select({calling}) | .id",
+                           "select(.name == $name) | .id")
+    assert drifted != text, "the id lookup was not found to drift"
+    assert lookups_not_deferring_to_the_shared_rule(drifted) == ["field_id_for"]
+
+    inline = text.replace(
+        f'select({stated.group("name")}(.key; $name))',
+        'select((.key | gsub(" "; "") | ascii_downcase)'
+        ' == ($name | gsub(" "; "") | ascii_downcase))')
+    assert inline != text, "the read was not found to spell a rule inline"
+    reported = rules_of_sameness_outside_the_shared_one(inline)
+    assert reported, "the scan sees no rule stated outside the shared one"
+    assert all("ascii_downcase" in line for line in reported), reported
 
 
 #: The subcommand that listed a whole project to find one item in it. Written

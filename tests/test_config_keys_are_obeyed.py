@@ -294,6 +294,24 @@ ITEMS_THE_COMMAND_ANSWERS_WITH = FILED_QUERY_MAX_ITEMS + 2
 DEFAULT_FILED_QUERY_TIMEOUT = filed_query.DEFAULT_TIMEOUT_SECONDS
 DEFAULT_FILED_QUERY_MAX_ITEMS = filed_query.DEFAULT_MAX_ITEMS
 
+#: The bound the query proofs that are *not* about the bound configure instead
+#: of `FILED_QUERY_TIMEOUT`. Two proofs here spawn a command and read what it
+#: answered — the one for `filed_query_command` and the one for
+#: `filed_query_max_items` — and neither says anything about how long a command
+#: may run. Left under the tight bound, each of them was also asserting that
+#: this machine spawns a shell inside 6.5 seconds while the suite runs its
+#: modules in parallel and several of them spawn whole nested pytest runs, and
+#: that assertion is the one that goes red on a loaded machine. Neither may
+#: report inconclusive in its place: both are proof nodes, and the pristine
+#: control requires every proof node to have *passed*.
+#:
+#: So the number is made irrelevant to them rather than widened: the bound is
+#: an input to these two and the subject of neither, and it is set to the value
+#: the harness itself falls back to so that nothing about the number is a claim
+#: this module makes here. The bound's own two proofs are untouched and still
+#: pin it from both sides at `FILED_QUERY_TIMEOUT`.
+BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER = DEFAULT_FILED_QUERY_TIMEOUT
+
 #: How long the fixture allows an item-update command to run. Not a whole
 #: number of seconds, which no harness would pick: the default written in
 #: harness source is a minute and this repository configures none. It stands in
@@ -1965,6 +1983,16 @@ def asked_what_is_filed(tmp_path: Path, *, sleeps: int = 0, items: int = 1,
         QUERY_PATHS, harness_config.load_config(target), target)
 
 
+def not_about_the_bound() -> dict[str, object]:
+    """The departure a query proof that says nothing about the bound makes.
+
+    The key is read off the query module rather than written here, so it is the
+    key the harness reads. See `BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER` for why
+    these proofs configure a bound of their own.
+    """
+    return {filed_query.TIMEOUT_KEY: BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER}
+
+
 def test_filed_query_command_is_the_command_the_question_is_put_to(tmp_path):
     """The configured command is the one that answered, observed at the answer.
 
@@ -1972,8 +2000,12 @@ def test_filed_query_command_is_the_command_the_question_is_put_to(tmp_path):
     printed, and that script sits at the configured path and nowhere else. A
     harness that had stopped reading the key would ask nothing at all, and the
     answer would know nothing instead of reporting an item.
+
+    Nothing here is about how long a command may run, so the query is not held
+    to the tight bound the two proofs below pin — the command key is what is
+    asserted, and the machine's spawn latency is not.
     """
-    answer = asked_what_is_filed(tmp_path)
+    answer = asked_what_is_filed(tmp_path, **not_about_the_bound())
     assert answer.answered is True, answer.reason
     assert [item.key for item in answer.items] == [f"{QUERY_ITEM_KEY}-0"]
 
@@ -2053,7 +2085,8 @@ def test_filed_query_max_items_is_the_bound_on_what_one_answer_carries(tmp_path)
     item and name nothing.
     """
     answer = asked_what_is_filed(tmp_path,
-                                 items=ITEMS_THE_COMMAND_ANSWERS_WITH)
+                                 items=ITEMS_THE_COMMAND_ANSWERS_WITH,
+                                 **not_about_the_bound())
     assert answer.answered is True, answer.reason
     assert [item.key for item in answer.items] == [
         f"{QUERY_ITEM_KEY}-{ordinal}" for ordinal in range(FILED_QUERY_MAX_ITEMS)]

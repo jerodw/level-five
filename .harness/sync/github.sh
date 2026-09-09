@@ -341,23 +341,36 @@ if [ -n "$PROJECT" ]; then
       || fail_transient "the field values of item ${item_id} in project ${PROJECT} could not be obtained, so its fields are unknown"
   }
 
+  # What makes two field names the same, said once for all three lookups below.
+  # The configured name and the board's name are compared with their spaces
+  # removed and their case ignored, so a target that configures "status" against
+  # a board whose field is titled "Status" resolves that field however the name
+  # is spelled. Every lookup that matches a field name -- the read of this item's
+  # current value, the resolution of a field's id, and the field-name half of the
+  # resolution of an option's id -- refers to this definition rather than
+  # carrying a rule of its own, so the three cannot come to disagree: a name the
+  # read tolerates is a name the write resolves. Option names are not matched by
+  # it; they are compared against the board verbatim.
+  SAME_FIELD_NAME='def same_field_name($a; $b):
+      ($a | gsub(" "; "") | ascii_downcase) == ($b | gsub(" "; "") | ascii_downcase);'
+
   # What the read reports this item's named field as, empty where the board
-  # reports none. The name is matched with its spaces removed and its case
-  # ignored on both sides, so a board whose field names carry spaces resolves
-  # the same way however the key is spelled.
+  # reports none.
   board_value() {
-    printf '%s' "$item" | jq -r --arg name "$1" \
-      '[to_entries[] | select((.key | gsub(" "; "") | ascii_downcase) == ($name | gsub(" "; "") | ascii_downcase)) | .value] | .[0] // "" | tostring'
+    printf '%s' "$item" | jq -r --arg name "$1" "$SAME_FIELD_NAME"'
+      [to_entries[] | select(same_field_name(.key; $name)) | .value] | .[0] // "" | tostring'
   }
 
   field_id_for() {
-    printf '%s' "$fields" | jq -r --arg name "$1" \
-      '[.fields[]? | select(.name == $name) | .id] | .[0] // ""'
+    printf '%s' "$fields" | jq -r --arg name "$1" "$SAME_FIELD_NAME"'
+      [.fields[]? | select(same_field_name(.name; $name)) | .id] | .[0] // ""'
   }
 
+  # The field name is matched by the shared definition; the option name is
+  # matched against the board verbatim, which is deliberate and unchanged.
   option_id_for() {
-    printf '%s' "$fields" | jq -r --arg name "$1" --arg option "$2" \
-      '[.fields[]? | select(.name == $name) | .options[]? | select(.name == $option) | .id] | .[0] // ""'
+    printf '%s' "$fields" | jq -r --arg name "$1" --arg option "$2" "$SAME_FIELD_NAME"'
+      [.fields[]? | select(same_field_name(.name; $name)) | .options[]? | select(.name == $option) | .id] | .[0] // ""'
   }
 
   if [ -n "$STATUS_OPTION" ]; then
