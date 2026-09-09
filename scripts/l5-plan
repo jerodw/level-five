@@ -225,6 +225,20 @@ def main() -> None:
         release_claim(target_root, remote, reservation, "no worktree was created")
         sys.exit(refuse_worktree(worktree, made.problems))
     print(f"l5-plan: planning in {worktree}, cut from {resolved_base}.")
+    # The build state the target's configured commands name, linked in above the
+    # session that will need it: a fresh worktree holds tracked files alone, so
+    # an interpreter the target configures inside its own tree is gitignored and
+    # therefore absent, and a planning session standing here could not run the
+    # target's configured test command. The mechanism is orchestration's; this
+    # script calls it rather than spelling it.
+    #
+    # A failure to link is not a refusal. The session is still worth running,
+    # and nothing here blocks an invocation that runs today.
+    build_state = story_coordinator.link_configured_build_state(
+        target_root, worktree, config
+    )
+    for problem in build_state.problems:
+        print(f"l5-plan: {problem}")
     try:
         workflow = harness_config.load_workflow(HARNESS_ROOT, workflow_name, config)
     except harness_config.UnknownWorkflow as unknown:
