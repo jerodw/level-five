@@ -135,20 +135,12 @@ WORKFLOW_FIELD="${L5_SYNC_WORKFLOW_FIELD:-}"
 # wants — and a payload carrying no category applies no label at all.
 CATEGORY_LABEL_PREFIX="${L5_SYNC_CATEGORY_LABEL_PREFIX:-l5-}"
 
-# The colour a category label is created with. Not an L5_SYNC_ constant, for the
-# reason ITEM_LIST_LIMIT below is not: it is a mechanic rather than something
-# this target files against. It exists so the create is idempotent — gh's
+# The colour a category label is created with. Not an L5_SYNC_ constant: it is a
+# mechanic rather than something this target files against. It exists so the
+# create is idempotent — gh's
 # --force updates a label that already exists rather than failing on it, and a
 # create naming no colour would give the label a fresh random one every filing.
 CATEGORY_LABEL_COLOR="ededed"
-
-# How much of the project's item listing is read when looking for the item this
-# invocation just added. Not an L5_SYNC_ constant, because it is a mechanic
-# rather than something this target files against: it bounds a read, and an
-# item the listing did not report is answered transiently rather than read as a
-# set of empty fields, so a bound that was too small costs a pending entry and
-# never an overwritten value.
-ITEM_LIST_LIMIT=5000
 
 # The searchable marker written once per path the payload carries.
 # templates/query/github.sh searches for exactly this prefix, and a test reads
@@ -285,8 +277,8 @@ if [ -n "$PROJECT" ]; then
     || fail_transient "the issue was added to project ${PROJECT} but the item id could not be read"
   [ -n "$item_id" ] || fail_transient "the issue was added to project ${PROJECT} but it named no item"
 
-  # The project's id, its field list and its item listing are each read at most
-  # once per filing rather than once per field, so the writes below do not
+  # The project's id, its field list and this item's own field values are each
+  # read at most once per filing rather than once per field, so the writes below do not
   # multiply the reads. Each is read the first time something needs it, so a
   # filing with nothing to write makes none of these calls.
   project_id=""
@@ -306,27 +298,56 @@ if [ -n "$PROJECT" ]; then
 
   read_the_item() {
     [ -z "$item" ] || return 0
-    # What the board already says about this item. An item the listing did not
-    # report is a failure to know rather than a set of empty fields: writing on
-    # the strength of a listing that did not mention the item would overwrite
-    # values a human put there.
-    local listed
-    listed="$(gh project item-list "$PROJECT" --owner "$PROJECT_OWNER" \
-                --limit "$ITEM_LIST_LIMIT" --format json 2>/dev/null)" \
-      || fail_transient "the project ${PROJECT} listing failed, so the item's fields are unknown"
-    item="$(printf '%s' "$listed" \
-              | jq -c --arg id "$item_id" '[.items[]? | select(.id == $id)] | .[0] // empty')" \
-      || fail_transient "the project ${PROJECT} listing could not be read"
+    # What the board already says about this item, asked for by the item's own
+    # node id rather than selected out of a listing of the whole project. The id
+    # is already in hand, so one graphql read answers the same question
+    # consistently: it is not read against an index that lags behind an add, and
+    # it has no size to outgrow as the board grows.
+    #
+    # An item whose field values could not be obtained -- the read failing, or
+    # answering with no such node -- is a failure to know rather than a set of
+    # empty fields: writing on the strength of an answer that did not describe
+    # the item would overwrite values a human put there.
+    local answered
+    answered="$(gh api graphql -f item="$item_id" -f query='
+      query($item: ID!) {
+        node(id: $item) {
+          ... on ProjectV2Item {
+            fieldValues(first: 100) {
+              nodes {
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field { ... on ProjectV2FieldCommon { name } }
+                }
+              }
+            }
+          }
+        }
+      }' 2>/dev/null)" \
+      || fail_transient "the field values of item ${item_id} in project ${PROJECT} could not be read, so its fields are unknown"
+    # One object mapping field name to value. Only single-select values are
+    # selected, because those are the only ones this script writes, and an entry
+    # missing either half is dropped -- so a field the board reports no value for
+    # contributes no key and reads as empty, exactly as it did under the listing.
+    # An answer carrying no such node yields nothing at all rather than an empty
+    # object, which is what makes it distinguishable from an item with no values.
+    item="$(printf '%s' "$answered" | jq -c '
+      (.data.node.fieldValues.nodes? // empty)
+      | [ .[] | select((.name? != null) and (.field?.name? != null))
+              | {key: .field.name, value: .name} ]
+      | from_entries')" \
+      || fail_transient "the field values of item ${item_id} in project ${PROJECT} could not be read, so its fields are unknown"
     [ -n "$item" ] \
-      || fail_transient "item ${item_id} was not in the first ${ITEM_LIST_LIMIT} items of project ${PROJECT}, so its fields are unknown"
+      || fail_transient "the field values of item ${item_id} in project ${PROJECT} could not be obtained, so its fields are unknown"
   }
 
-  # What the listing reports this item's named field as, empty where the board
-  # reports none. gh names a field's key after the field itself, so the name is
-  # matched with its spaces removed and its case ignored.
+  # What the read reports this item's named field as, empty where the board
+  # reports none. The name is matched with its spaces removed and its case
+  # ignored on both sides, so a board whose field names carry spaces resolves
+  # the same way however the key is spelled.
   board_value() {
     printf '%s' "$item" | jq -r --arg name "$1" \
-      '[to_entries[] | select((.key | ascii_downcase) == ($name | gsub(" "; "") | ascii_downcase)) | .value] | .[0] // "" | tostring'
+      '[to_entries[] | select((.key | gsub(" "; "") | ascii_downcase) == ($name | gsub(" "; "") | ascii_downcase)) | .value] | .[0] // "" | tostring'
   }
 
   field_id_for() {
