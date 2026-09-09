@@ -72,6 +72,7 @@ import conftest
 import filed_query
 import harness_config
 import inspection
+import item_update
 import machine_load
 import outbox
 import outbox_sweep
@@ -142,6 +143,11 @@ TOKEN_EXEMPT: dict[str, str] = {
         "the value is a count of items one answer may carry, parsed to a "
         "positive integer and reported as a problem by the query's settings "
         "resolution when it is not one, so it cannot carry a word"
+    ),
+    "item_update_timeout_seconds": (
+        "the value is a duration in seconds, parsed to a positive number and "
+        "reported as the reason a publish did not happen when it is not one, "
+        "so it cannot carry a word"
     ),
     "inspect_max_findings": (
         "the value is a count of briefs one inspection may file, parsed to a "
@@ -288,6 +294,33 @@ ITEMS_THE_COMMAND_ANSWERS_WITH = FILED_QUERY_MAX_ITEMS + 2
 DEFAULT_FILED_QUERY_TIMEOUT = filed_query.DEFAULT_TIMEOUT_SECONDS
 DEFAULT_FILED_QUERY_MAX_ITEMS = filed_query.DEFAULT_MAX_ITEMS
 
+#: How long the fixture allows an item-update command to run. Not a whole
+#: number of seconds, which no harness would pick: the default written in
+#: harness source is a minute and this repository configures none. It stands in
+#: for the token the value cannot carry, and its proof pins it from both sides
+#: — a command asked to sleep for longer than it and less than the default is
+#: killed at this bound, where under the default it would finish and publish.
+#: So a harness that stopped reading the key fails in seconds rather than after
+#: a minute of waiting.
+#:
+#: Only the killed half is a proof: a loaded machine makes the kill more
+#: certain rather than less, so nothing here reports inconclusive and nothing
+#: here is a claim about the machine.
+ITEM_UPDATE_TIMEOUT = 2.7
+ITEM_SLEEPS_PAST_THE_BOUND = 9
+
+#: The default the fallback comparison and the ordering above are stated
+#: against, read off the item-update module rather than written here.
+DEFAULT_ITEM_UPDATE_TIMEOUT = item_update.DEFAULT_TIMEOUT_SECONDS
+
+#: Where the fixture's item-update command lives inside the target, and what a
+#: publish put to it is about. The path, the item's key and the projected
+#: document all carry the token, so a publish recorded under this key can only
+#: have come from the harness running the configured command.
+ITEM_COMMAND_REL = "xyzzy-item/publishes-the-plan.sh"
+ITEM_KEY = "xyzzy-planned-from-item"
+ITEM_PROJECTION = "xyzzy-projection: the plan as it was committed"
+
 #: The shape a finding the fixture writes must satisfy, loaded as it ships so
 #: this module spells no enum member of its own — the severity the findings
 #: carry and the floor the fixture configures are both read off it.
@@ -381,6 +414,8 @@ VARYING: dict[str, object] = {
     "inspect_max_cost_usd": str(INSPECT_MAX_COST),
     "inspect_max_findings": str(INSPECT_MAX_FINDINGS),
     "inspect_min_severity": str(INSPECT_MIN_SEVERITY),
+    "item_update_command": ITEM_COMMAND_REL,
+    "item_update_timeout_seconds": str(ITEM_UPDATE_TIMEOUT),
     "logs_dir": ".harness/xyzzy-logs",
     "mandate_max_depth": str(MANDATE_DEPTH),
     "max_pause_wait_seconds": str(PAUSE_WAIT),
@@ -427,6 +462,10 @@ FALLBACKS: dict[str, object] = {
     "inspect_max_cost_usd": DEFAULT_INSPECT_MAX_COST,
     "inspect_max_findings": DEFAULT_INSPECT_MAX_FINDINGS,
     "inspect_min_severity": DEFAULT_INSPECT_MIN_SEVERITY,
+    # No command at all is the ordinary case: unset, nothing is published and a
+    # planning session says so and is otherwise unchanged.
+    "item_update_command": None,
+    "item_update_timeout_seconds": DEFAULT_ITEM_UPDATE_TIMEOUT,
     "logs_dir": ".harness/logs",
     "mandate_max_depth": story_coordinator.DEFAULT_MANDATE_MAX_DEPTH,
     "max_pause_wait_seconds": story_coordinator.NO_PAUSE_WAIT,
@@ -518,6 +557,15 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "inspect_min_severity": Proof(
         "test_inspect_min_severity_is_the_floor_on_what_an_inspection_files",
+        BEHAVIOURAL),
+    "item_update_command": Proof(
+        "test_item_update_command_is_the_command_a_story_is_published_by",
+        BEHAVIOURAL),
+    # The killed half rather than a settings read: it is the one that separates
+    # the configured value from the harness default by observing what the bound
+    # *did*, and it cannot report inconclusive.
+    "item_update_timeout_seconds": Proof(
+        "test_an_item_command_sleeping_past_the_bound_is_killed_and_publishes_nothing",
         BEHAVIOURAL),
     "logs_dir": Proof(
         "test_logs_dir_is_where_the_stage_log_is_written",
@@ -675,6 +723,18 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "inspect_min_severity": (
         ("orchestration/inspection.py",
          "declared = config.get(MIN_SEVERITY_KEY)",
+         "declared = None"),
+    ),
+    # The two publish keys are read in the seam, which is the only module in
+    # the repository that invokes the configured item-update command.
+    "item_update_command": (
+        ("orchestration/item_update.py",
+         "command = config.get(COMMAND_KEY)",
+         "command = None"),
+    ),
+    "item_update_timeout_seconds": (
+        ("orchestration/item_update.py",
+         "declared = config.get(TIMEOUT_KEY)",
          "declared = None"),
     ),
     "logs_dir": (
@@ -1103,6 +1163,7 @@ EXPECTED_KEYS = (
     "filed_query_timeout_seconds", "history_dir", "history_retention_days",
     "inspect_after_story_max_files",
     "inspect_max_cost_usd", "inspect_max_findings", "inspect_min_severity",
+    "item_update_command", "item_update_timeout_seconds",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "source_dirs", "standards_dir",
     "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
@@ -1506,6 +1567,11 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
         < DEFAULT_FILED_QUERY_TIMEOUT
     assert 0 < FILED_QUERY_MAX_ITEMS < ITEMS_THE_COMMAND_ANSWERS_WITH \
         < DEFAULT_FILED_QUERY_MAX_ITEMS
+    # And the publish bound, pinned the same way: the command sleeps between
+    # the configured value and the default written in harness source, so the
+    # configured value kills where the default would let it publish.
+    assert 0 < ITEM_UPDATE_TIMEOUT < ITEM_SLEEPS_PAST_THE_BOUND \
+        < DEFAULT_ITEM_UPDATE_TIMEOUT
     # And the inspection cap, pinned the same way: what the invocation writes
     # sits between the configured bound and the default, so the configured
     # value excludes findings where the default would file every one of them.
@@ -1996,6 +2062,75 @@ def test_filed_query_max_items_is_the_bound_on_what_one_answer_carries(tmp_path)
     stated = " ".join(answer.excluded)
     assert str(FILED_QUERY_MAX_ITEMS) in stated, stated
     assert str(dropped) in stated, stated
+
+
+def published_from(tmp_path: Path, *, sleeps: int = 0,
+                   **overrides) -> tuple[item_update.Published, Path]:
+    """Build a fixture target, install its item command, and publish onto it.
+
+    The command is a file this fixture writes, at the path the configuration
+    names, recording the question it was handed. Nothing reaches a tracker, and
+    the path, the item key and the projected document carry the token — so a
+    record naming them can only have come from the harness running the
+    *configured* command.
+
+    The two publish keys are read in `orchestration/item_update.py`, which is
+    the only module that invokes the command, so their proofs are driven at
+    that seam rather than through `run_story`: no run reaches this path at all.
+    """
+    values = fixture_config(**overrides)
+    target = build_target(tmp_path, values)
+    command = target / str(values["item_update_command"])
+    command.parent.mkdir(parents=True, exist_ok=True)
+    recorded = command.parent / "published.json"
+    command.write_text(
+        "#!/bin/sh\n"
+        + (f"sleep {sleeps}\n" if sleeps else "")
+        + f'cat > "{recorded}"\n',
+        encoding="utf-8")
+    command.chmod(0o755)
+
+    answer = item_update.publish(
+        ITEM_KEY, STORY_ID, ITEM_PROJECTION,
+        harness_config.load_config(target), target)
+    return answer, recorded
+
+
+def test_item_update_command_is_the_command_a_story_is_published_by(tmp_path):
+    """The configured command is the one that published, observed at the item.
+
+    The question the fixture's own script recorded is the one the harness sent,
+    and that script sits at the configured path and nowhere else. A harness
+    that had stopped reading the key would publish nothing at all, and there
+    would be no record to read.
+    """
+    answer, recorded = published_from(tmp_path)
+
+    assert answer.published is True, answer.reason
+    question = json.loads(recorded.read_text(encoding="utf-8"))
+    assert question["key"] == ITEM_KEY
+    assert question["story_id"] == STORY_ID
+    assert question["document"] == ITEM_PROJECTION
+
+
+def test_an_item_command_sleeping_past_the_bound_is_killed_and_publishes_nothing(
+        tmp_path):
+    """The half that separates the configured value from the harness default.
+
+    A command asked to sleep for longer than the configured bound and less than
+    the default is killed at the configured bound, and the answer says it did
+    not publish and names that bound. A loaded machine makes the command slower
+    and the kill more certain, so this never reports inconclusive.
+
+    Its control is the test above: the same fixture, the same command with no
+    sleep in it, which publishes and is recorded.
+    """
+    answer, recorded = published_from(tmp_path,
+                                      sleeps=ITEM_SLEEPS_PAST_THE_BOUND)
+
+    assert answer.published is False
+    assert str(ITEM_UPDATE_TIMEOUT) in answer.reason
+    assert not recorded.exists()
 
 
 def inspection_finding(ordinal: int) -> dict:

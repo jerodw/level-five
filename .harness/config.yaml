@@ -82,6 +82,23 @@ sync_command: .harness/sync/github.sh
 # anyway. It is the sync command's pair and must agree with it about the two
 # markers, which is a contract the harness requires and cannot enforce.
 filed_query_command: .harness/query/github.sh
+# The third member of that family: how this repository publishes a planned
+# story onto the item it was planned from. Without it the tracker item a
+# developer has been watching still shows the brief and nothing about the plan
+# approved from it, and anyone reading it to see what was decided has to be
+# told the story id and then go and find the repository. What goes onto the
+# item is a PROJECTION and not a move: the artifact in .harness/stories/ stays
+# what a run reads, because it governs the run rather than describing it, and
+# an edit made on the item reaches nothing — the projection says so in its own
+# heading. The harness invokes this once per artifact, on the --brief path
+# alone, after the push has landed and before the run offer: the entry on
+# stdin, the key in L5_ITEM_KEY, stdout unread, and an exit code saying
+# published (0) or not (anything else, none of which means retry, because
+# nothing retries). A publish that fails prints one line and changes no exit
+# status. It is installed by l5-init beside the sync and query commands, and
+# it must not disturb the markers those two depend on. Read
+# .harness/item/github.sh for the whole contract.
+item_update_command: .harness/item/github.sh
 # How long that command may run before it is killed, in seconds. The kill
 # reaches its process group, so a command that spawned children of its own
 # leaves none behind, and the entry is left pending rather than failed —

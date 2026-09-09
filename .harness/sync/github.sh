@@ -86,6 +86,17 @@
 # installs one without the other gets no dedupe rather than an error. Change
 # the marker here and change it there in the same edit.
 #
+# templates/item/github.sh IS THE THIRD MEMBER OF THAT FAMILY. It publishes a
+# planned story onto an item this script filed, so it is the only one of the
+# three that rewrites a body this one wrote. What it must not disturb is
+# everything this script records: the key marker the search above finds, the
+# per-path markers the query script searches for, and the payload marker the
+# brief fetch reads back. It writes its projection between markers of its own
+# and replaces only what they delimit, which is what keeps filing, dedupe and
+# brief fetch working over an item that has been published onto. Nothing in
+# the harness reads a projection back, and a publish that fails refuses
+# nothing.
+#
 # A SYNC COMMAND MUST NOT COMMIT. It writes to a tracker; a human or a run
 # commits to the repository. The harness does not enforce this and says so
 # rather than implying a check that does not exist. Do not add a git commit

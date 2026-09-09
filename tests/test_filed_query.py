@@ -1320,7 +1320,10 @@ second implementation:
   issue view          prints one issue's body by the key the create printed --
                       the invocation the query script makes to answer a
                       brief-fetch question.
-  issue edit          adds a label to an issue, beside the ones it carries. A
+  issue edit          given --body-file, replaces the issue's whole body with
+                      that file, which is the one edit the item-update script
+                      makes; given --add-label,
+                      adds a label to an issue, beside the ones it carries. A
                       label the repository does not hold is refused, as gh
                       refuses it, which is what makes "created before it was
                       applied" something this stub can report rather than
@@ -1430,6 +1433,17 @@ elif argv[:2] == ["issue", "edit"]:
              if wanted in (issue["url"], str(issue["number"]))]
     if not found:
         refuse("no issue is filed under %s" % wanted)
+    replacement = flag(argv, "--body-file")
+    if replacement is not None:
+        # The one edit the item-update script makes: the whole body replaced
+        # with the file it wrote. Held here beside the label edit rather than
+        # in a stub of its own, because the third member of the family writes
+        # to the same item the other two read, and a second stub could not
+        # report that it left their markers alone.
+        found[0]["body"] = open(replacement).read()
+        save()
+        print(found[0]["url"])
+        sys.exit(0)
     added = flag(argv, "--add-label")
     if added is None:
         refuse("the stub was asked for something it does not do: %s"
