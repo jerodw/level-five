@@ -47,11 +47,18 @@ disagree.
 
 **The command's stdout is not read.** No reference is recorded, nothing is
 parsed, and a command that printed nothing publishes exactly as one that
-printed a page. The exit code is the whole of the answer: zero means published
-and any other code means it did not publish, with a bounded tail of stderr
-carried back as the reason. **No exit code is read as a retry**, because
-nothing retries: a publish that failed is reported and the run offer, the
-commit and the push it followed are untouched.
+printed a page. The exit code is the whole of the answer: zero means everything
+the question asked for was done and any other code means some part of it was
+not, with a bounded tail of stderr carried back as the reason. **No exit code is
+read as a retry**, because nothing retries: a failure is reported and the run
+offer, the commit and the push it followed are untouched.
+
+**A non-zero exit may follow a document that was already published.** A question
+carrying both halves is answered in order, the document first, so a status the
+command cannot honour leaves the projection on the item and then exits non-zero.
+A failure says that not all of the question was answered rather than that none
+of it was, and a caller that reads it as nothing-happened will be wrong about
+the item's body.
 
 This module **raises on nothing**. An unset command, a command line that cannot
 be split, one that cannot be launched, one that exits non-zero and one that
