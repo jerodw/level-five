@@ -42,7 +42,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import harness_config
 import outbox
+
+#: The command an entry is filed by running. It is named here only so the
+#: drift check below can ask about it by name; `build_transport` keeps its own
+#: literal read of the same key, which is what the declared-keys scan reads and
+#: what the proof that the key governs is pinned to.
+COMMAND_KEY = "sync_command"
 
 #: How long a sync command may run before it is killed.
 TIMEOUT_KEY = "sync_timeout_seconds"
@@ -209,8 +216,20 @@ def sweep(target_root: Path, config: dict, harness_root: Path | None = None,
             harness_root=harness_root,
             limit=limit,
         )
+        # A run holds the configuration it loaded before anything happened, so
+        # a story whose own work moves the sync command spends the rest of its
+        # run filing under the path it just removed. Nothing here routes on
+        # that: an unlaunchable command is deferred by the transport rather
+        # than failed, so the entries stay pending and a later run files them
+        # under the new path. What the note adds is why they are still pending.
+        moved = harness_config.moved_command(config, target_root, COMMAND_KEY)
+        drift = (
+            f"{moved.describe()}, so an entry was offered to a command this "
+            f"tree no longer names and a later run will file it under the new "
+            f"one"
+        ) if moved is not None else ""
         notes = tuple(
-            note for note in (problem, limit_problem) if note
+            note for note in (problem, limit_problem, drift) if note
         ) + summary.notes
         summary = replace_notes(summary, notes)
     except Exception as error:  # noqa: BLE001 - the totality is the guarantee

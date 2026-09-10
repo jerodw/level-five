@@ -57,6 +57,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import harness_config
 import inspection
 
 #: The maximum number of files one post-story inspection may take into scope
@@ -677,6 +678,26 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
                 f"{one.scope}: {one.reason}; what was filed may already be "
                 f"filed",
             )
+    # Beside that note, and on the same terms: a run that holds a filed-query
+    # command the tree no longer names launched its dedupe as a command this
+    # tree does not have, so an empty answer means a stale path rather than an
+    # empty tracker. Said whether or not dedupe answered, because a query that
+    # ran against a stale-but-existing command answered for a tracker the tree
+    # no longer points at, which is the same doubt reached by a different road.
+    #
+    # The key is the query seam's own constant, reached through `inspection`
+    # rather than by importing the seam here: which modules reach that seam is
+    # a declared set, and noticing a moved command is not reaching it.
+    moved = harness_config.moved_command(
+        config, target_root, inspection.filed_query.COMMAND_KEY
+    )
+    if moved is not None:
+        _note(
+            run_dir,
+            f"post-story inspection of {story_id}: {moved.describe()}, so the "
+            f"dedupe query answered for a tracker the tree no longer points "
+            f"at; what was filed may already be filed",
+        )
     _say(
         run_dir, _summary(story_id, report, excluded, trimmed),
         findings=findings, filed=filed_count, dropped=dropped_count,

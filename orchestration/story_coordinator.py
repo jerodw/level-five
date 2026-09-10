@@ -7020,7 +7020,35 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
             f"{state.story_id}: {moved.reason}",
             file=sys.stderr,
         )
+    _report_moved_item_command(run_dir, config or {}, target_root)
     return 0
+
+
+def _report_moved_item_command(
+    run_dir: Path, config: dict, target_root: Path
+) -> None:
+    """Say in the run's events.log where the item command moved under the run.
+
+    A run holds the configuration it loaded before the run directory existed,
+    so a story whose own work moves the item-update command sends its
+    ready-to-merge status through the path it has just removed. The line sits
+    beside the one reporting whether that status was sent, so a reader meeting
+    "was not sent" learns whether the command is broken or merely the one the
+    tree has moved on from.
+
+    Nothing routes on it: the status that was sent is the status that was sent,
+    the run's exit code is unchanged, and a completion may not fail on a report
+    about itself — so every path here is guarded and every path returns.
+    """
+    try:
+        moved = harness_config.moved_command(
+            config, target_root, item_update.COMMAND_KEY
+        )
+        if moved is None:
+            return
+        append_event(run_dir, moved.describe())
+    except Exception:  # noqa: BLE001 - noticing may not become a failure
+        pass
 
 
 def run_story(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import schema_validator
@@ -98,6 +99,80 @@ def load_config(target_root: Path) -> dict:
                 config[key] = []
                 current_list = key
     return config
+
+
+@dataclass(frozen=True)
+class MovedCommand:
+    """One configured command whose value the tree has moved on from.
+
+    `held` is the value the caller is still acting on — the dictionary the run
+    loaded before anything else happened — and `now` is the value the target's
+    configuration file carries at the moment the comparison was made. Both are
+    rendered rather than compared by a reader: what a caller owes its reader is
+    the two values side by side, so a reader can tell an empty answer from a
+    stale path without opening the file.
+    """
+
+    key: str
+    held: str
+    now: str
+
+    def describe(self) -> str:
+        """The two values, said once, so no caller spells them a second time.
+
+        Each caller adds its own consequence after this: what a stale filed
+        query means is not what a stale sync command means, and neither is a
+        sentence this module is in a position to write.
+        """
+        return (
+            f"{self.key} moved under this run: it holds {self.held}, and the "
+            f"target's configuration now names {self.now}"
+        )
+
+
+def _rendered_value(value) -> str:
+    """One configured value as a reader meets it in a report.
+
+    An unset key is *said* rather than rendered as an empty string, because a
+    report whose two halves are `''` and `'x'` reads as a value that lost its
+    contents rather than as one that was never there.
+    """
+    if value is None or value == "" or value == []:
+        return "nothing"
+    return f"'{value}'"
+
+
+def moved_command(config: dict, target_root: Path, key: str):
+    """Whether the value a caller holds for `key` is the value the tree carries.
+
+    A run reads its target's configuration once, before the run directory
+    exists, and threads that one dictionary through to the end. That is
+    deliberate and this does not change it: the pre-flight that refuses an
+    undeclared key does so exactly once from the loaded dictionary, so a run
+    cannot quietly exercise something other than what it was launched under,
+    and re-reading the file to *act* on would give that up.
+
+    What this adds is noticing rather than re-reading. It answers with a
+    `MovedCommand` where the two values disagree and with `None` where they
+    agree, and **nothing routes on the answer**: the loaded dictionary stays the
+    one every decision, check and status is made from, and a caller reports a
+    move and then does exactly what it would have done without it.
+
+    A configuration file that is absent, unreadable or unparseable answers
+    "nothing moved". This is a report about a run whose work is already
+    committed, so it may not become the thing that fails: a caller with no
+    answer is left saying nothing, which is what it said before this existed.
+    """
+    try:
+        current = load_config(Path(target_root))
+    except Exception:  # noqa: BLE001 - noticing may not become a failure
+        return None
+    held, now = config.get(key), current.get(key)
+    if held == now:
+        return None
+    return MovedCommand(
+        key=key, held=_rendered_value(held), now=_rendered_value(now)
+    )
 
 
 #: Where a target keeps its cross-run history when it says nothing about it,
