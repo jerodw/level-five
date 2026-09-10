@@ -1,0 +1,134 @@
+story:
+  id: story-132
+  title: A planned story's projection reaches its item on a target that configures no board
+  description: |
+    Planned from the brief filed under key 202.
+
+    The item branch of the reference tracker script resolves and refuses the
+    status half of a question before it touches the document half. Where a
+    target configures no project, that refusal ends the whole invocation:
+    templates/scripts/github.sh:927-928 exits non-zero saying no project is
+    configured, and the `gh issue edit` at line 966 is never reached, so the
+    item keeps a body that says nothing about the plan. Since l5-plan began
+    riding status=planned on the invocation that already carries the document,
+    that has meant no boardless target gets the projection published at plan
+    time, and both run-time moments report a failure line on every run.
+
+    Twelve hundred lines away in the same file the sync branch reads the same
+    empty value differently: templates/scripts/github.sh:606 treats an empty
+    project as "there is no board here", skips that work and does the rest of
+    its job. The two branches of one file disagree about what an unconfigured
+    project means.
+
+    This story settles that disagreement in the sync branch's favour and makes
+    the harness say the same thing. An empty project becomes a statement about
+    the target rather than a failure, so the document is published and the
+    invocation exits zero. The document half moves ahead of the status half, so
+    a status that genuinely cannot be honoured — a token this copy names no
+    option for, a board call the tracker refuses — leaves the projection on the
+    item and then exits non-zero. That partial outcome is a thing the contract
+    text has never described, and both places that describe the contract begin
+    describing it.
+
+    This repository is no longer one of the affected targets: its installed
+    copy sets a project at .harness/scripts/github.sh:296. It is changed here
+    because the two copies differ only in the values they configure, and both
+    are live subjects of the test suite, so their mechanics must not diverge.
+  workflow: story-workflow
+
+tasks:
+  - Make the item branch of templates/scripts/github.sh treat an empty project as the sync branch already does: the board work is skipped rather than the invocation refused, silently and without reaching the tracker, in the shape templates/scripts/github.sh:606 already has.
+  - Move the document half of the item branch ahead of the status half in templates/scripts/github.sh, so a status that cannot be honoured leaves an already-published projection behind rather than preventing it.
+  - Make the same two changes to the installed copy at .harness/scripts/github.sh, leaving every configured value in it exactly as it is, so the two copies continue to differ only in their configuration.
+  - Reword l5-plan's success line so it no longer asserts a board move the harness cannot know happened, and correct the comment at scripts/l5-plan:970-976, which states the cost of sharing one invocation as the reverse of what it turned out to be.
+  - Say what a partial failure leaves behind in the item_update_command description in schemas/harness-config.schema.json, which today says only that a failure refuses nothing.
+  - Say the same thing in the module docstring of orchestration/item_update.py, which today says any non-zero exit code means it did not publish.
+  - Cover the combination nothing asserts today in tests/test_a_brief_follows_its_story.py — a question carrying a document beside a status that cannot be honoured — and repair the existing case at tests/test_a_brief_follows_its_story.py:1381-1382, which asserts the behaviour this story deliberately reverses.
+
+acceptance_criteria:
+  - With no project configured, a question carrying both a document and the planned status exits zero, and the item's body afterwards carries that story's projection between that story's markers.
+  - With no project configured, a question carrying a status and no document exits zero and leaves the item's body byte for byte as it found it.
+  - With no project configured, a question carrying a status makes no call against the board at all.
+  - With a board configured, a question carrying a document beside a status the script names no option for exits non-zero and the item's body afterwards carries the projection.
+  - With a board configured, a question carrying a document beside a status whose board call the tracker refuses exits non-zero and the item's body afterwards carries the projection.
+  - With a board configured, a question carrying both a document and a status still publishes the projection and still moves the item to the option that status names, unchanged from today.
+  - With a board configured, a question carrying a status the script names no option for still exits non-zero and still says so on stderr.
+  - The installed .harness/scripts/github.sh and templates/scripts/github.sh differ on no line other than the assignments that configure this target's values, so the mechanics of the two copies are identical.
+  - l5-plan's line reporting a successful plan-time publish states that the tracker was told the story is planned, and does not assert that an item was moved.
+  - The comment in scripts/l5-plan explaining why the status rides on the existing invocation states the cost that was realised rather than its reverse.
+  - The item_update_command description in schemas/harness-config.schema.json states that a non-zero exit may follow a document that was already published, so a failure at the status half leaves the projection on the item.
+  - The module docstring of orchestration/item_update.py states the same, so the two descriptions of one contract do not disagree.
+  - Every board value the two scripts read still comes from the environment, with the same variable names and the same defaults the scripts declare today.
+
+technical_plan:
+  implementation_steps:
+    - In the item branch of templates/scripts/github.sh, relocate the block that publishes the document so it runs before the block that resolves the status token, keeping each block's own contents and its failure wording.
+    - In the status block, replace the requirement that a project be configured with the sync branch's condition — where the project is empty, the board work does not run and nothing is said, because a target that declares no board has nothing that failed.
+    - Keep every other way of not reaching the board exactly as it is: an unrecognised token, a copy naming no option for a token, and any board call the tracker refuses each still say so on stderr and exit non-zero.
+    - Apply the identical edits to .harness/scripts/github.sh, touching none of the assignments that carry this target's project number, status field, column names or classification field names.
+    - In scripts/l5-plan, reword the success branch of the plan-time publish and rewrite the comment above the publish call so it names the cost this arrangement actually has.
+    - Extend the item_update_command description in schemas/harness-config.schema.json and the module docstring of orchestration/item_update.py with what a partial failure leaves behind.
+    - In tests/test_a_brief_follows_its_story.py, add the boardless cases and the document-beside-an-unhonourable-status cases, and change the existing no-board case so it expects the published document and a zero exit.
+  likely_file_changes:
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: The item branch is where the status half refuses the invocation before the document half runs; both the reordering and the empty-project condition are here.
+    - file: .harness/scripts/github.sh
+      stage: implementer
+      reason: This target's installed copy of the same script, held to identical mechanics by the suite, which runs assertions against both copies.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Its success line asserts a board move that a boardless target does not make, and its comment states the cost of the shared invocation backwards.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The item_update_command description is the contract text and says nothing about what a partial failure leaves behind.
+    - file: orchestration/item_update.py
+      stage: implementer
+      reason: Its module docstring mirrors that contract and today says any non-zero exit means nothing was published, which stops being true.
+    - file: tests/test_a_brief_follows_its_story.py
+      stage: tester
+      reason: The combination of a document and an unhonourable status is asserted by nothing, and the existing no-board case asserts the behaviour this story reverses.
+
+scope:
+  modify:
+    - templates/scripts/github.sh
+    - .harness/scripts/github.sh
+    - scripts/l5-plan
+    - schemas/harness-config.schema.json
+    - orchestration/item_update.py
+    - tests/test_a_brief_follows_its_story.py
+  do_not_modify:
+    - How a target declares its board values. The environment-only configuration of the reference scripts predates this change, the sync branch beside the item branch has the same shape, and redesigning it is not this story's work.
+    - .harness/config.yaml
+    - templates/config.yaml
+    - Every branch of the reference script other than the item branch, and every helper the branches share.
+    - Every test module other than tests/test_a_brief_follows_its_story.py.
+
+verification_requirements:
+  - Confirm the shipped script, run as it ships against the stub tracker with no project configured, publishes a projection and exits zero for a question carrying both halves.
+  - Confirm that same invocation makes no call against the board.
+  - Confirm the shipped script, with a board configured, still publishes and still moves for a question carrying both halves.
+  - Confirm a question carrying a document beside a status that cannot be honoured exits non-zero with the document published, for both an unrecognised token and a refused board call.
+  - Confirm the installed copy and the template differ only in configured values.
+  - Confirm scripts/l5-plan's success line no longer claims an item was moved, and that its comment describes the realised cost.
+  - Confirm the schema description and the orchestration/item_update.py docstring both describe the partial outcome, and that they do not contradict each other.
+  - Run the full suite and confirm it passes, including the modules that exercise the reference script's other branches.
+
+constraints:
+  - The harness attaches no meaning to a status token; no code outside the reference script may branch on which token was sent.
+  - Nothing about the item's key changes: it stays opaque, sent verbatim on stdin and in L5_ITEM_KEY from the same value.
+  - The command's stdout stays unread, and no exit code becomes a retry.
+  - A publish that fails still refuses nothing — it changes l5-plan's exit status on no path, refuses no run, and fails no run that reached completion.
+  - The markers the sync branch writes and the query branch searches for stay untouched by the item branch, so filing, dedupe and brief fetch keep finding what they wrote.
+  - The item branch stays idempotent given a story id: a second invocation for one story replaces that story's block rather than adding a second one.
+  - A question carrying neither a document nor a status is still refused rather than treated as a no-op that succeeded.
+  - Every board value stays a configuration read from the environment; no value is written into the harness's own source.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-10 08:53:31
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 202
