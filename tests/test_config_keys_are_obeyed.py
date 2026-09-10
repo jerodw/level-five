@@ -219,11 +219,13 @@ MANDATE_DEPTH = 0
 #:
 #: The bound has to leave room for a shell to be spawned, because every site
 #: that observes a command *landing* needs one started and finished inside it.
-#: At 1.3s it did not: this bound was five times tighter than either of its
-#: siblings below, and on story-130's run a loaded machine took two of those
-#: sites past it — the landing half reporting inconclusive is the escape for a
-#: precondition that is genuinely out of reach, not cover for a number set at
-#: the floor. It now sits with those siblings. What that costs is one sleep,
+#: At 1.3s it did not: this bound was the tightest of the three, five times
+#: tighter than the query command's `FILED_QUERY_TIMEOUT` of 6.5 and about
+#: half the item command's `ITEM_UPDATE_TIMEOUT` of 2.7, and on story-130's
+#: run a loaded machine took two of those sites past it — the landing half
+#: reporting inconclusive is the escape for a precondition that is genuinely
+#: out of reach, not cover for a number set at the floor. It now sits among
+#: those siblings rather than below both. What that costs is one sleep,
 #: since `SLEEPS_PAST_THE_BOUND` has to stay above it and exactly one test
 #: asks for that sleep.
 #:
