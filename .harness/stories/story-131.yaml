@@ -1,0 +1,168 @@
+story:
+  id: story-131
+  title: A filed query answers for a scope of any size an inspection hands it
+  description: |
+    The tracker tier of the inspector's dedupe has never run. Every post-story
+    inspection from story-101 to story-130 reports "dedupe did not run" in its
+    run's events.log, because the query branch of the tracker script searches
+    once per path in a sequential loop: measured against this repository's
+    tracker one search costs roughly 0.85 seconds, story-130's post-story
+    inspection carried a scope of 60 files, and the query is held to the
+    30-second default at orchestration/filed_query.py. The command is killed
+    partway through and never answers, so Report.dedupe_ran is false. The
+    second tier still works — the inspection unions the tracker's answer with a
+    local index of what this machine filed — so what has never functioned is
+    the tier that would catch a brief filed from another checkout, another
+    developer or the tracker's web UI, which is the tier the whole per-path
+    marker scheme exists to serve.
+
+    This story stops the number of searches being proportional to the scope
+    rather than raising the bound: the query branch batches several path
+    markers into one search. Measured against this repository's tracker before
+    this story was planned, one search carrying 20 quoted markers OR'd together
+    answers in about 1.0 seconds where 5 markers cost 0.83 and 10 cost 0.90, so
+    the cost is nearly flat in batch size and a 60-file scope becomes three
+    searches rather than sixty. The bound stays where it is and the scope handed
+    to the query is not capped, because capping it would mean inventing a
+    partial answer and Answer.answered means the whole question was answered.
+
+    Batching introduces one hazard the per-path loop does not have. Each search
+    is capped at LIMIT results; with one path per search that cap is per path,
+    but with many paths per search a filled page could be many paths' worth of
+    issues truncated, and a truncated page read as complete is a duplicate
+    filed. So a batch whose page fills to the limit, and a batch whose search
+    fails, are both re-asked path by path — which also keeps the change safe on
+    a tracker whose query length limit is tighter than this one's.
+
+    The story also makes a failed dedupe visible as a failure. Today it is a
+    trailing clause on the inspection's summary line and nothing else, which is
+    how it stayed true for thirty stories without being read as the standing
+    failure it is. It gets its own line in the run's events.log and a
+    dedupe_ran field on the durable inspection record, so which runs inspected
+    without dedupe is a question one read of a tracked file answers.
+
+    Planned from the brief filed under 208.
+  workflow: story-workflow
+
+tasks:
+  - Batch the query branch's tracker searches in templates/scripts/github.sh - build batches of path markers bounded by a declared constant, search once per batch, and union the pages through the composition that already deduplicates by URL.
+  - Give a batch that could not be trusted a path-by-path fallback - a search that failed and a page that filled to LIMIT are both re-asked one path at a time, and a per-path search that fails still fails the whole answer.
+  - Update the query contract comment at the head of templates/scripts/github.sh so a target writing its own command is told that one search per path does not scale, and what the batching and its fallback guarantee.
+  - Carry the same query-branch change into this repository's installed .harness/scripts/github.sh without disturbing the board constants that copy is configured with.
+  - Adapt the stub gh in tests/test_filed_query.py so it answers a batched search, since it matches a search by plain substring today and every existing query-branch test goes red the moment the script batches.
+  - Give a failed dedupe its own line in the run's events.log rather than only a trailing clause on the inspection's summary line.
+  - Record whether dedupe ran on the durable inspection record - a dedupe_ran field on each line of .harness/history/inspection-log.jsonl, declared in schemas/cross-run-history.schema.json and written by both inspection modes.
+  - Add the standing tests for the batching, its two fallbacks, and the new visibility.
+  - Document the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - The query branch of templates/scripts/github.sh makes fewer searches than the number of paths it was asked about - a question carrying more paths than the declared batch size makes ceil(paths / batch size) searches, and a test drives the script against the stub gh and counts them.
+  - The items the batched query answers with are the same items the per-path loop answered with for the same tracker state - same keys, same titles, same per-item paths attribution, and no item reported twice.
+  - A batch whose search fails is re-asked path by path, and where every one of those answers the whole query still answers - a test makes the stub fail a batched search and succeed on single-path searches, and the script exits 0 with the items found.
+  - A per-path search that fails after the fallback fails the whole answer - the script exits non-zero and says which path, so what is filed is reported as not known rather than as nothing filed.
+  - A batch whose page fills to LIMIT is re-asked path by path rather than being read as the whole answer - a test seeds the stub with more matching issues than LIMIT for one batch and asserts the per-path searches were made.
+  - The query branch is asked about a 60-path scope and answers inside the default 30-second bound against the stub, so the failure this story exists against cannot recur silently.
+  - The installed .harness/scripts/github.sh carries the same batching as templates/scripts/github.sh, and a test reports the two having drifted apart on the query branch while leaving each copy its own configured board constants.
+  - An inspection whose filed query could not answer appends its own line to the run's events.log naming the scope and the reason, in addition to whatever the summary line says.
+  - Every line .harness/history/inspection-log.jsonl carries a dedupe_ran boolean, written by both the narrow and the broad inspection mode, and schemas/cross-run-history.schema.json declares it with what it means.
+  - The whole test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - In templates/scripts/github.sh, declare the batch size beside LIMIT in the query job's own constants block, read from the environment the way LIMIT is, and say in its comment why it exists and what bounds it.
+    - Replace the one-search-per-path loop in do_query with a loop over batches - each batch's search text is its markers quoted and joined with OR - keeping the existing jq composition, which already unions pages, deduplicates by URL and attributes per-item paths from the asked list.
+    - Add the fallback - a batched search that exits non-zero, and one whose page holds LIMIT items, both re-ask that batch's paths one at a time. A per-path search that fails is still the failure the whole answer takes, which is the behaviour the query contract already states.
+    - Update the query contract comment at the head of the file - what the batching buys, what the fallback guarantees, and that a target writing its own command must not make its searches proportional to the scope.
+    - Port the query-branch change into .harness/scripts/github.sh, leaving that copy's board constants exactly as they are.
+    - Teach the stub gh in tests/test_filed_query.py to parse a search of quoted terms joined by OR and match an issue whose body contains any of them, so the existing query-branch tests describe the script as it now behaves.
+    - In orchestration/story_inspection.py, append a second event line for a scope whose dedupe did not run, naming the scope and the reason, beside the summary line rather than instead of it.
+    - Carry dedupe_ran through the shared append into the inspection record, from both orchestration/inspection.py's broad mode and orchestration/story_inspection.py's narrow one, and declare the field in schemas/cross-run-history.schema.json.
+    - Have scripts/l5-inspect report a failed dedupe as the failure it is rather than as one line among the per-scope lines.
+    - Add the standing test module for the batching, the two fallbacks, the template-and-installed-copy agreement, and the new record field.
+    - Add the ARCHITECTURE.md section for the change.
+  likely_file_changes:
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: The query branch's per-path loop becomes a batched loop with a path-by-path fallback, and the query contract comment at the head of the file states what a target writing its own command must satisfy.
+    - file: .harness/scripts/github.sh
+      stage: implementer
+      reason: This repository's installed copy is what its own runs ask, so the batching has to reach it or the failure this story exists against continues here. Its configured board constants are left as they are.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: A failed dedupe gets its own events.log line beside the summary line, and the record the narrow mode appends carries dedupe_ran.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: The broad mode's record carries dedupe_ran on the same terms, so one read of the log answers for both modes.
+    - file: orchestration/filed_query.py
+      stage: implementer
+      reason: The module docstring says why the question stays one question and one bound - the scaling is the answering command's business, not a bound the harness raises. No behaviour, bound or answer semantics here changes.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declares dedupe_ran on the inspection-log record with what it means and why an absent tracker answer is not an empty one.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: Reports a failed dedupe as a failure of the inspection rather than as one line among the per-scope lines.
+    - file: tests/test_filed_query.py
+      stage: implementer
+      reverting_breaks_the_suite: The stub gh in this module matches a search by plain substring against an issue body, so it cannot answer the batched search the query branch now makes. Every existing query-branch test in this file goes red until the stub parses the OR'd form, which makes this a test adaptation forced by the script change in the same story - reverting it leaves the suite red.
+      reason: The stub gh learns to answer a search of quoted terms joined by OR, so the existing query-branch tests describe the script as it now behaves.
+    - file: tests/test_a_filed_query_scales_with_its_scope.py
+      stage: tester
+      reason: The standing module holding the batching to its properties - fewer searches than paths, the same items as the per-path loop, the failed-batch fallback, the filled-page fallback, a 60-path scope answered inside the default bound, and the two copies of the script agreeing on the query branch.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: A run whose dedupe did not run appends its own events.log line and records dedupe_ran on the inspection log.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section for this change - why batching rather than a raised bound or a capped scope, what the fallback guarantees, and that a failed dedupe is now a durable, queryable fact.
+
+scope:
+  modify:
+    - templates/scripts/github.sh
+    - .harness/scripts/github.sh
+    - orchestration/story_inspection.py
+    - orchestration/inspection.py
+    - orchestration/filed_query.py
+    - schemas/cross-run-history.schema.json
+    - scripts/l5-inspect
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/outbox.py
+    - orchestration/brief_filing.py
+    - .harness/config.yaml
+    - prompts/
+    - workflows/
+    - schemas/filed-items.schema.json
+    - schemas/harness-config.schema.json
+
+verification_requirements:
+  - Confirm the query branch makes fewer searches than the paths it was asked about, by counting the searches the stub gh recorded for a question carrying more paths than the batch size.
+  - Confirm the batched answer carries the same items, the same keys and the same per-item path attribution the per-path loop carried for the same tracker state, with no item reported twice.
+  - Confirm a batched search that failed is re-asked path by path, and that a per-path search failing after that still fails the whole answer with a non-zero exit naming the path.
+  - Confirm a batch whose page filled to LIMIT is re-asked path by path rather than read as the whole answer.
+  - Confirm a 60-path question is answered inside the default 30-second bound against the stub.
+  - Confirm templates/scripts/github.sh and .harness/scripts/github.sh carry the same query branch, and that a test reports them having drifted.
+  - Confirm the sync and item branches of both copies of the script are unchanged.
+  - Confirm an inspection whose filed query could not answer appends its own events.log line naming the scope and the reason, and that the summary line still says what it said.
+  - Confirm dedupe_ran is written on the inspection record by both modes and is declared in schemas/cross-run-history.schema.json.
+  - Confirm the whole test suite passes.
+
+constraints:
+  - The local index tier is not what failed and is not touched - no change to how the union of the tracker's answer and the local index decides a drop, and no change to which source a drop names.
+  - Nothing in orchestration/filed_query.py changes what an answer means - Answer.answered stays a statement about the whole question, the default timeout stays where it is, and no partial or per-path answer is invented.
+  - The scope the query is handed is not capped, and how a post-story inspection chooses or trims its scope is not this story's subject - inspect_after_story_max_files, expansion and cap_paths keep the behaviour they have.
+  - The sync and item branches of the tracker script make no per-path search and are left alone, in both copies.
+  - The marker the sync branch writes and the marker the query branch searches for stay one declaration, so the pair cannot drift.
+  - A failed dedupe still costs dedupe and costs nothing else - the findings are filed anyway, no run is blocked, delayed, refused or failed by it, and the post-story inspection stays total.
+  - The harness infers no tracker policy - which items to report stays the answering command's decision, and no exit code from the query branch is read as a retry.
+  - .harness/scripts/github.sh keeps the board constants it is configured with; only the query branch's search loop and its comments change there.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-09 21:38:54
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 208
