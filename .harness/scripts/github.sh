@@ -321,8 +321,8 @@ CATEGORY_LABEL_COLOR="ededed"
 # board saying "In Progress", "Doing" or "En cours" is a configuration rather
 # than an edit to the logic above it.
 PLANNED_OPTION="${L5_ITEM_PLANNED_OPTION:-Planned}"
-IN_PROGRESS_OPTION="${L5_ITEM_IN_PROGRESS_OPTION:-In progress}"
-READY_TO_MERGE_OPTION="${L5_ITEM_READY_TO_MERGE_OPTION:-Ready to merge}"
+IN_PROGRESS_OPTION="${L5_ITEM_IN_PROGRESS_OPTION:-In Progress}"
+READY_TO_MERGE_OPTION="${L5_ITEM_READY_TO_MERGE_OPTION:-Ready to Merge}"
 
 # --- what only the query job uses. Edit these. ---------------------------
 # How many items one path's search may return. The harness bounds what it will
