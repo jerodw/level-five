@@ -61,15 +61,17 @@ architecture_docs:
   - .harness/docs/ARCHITECTURE.md
 test_command: .venv/bin/python -m pytest tests/ -q -n auto
 # How this repository files an outbox entry: the reference implementation it
-# ships, installed into .harness/sync/ by l5-init and wired up here, so the
+# ships, installed into .harness/scripts/ by l5-init and wired up here, so the
 # script the harness hands to every target is the script this repository is
 # itself exercised by. The harness invokes it once per entry and knows nothing
 # else about the tracker — the entry on stdin, the key in L5_SYNC_KEY, the
 # reference as the last non-empty line of stdout, and an exit code saying
 # landed (0), retry (75) or stop (anything else). The command is idempotent
 # given the key, which is what makes a lost response safe to retry, and it
-# does not commit. Read .harness/sync/github.sh for the whole contract.
-sync_command: .harness/sync/github.sh
+# does not commit. One file answers all three of this target's tracker
+# commands, dispatching on its first argument; read .harness/scripts/github.sh
+# for the whole contract.
+sync_command: .harness/scripts/github.sh sync
 # The other half of that pair: how this repository asks what it has already
 # filed. Without it an inspection can only report that dedupe did not run, and
 # then refile everything it found last time — which is what both post-story
@@ -80,8 +82,9 @@ sync_command: .harness/sync/github.sh
 # A failure here costs dedupe and blocks no run: the harness reads it as
 # knowing nothing rather than as nothing being filed, says so, and files
 # anyway. It is the sync command's pair and must agree with it about the two
-# markers, which is a contract the harness requires and cannot enforce.
-filed_query_command: .harness/query/github.sh
+# markers, which is a contract the harness requires and cannot enforce — and
+# which is now kept by their being one file with one declaration of each.
+filed_query_command: .harness/scripts/github.sh query
 # The third member of that family: how this repository publishes a planned
 # story onto the item it was planned from. Without it the tracker item a
 # developer has been watching still shows the brief and nothing about the plan
@@ -95,10 +98,11 @@ filed_query_command: .harness/query/github.sh
 # stdin, the key in L5_ITEM_KEY, stdout unread, and an exit code saying
 # published (0) or not (anything else, none of which means retry, because
 # nothing retries). A publish that fails prints one line and changes no exit
-# status. It is installed by l5-init beside the sync and query commands, and
-# it must not disturb the markers those two depend on. Read
-# .harness/item/github.sh for the whole contract.
-item_update_command: .harness/item/github.sh
+# status. It is installed by l5-init as the same file the sync and query
+# commands are, reached by its own argument, and it must not disturb the
+# markers those two depend on. Read
+# .harness/scripts/github.sh for the whole contract.
+item_update_command: .harness/scripts/github.sh item
 # How long that command may run before it is killed, in seconds. The kill
 # reaches its process group, so a command that spawned children of its own
 # leaves none behind, and the entry is left pending rather than failed —

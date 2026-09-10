@@ -217,13 +217,26 @@ MANDATE_DEPTH = 0
 #: harness that stopped reading the key fails the killed half in seconds
 #: rather than after a minute of waiting.
 #:
-#: The bound is small enough that a busy machine can take a shell past it with
-#: no sleep at all. That is why the three halves are three tests: the number
-#: the transport was built with and the kill past it are decided without any
-#: race, and only the landing half depends on the machine — which reports
-#: inconclusive rather than failing, and takes neither of the others with it.
-SYNC_TIMEOUT = 1.3
-SLEEPS_PAST_THE_BOUND = 4
+#: The bound has to leave room for a shell to be spawned, because every site
+#: that observes a command *landing* needs one started and finished inside it.
+#: At 1.3s it did not: this bound was the tightest of the three, five times
+#: tighter than the query command's `FILED_QUERY_TIMEOUT` of 6.5 and about
+#: half the item command's `ITEM_UPDATE_TIMEOUT` of 2.7, and on story-130's
+#: run a loaded machine took two of those sites past it — the landing half
+#: reporting inconclusive is the escape for a precondition that is genuinely
+#: out of reach, not cover for a number set at the floor. It now sits among
+#: those siblings rather than below both. What that costs is one sleep,
+#: since `SLEEPS_PAST_THE_BOUND` has to stay above it and exactly one test
+#: asks for that sleep.
+#:
+#: The three halves are still three tests, because the bound cannot be raised
+#: far enough to make a wall-clock claim safe and raising it that far is not
+#: what would make it safe: the number the transport was built with and the
+#: kill past it are decided without any race, and only the landing half
+#: depends on the machine — which reports inconclusive rather than failing,
+#: and takes neither of the others with it.
+SYNC_TIMEOUT = 5.3
+SLEEPS_PAST_THE_BOUND = 12
 
 #: The default the fallback comparison and the ordering above are stated
 #: against, read off the transport rather than written here.

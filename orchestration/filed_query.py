@@ -42,8 +42,8 @@ whole. A bound whose effect is not stated reads as a tracker with nothing in it.
 **Whether a closed item suppresses a refiling is the answering command's
 policy.** The harness must not encode it, must not infer it, and must not add a
 field that would let it start; see `schemas/filed-items.schema.json`, where a
-reader meets the rule, and `templates/query/github.sh`, where a script author
-does.
+reader meets the rule, and the query branch of `templates/scripts/github.sh`,
+where a script author does.
 """
 from __future__ import annotations
 

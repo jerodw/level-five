@@ -71,7 +71,10 @@ import story_coordinator
 from test_filed_query import (  # noqa: F401 - shared idioms and fixtures
     FAIL_VARIABLE,
     INTERPRETER,
+    PROJECT_CONSTANT,
+    PROJECT_OWNER_CONSTANT,
     REPO_ROOT,
+    STATUS_FIELD_CONSTANT,
     THIS_TARGETS_PROJECT,
     THIS_TARGETS_PROJECT_OWNER,
     THIS_TARGETS_STATUS_FIELD,
@@ -92,6 +95,7 @@ from test_plan_commit import (  # noqa: F401 - shared idioms
 from test_plan_from_a_brief import KEY  # noqa: F401 - the key --brief is given
 from test_a_planned_story_is_published_onto_its_item import (  # noqa: F401
     COMMAND_KEY,
+    ITEM_JOB_ARGUMENTS,
     TEMPLATE_ITEM,
     an_item_already_filed,
     sync_markers,
@@ -1178,10 +1182,10 @@ def test_a_status_that_could_not_be_sent_fails_no_run(tmp_path, harness_root,
 #: value is a configuration and what each token means, and a test that wrote
 #: those names down would stop testing that.
 ENVIRONMENT_ASSIGNMENT = re.compile(
-    r'^(?P<constant>[A-Z_]+)="\$\{(?P<variable>[A-Z_0-9]+):-(?P<default>[^}]*)\}"',
+    r'^(?P<constant>[A-Z_0-9]+)="\$\{(?P<variable>[A-Z_0-9]+):-(?P<default>[^}]*)\}"',
     re.MULTILINE)
 TOKEN_CASE = re.compile(
-    r'^[ \t]*(?P<token>[a-z_]+)\)[ \t]*option="\$(?P<constant>[A-Z_]+)"',
+    r'^[ \t]*(?P<token>[a-z_]+)\)[ \t]*option="\$(?P<constant>[A-Z_0-9]+)"',
     re.MULTILINE)
 
 
@@ -1243,9 +1247,9 @@ def board_environment(ledger: Path) -> tuple[dict, dict]:
     constants, tokens = script_configuration()
     options = dict(zip(TOKENS, board_status_options(ledger)))
     environment = {
-        constants["PROJECT"]: THIS_TARGETS_PROJECT,
-        constants["PROJECT_OWNER"]: THIS_TARGETS_PROJECT_OWNER,
-        constants["STATUS_FIELD"]: THIS_TARGETS_STATUS_FIELD,
+        constants[PROJECT_CONSTANT]: THIS_TARGETS_PROJECT,
+        constants[PROJECT_OWNER_CONSTANT]: THIS_TARGETS_PROJECT_OWNER,
+        constants[STATUS_FIELD_CONSTANT]: THIS_TARGETS_STATUS_FIELD,
     }
     for token, variable in tokens.items():
         environment[variable] = options[token]
@@ -1270,7 +1274,7 @@ def ask_the_reference_script(tmp_path: Path, environment: dict, *, key: str,
     if status is not None:
         question["status"] = status
     return subprocess.run(
-        [INTERPRETER, str(TEMPLATE_ITEM)],
+        [INTERPRETER, str(TEMPLATE_ITEM), *ITEM_JOB_ARGUMENTS],
         input=json.dumps(question), capture_output=True, text=True, timeout=60,
         cwd=tmp_path,
         env={**environment, **(extra or {}), KEY_VARIABLE: key})

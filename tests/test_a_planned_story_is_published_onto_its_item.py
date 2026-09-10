@@ -17,7 +17,8 @@ three altitudes:
     its environment, what is read back from it and what every way of failing
     comes back as are observations at the command rather than of the source.
 
-  * **the reference implementation** — `templates/item/github.sh` — run as it
+  * **the reference implementation** — the item branch of
+    `templates/scripts/github.sh` — run as it
     ships against the stub `gh` `tests/test_filed_query.py` wrote, over an item
     that the reference *sync* script filed. So "a second publish replaces the
     first" and "the markers the other two scripts depend on survive" are facts
@@ -56,6 +57,7 @@ import json
 import os
 import re
 import subprocess
+import shlex
 import time
 from pathlib import Path
 
@@ -70,12 +72,24 @@ import story_coordinator
 from test_filed_query import (  # noqa: F401 - shared idioms and fixtures
     INTERPRETER,
     LEDGER_VARIABLE,
-    QUERY_DIR,
+    QUERY_JOB,
     REPO_ROOT,
-    SYNC_DIR,
+    SYNC_JOB,
     TEMPLATES,
     asked,
+    A_COLUMN_A_HUMAN_MOVED_IT_TO,
+    PROJECT_CONSTANT,
+    STATUS_FIELD_CONSTANT,
+    TEMPLATE_CONSTANTS,
+    THIS_TARGETS_PROJECT,
+    THIS_TARGETS_STATUS_FIELD,
+    board_environment_for,
+    board_items,
     bodies,
+    branch_source,
+    differences_that_are_not_constant_values,
+    in_a_case_the_board_does_not_use,
+    sync_constants,
     file_through_the_reference_sync,
     fixture_command,
     fixture_file,
@@ -123,10 +137,14 @@ ERROR_TAIL_LENGTH = item_update.ERROR_TAIL_LENGTH
 #: the sub-directory and the template it was installed from. Read off this
 #: repository's configuration rather than written here, so the assertions below
 #: are about the copy this repository actually runs.
-INSTALLED_ITEM = REPO_ROOT / str(
-    harness_config.load_config(REPO_ROOT)[COMMAND_KEY])
-ITEM_DIR = INSTALLED_ITEM.parent.name
-TEMPLATE_ITEM = TEMPLATES / ITEM_DIR / INSTALLED_ITEM.name
+#: A configured command is split into words before it is run, so the first
+#: word is the path and the rest are the command's own arguments — which since
+#: story-130 is the job this one file is being asked for.
+CONFIGURED_ITEM = shlex.split(harness_config.load_config(REPO_ROOT)[COMMAND_KEY])
+INSTALLED_ITEM = REPO_ROOT / CONFIGURED_ITEM[0]
+ITEM_JOB_ARGUMENTS = CONFIGURED_ITEM[1:]
+SCRIPTS_DIR = INSTALLED_ITEM.parent.name
+TEMPLATE_ITEM = TEMPLATES / SCRIPTS_DIR / INSTALLED_ITEM.name
 
 #: The story a publish is about, and the artifact it publishes. The artifact is
 #: prose this module composed rather than a story read from anywhere: what the
@@ -755,9 +773,11 @@ def test_the_scan_reports_a_module_that_did_reach_the_queue(module, tmp_path):
 BEGIN_ASSIGNMENT = re.compile(r'^[ \t]*begin="(?P<marker>.*)"$', re.MULTILINE)
 END_ASSIGNMENT = re.compile(r'^[ \t]*end="(?P<marker>.*)"$', re.MULTILINE)
 
-#: How the sync script's own markers are spelled. Every marker constant it
-#: declares, whatever it is called, so a marker added to that script is one
-#: this module requires a publish to leave alone without being edited.
+#: How the sync branch's own markers are spelled. Every marker constant the
+#: file declares, whatever it is called, so a marker added to it is one this
+#: module requires a publish to leave alone without being edited. Since the
+#: three jobs became one file those constants are declared once at the top of
+#: it, above every branch, which is what makes reading them one read.
 MARKER_CONSTANT = re.compile(
     r'^(?P<name>[A-Z_]*MARKER[A-Z_]*)="(?P<value>[^"]*)"$', re.MULTILINE)
 
@@ -775,11 +795,11 @@ def story_markers(story_id: str) -> tuple[str, str]:
 
 
 def sync_markers() -> list[str]:
-    """Every marker the reference sync script writes into a body."""
-    text = (TEMPLATES / SYNC_DIR / "github.sh").read_text(encoding="utf-8")
+    """Every marker the reference sync branch writes into a body."""
+    text = TEMPLATE_ITEM.read_text(encoding="utf-8")
     found = [match.group("value")
              for match in MARKER_CONSTANT.finditer(text)]
-    assert found, "the sync script declares no marker constant"
+    assert found, "the script declares no marker constant"
     return found
 
 
@@ -800,7 +820,7 @@ def publish_through_the_reference_script(
     """One invocation of the shipped item command, whatever it exits."""
     question = {"key": key, "story_id": story_id, "document": document}
     return subprocess.run(
-        [INTERPRETER, str(script or TEMPLATE_ITEM)],
+        [INTERPRETER, str(script or TEMPLATE_ITEM), *ITEM_JOB_ARGUMENTS],
         input=json.dumps(question), capture_output=True, text=True, timeout=60,
         cwd=tmp_path,
         env={**environment, KEY_VARIABLE: key})
@@ -946,9 +966,9 @@ def test_the_query_script_still_finds_an_item_that_was_published_onto(
     os.environ.update({name: environment[name]
                        for name in ("PATH", LEDGER_VARIABLE)})
     try:
-        answer = asked(reference_script(QUERY_DIR), tmp_path,
+        answer = asked(reference_script(QUERY_JOB), tmp_path,
                        paths=("src/parser.py",))
-        unrelated = asked(reference_script(QUERY_DIR), tmp_path,
+        unrelated = asked(reference_script(QUERY_JOB), tmp_path,
                           paths=("src/nothing-is-filed-against-this.py",))
     finally:
         os.environ.clear()
@@ -984,17 +1004,18 @@ def test_a_publish_onto_an_item_that_cannot_be_read_publishes_nothing(
 
 
 def test_a_freshly_initialized_target_carries_the_item_command(initialized):
-    """Installed beside the sync and query commands, executable, because the
-    harness launches it as a command rather than reading it.
+    """Installed as the same file the sync and query commands are, executable,
+    because the harness launches it as a command rather than reading it.
 
     A target that got the other two without this one would have filing and
-    dedupe with no way to publish what was planned from what they filed.
+    dedupe with no way to publish what was planned from what they filed, and
+    one file answering all three is what makes that state unreachable.
     """
-    templates = sorted((TEMPLATES / ITEM_DIR).glob("*.sh"))
-    assert templates, "the harness ships no reference item command"
+    templates = sorted((TEMPLATES / SCRIPTS_DIR).glob("*.sh"))
+    assert templates, "the harness ships no reference tracker command"
 
-    installed = initialized / ".harness" / ITEM_DIR
-    assert installed.is_dir(), ITEM_DIR
+    installed = initialized / ".harness" / SCRIPTS_DIR
+    assert installed.is_dir(), SCRIPTS_DIR
     assert sorted(path.name for path in installed.iterdir()) == \
         [path.name for path in templates]
     for template in templates:
@@ -1019,10 +1040,42 @@ def test_a_freshly_initialized_target_publishes_nothing_until_it_says_to(
 
 def test_this_repository_runs_the_copy_it_ships():
     """The reference implementation is exercised by the repository that ships
-    it, which is what stops the template being a file nobody ever runs."""
+    it, which is what stops the template being a file nobody ever runs.
+
+    Byte identity is deliberately no longer what is asserted. There is no
+    separate item script now: the file this repository publishes through is the
+    one it files through, and that one carries the project this deployment
+    files against — which is exactly what a template must not carry. So what is
+    asserted is the shape of the difference, the comparison the sync half
+    already made: every line the two do not share is one of the editable
+    constant assignments at the top.
+    """
     assert INSTALLED_ITEM.is_file()
-    assert INSTALLED_ITEM.read_bytes() == TEMPLATE_ITEM.read_bytes()
     assert os.access(INSTALLED_ITEM, os.X_OK)
+
+    template = TEMPLATE_ITEM.read_text(encoding="utf-8")
+    installed = INSTALLED_ITEM.read_text(encoding="utf-8")
+    assert installed != template, \
+        "the installed copy sets no value of its own, so it publishes nowhere"
+    assert differences_that_are_not_constant_values(template, installed) == []
+
+
+def test_that_comparison_reports_a_difference_that_is_not_a_constant():
+    """The control: the same predicate over a copy of the template whose
+    difference is a line of mechanics rather than a value.
+
+    Rendered here rather than written to the tree, so the control is about the
+    comparison and not about this repository. Without it, "every difference is
+    a constant" would be satisfied just as happily by a comparison that had
+    stopped seeing differences at all.
+    """
+    template = TEMPLATE_ITEM.read_text(encoding="utf-8")
+    tampered = template.replace("READY_TO_MERGE_OPTION", "READY_TO_SHIP_OPTION")
+    assert tampered != template
+
+    reported = differences_that_are_not_constant_values(template, tampered)
+    assert reported, "the comparison sees no difference it should report"
+    assert any("READY_TO_SHIP_OPTION" in line for line in reported), reported
 
 
 # ==========================================================================
@@ -1413,3 +1466,119 @@ def test_the_line_a_successful_publish_prints_says_what_it_is(
     assert len(lines) == 1, output
     assert KEY in lines[0]
     assert re.search(r"(?i)copy", lines[0]), lines[0]
+
+
+# ==========================================================================
+# 12. What the merge made newly checkable
+#
+# The item branch resolves a field name through the rule the sync branch
+# resolves one through, because there is one rule and one file. Until they were
+# merged the item script compared a configured field name against the board's
+# verbatim, so a board titled `Status` and a target configuring `status` were
+# the same field for one command and different fields for the other.
+# ==========================================================================
+
+
+def move_through_the_reference_script(
+        tmp_path: Path, environment: dict, *, key: str, story_id: str,
+        status: str, script: Path | None = None,
+        extra: dict | None = None) -> subprocess.CompletedProcess:
+    """One invocation asking the item branch for a status and no document.
+
+    A status arriving alone rewrites no body, which is what the two run-time
+    moments send, so this is the invocation the board claims are about.
+    """
+    question = {"key": key, "story_id": story_id, "status": status}
+    target = script or TEMPLATE_ITEM
+    return subprocess.run(
+        [INTERPRETER, str(target), *ITEM_JOB_ARGUMENTS],
+        input=json.dumps(question), capture_output=True, text=True, timeout=60,
+        cwd=tmp_path,
+        env={**environment, **board_environment_for(target), **(extra or {}),
+             KEY_VARIABLE: key})
+
+
+@needs_jq
+def test_the_item_branch_resolves_a_field_name_the_board_spells_differently(
+        tmp_path):
+    """A target configuring `status` against a board titled `Status` moves.
+
+    This is the regression the merge removes. story-129 made a field name match
+    case-insensitively and changed the sync script; the item script, landed by
+    story-127, went on comparing verbatim, so the same board and the same
+    configuration disagreed depending on which command was asking — a filing
+    landed in its column and every status move the harness asked for reported a
+    failure. One rule in one file is what makes the name the sync branch
+    resolves a name the item branch resolves.
+
+    The board keeps the field name it is seeded with and only the configured
+    name is spelled differently, so what resolves the field can only be the
+    comparison rather than a board rewritten to suit it. The control is below.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    item = an_item_already_filed(tmp_path, environment)
+    named = {TEMPLATE_CONSTANTS[STATUS_FIELD_CONSTANT][0]:
+             in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_FIELD)}
+
+    result = move_through_the_reference_script(
+        tmp_path, environment, key=item, story_id=STORY,
+        status=item_update.IN_PROGRESS, extra=named)
+
+    assert result.returncode == 0, result.stderr
+    assert board_items(ledger)[0]["status"] == A_COLUMN_A_HUMAN_MOVED_IT_TO
+
+
+@needs_jq
+def test_that_same_move_fails_where_the_field_name_is_matched_verbatim(
+        tmp_path):
+    """The control: the item branch as story-127 left it, comparing verbatim.
+
+    Rendered here rather than recovered out of history, so what is shown is the
+    comparison rather than a file that has since been deleted: the shared rule
+    is replaced by an equality against the board's own name, which is what the
+    item script carried, and the same drive must then report a field the
+    project does not have and move nothing.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    item = an_item_already_filed(tmp_path, environment)
+
+    verbatim = tmp_path / "matches-verbatim.sh"
+    verbatim.write_text(
+        TEMPLATE_ITEM.read_text(encoding="utf-8").replace(
+            "select(same_field_name(.name; $name))", "select(.name == $name)"),
+        encoding="utf-8")
+
+    named = {TEMPLATE_CONSTANTS[STATUS_FIELD_CONSTANT][0]:
+             in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_FIELD)}
+    result = move_through_the_reference_script(
+        tmp_path, environment, key=item, story_id=STORY,
+        status=item_update.IN_PROGRESS, script=verbatim, extra=named)
+
+    assert result.returncode != 0
+    assert "no field named" in result.stderr
+    # Nothing was moved: the board reports the column the passing case above
+    # reaches for no item at all.
+    assert [one for one in board_items(ledger)
+            if one.get("status") == A_COLUMN_A_HUMAN_MOVED_IT_TO] == []
+
+
+def test_this_repositorys_installed_copy_names_a_project_for_the_item_branch():
+    """A shipped artifact and the subject: this deployment's own wiring.
+
+    Pointing this deployment at project 1 was done by editing the sync script's
+    installed copy; the item script needed the same value, had no copy of it,
+    and so reported a failure for every status move it was asked to make. One
+    project constant serving all three branches is what makes that value reach
+    the item branch, and it is the behaviour change the merge produced rather
+    than the object of it.
+    """
+    installed = INSTALLED_ITEM.read_text(encoding="utf-8")
+    declared = sync_constants(installed)
+
+    assert declared[PROJECT_CONSTANT][1] == THIS_TARGETS_PROJECT
+    # One assignment, so the value the item branch reads and the value the sync
+    # branch reads cannot be two values.
+    assert len([line for line in installed.splitlines()
+                if line.startswith(PROJECT_CONSTANT + "=")]) == 1
+    for job in ("do_sync", "do_item"):
+        assert PROJECT_CONSTANT in branch_source(installed, job), job
