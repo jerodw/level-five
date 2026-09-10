@@ -350,7 +350,7 @@ CATEGORY_LABEL_COLOR="ededed"
 # than an edit to the logic above it.
 PLANNED_OPTION="${L5_ITEM_PLANNED_OPTION:-Planned}"
 IN_PROGRESS_OPTION="${L5_ITEM_IN_PROGRESS_OPTION:-In Progress}"
-READY_TO_MERGE_OPTION="${L5_ITEM_READY_TO_MERGE_OPTION:-Ready to Merge}"
+READY_TO_MERGE_OPTION="${L5_ITEM_READY_TO_MERGE_OPTION:-Implementation Complete}"
 
 # --- what only the query job uses. Edit these. ---------------------------
 # How many items one search may return. The harness bounds what it will
