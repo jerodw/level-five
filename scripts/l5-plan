@@ -972,9 +972,13 @@ def publish(
             continue
         # The first of the three moments rides on the invocation that already
         # publishes the projection rather than being a second one: one item
-        # edit happens where one happened before. The cost is stated and
-        # accepted — a publish that fails moves no status either, and the
-        # developer sees one failure line rather than two.
+        # edit happens where one happened before. The cost that arrangement
+        # turned out to have runs the other way from the one first recorded
+        # here: it is not that a failed publish moves no status, it is that a
+        # status half that cannot be honoured decides the whole invocation. So
+        # the command publishes the document first and a status it cannot
+        # honour leaves the projection on the item and then exits non-zero,
+        # and the developer sees one line covering both halves rather than two.
         published = item_update.publish(
             brief_key,
             story_id,
@@ -985,14 +989,16 @@ def publish(
         )
         if published.published:
             print(
-                f"l5-plan: published {story_id} onto {brief_key} and moved it "
-                f"to {item_update.PLANNED}; the projection is a copy, and the "
-                f"artifact in the repository is what runs."
+                f"l5-plan: published {story_id} onto {brief_key} and told the "
+                f"tracker it is {item_update.PLANNED}; the projection is a "
+                f"copy, and the artifact in the repository is what runs."
             )
         else:
             print(
-                f"l5-plan: did not publish {story_id} onto {brief_key} or move "
-                f"it to {item_update.PLANNED}: {published.reason}. The story is "
+                f"l5-plan: publishing {story_id} onto {brief_key} as "
+                f"{item_update.PLANNED} did not succeed: {published.reason}. "
+                f"Whatever the command did before it stopped stands, so the "
+                f"projection may already be on the item. The story is "
                 f"committed and pushed; nothing about the plan depends on this."
             )
 

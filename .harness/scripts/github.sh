@@ -910,24 +910,6 @@ do_item() {
     fail "the question carried neither a document nor a status; there was nothing to do to ${key}"
   fi
 
-  # --- the status: which column each token names ------------------------
-  # The whole of what this branch knows about a token is which option it names.
-  # An unrecognised one is refused rather than guessed at: writing a column
-  # nobody asked for would be worse than saying the word was not understood.
-  option=""
-  if [ -n "$status" ]; then
-    case "$status" in
-      planned)        option="$PLANNED_OPTION" ;;
-      in_progress)    option="$IN_PROGRESS_OPTION" ;;
-      ready_to_merge) option="$READY_TO_MERGE_OPTION" ;;
-      *) fail "the status ${status} is not one this command knows an option for, so ${key} was not moved" ;;
-    esac
-    [ -n "$option" ] \
-      || fail "this copy names no board option for ${status}, so ${key} was not moved"
-    [ -n "$L5_TRACKER_PROJECT" ] \
-      || fail "no project is configured here, so there is no board to move ${key} to ${option} on"
-  fi
-
   # --- the document: publish the projection -----------------------------
   # Only where one was given. A status arriving alone leaves the item's body
   # exactly as it is, which is what the two run-time moments want: the projection
@@ -968,13 +950,35 @@ do_item() {
       || fail "the item ${key} could not be updated, so ${story_id} was not published onto it"
   fi
 
-  # --- the status: move the item's column -------------------------------
-  # Reached only where a status was given, and the project was established above,
-  # so everything from here is the board work itself. Every way of not reaching
-  # the board — the item, the project, the field or the option — is said on
-  # stderr and exits non-zero: an item that was not moved must not be reported as
-  # one that was.
+  # --- the status: which column each token names ------------------------
+  # The whole of what this branch knows about a token is which option it names.
+  # An unrecognised one is refused rather than guessed at: writing a column
+  # nobody asked for would be worse than saying the word was not understood.
+  #
+  # This runs after the document above rather than before it, so a status that
+  # cannot be honoured leaves the projection on the item and then exits
+  # non-zero, instead of preventing it from ever being published.
+  option=""
   if [ -n "$status" ]; then
+    case "$status" in
+      planned)        option="$PLANNED_OPTION" ;;
+      in_progress)    option="$IN_PROGRESS_OPTION" ;;
+      ready_to_merge) option="$READY_TO_MERGE_OPTION" ;;
+      *) fail "the status ${status} is not one this command knows an option for, so ${key} was not moved" ;;
+    esac
+    [ -n "$option" ] \
+      || fail "this copy names no board option for ${status}, so ${key} was not moved"
+  fi
+
+  # --- the status: move the item's column -------------------------------
+  # Reached only where a status was given and a project is configured. An empty
+  # project is a statement about this target rather than a failure — it declares
+  # no board, so there is nothing here that failed — and the board work is
+  # skipped silently without reaching the tracker, exactly as the sync branch
+  # above skips it. Where there is a board, every way of not reaching it — the
+  # item, the project, the field or the option — is said on stderr and exits
+  # non-zero: an item that was not moved must not be reported as one that was.
+  if [ -n "$status" ] && [ -n "$L5_TRACKER_PROJECT" ]; then
     url="$(gh issue view "$key" --json url --jq '.url // ""' 2>/dev/null)" \
       || fail "the item ${key} could not be read, so it was not moved to ${option}"
     [ -n "$url" ] || fail "the item ${key} named no URL, so it was not moved to ${option}"

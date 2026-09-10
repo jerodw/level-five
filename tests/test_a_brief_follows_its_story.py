@@ -45,6 +45,26 @@ Every absence asserted here carries a demonstration that it can fail:
   * "a second recording changes no byte" sits beside the first recording of the
     same key, which changes several.
 
+story-132 adds to it, in the sections marked with its id: a target that
+configures no board is a target with nothing that failed, so the projection is
+published and the invocation exits zero, and the document half is answered
+before the status half, so a status that cannot be honoured leaves the
+projection on the item and then exits non-zero. Its absences carry the same
+demonstration:
+
+  * "a boardless status reaches no board" sits beside the same question on the
+    same stub with a board configured, which does reach it;
+  * "the success line claims no move" is a check shown reporting the line it
+    replaced, and "the comment states no reversed cost" a check shown reporting
+    the comment it replaced;
+  * "neither description of the contract denies the partial outcome" sits
+    beside a description composed here that denies it, and beside one composed
+    here that states it in words neither shipped text uses.
+
+Every sentence those three are demonstrated against is written in this module
+rather than resolved out of the repository's history, which moves under a
+rebase and is not a property of what the harness says.
+
 Nothing here invokes a model, reaches a network or touches a tracker. Every
 command driven as an item-update command is a file this module wrote, and every
 run goes through a fake agent runner.
@@ -113,6 +133,7 @@ from test_a_planned_story_is_published_onto_its_item import (  # noqa: F401
     questions_asked,
     recording,
     sleeps_forever,
+    story_markers,
     unlaunchable,
 )
 from test_workflow_proposal import (  # noqa: F401 - fixtures used by name
@@ -1369,18 +1390,23 @@ def test_a_board_that_could_not_be_reached_is_said_and_exits_non_zero(
         tmp_path):
     """An item that was not moved must not be reported as one that was.
 
-    Three ways of not reaching it — a board this copy names none of, a token it
-    knows no option for, and a board call the tracker refuses — each said on
-    stderr with a non-zero exit. Their control is the ordinary move above,
-    which exits zero and says nothing.
+    Two ways of not reaching a board that is there — a token this copy knows no
+    option for, and a board call the tracker refuses — each said on stderr with
+    a non-zero exit. Their controls are the ordinary move above, which exits
+    zero and says nothing, and the boardless question below, which also exits
+    zero: a target that declares no board has nothing that failed, so it is not
+    one of the ways, and asserting it here would be asserting that the check
+    cannot tell a refusal from a target with no board to refuse on.
     """
     environment, ledger = stub_tracker(tmp_path)
     item = an_item_already_filed(tmp_path, environment)
     board, _ = board_environment(ledger)
 
+    no_board = ask_the_reference_script(
+        tmp_path, environment, key=item, status=item_update.IN_PROGRESS)
+    assert no_board.returncode == 0, no_board.stderr
+
     ways = {
-        "no board is configured": ask_the_reference_script(
-            tmp_path, environment, key=item, status=item_update.IN_PROGRESS),
         "a token it knows no option for": ask_the_reference_script(
             tmp_path, {**environment, **board}, key=item,
             status="something-nobody-declared"),
@@ -1396,3 +1422,318 @@ def test_a_board_that_could_not_be_reached_is_said_and_exits_non_zero(
     assert board_items(ledger) == [] or all(
         THIS_TARGETS_STATUS_FIELD.lower() not in one
         for one in board_items(ledger))
+
+
+# ==========================================================================
+# 6a. story-132: a target that configures no board, and a status that cannot
+#     be honoured on one that is there
+#
+# The same shipped script, run the same way, over the two questions the item
+# branch used to answer by refusing: one asked of a target that declares no
+# board, and one whose status half cannot be honoured although its document
+# half can. Both are about what the item's body carries afterwards, so what is
+# read is the body rather than the exit code alone.
+# ==========================================================================
+
+
+def published_block(body: str, story_id: str) -> str:
+    """What an item's body carries between one story's own markers.
+
+    Read between the markers rather than searched for anywhere in the body,
+    because "the projection reached the item" is a claim about the block this
+    story owns: a document sitting outside those markers is one a second
+    invocation for the same story would not replace.
+    """
+    begin, end = story_markers(story_id)
+    assert begin in body and end in body, body
+    return body.split(begin, 1)[1].split(end, 1)[0]
+
+
+#: The two ways a status cannot be honoured where a board *is* configured, as
+#: a status to send and what to tell the stub. Both are refusals of the status
+#: half alone: the document half of the same question is answerable, which is
+#: what makes them the cases that say where the projection ends up.
+UNHONOURABLE = {
+    "a token it knows no option for": ("something-nobody-declared", {}),
+    "a board call the tracker refuses": (item_update.IN_PROGRESS,
+                                         {FAIL_VARIABLE: "item-edit"}),
+}
+
+
+@needs_jq
+def test_a_boardless_target_gets_the_projection_and_exits_zero(tmp_path):
+    """The planning moment's question, asked of a target that declares no
+    board: both halves carried, and the half that has somewhere to go arrives.
+
+    An empty project is a statement about the target rather than a failure, so
+    the question is answered rather than refused — and the projection is read
+    out of this story's own block, so an item that had been published onto
+    before would not answer for one that had not.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    item = an_item_already_filed(tmp_path, environment)
+    projected = item_update.projection(STORY, ARTIFACT)
+
+    result = ask_the_reference_script(tmp_path, environment, key=item,
+                                      document=projected,
+                                      status=item_update.PLANNED)
+
+    assert result.returncode == 0, result.stderr
+    assert projected in published_block(bodies(ledger)[0], STORY)
+
+
+@needs_jq
+def test_a_boardless_status_arriving_alone_leaves_the_body_as_it_found_it(
+        tmp_path):
+    """The run-time moments' question on the same target: nothing to publish
+    and no board to move on is a question with nothing left to do, and it is
+    answered rather than refused.
+
+    The markers are asserted onto the body before the invocation, so their
+    presence afterwards is the script leaving the body alone rather than a
+    search that would have found them anywhere, and the whole body is compared
+    rather than the markers alone.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    item = an_item_already_filed(tmp_path, environment)
+
+    before = bodies(ledger)[0]
+    present = [marker for marker in sync_markers() if marker in before]
+    assert present, sync_markers()
+
+    result = ask_the_reference_script(tmp_path, environment, key=item,
+                                      status=item_update.IN_PROGRESS)
+
+    assert result.returncode == 0, result.stderr
+    assert bodies(ledger)[0] == before
+
+
+@needs_jq
+def test_a_boardless_status_reaches_no_board_at_all(tmp_path):
+    """Skipped rather than attempted and forgiven: where no project is
+    configured the board is not called.
+
+    Its control is the same question on the same stub with a board configured,
+    made second and read off the same ledger — which does call it. Without
+    that, a ledger nothing ever wrote to would pass this test.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    item = an_item_already_filed(tmp_path, environment)
+    before = project_calls(ledger)
+
+    result = ask_the_reference_script(tmp_path, environment, key=item,
+                                      status=item_update.IN_PROGRESS)
+
+    assert result.returncode == 0, result.stderr
+    assert project_calls(ledger) == before
+
+    board, _ = board_environment(ledger)
+    configured = ask_the_reference_script(tmp_path, {**environment, **board},
+                                          key=item,
+                                          status=item_update.IN_PROGRESS)
+    assert configured.returncode == 0, configured.stderr
+    assert project_calls(ledger) != before
+
+
+@needs_jq
+@pytest.mark.parametrize("way", list(UNHONOURABLE))
+def test_a_status_that_cannot_be_honoured_leaves_the_projection_behind(
+        way, tmp_path):
+    """The partial outcome, on a board that is there: the document half is
+    answered first, so a status half that cannot be honoured exits non-zero
+    over a projection that is already on the item.
+
+    Its control is the question carrying an honourable status above, which
+    exits zero over the same published block: a failure here is the status
+    half's alone, and the caller that reads it as nothing-happened is the
+    caller this asserts against.
+    """
+    status, extra = UNHONOURABLE[way]
+    environment, ledger = stub_tracker(tmp_path)
+    item = an_item_already_filed(tmp_path, environment)
+    board, _ = board_environment(ledger)
+    projected = item_update.projection(STORY, ARTIFACT)
+
+    result = ask_the_reference_script(tmp_path, {**environment, **board},
+                                      key=item, document=projected,
+                                      status=status, extra=extra)
+
+    assert result.returncode != 0, way
+    assert result.stderr.strip(), way
+    assert projected in published_block(bodies(ledger)[0], STORY)
+
+
+# ==========================================================================
+# 7. story-132: what the harness says about the outcome it now has
+#
+# A partial outcome is a thing a caller can be wrong about, so the two places
+# that describe the contract and the line a developer reads at plan time are
+# the subject here. Every check made of a shipped word is made of a sentence
+# composed in this module first, so what it can report is demonstrated rather
+# than assumed — and every sentence it is demonstrated against is written here
+# rather than resolved out of the history, which would move under a rebase.
+# ==========================================================================
+
+
+#: How a description of this contract used to answer "what does a non-zero
+#: exit mean": nothing was published. Composed here as the negative control for
+#: the reader below, because a reader that reported this as stating the partial
+#: outcome would be reporting anything at all.
+A_DESCRIPTION_THAT_DENIES_IT = (
+    "Exit zero means published and any other exit code means it did not "
+    "publish, with a bounded tail of its stderr carried back as the reason."
+)
+
+#: The same question answered as it is now, in words neither shipped text uses,
+#: so the reader is shown reporting a statement it has not been fitted to.
+A_DESCRIPTION_THAT_STATES_IT = (
+    "A failure may arrive after the document was already published, so the "
+    "item's body may carry the projection either way."
+)
+
+#: What a sentence saying it has to be about: a failure, and a document that is
+#: on the item regardless.
+A_FAILURE = re.compile(r"(?i)non-zero exit|other (?:exit )?code|a failure")
+ALREADY_PUBLISHED = re.compile(r"(?i)already (?:been )?published")
+
+#: The claim the two descriptions no longer make, which is the one that
+#: contradicts the partial outcome outright.
+NOTHING_WAS_PUBLISHED = re.compile(
+    r"(?i)other (?:exit )?code means it did not publish")
+
+
+def states_the_partial_outcome(text: str) -> bool:
+    """Whether some one sentence of `text` says a failure may follow a
+    document that was already published.
+
+    One sentence rather than the whole text, so a description that mentions
+    failures in one paragraph and publishing in another does not pass for one
+    that connects them.
+    """
+    sentences = re.split(r"(?<=[.:])\s+", " ".join(text.split()))
+    return any(A_FAILURE.search(one) and ALREADY_PUBLISHED.search(one)
+               for one in sentences)
+
+
+def contract_descriptions() -> dict[str, str]:
+    """The two places one contract is described, by where each lives.
+
+    The schema description is read through the harness's own schema reader,
+    and the docstring off the imported module, so both are the text that
+    ships rather than a copy of it.
+    """
+    schema = schema_validator.load_schema(harness_config.CONFIG_SCHEMA_NAME)
+    return {
+        f"{harness_config.CONFIG_SCHEMA_NAME}.{COMMAND_KEY}":
+            schema["properties"][COMMAND_KEY]["description"],
+        ITEM_UPDATE_MODULE: item_update.__doc__ or "",
+    }
+
+
+def test_the_partial_outcome_reader_reports_what_a_text_says():
+    """The control for the reader below: it reports the statement made and not
+    the one that denies it, and it needs the two halves in one sentence."""
+    assert states_the_partial_outcome(A_DESCRIPTION_THAT_STATES_IT)
+    assert not states_the_partial_outcome(A_DESCRIPTION_THAT_DENIES_IT)
+    assert not states_the_partial_outcome(
+        "A failure is reported. The document was already published.")
+    assert NOTHING_WAS_PUBLISHED.search(A_DESCRIPTION_THAT_DENIES_IT)
+
+
+@pytest.mark.parametrize("where", list(contract_descriptions()))
+def test_both_descriptions_of_the_contract_say_what_a_failure_leaves_behind(
+        where):
+    """One contract described in two places, saying the same thing.
+
+    A caller reads whichever it meets first, so a description that still
+    answered "a non-zero exit means nothing was published" would be telling it
+    something the command no longer does.
+    """
+    text = contract_descriptions()[where]
+
+    assert states_the_partial_outcome(text), where
+    assert NOTHING_WAS_PUBLISHED.search(text) is None, where
+
+
+#: Where the plan-time moment's words live, as the reader below opens it.
+PLAN_SCRIPT = REPO_ROOT / "scripts" / "l5-plan"
+
+#: The claim that the arrangement's cost is a failed publish moving no status,
+#: which is the reverse of the cost it turned out to have. Composed here so the
+#: check below is shown catching it.
+A_COMMENT_STATING_THE_REVERSE = (
+    "The cost is stated and accepted: a publish that fails moves no status "
+    "either, and the developer sees one failure line rather than two."
+)
+THE_REVERSED_COST = re.compile(r"(?i)publish that fails? moves no status")
+
+#: What the arrangement's realised cost rests on: the document is answered
+#: first, so the half that cannot be honoured does not decide the other.
+THE_REALISED_COST = re.compile(r"(?i)document first")
+
+
+def the_comment_above_the_plan_time_publish() -> str:
+    """The comment block sitting directly above l5-plan's publish call.
+
+    Taken by walking up from the call rather than by matching the comment's
+    own words, so a comment rewritten in any words at all is still the one
+    this reads.
+    """
+    lines = PLAN_SCRIPT.read_text(encoding="utf-8").splitlines()
+    at = next(index for index, line in enumerate(lines)
+              if "item_update.publish(" in line)
+    block: list[str] = []
+    while at and lines[at - 1].strip().startswith("#"):
+        at -= 1
+        block.insert(0, lines[at].strip().lstrip("#").strip())
+    assert block, "the plan-time publish call carries no comment above it"
+    return " ".join(block)
+
+
+def test_the_comment_above_the_publish_states_the_cost_that_was_realised():
+    """A comment that states a cost backwards is worse than none: the next
+    reader plans around a constraint that does not exist.
+
+    Its control is the sentence it used to carry, composed above and shown
+    being reported by the same check.
+    """
+    comment = the_comment_above_the_plan_time_publish()
+
+    assert THE_REVERSED_COST.search(comment) is None, comment
+    assert THE_REALISED_COST.search(comment), comment
+
+    assert THE_REVERSED_COST.search(A_COMMENT_STATING_THE_REVERSE)
+    assert THE_REALISED_COST.search(A_COMMENT_STATING_THE_REVERSE) is None
+
+
+#: The success line as it read before this story, claiming the item itself was
+#: moved. The negative control for the check below, composed here rather than
+#: read out of the history, which a rebase moves.
+A_LINE_CLAIMING_A_MOVE = (
+    f"l5-plan: published {PLANNED_ID} onto {KEY} and moved it to "
+    f"{item_update.PLANNED}; the projection is a copy."
+)
+CLAIMS_A_MOVE = re.compile(r"(?i)\bmove[ds]?\b")
+
+
+def test_the_success_line_says_the_tracker_was_told_and_claims_no_move(
+        publishing, planning_harness):
+    """What a developer is told at plan time, on a target whose command
+    succeeds: the tracker was told the story is planned.
+
+    Not that an item was moved — a target that configures no board moves
+    nothing and still exits zero, so a line claiming a move would be telling
+    the developer something the harness cannot know. The check is shown
+    reporting the line this one replaced.
+    """
+    status, output = plan_session(publishing, planning_harness, "--brief", KEY)
+    assert status == 0, output
+
+    lines = [line for line in output.splitlines()
+             if f"published {PLANNED_ID}" in line]
+    assert len(lines) == 1, output
+    assert KEY in lines[0]
+    assert item_update.PLANNED in lines[0]
+    assert CLAIMS_A_MOVE.search(lines[0]) is None, lines[0]
+
+    assert CLAIMS_A_MOVE.search(A_LINE_CLAIMING_A_MOVE)
