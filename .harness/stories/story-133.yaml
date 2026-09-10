@@ -1,0 +1,137 @@
+story:
+  id: story-133
+  title: A run whose tracker commands moved under it says so in its own post-story record
+  description: |
+    Planned from the brief filed under key 209.
+
+    A run reads its target's configuration once, before anything else
+    happens, and threads that one dictionary through to the end — including
+    to the post-story steps that reach for the tracker commands after the
+    work is committed. So a story whose own work is to move one of those
+    commands spends the rest of its own run calling the path it just
+    removed. That is not hypothetical: the post-story inspection of the
+    story that moved this repository's three tracker commands into one
+    script launched its dedupe query as `.harness/query/github.sh`, a path
+    that exists nowhere in the tree at that commit, learned nothing about
+    what was already filed, and filed against a tracker it could not read.
+    Its record says "dedupe did not run: no such file", which reads like a
+    broken script rather than like a run holding a configuration the tree
+    has moved on from.
+
+    Loading the configuration once is deliberate and this story keeps it.
+    The pre-flight that refuses an undeclared key does so exactly once, from
+    the dictionary loaded before the run directory exists, so a run cannot
+    quietly exercise something other than what it was launched under;
+    re-reading the file after the implementer has been editing the tree
+    would give that up. What this story adds is not re-reading but
+    noticing. Each post-story step that is about to reach for a tracker
+    command compares the value it holds against the value the tree's
+    configuration now carries, and names the disagreement in the run's
+    events.log. Nothing routes on it and nothing refuses because of it: an
+    inspection that reports an empty dedupe now says whether the query it
+    launched was the one the tree still names, so the reader knows whether
+    an empty answer means an empty tracker or a stale path — and knows that
+    what was just filed may already be filed.
+
+    All three tracker commands are covered, because all three sit in the
+    same position after the completion commit: the filed query the
+    inspection dedupes with, the sync command the queue sweep files with,
+    and the item-status send that marks the story ready to merge. The sweep
+    is the half that already survives a moved command by luck — an
+    unlaunchable command is deferred rather than failed, so the entries stay
+    pending and a later run files them under the new path — and that luck is
+    preserved untouched; what it gains is a note saying why they are still
+    pending.
+  workflow: story-workflow
+
+tasks:
+  - Add to orchestration/harness_config.py a helper that answers, for one configured key, whether the value a caller holds differs from the value the target's configuration file now carries, reporting the key and both values. It re-reads the file from disk and returns "nothing moved" for a file it cannot read or parse, so noticing can never become a failure, and it changes nothing about what a run acts on — the loaded dictionary stays the one every decision is made from.
+  - Report the drift in the post-story inspection. Where the tree now names a different filed-query command than the one the run holds, orchestration/story_inspection.py says so in the run's events.log beside its existing dedupe note, naming the command the query was launched as and the command the tree now names, and saying that what was filed may already be filed.
+  - Report the drift in the opportunistic sweep. Where the tree now names a different sync command than the one the sweep holds, orchestration/outbox_sweep.py carries that as a note on the Summary it already returns, so the line the coordinator already prints explains why entries are still pending.
+  - Report the drift at the item-status send in orchestration/story_coordinator.py's completion path. Where the tree now names a different item-update command than the one the run holds, the run's events.log says so beside the line that already reports whether the ready-to-merge status was sent.
+  - Cover the behaviour with a standing test module under tests/: a completed run whose configuration moved under it names the moved command in its events.log, at each of the three post-story sites; a run whose configuration did not move says nothing new; and the noticing changes no decision, no status and no filing outcome at any of them.
+  - Record the mechanism in .harness/docs/ARCHITECTURE.md: that the configuration is loaded once and deliberately not re-read, that the post-story steps compare what they hold against what the tree carries, and that the comparison reports and never routes.
+
+acceptance_criteria:
+  - A post-story inspection whose run holds a filed-query command the tree no longer names writes a line in that run's events.log naming both the command the query was launched as and the command the tree now names, and saying that what was filed may already be filed.
+  - That line is written whether or not the dedupe query answered, so a dedupe that ran against a stale-but-existing command is reported on the same terms as one that could not launch at all.
+  - A post-story inspection whose run holds the same filed-query command the tree carries writes no such line, and its events.log is otherwise what it was.
+  - An opportunistic sweep whose run holds a sync command the tree no longer names returns a Summary carrying a note naming both values, and that note reaches the line the coordinator already prints for the sweep.
+  - The sweep still returns a Summary on every path, still files nothing rather than refusing when it cannot obey its configuration, and still gains no parameter, return value or exception by which a caller could be told to stop.
+  - A completion path whose run holds an item-update command the tree no longer names writes a line in that run's events.log naming both values, beside the line reporting whether the ready-to-merge status was sent.
+  - The post-story inspection remains total: no path added by this story returns a value a caller could branch on, raises, or refuses, and an inspection whose drift check cannot read the configuration file records what it would have recorded without it.
+  - The helper answers "nothing moved" for a configuration file that is absent, unreadable or unparseable, rather than raising or reporting a spurious move.
+  - A run's decisions are unchanged by the noticing: the configuration dictionary every stage, check and routing decision reads is still the one loaded before the run directory existed, and no drift report alters a status, a filing outcome or an exit code.
+  - The pre-flight that refuses a key the schema does not declare still runs exactly once, from that same loaded dictionary, above every other pre-flight and before any run directory, state.json, log, branch or agent invocation exists.
+  - A command that cannot be launched is still deferred by the transport rather than failed, so a queue entry whose command moved stays pending and is filed by a later run under the new path.
+  - A standing test module under tests/ holds each of the three sites to the behaviour above, and holds the no-drift case and the unreadable-configuration case too.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/harness_config.py, add a function beside load_config that takes the held configuration, the target root and a key name, re-reads the target's configuration file, and returns what moved — the key with the held value and the value the file now carries — or nothing when the two agree. Guard the read so an absent, unreadable or unparseable file answers "nothing moved"; this is a report about a run that has already finished, and it may not become the thing that fails. Take the key as a parameter so each caller names its own module's command-key constant, rather than adding literal reads of keys that are already read elsewhere.
+    - In orchestration/story_inspection.py, ask the helper about the filed-query command key before writing the inspection's record, and where it moved say so through the existing events.log-only note seam, in a sentence naming the command the query was launched as, the command the tree now names, and the consequence — that dedupe answered for a tracker the tree no longer points at, so what was filed may already be filed. Say it whether or not dedupe ran, and leave the committed one-line record's fields exactly as they are.
+    - In orchestration/outbox_sweep.py, ask the helper about the sync command key inside sweep, and where it moved add the answer to the notes already assembled from the build and limit problems, so render prints it beside the pending count. Keep build_transport untouched — it is the refusable half and this is not a refusal — and keep the sweep's totality: the note is carried, never raised, and no call site gains anything to branch on.
+    - In orchestration/story_coordinator.py's completion path, ask the helper about the item-update command key beside the ready-to-merge send, and where it moved append an event naming both values. Read the key through item_update's own constant, and guard the report so a completion cannot fail on it.
+    - Add the standing test module under tests/, exercising the three sites against a target whose configuration file is rewritten after the configuration was loaded, plus the no-drift case, the unreadable-file case, and assertions that status, filing outcome and exit code are what they were without the drift.
+    - Record the mechanism in .harness/docs/ARCHITECTURE.md, in the section that describes what happens after the completion commit.
+  likely_file_changes:
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: Holds the one reader of the target's configuration file, so the comparison between a held value and the file's current value belongs beside it.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The post-story inspection is where a stale filed-query command has its consequence, so it is where the drift is reported.
+    - file: orchestration/outbox_sweep.py
+      stage: implementer
+      reason: The sweep's summary is where a stale sync command explains a pending count that is not going down.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The ready-to-merge item-status send in the completion path reaches the third tracker command and drifts the same way.
+    - file: tests/test_a_moved_tracker_command_is_named.py
+      stage: tester
+      reason: The standing module holding the three sites to the reported behaviour, the no-drift case and the unreadable-configuration case.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the configuration is loaded once and deliberately not re-read, and that the post-story steps compare what they hold against the tree and report without routing.
+
+scope:
+  modify:
+    - orchestration/harness_config.py
+    - orchestration/story_inspection.py
+    - orchestration/outbox_sweep.py
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/command_transport.py
+    - orchestration/outbox.py
+    - orchestration/filed_query.py
+    - orchestration/item_update.py
+    - schemas/harness-config.schema.json
+    - .harness/config.yaml
+    - .harness/scripts/
+
+verification_requirements:
+  - Confirm that the drift report appears in the run's events.log at each of the three post-story sites when the target's configuration file names a different command than the one the run holds, and that both the held and the current value are named.
+  - Confirm that a run whose configuration did not move gains no drift line anywhere.
+  - Confirm that the configuration a run acts on is still the one loaded before the run directory existed: no stage, check or routing decision reads the re-read values.
+  - Confirm that the undeclared-key pre-flight still runs once, above every other pre-flight, and still leaves no run directory, state.json, log, branch or agent invocation behind when it refuses.
+  - Confirm that command_transport still defers an unlaunchable command rather than failing it, and that a queue entry whose command moved stays pending.
+  - Confirm that the post-story inspection and the sweep are still total: no new return value, parameter or raising path by which either could tell a caller to stop, and a drift check that cannot read the configuration file leaves both behaving exactly as they did.
+  - Confirm the full suite passes, including the new module.
+
+constraints:
+  - The configuration is loaded once per run and the loaded dictionary stays the one every decision is made from; the re-read exists only to be compared against and is read by nothing that routes.
+  - Neither the post-story inspection nor the opportunistic sweep may gain a way to refuse, delay or block a run — no new return value a caller could branch on, no new parameter meaning stop, and no path that raises.
+  - The committed one-line inspection record keeps the fields it has; the drift is reported in the run's events.log.
+  - No new configuration key is introduced, and no key's declared vocabulary changes.
+  - Existing assertions are not weakened, skipped or deleted.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-10 11:46:06
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 209
