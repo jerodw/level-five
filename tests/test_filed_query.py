@@ -1408,6 +1408,14 @@ LABEL_ADD_CALL = "issue-edit"
 #: name of the stub's rather than one taken from an argument.
 GRAPHQL_CALL = "api-graphql"
 
+#: What a test names in FAIL_VARIABLE to fail a search. The first fails every
+#: search the invocation makes; the second fails only a search carrying more
+#: than one term, which is the batched form — so a stub told that one answers a
+#: per-path search and refuses a batched one, which is exactly the tracker the
+#: query branch's fallback exists for.
+ISSUE_LIST_CALL = "issue-list"
+BATCHED_SEARCH_CALL = "batched-search"
+
 #: What makes that read answer with no such node while the item is in fact on
 #: the board. That is what a tracker whose read has not caught up with an add
 #: looks like, and it is the case the script must answer transiently rather
@@ -1424,7 +1432,17 @@ second implementation:
 
   issue create        appends to the ledger and prints a URL, carrying the
                       label it was created with.
-  issue list --search matches the search text against each issue's body.
+  issue list --search matches the search text against each issue's body. The
+                      search is read as quoted terms joined by OR, because the
+                      query script batches several path markers into one
+                      search, and an issue matches when its body contains any
+                      of them; a search carrying no quotes is one term. --limit
+                      is honoured, so a page filled to the limit -- which is
+                      how the query script learns a batch may have been
+                      truncated -- is something this stub can produce. Every
+                      search is recorded in the ledger in the order it was
+                      made, so how many searches a scope cost is readable
+                      rather than inferred.
   issue view          prints one issue's body by the key the create printed --
                       the invocation the query script makes to answer a
                       brief-fetch question -- or its url where url is the one
@@ -1475,6 +1493,7 @@ makes the item read answer with no such node.
 """
 import json
 import os
+import re
 import sys
 
 
@@ -1505,6 +1524,21 @@ def told_to_fail(call):
 def board_key(name):
     """The key gh reports one field's value under, from the field's name."""
     return name.replace(" ", "").lower()
+
+
+def search_terms(argv):
+    """The terms one --search carries, as a search of quoted terms joined by OR.
+
+    The query script batches several path markers into one search, so a search
+    is one or more quoted runs with OR between them and it matches an issue
+    whose body contains any of them. A search carrying no quotes at all is one
+    term, which is what the fetch and the sync branch's own searches look like.
+    """
+    text = flag(argv, "--search", "") or ""
+    quoted = re.findall(r'"([^"]*)"', text)
+    if quoted:
+        return [term for term in quoted if term]
+    return [text] if text else []
 
 
 def record_issue_call(command):
@@ -1589,9 +1623,22 @@ elif argv[:2] == ["label", "create"]:
         state["labels"].append(name)
     save()
 elif argv[:2] == ["issue", "list"]:
-    search = (flag(argv, "--search", "") or "").strip('"')
+    state["searches"].append(flag(argv, "--search", "") or "")
+    save()
+    if told_to_fail("ISSUE_LIST_CALL"):
+        refuse("the stub was told to fail at issue list")
+    if told_to_fail("BATCHED_SEARCH_CALL") and len(search_terms(argv)) > 1:
+        refuse("the stub was told to fail at a batched search")
     fields = (flag(argv, "--json", "") or "").split(",")
-    matched = [issue for issue in issues if search and search in issue["body"]]
+    terms = search_terms(argv)
+    matched = [issue for issue in issues
+               if any(term in issue["body"] for term in terms)]
+    limit = flag(argv, "--limit")
+    if limit is not None:
+        # gh returns at most --limit items, and a page filled to the limit is
+        # how the query script learns its batch may have been truncated. A stub
+        # that answered past the limit could not report that at all.
+        matched = matched[:int(limit)]
     if "--jq" in argv:
         # The one program the sync script asks for: the first url, or nothing.
         print(matched[0]["url"] if matched else "")
@@ -1759,10 +1806,16 @@ def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
                         .replace("OMIT_VARIABLE", OMIT_VARIABLE)
                         .replace("GRAPHQL_CALL", GRAPHQL_CALL)
                         .replace("LABEL_CREATE_CALL", LABEL_CREATE_CALL)
-                        .replace("LABEL_ADD_CALL", LABEL_ADD_CALL))
+                        .replace("LABEL_ADD_CALL", LABEL_ADD_CALL)
+                        .replace("BATCHED_SEARCH_CALL", BATCHED_SEARCH_CALL)
+                        .replace("ISSUE_LIST_CALL", ISSUE_LIST_CALL))
     ledger.write_text(json.dumps(
         {"issues": [], "labels": [], "projects": seeded_board(),
-         "calls": [], "issue_calls": []}),
+         "calls": [], "issue_calls": [],
+         # One entry per `issue list --search`, in the order the searches were
+         # made, so how many searches a scope cost is readable rather than
+         # inferred from how long the script took.
+         "searches": []}),
         encoding="utf-8")
     environment = {
         name: value for name, value in os.environ.items()

@@ -965,7 +965,12 @@ def test_the_key_adds_the_inspection_line_to_events_log_and_nothing_else(
     said = messages(configured)
     inspected = [line for line in said if line.startswith(
         f"post-story inspection of {STORY_ID}")]
-    assert len(inspected) == 1, said
+    # The summary line, and beside it however many lines say a scope's dedupe
+    # did not answer — this target configures no filed_query_command, so there
+    # is one of those. The subject is that every line the key added is one of
+    # the inspection's and that nothing else in the log moved, so the summary
+    # is what is counted rather than the block.
+    assert len([line for line in inspected if "finding(s)" in line]) == 1, said
     assert [line for line in said if line not in inspected] == messages(unset)
 
 
@@ -1165,9 +1170,15 @@ CAP_THE_RUN_EXCEEDS = 3
 
 
 def inspection_line(target: Path) -> str:
-    """The one line this run's events.log carries about its inspection."""
+    """The one summary line this run's events.log carries about its inspection.
+
+    A failed dedupe now gets a line of its own beside it, so the summary is
+    selected by the counts it carries rather than by the whole block being one
+    line. Still exactly one: the summary is what these assertions are about.
+    """
     said = [line for line in messages(target)
-            if line.startswith(f"post-story inspection of {STORY_ID}")]
+            if line.startswith(f"post-story inspection of {STORY_ID}")
+            and "finding(s)" in line]
     assert len(said) == 1, messages(target)
     return said[0]
 
@@ -1493,8 +1504,11 @@ def test_the_counts_and_every_way_a_finding_was_dropped_reach_events_log(
         **{inspection.MAX_FINDINGS_KEY: "1"})
 
     assert code == 0
+    # The summary line, selected by the counts it carries: a failed dedupe has
+    # a line of its own beside it, and this assertion is about the summary.
     said = [line for line in messages(target)
-            if line.startswith(f"post-story inspection of {STORY_ID}")]
+            if line.startswith(f"post-story inspection of {STORY_ID}")
+            and "finding(s)" in line]
     assert len(said) == 1, messages(target)
     line = said[0]
     assert "3 finding(s)" in line, line

@@ -101,6 +101,10 @@
           "dropped": {
             "type": "integer",
             "description": "How many were dropped, for every reason together. Which way each went is not summarised here: it is in the run's own events.log, where each reason is named with how many went that way."
+          },
+          "dedupe_ran": {
+            "type": "boolean",
+            "description": "Whether this inspection's filed query answered for every scope it covered. False is an inspection made without dedupe: the findings were filed anyway, because a query that could not answer costs dedupe and costs nothing else, so what a false records is that this inspection may have refiled what is already in the tracker. It is a statement about the filed query alone. The local outbox queue is read as a second dedupe source and reading it successfully does not make dedupe complete — it holds only what this machine filed, so a brief filed from another checkout, another developer or the tracker's own interface is invisible to it, and the tracker's answer is the only tier that can see one. An absent tracker answer is therefore not an empty one: nothing filed and nothing known look identical in an item list, and this field is what separates them once the inspection is over and the run directory it reported into is gone. It is written by both modes and on every line, including one where the query did answer, because a boolean has a false to say and absence would then mean either that or a line written before this field existed. An inspection that made no invocation at all — the file cap unusable, nothing the story changed in an inspected scope, an inspection that could not run — records false, because no query answered for it. Which scope's query failed and why is not summarised here: it is in the run's own events.log for a narrow-mode inspection, where a failed dedupe gets a line of its own naming the scope and the reason, and in what l5-inspect printed for a broad one."
           }
         }
       }
