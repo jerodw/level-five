@@ -1,0 +1,146 @@
+story:
+  id: story-134
+  title: A target's configured values are read by the tests that check them, never written into them
+  description: |
+    Planned from the brief filed under 226.
+
+    Nine values this target configures in `.harness/scripts/github.sh` are
+    written into the suite as literals: the project, its owner, the Status
+    field and the option a filing lands in, at
+    `tests/test_filed_query.py:242-245`, and the five board field names a
+    brief's classification is written into, in the `CLASSIFICATION` table at
+    `tests/test_filed_query.py:290-301`. Two further modules read them by
+    import, and one of them pins the project a second time. A target that
+    renames the column its filings land in, or moves to another board, has to
+    edit the suite to keep it green -- so the suite reports a configuration
+    change as a defect, and a configuration change is gated behind a code
+    change.
+
+    The configuration file half of this is already right, in two ways.
+    `tests/test_config_keys_are_obeyed.py` loads this repository's own
+    configuration and uses it only to assert its fixtures differ from it, and
+    `tests/test_capacity_pause.py` reads the configured pause bound out of the
+    configuration rather than naming it. No value in `.harness/config.yaml` is
+    pinned anywhere in the suite. The tracker script's constants are
+    configuration in the same sense and are the family that did not get this
+    treatment, because they live in a script rather than in the config file.
+
+    What the pinning is for must survive. Every other board test sets the
+    tracker's environment variables, so an installed copy whose constants were
+    empty or wrong would pass all of them -- which is what happened when the
+    item branch carried no project for weeks and reported a failure for every
+    status move it was asked to make. The property that stands against that is
+    that the file this repository runs is the file its suite exercises, and it
+    needs two claims, neither of which names a value: that the installed copy
+    declares each of those constants non-empty, so this target has configured a
+    board at all; and that driving the installed copy with nothing set in the
+    environment, the values that take effect are the ones it declares.
+    Together those catch an empty constant, a declared-but-unused one, a
+    typo'd variable name, and a constant one branch reads and another does not.
+    They cannot catch a target pointed at the wrong board, and no test can:
+    which board is right is a fact only the developer holds.
+
+    The story also leaves a standing guard behind, so the claim is true going
+    forward rather than true today. The guard does not search the suite for a
+    configured value. Searching for one would break the very rule it is meant
+    to hold: this target's project is `1`, and `"1"` occurs innocently in a
+    dozen test modules -- including `tests/test_filed_query.py:2284`, where it
+    is a flag telling a stub which failure to produce -- and `"Status"` is a
+    markdown section heading in `tests/test_escalation_summary.py`. Whether an
+    unrelated test happens to contain the string a target chose is not a
+    property of the harness, so a value search cannot promise that changing a
+    value keeps the suite green. The guard asserts the shape instead: in the
+    modules that exercise the tracker script, every board-naming value is bound
+    by reading the installed script and none is bound to a string literal, each
+    declared value is non-empty, and the values in force when the installed
+    copy is driven with nothing set are the ones it declares. Its control is a
+    mocked configuration -- a copy of the script whose board constants are
+    rewritten to invented values -- which both the derivation and the driven
+    copy must follow.
+  workflow: story-workflow
+
+tasks:
+  - Replace the four THIS_TARGETS_* literals in tests/test_filed_query.py with values read out of the installed tracker script's own constant assignments, using the sync_constants extraction the module already has, and assert each declared value is non-empty.
+  - Replace the five board field names written into the CLASSIFICATION table in tests/test_filed_query.py with the values the installed script declares for the same constants, leaving the payload field names and the schema-derived option values as they are.
+  - Drop the assertion at tests/test_a_planned_story_is_published_onto_its_item.py:1578 that the installed copy's project constant equals a written-down project number, which becomes a comparison of a value against itself once that value is read from the file being read; the two assertions beneath it, that the constant is assigned once and referenced by both the sync and item branches, are what hold the wiring and stay.
+  - Replace the assertion at tests/test_filed_query.py:3286 that the template's project-owner default equals this target's owner with the claim its docstring makes, that the template ships a non-empty generic owner, so that changing this target's owner does not redden a test about the template.
+  - Add a standing test module under tests/ that holds the rule going forward, asserting the shape by which the suite comes to know this target's board values rather than searching the suite for any value.
+  - Update the comments in tests/test_filed_query.py that give the pinning its reason, so no comment still says a value is written down deliberately when it is read.
+
+acceptance_criteria:
+  - No string literal in tests/ is the value of a board-naming constant declared by .harness/scripts/github.sh by way of being that test's copy of a configured value; the project, its owner, the Status field, the option a filing lands in and the five classification field names are each obtained by reading the installed script.
+  - Every board value the tracker-facing test modules use is derived from a single reading of the installed script, so the three modules cannot disagree about what this target's board is.
+  - Each board-naming constant the installed script declares is asserted non-empty, so a target that has configured no board fails rather than passing vacuously.
+  - Driving the installed copy with nothing set in its environment is still asserted to file against, and move items on, the board the installed copy declares.
+  - A copy of the installed script whose board constants carry invented values is driven with nothing set, and the values that take effect are the invented ones, so what is asserted is that the copy follows its own declarations rather than that it agrees with a number.
+  - The same derivation applied to that changed copy yields the invented values, demonstrating that the suite's knowledge of the board follows the file rather than a constant beside it.
+  - The new module asserts that in each tracker-facing test module the board-naming values are bound by reading the installed script and none is bound to a string literal, and that assertion is shown able to fail against a module with such a binding planted in it.
+  - The new module discovers which modules it covers by reading imports rather than from a list written into it, and says in its docstring that a module pinning a board value without importing the derivation is outside what it can see.
+  - Nothing about which project, owner, field or column this target names is changed.
+  - The suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read tests/test_filed_query.py around the constant extraction at lines 188-250 and the CLASSIFICATION table at 285-301; sync_constants already parses a script into name to (variable, default) pairs and TEMPLATE_CONSTANTS already applies it to the template, so the installed reading is the same call against INSTALLED_SCRIPT.
+    - Bind the installed constants once at module level and derive THIS_TARGETS_PROJECT, THIS_TARGETS_PROJECT_OWNER, THIS_TARGETS_STATUS_FIELD and THIS_TARGETS_STATUS_OPTION from it, asserting each is non-empty at the point of derivation so a target with no board fails at collection rather than in an unrelated assertion.
+    - Derive each Axis field_name in CLASSIFICATION from the same reading, keyed by the constant name the Axis already carries, leaving payload_field and the schema-derived values untouched.
+    - Rewrite the comments at lines 237-245 and 285-289 to say the values are read from the installed copy and why, replacing the reasoning they currently give.
+    - Check the template comparison at tests/test_filed_query.py:3280-3300; the assertions that the template's project and status option default to empty, and that this target's option does not appear in the template, all still say what they said, and only the owner comparison changes.
+    - Remove the project-number comparison at tests/test_a_planned_story_is_published_onto_its_item.py:1578 and adjust that test's docstring, which explains why the item branch needs the project, so it no longer promises a comparison the test no longer makes.
+    - Write the new module, naming it for what it checks in the convention tests/test_validation_module_naming.py holds; discover the tracker-facing modules by parsing tests/ for modules that import the derivation, assert per module that the board-naming names are bound from that reading and not from string literals, and sit that assertion beside the same scan over a source with a literal binding planted in it.
+    - Give the new module the mocked-configuration control: write a copy of the installed script into a temporary directory with its board constants rewritten to invented values, drive it against the stub tracker with the tracker's variables stripped from the environment, and assert both that the derivation reports the invented values and that the copy files against the board they name.
+    - Reuse the stub tracker and the environment-stripping fixture tests/test_filed_query.py already has rather than building a second one, so the new module drives the copy the way every other tracker test does.
+  likely_file_changes:
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: Holds the four pinned constants and the classification field names, and the comments that give them their reason; this is where the derivation from the installed script is written.
+    - file: tests/test_a_planned_story_is_published_onto_its_item.py
+      stage: tester
+      reason: Its project assertion becomes a comparison of a value against itself once the value is read from the file it reads, and its docstring describes that assertion.
+    - file: tests/test_a_brief_follows_its_story.py
+      stage: tester
+      reason: Imports three of the constants; expected to need no change beyond whatever the renamed or re-commented imports require, and listed so a run that does touch it is not a surprise.
+    - file: tests/test_a_targets_configured_values_are_read_not_written.py
+      stage: tester
+      reason: The standing guard this story leaves behind, holding the rule for later work rather than for this change alone.
+
+scope:
+  modify:
+    - tests/test_filed_query.py
+    - tests/test_a_planned_story_is_published_onto_its_item.py
+    - tests/test_a_brief_follows_its_story.py
+    - tests/ for the new guard module
+  do_not_modify:
+    - .harness/scripts/github.sh
+    - templates/scripts/github.sh
+    - .harness/config.yaml
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_capacity_pause.py
+    - orchestration/
+    - prompts/
+    - workflows/
+
+verification_requirements:
+  - Confirm that the four constants and the five classification field names in tests/test_filed_query.py are obtained from the installed tracker script and that no test module binds a board-naming value to a string literal.
+  - Confirm the values this target configures in .harness/scripts/github.sh are unchanged, by comparing the file against its committed state.
+  - Confirm the new module fails when a literal binding is planted in a module it covers, and that its mocked-configuration control drives a script carrying invented values and reports those values.
+  - Confirm the non-empty assertions are reachable, in that a copy declaring an empty board constant fails them.
+  - Confirm the property story-130 established still holds: the installed copy driven with nothing set in its environment files against, and moves items on, the board it declares.
+  - Confirm the full suite passes with the command .harness/config.yaml names.
+
+constraints:
+  - Which project, owner, field or column this target names is not changed by this story; only how the suite comes to know them.
+  - No assertion is removed except where reading the value from the file being asserted about makes it a comparison of that value against itself, and each such removal leaves the claims that carried real content in place.
+  - The comparison holding the installed copy to its template outside the constant assignments is a different claim and stays as it is.
+  - The template's own defaults name no target-specific value and are not what is pinned; assertions about the template stay about the template.
+  - The guard added by this story must not search test sources for a configured value, because an unrelated test containing the string a target chose would then turn a configuration change into a test failure, which is the defect this story removes.
+  - Every file this story changes is under tests/, so the tester stage carries the whole of it and the implementer has no file to change.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-10 17:51:34
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 226
