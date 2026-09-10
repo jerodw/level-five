@@ -82,6 +82,11 @@ def report(found, dry_run: bool) -> int:
     whatever it found: finding nothing is an answer, and so is finding
     something the cap or the queue excluded, which is reported rather than
     treated as a failure of the command.
+
+    A dedupe that could not answer is reported as the failure it is rather than
+    as one line among the per-scope lines, and it still returns zero: the
+    findings were filed, and a failed query costs dedupe and costs nothing
+    else. What it costs is visibility, which is what saying it loudly buys back.
     """
     print(
         f"inspected {len(found.scopes)} scope(s) in "
@@ -100,6 +105,21 @@ def report(found, dry_run: bool) -> int:
                 print(f"      note: {excluded}")
         else:
             print(f"  dedupe did NOT run for {one.scope}: {one.reason}")
+
+    # And said again as the failure it is, outside the per-scope lines. One line
+    # among a dozen reads as a detail of a scope; what it actually reports is
+    # that this inspection was made without the only dedupe tier that can see a
+    # brief filed from another checkout, another developer or the tracker's own
+    # interface — so what it says it filed may already be filed. It still costs
+    # dedupe and nothing else: the findings were filed, and this command exits
+    # zero for an inspection that ran.
+    unanswered = [one for one in found.dedupe if not one.ran]
+    if unanswered:
+        print("dedupe FAILED, so this inspection ran without the tracker's "
+              "answer and may have refiled what is already filed. The scopes "
+              "it could not answer for:")
+        for one in unanswered:
+            print(f"  {one.scope}: {one.reason}")
 
     # The other tier, said on every inspection including one where the index
     # held nothing: a source that is silent when it found nothing is

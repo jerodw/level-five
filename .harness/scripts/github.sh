@@ -155,6 +155,34 @@
 # "suppress nothing closed" errs toward hearing a finding twice, which is the
 # cheaper mistake.
 #
+# ONE SEARCH PER PATH DOES NOT SCALE, and a target writing its own command has
+# to be told so, because nothing about the failure is loud. The harness asks one
+# question carrying the whole scope and holds the answer to one bound, so a
+# command whose searches are proportional to the scope is killed partway through
+# and never answers — which the harness reads as dedupe not having run, on every
+# inspection, for as long as nobody looks. Measured against this tracker one
+# search costs roughly 0.85 seconds, so a 60-file scope spent close to a minute
+# against a 30-second bound. This branch therefore batches: BATCH path markers
+# are quoted and OR'd into one search, and the pages are unioned through the
+# composition below, which already deduplicates by URL. The cost of a search is
+# nearly flat in batch size — 5 markers measured 0.83 seconds, 10 measured 0.90
+# and 20 measured about 1.0 — so a 60-file scope becomes three searches rather
+# than sixty. Neither the harness's bound nor the scope it hands over is what
+# changed: the scope is not capped, because a capped scope means inventing a
+# partial answer and an answer here means the whole question was answered.
+#
+# BATCHING IS ONLY SAFE WITH A FALLBACK, and the fallback is what a target
+# writing its own command must carry too. A search is capped at LIMIT results.
+# With one path per search that cap is per path; with many paths in one search a
+# filled page could be several paths' worth of issues truncated, and a truncated
+# page read as complete is a duplicate filed. So a batch whose page fills to the
+# limit, and a batch whose search fails, are both re-asked one path at a time —
+# which is also what keeps this safe on a tracker whose limit on query length is
+# tighter than this one's, since a batch that is too long to search falls back
+# rather than failing. A per-path search that fails after that still fails the
+# whole answer, on the rule above: reporting the paths that did answer would say
+# that nothing is filed against the ones that did not.
+#
 # THE QUERY BRANCH IS THE SYNC BRANCH'S PAIR, and they are now the same file,
 # which is what removes the way they used to be able to drift: the sync branch
 # writes one searchable marker per path and records the whole payload under a
@@ -325,9 +353,19 @@ IN_PROGRESS_OPTION="${L5_ITEM_IN_PROGRESS_OPTION:-In Progress}"
 READY_TO_MERGE_OPTION="${L5_ITEM_READY_TO_MERGE_OPTION:-Ready to Merge}"
 
 # --- what only the query job uses. Edit these. ---------------------------
-# How many items one path's search may return. The harness bounds what it will
+# How many items one search may return. The harness bounds what it will
 # read as well; this bound is about what the tracker is asked for.
 LIMIT="${L5_QUERY_LIMIT:-50}"
+
+# How many path markers one search carries. It exists because the number of
+# searches, not the cost of one, is what stopped this branch answering a scope
+# of any size: see ONE SEARCH PER PATH DOES NOT SCALE above for the measurement
+# and for what the fallback below guarantees. It bounds two things at once —
+# how long one search's text is, for a tracker whose limit on query length is
+# tighter than this one's, and how many paths one filled page can hide, since a
+# batch whose page fills to LIMIT is re-asked path by path and a smaller batch
+# makes that fallback rarer.
+BATCH="${L5_QUERY_BATCH:-20}"
 
 # --- the failure vocabularies -------------------------------------------
 # fail_transient is the sync branch's alone. Exit 75 means "the entry stays
@@ -659,10 +697,74 @@ PATHS
 # The query job
 # ==========================================================================
 
+# The batched search's own state, held here rather than in do_query's locals
+# because query_batch reads and appends to all four. `found` accumulates the
+# pages every search returned, in the order they were made; the other three are
+# the batch being assembled.
+found=""
+batch_search=""
+batch_paths=""
+batch_count=0
+
+# Search for one batch's markers at once, and fall back to one search per path
+# where the batch's answer cannot be trusted.
+#
+# Two answers cannot be trusted and both fall back rather than being read. A
+# search that exited non-zero says nothing about what is filed against any of
+# its paths. And a page holding LIMIT items is a page the tracker truncated:
+# with one path per search that cap is per path, but a batch's filled page could
+# be several paths' worth of issues cut off, and a truncated page read as
+# complete is a duplicate filed. The fallback is also what keeps this safe on a
+# tracker whose limit on query length is tighter than this one's — a batch too
+# long to search fails, and failing is what re-asks its paths one at a time.
+#
+# A per-path search that fails after that fails the whole answer, which is the
+# behaviour this branch has always had: reporting the paths that did answer
+# would say that nothing is filed against the ones that did not.
+query_batch() {
+  local page returned fallback one marker
+
+  echo "searching for ${batch_count} path marker(s) in one search" >&2
+  fallback=0
+  if page="$(gh issue list --search "$batch_search" --state all --limit "$LIMIT" \
+               --json number,title,body,url,state,stateReason 2>/dev/null)"; then
+    returned="$(printf '%s' "$page" | jq 'length' 2>/dev/null)" || returned=""
+    if [ -z "$returned" ]; then
+      echo "the batched search's page could not be counted, so it is re-asked one path at a time" >&2
+      fallback=1
+    elif [ "$returned" -ge "$LIMIT" ]; then
+      echo "the batched search filled its page of ${LIMIT}, so it may be truncated and is re-asked one path at a time" >&2
+      fallback=1
+    fi
+  else
+    echo "the batched search failed, so it is re-asked one path at a time" >&2
+    fallback=1
+  fi
+
+  if [ "$fallback" -eq 0 ]; then
+    found="${found}${page}
+"
+    return 0
+  fi
+
+  while IFS= read -r one; do
+    [ -n "$one" ] || continue
+    marker="${PATH_MARKER_PREFIX}${one}"
+    echo "searching for ${marker}" >&2
+    page="$(gh issue list --search "\"${marker}\"" --state all --limit "$LIMIT" \
+              --json number,title,body,url,state,stateReason 2>/dev/null)" \
+      || fail "the search for ${one} failed, so what is filed is not known"
+    found="${found}${page}
+"
+  done <<BATCH_PATHS
+$batch_paths
+BATCH_PATHS
+}
+
 do_query() {
   require_tools fail
 
-  local question key body encoded asked paths found page one marker
+  local question key body encoded asked paths one
 
   question="$(cat)" || fail "the question could not be read from stdin"
 
@@ -707,22 +809,38 @@ do_query() {
     exit 0
   fi
 
-  # One search per path. A search that fails makes the whole answer unreliable —
-  # reporting the paths that did answer would say that nothing is filed against
-  # the ones that did not — so a failure here is a failure to answer.
+  # BATCH markers to a search rather than one search per path, so the number of
+  # searches is proportional to the scope divided by BATCH rather than to the
+  # scope. Each batch's search text is its markers quoted and joined with OR;
+  # every page goes into `found` and the composition below unions them.
   found=""
+  batch_search=""
+  batch_paths=""
+  batch_count=0
   while IFS= read -r one; do
     [ -n "$one" ] || continue
-    marker="${PATH_MARKER_PREFIX}${one}"
-    echo "searching for ${marker}" >&2
-    page="$(gh issue list --search "\"${marker}\"" --state all --limit "$LIMIT" \
-              --json number,title,body,url,state,stateReason 2>/dev/null)" \
-      || fail "the search for ${one} failed, so what is filed is not known"
-    found="${found}${page}
+    if [ "$batch_count" -gt 0 ]; then
+      batch_search="${batch_search} OR "
+    fi
+    batch_search="${batch_search}\"${PATH_MARKER_PREFIX}${one}\""
+    batch_paths="${batch_paths}${one}
 "
+    batch_count=$((batch_count + 1))
+    if [ "$batch_count" -ge "$BATCH" ]; then
+      query_batch
+      batch_search=""
+      batch_paths=""
+      batch_count=0
+    fi
   done <<PATHS
 $paths
 PATHS
+
+  # The last batch, which is short of BATCH whenever the scope does not divide
+  # by it. A scope smaller than one batch is answered by exactly one search.
+  if [ "$batch_count" -gt 0 ]; then
+    query_batch
+  fi
 
   # One document on stdout and nothing else. Every item's fields are what the
   # tracker said; nothing is invented for an item the searches did not return.

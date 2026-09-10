@@ -1118,6 +1118,7 @@ def append_event(
     cost_usd: float | None = None,
     scope_files: int | None = None,
     invocations: int | None = None,
+    dedupe_ran: bool | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -1174,6 +1175,13 @@ def append_event(
         "cost_usd": cost_usd,
         "scope_files": scope_files,
         "invocations": invocations,
+        # Whether that inspection's filed query answered. Written on every
+        # inspection entry including one where it did, rather than only where it
+        # did not, because a boolean has a false to say and absence would then
+        # mean either that or an entry written before this field existed — the
+        # treatment `discarded_session_block` already gets one log over. The
+        # `is not None` filter below is what lets a false through.
+        "dedupe_ran": dedupe_ran,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)

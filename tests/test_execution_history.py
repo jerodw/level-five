@@ -642,11 +642,14 @@ def test_the_schema_uses_only_the_keywords_the_validator_supports():
 #: invocations that cost covers. `cost_usd` is absent where the invocation
 #: reported no cost rather than written as zero, which is the same reading of
 #: "optional" one step sharper — absent means the harness was told no figure.
+#: `dedupe_ran` is an inspection's too and is a boolean, so it is written on
+#: every inspection entry including one where dedupe did run: absent there would
+#: mean either false or an entry written before the field existed.
 OPTIONAL_FIELDS = {
     "stage", "artifacts", "duration_seconds", "verifier_outcome",
     "retry_decision", "retry_reason", "retry_category", "retry_stage",
     "findings", "filed", "dropped",
-    "mode", "cost_usd", "scope_files", "invocations",
+    "mode", "cost_usd", "scope_files", "invocations", "dedupe_ran",
 }
 
 

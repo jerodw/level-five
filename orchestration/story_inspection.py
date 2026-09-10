@@ -306,7 +306,8 @@ def cap_paths(found: Expansion, cap: int):
 def _say(run_dir: Path, message: str, *, findings: int | None = None,
          filed: int | None = None, dropped: int | None = None,
          cost_usd: float | None = None, scope_files: int | None = None,
-         invocations: int | None = None) -> None:
+         invocations: int | None = None,
+         dedupe_ran: bool | None = None) -> None:
     """Append the inspection's record through the coordinator's shared append.
 
     Every value goes through that one call, so events.log, the run's structured
@@ -315,6 +316,11 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
     and are omitted when absent on exactly the terms those three already are —
     which is how an invocation that reported no cost records that it reported
     none rather than recording a zero.
+
+    `dedupe_ran` is not on those terms and is passed by every call: it is a
+    boolean, so absence would mean either false or a record written before the
+    field existed, and a record that cannot say which is a record nobody can
+    query for the runs that inspected without dedupe.
 
     Imported inside the body, the idiom the queue module already uses for its
     own coordinator import: the coordinator imports this module, and a
@@ -329,8 +335,28 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
             Path(run_dir), message, kind=INSPECTION_EVENT,
             findings=findings, filed=filed, dropped=dropped,
             mode=MODE, cost_usd=cost_usd, scope_files=scope_files,
-            invocations=invocations,
+            invocations=invocations, dedupe_ran=dedupe_ran,
         )
+    except Exception:  # noqa: BLE001 - reporting may not become the failure
+        pass
+
+
+def _note(run_dir: Path, message: str) -> None:
+    """Say one thing in the run's events.log, and only there.
+
+    It carries no kind of its own, so it is a note: it reaches events.log and
+    the run's structured history, and it reaches the cross-run inspection log
+    not at all — that log holds one record per inspection, and a second entry
+    carrying this kind would be a second inspection as far as anything reading
+    it is concerned. What the durable record says about dedupe is the
+    `dedupe_ran` field on the one line the inspection writes.
+
+    Guarded and imported inside the body for the reasons `_say` beside it is.
+    """
+    try:
+        from story_coordinator import append_event
+
+        append_event(Path(run_dir), message)
     except Exception:  # noqa: BLE001 - reporting may not become the failure
         pass
 
@@ -537,6 +563,10 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
                 f"{error}",
                 findings=0, filed=0, dropped=0,
                 scope_files=0, invocations=0,
+                # No invocation was made, so no filed query answered for this
+                # run. False is the honest reading; the vacuous true an empty
+                # scope list would give would say dedupe ran when nothing asked.
+                dedupe_ran=False,
             )
             commit_record(target_root, config, story_id)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
@@ -555,7 +585,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
             # total function's answer to a bad bound has to be.
             _say(run_dir, f"post-story inspection of {story_id}: {problem}",
                  findings=0, filed=0, dropped=0,
-                 scope_files=0, invocations=0)
+                 scope_files=0, invocations=0, dedupe_ran=False)
             commit_record(target_root, config, story_id)
         # An absent key is the mechanism switched off: no invocation, no event,
         # no commit, and an events.log byte-for-byte what it was.
@@ -574,7 +604,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
             f"post-story inspection of {story_id}: nothing the story changed "
             f"is in an inspected scope, so no inspection was made",
             findings=0, filed=0, dropped=0,
-            scope_files=0, invocations=0,
+            scope_files=0, invocations=0, dedupe_ran=False,
         )
         commit_record(target_root, config, story_id)
         return
@@ -583,7 +613,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     if bound is None:
         _say(run_dir, f"post-story inspection of {story_id}: {bound_problem}",
              findings=0, filed=0, dropped=0,
-             scope_files=0, invocations=0)
+             scope_files=0, invocations=0, dedupe_ran=False)
         commit_record(target_root, config, story_id)
         return
 
@@ -631,9 +661,29 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         min_severity=bound.min_severity,
     )
     findings, filed_count, dropped_count = _counts(report)
+    # A failed dedupe gets a line of its own, beside the summary rather than
+    # instead of it. As a trailing clause on one long line it stayed true for
+    # thirty stories without anybody reading it as the standing failure it was:
+    # an inspection that could not ask the tracker may have refiled what is
+    # already there, which is a different thing from an inspection that found
+    # nothing worth filing, and the two read alike at the end of a summary.
+    # Said first, because the summary below it reports what was filed and this
+    # is what a reader needs in order to know what that count is worth.
+    for one in report.dedupe:
+        if not one.ran:
+            _note(
+                run_dir,
+                f"post-story inspection of {story_id}: dedupe did not run for "
+                f"{one.scope}: {one.reason}; what was filed may already be "
+                f"filed",
+            )
     _say(
         run_dir, _summary(story_id, report, excluded, trimmed),
         findings=findings, filed=filed_count, dropped=dropped_count,
+        # A statement about the filed query alone, whatever the local index
+        # said: that tier holds only what this machine filed, so reading it does
+        # not make dedupe complete.
+        dedupe_ran=report.dedupe_ran,
         # Carried from the invocation's own result through the scope result,
         # never re-derived: nothing here reads an agent log back for it. None
         # where the invocation reported nothing, which is how the record says

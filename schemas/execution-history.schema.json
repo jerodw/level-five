@@ -111,6 +111,10 @@
       "invocations": {
         "type": "integer",
         "description": "How many agent invocations the recorded cost covers. Absent on every entry that is not an inspection, and zero on one recording an inspection that was not made."
+      },
+      "dedupe_ran": {
+        "type": "boolean",
+        "description": "Whether the inspection's filed query answered for every scope it covered. False is an inspection made without dedupe: the findings were filed anyway, because a query that could not answer costs dedupe and costs nothing else, so what this records is that the inspection may have refiled what is already in the tracker. It is a statement about the filed query alone and not about the local queue read beside it, which knows only what this machine filed and cannot see a duplicate filed from another checkout. Present on every entry that is an inspection, including one where the query did answer, because a boolean has a false to say and absence would otherwise mean either that or an entry written before this field existed. An inspection that made no invocation at all records false, because no query answered for it. Absent on every entry that is not an inspection, including the note a run appends beside an inspection's own entry naming the scope whose dedupe failed."
       }
     }
   }

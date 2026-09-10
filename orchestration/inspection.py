@@ -1179,6 +1179,12 @@ def record(target_root: Path, config: dict, report: Report) -> None:
             "dropped": len(report.dropped),
             "scope_files": report.scope_files,
             "invocations": report.invocations,
+            # Written on every line rather than only where dedupe failed, so a
+            # false is distinguishable from a line written before the field
+            # existed. It is the whole of what makes "which inspections ran
+            # without dedupe" a question one read of a tracked file answers,
+            # once the report this printed has scrolled away.
+            "dedupe_ran": report.dedupe_ran,
         }
         if report.cost_usd is not None:
             # Absent where nothing was reported, rather than zero: the same

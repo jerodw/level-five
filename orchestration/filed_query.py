@@ -39,6 +39,19 @@ returns: the item cap says how many it dropped, the per-field bound says how
 many fields it shortened, and the stdout bound says the document was never read
 whole. A bound whose effect is not stated reads as a tracker with nothing in it.
 
+**How the answering command scales with the scope is that command's business,
+not a bound the harness raises.** One question carries the whole scope and is
+held to one timeout, and both of those stay where they are however large a scope
+gets. The reason is what an answer means here: `Answer.answered` is a statement
+about the *whole* question, so a scope trimmed to fit a bound would be a partial
+answer reported as a complete one, which is exactly the false agreement the flag
+above exists against — and raising the bound only moves the size at which the
+same failure returns. So a command whose work is proportional to the scope is
+killed partway through and answers nothing, which the harness reports as dedupe
+not having run; the repair belongs in the command, and the query branch of
+`templates/scripts/github.sh` is where one is written that batches. Nothing
+about the timeout, the scope or what an answer means changes here.
+
 **Whether a closed item suppresses a refiling is the answering command's
 policy.** The harness must not encode it, must not infer it, and must not add a
 field that would let it start; see `schemas/filed-items.schema.json`, where a
