@@ -32,6 +32,14 @@ file it happens to touch.
 - **planning** — `l5-plan` and everything it does: the interview, the mandate,
   story ids and their reservation, committing and validating the artifact,
   fetching a brief, offering the run.
+- **agent-invocation** — how a stage's agent is actually run: the model and
+  effort it runs under, its permission mode, how many agents a stage is, and
+  what comes back from a turn.
+- **artifact-schemas** — the schemas artifacts are held to, the validator that
+  holds them, the inventory that keeps the set honest, and the parsing that
+  reads an artifact against its schema.
+- **cost-and-budgets** — what a run and a stage may spend, what is recorded
+  about what they did spend, and what stops on a ceiling.
 - **inspection-and-briefs** — the Inspector, what it files and what it
   declines to, the brief contract, and filing a brief by hand.
 - **outbox** — the durable queue: entries, identity and dedupe, receipts, and
