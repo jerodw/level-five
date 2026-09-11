@@ -2250,6 +2250,24 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "beside the other inspection keys. Neither is a claim a fixture "
         "configuration could make, because both are claims about the files "
         "this repository ships",
+    "test_a_merge_closes_the_brief.py":
+        "what this deployment ships is its whole subject: the workflow "
+        "definition at .github/workflows/close-brief-on-merge.yml, whose path "
+        "carries a 'workflows' segment, and whose trigger, merged guard, "
+        "issues-write permission and merge-commit checkout are the criteria "
+        "themselves — a fixture definition could only say back what the module "
+        "had just written into it, and what GitHub runs on a merge here is the "
+        "deployed file. The script it drives is the shipped one too, copied "
+        "into targets the module builds under tmp_path so that the branch "
+        "derivation, the column-zero brief_key read and the tracker calls are "
+        "exercised against the text this repository installs rather than "
+        "against an imitation of it. Where the configuration *is* an input — "
+        "which branch prefix and which stories directory the script reads — "
+        "the module declares invented values in a configuration it writes, and "
+        "it names neither of this target's own: the only thing it takes from "
+        "the live .harness/config.yaml is the two values it then searches the "
+        "change for, which is the claim that neither is written down a second "
+        "time",
     "test_a_question_to_the_developer_is_about_consequences.py":
         "what this repository ships is the whole of its subject: that "
         "prompts/prose-layer.md carries the widened scope sentence, the "

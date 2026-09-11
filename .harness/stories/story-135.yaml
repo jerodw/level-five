@@ -1,0 +1,199 @@
+story:
+  id: story-135
+  title: A merge on this repository closes the brief its story was planned from
+  description: |
+    Planned from the brief filed under 225.
+
+    A story's brief stays open after the story merges and a person closes it by
+    hand. Nothing is broken: the harness's last tracker moment is
+    `ready_to_merge`, sent when the run completes, and a merge happens
+    afterwards where the harness is not watching. What is missing is the step
+    after that one, and it is missing on this deployment rather than in the
+    harness.
+
+    THIS IS TARGET-SIDE WORK AND STAYS THERE. A GitHub Actions workflow assumes
+    GitHub, assumes a pull-request model, assumes issues, and assumes a target
+    wants its briefs closed on a merge -- four assumptions the harness is built
+    not to make. The harness knows a key and which of three moments the work
+    has reached; what those mean is the target's script's business. So this
+    belongs beside the things this repository already configures for itself --
+    `.harness/config.yaml`, the constants in `.harness/scripts/github.sh`,
+    `.github/workflows/tests.yml` -- and nowhere near `templates/`, which
+    `l5-init` installs into every target. A target on GitLab, on a markdown
+    table, or one that simply does not want this is unaffected, because nothing
+    about it is installed anywhere.
+
+    The board already does half of it. Its built-in closed-to-Done automation
+    works and was measured rather than assumed: across every item on project 1,
+    every closed issue is Done and every Done item is closed, with no exception
+    in either direction. So closing the brief is the whole of what is needed
+    and the column follows on its own.
+
+    THE OBVIOUS APPROACH IS THE WRONG ONE, and it was tried on 2026-09-10
+    rather than reasoned about. Putting a closing keyword in a story's pull
+    request body links the pull request to the brief, and that link trips a
+    second board automation which drives an item's Status from the state of its
+    linked pull request. Issue 209 sat at Implementation Complete; adding a
+    closing keyword for it to pull request 224 pulled it back to In Progress
+    within seconds, and removing the keyword again did not undo the move -- the
+    item had to be put back through the item command. Any design that links the
+    pull request to the brief fights that automation for as long as the pull
+    request is open, so the link is what must be avoided rather than a detail
+    to get right.
+
+    Whether closing through the API creates such a link was settled while this
+    story was planned, read-only and against the live board. Issue 226 --
+    story-134's brief, closed after that story merged -- carries a `closed`
+    event and no `ConnectedEvent` and no `CrossReferencedEvent`, and its board
+    Status is Done. So a close creates no pull-request-to-issue relationship,
+    the closed-to-Done automation fires, and the Status-from-linked-pull-request
+    automation has nothing to read. The one remaining way this design could
+    grow a link is a comment naming the pull request, so the workflow leaves no
+    comment at all.
+
+    What this adds: a workflow on `pull_request` `closed`, guarded by `merged`
+    being true, which checks out the merge commit and hands the head branch name
+    to a script. The script derives the story id from the branch, reads
+    `brief_key` out of the story artifact the merge just landed under
+    `.harness/stories/`, and closes that issue through the API. Deriving the key
+    from the artifact rather than from the pull request body is what makes it
+    independent of whoever wrote that body, which is the same reason the
+    projection is taken from the artifact and not from a paraphrase of it.
+
+    The thinking lives in the script rather than in the workflow's `run:` steps,
+    because almost none of it could be held by the suite otherwise, and both the
+    branch-name derivation and the `brief_key` read are testable without a
+    tracker. The script reads `branch_prefix` and `stories_dir` out of
+    `.harness/config.yaml` rather than restating them, which is the rule
+    story-134 established for this target's configured values: a configured
+    value is read by what depends on it, never written into it a second time.
+
+    The `brief_key` read anchors at column zero. A `brief_key` mentioned in
+    prose inside an indented block scalar is not the field, and this story's own
+    description is the demonstration -- it names `brief_key` five times above.
+
+    Nothing to close is quiet and a refused close is loud, and the split is
+    deliberate. A pull request whose branch carries no configured prefix, an
+    artifact that is absent or carries no `brief_key`, a key this deployment
+    cannot read as an issue number, and an issue already closed are each
+    ordinary and exit 0 saying so. A key that resolved and a close the API
+    refused fails the job, so a red check on the merged pull request says the
+    manual step still needs doing; exiting 0 there would make a silent failure
+    look exactly like a pull request that was never a story's.
+
+    The harness learns nothing from this. No new status token, no fourth
+    moment, no configuration key, and no harness code that knows what a merge
+    is. The run is over at completion and the harness has no merge to observe;
+    giving it one would mean the harness watching the tracker.
+  workflow: story-workflow
+
+tasks:
+  - Add .harness/scripts/close-brief.sh, a script that takes a branch name, reads branch_prefix and stories_dir out of .harness/config.yaml, derives the story id, reads brief_key from that story's artifact anchored at column zero, and closes the named issue through gh.
+  - Give that script the five quiet paths -- a branch carrying no configured prefix, a missing artifact, an artifact with no brief_key, a key this deployment cannot read as an issue number, and an issue already closed -- each exiting 0 with a sentence on stderr saying which it was.
+  - Give that script the one loud path -- a key resolved and the close refused by the API -- exiting non-zero with the refusal on stderr.
+  - Have the script ask the issue's state before closing it, so a re-run or a reverted-and-remerged branch is a no-op that this script decides rather than one inferred from gh's exit code for an already-closed issue.
+  - Give the script a dry-run mode, selected by an environment variable, which resolves and reports the key it would close and makes no tracker call, so the suite can drive the whole resolution without a tracker.
+  - Add .github/workflows/close-brief-on-merge.yml, triggered on pull_request closed, with a job guarded by github.event.pull_request.merged being true, which checks out the merge commit and invokes the script with the head branch name.
+  - Declare permissions on that workflow -- contents read and issues write -- because the default token cannot close an issue and tests.yml asks for no such permission.
+  - Add a standing test module under tests/ covering the branch derivation, the column-zero brief_key read, every quiet path, the loud path, and the workflow definition's merged guard and issues-write permission.
+  - Declare the new module in DECLARED_LIVE_ARTIFACT_READERS in tests/test_baseline_honesty.py, with the reason that what this deployment ships is its whole subject.
+  - Document in .harness/docs/ARCHITECTURE.md that this is this repository's own glue, installed into no target, and that the harness gained no fourth status token.
+
+acceptance_criteria:
+  - A workflow definition at .github/workflows/close-brief-on-merge.yml is triggered by the pull_request event's closed type and its job is guarded by github.event.pull_request.merged being true, so a pull request closed without merging runs nothing.
+  - That definition declares issues write permission, and the suite asserts it, so a token that cannot close an issue is a test failure rather than a runtime one.
+  - That definition checks out the pull request's merge commit, so the story artifact it reads is the one the merge landed rather than whatever a default ref would give.
+  - .harness/scripts/close-brief.sh obtains the branch prefix and the stories directory by reading .harness/config.yaml, and no test and no second file writes either value down.
+  - Given a branch name carrying the configured prefix and a story artifact carrying a brief_key, the script resolves that key, and the resolution is asserted by driving the script in its dry-run mode against a constructed repository rather than against a tracker.
+  - Given an artifact whose description mentions brief_key in prose inside an indented block scalar, and whose top-level brief_key field carries a different value, the script resolves the field's value and not the prose's, and that artifact is part of the suite's fixtures.
+  - Given an artifact carrying no top-level brief_key at all, but mentioning brief_key in prose, the script resolves nothing and exits 0.
+  - A branch name carrying no configured prefix exits 0, makes no tracker call, and says on stderr that the branch is not a story's.
+  - A branch whose derived story has no artifact exits 0, makes no tracker call, and says which artifact it looked for.
+  - A brief_key this deployment cannot read as an issue number exits 0, makes no tracker call, and says so, because the key is opaque to the harness and what can be done with one is this script's judgement.
+  - An issue the script finds already closed is left alone, makes no close call, and exits 0, so a re-run or a reverted-and-remerged branch costs nothing.
+  - A key that resolved and a close the tracker refused exits non-zero with the refusal on stderr, demonstrated against a stub tracker that refuses.
+  - Nothing the script does references the pull request to the issue -- no comment, no closing keyword, no body edit -- so no pull-request-to-issue link is created and the board's Status-from-linked-pull-request automation has nothing to read.
+  - Nothing under templates/, orchestration/ or schemas/ is changed, and no configuration key is added to .harness/config.yaml.
+  - .github/workflows/tests.yml is unchanged.
+  - The new test module is named for what it checks rather than for a story number, in the convention tests/test_validation_module_naming.py holds.
+  - The new test module is declared in DECLARED_LIVE_ARTIFACT_READERS in tests/test_baseline_honesty.py with a reason, so the equality that table is asserted against in both directions still holds.
+  - The suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read .harness/scripts/github.sh's header and its failure idiom before writing the new script, so the two agree about how a tracker-facing script on this deployment says why it did not do something; this script needs none of github.sh's three contracts and shares no constants with it, which is why it is a new file rather than a fourth job in that one.
+    - Write .harness/scripts/close-brief.sh taking the branch name as its first argument, with set -uo pipefail as github.sh has, and a single helper that prints a sentence on stderr and exits 0 for the quiet paths.
+    - Read branch_prefix and stories_dir out of .harness/config.yaml by matching the key anchored at column zero and taking the rest of the line, stripping surrounding whitespace; both are plain scalars in that file and neither is nested.
+    - Derive the story id by stripping the configured prefix from the branch name, and take the quiet path when the branch does not start with it.
+    - Read brief_key from the artifact at the stories directory joined with the story id and .yaml, matching ^brief_key: at column zero so a mention inside an indented block scalar cannot match, and taking the quiet path when the file is absent or the field is not there.
+    - Take the quiet path when the resolved key is not a run of digits, saying that this deployment reads a key as an issue number and that this one is not; the key is opaque to the harness and this is the one place on this deployment that decides what can be done with one.
+    - Ask the issue's state with gh issue view --json state before closing, take the quiet path when it is already closed, and fail loudly when the state cannot be read -- a state that cannot be read establishes nothing about whether the brief is open.
+    - Close with gh issue close and no comment and no body edit, and fail loudly with the refusal on stderr when it exits non-zero.
+    - Honour a dry-run environment variable by reporting the resolved key and returning before the first gh call, so every path above the tracker is drivable without one.
+    - Write .github/workflows/close-brief-on-merge.yml with on pull_request types closed, a permissions block naming contents read and issues write, a job conditioned on github.event.pull_request.merged, actions/checkout@v4 pinned to github.event.pull_request.merge_commit_sha, and one step invoking the script with github.event.pull_request.head.ref and GH_TOKEN from the job's token.
+    - Add a paragraph to .harness/docs/ARCHITECTURE.md beside the places that already carry deployment-side facts about .github/workflows/tests.yml, saying what this is, that it is installed into no target, that the harness gained no status token, and why a closing keyword is ruled out.
+  likely_file_changes:
+    - file: .harness/scripts/close-brief.sh
+      stage: implementer
+      reason: The whole of the resolution and the close -- the branch derivation, the configured reads, the brief_key read, the five quiet paths and the one loud one.
+    - file: .github/workflows/close-brief-on-merge.yml
+      stage: implementer
+      reason: The trigger, the merged guard, the issues-write permission and the merge-commit checkout; a thin caller of the script.
+    - file: tests/test_a_merge_closes_the_brief.py
+      stage: tester
+      reason: The standing module holding the derivation, the column-zero read, every quiet path, the loud path, and the workflow definition's guard and permission.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: Its DECLARED_LIVE_ARTIFACT_READERS table is asserted equal in both directions to what its scan reports, and the new module reads live paths carrying a workflows segment and config.yaml, so it joins that table or the table's equality fails.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that this is target-side glue installed into no target, that the harness gained no fourth status token, and why a closing keyword in a pull request body is ruled out.
+
+scope:
+  modify:
+    - .harness/scripts/close-brief.sh
+    - .github/workflows/close-brief-on-merge.yml
+    - tests/ for the new module and the baseline-honesty declaration
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - templates/
+    - orchestration/
+    - schemas/
+    - .github/workflows/tests.yml
+    - .harness/scripts/github.sh
+    - .harness/config.yaml
+    - prompts/
+    - workflows/
+    - scripts/
+
+verification_requirements:
+  - Confirm the workflow definition is triggered on the pull_request event's closed type, that its job is guarded by merged being true, that it declares issues write permission, and that it checks out the pull request's merge commit.
+  - Confirm .github/workflows/tests.yml is byte-identical to its committed state.
+  - Confirm nothing under templates/, orchestration/ or schemas/ was changed, and that .harness/config.yaml gained no key.
+  - Confirm the script obtains the branch prefix and the stories directory from .harness/config.yaml and that neither value is written down anywhere else in the change.
+  - Confirm the brief_key read is anchored at column zero by driving it against an artifact whose description mentions brief_key in prose and whose field carries a different value, and against one whose description mentions it and which carries no field.
+  - Confirm each of the five quiet paths exits 0, makes no tracker call, and names which it was.
+  - Confirm a refused close exits non-zero with the refusal on stderr.
+  - Confirm nothing in the change writes a comment on the issue, edits its body, or emits a closing keyword, so no pull-request-to-issue link can be created.
+  - Confirm the new test module's name is in the convention tests/test_validation_module_naming.py holds, and that tests/test_baseline_honesty.py's declaration table is equal in both directions to what its scan reports.
+  - Confirm the full suite passes with the command .harness/config.yaml names.
+
+constraints:
+  - The harness gains no knowledge of merges: no fourth status token, no configuration key, no schema field, and no change under orchestration/ or schemas/.
+  - Nothing this story adds is installed into any target; templates/ is untouched and l5-init ships none of it, so a target on another tracker or one that does not want this is unaffected.
+  - No design in this story may create a pull-request-to-issue relationship, by closing keyword, by comment, by body edit or otherwise, because the board's Status-from-linked-pull-request automation fights the harness's own status moves for as long as the pull request is open.
+  - The board's own automations are configuration on the tracker, not in this repository; this adds a caller of the closed-to-Done behaviour that already exists and changes no board setting.
+  - .github/workflows/tests.yml is not touched.
+  - A configured value is read by what depends on it and never written into it a second time, which is the rule story-134 established for this target's configured values.
+  - A pull request that is not a story's costs nothing and says nothing alarming: every path where there is nothing to close exits 0.
+  - A close the tracker refused is never absorbed, because a silent failure would be indistinguishable from a pull request that was never a story's.
+  - The brief_key this story reads is a string this deployment happens to spell as an issue number; the harness treats it as opaque and this script is the only place that decides otherwise.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-10 21:31:52
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 225

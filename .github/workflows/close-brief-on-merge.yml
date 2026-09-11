@@ -1,0 +1,47 @@
+# A merge on this repository closes the brief its story was planned from.
+#
+# This is this repository's own glue and is installed into no target: it
+# assumes GitHub, a pull-request model, issues, and a deployment that wants its
+# briefs closed on a merge. The harness makes none of those assumptions and
+# learns nothing from this — it gained no fourth status token and no
+# configuration key, and its last tracker moment is still ready_to_merge, sent
+# when the run completes. The step after that one is here.
+#
+# Everything it decides lives in .harness/scripts/close-brief.sh: which branch
+# is a story's, which brief that story was planned from, and what is worth
+# failing over. Read that file for the quiet paths and the one loud one. What
+# this definition contributes is the trigger, the guard, the permission the
+# close needs and the commit the artifact is read out of.
+name: close the brief a merged story was planned from
+
+on:
+  pull_request:
+    types: [closed]
+
+# The default token cannot close an issue, and tests.yml asks for no
+# permission at all. contents: read is the checkout; issues: write is the
+# close, and nothing here needs more than those two.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close-brief:
+    # A pull request closed without merging changed nothing, so it runs
+    # nothing: no checkout, no script, no tracker call.
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      # The merge commit, rather than whatever a default ref would give, so the
+      # story artifact the script reads is the one this merge landed.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      # The branch name goes through the environment rather than into the
+      # command line, so a branch named to look like shell is a string this
+      # step is given rather than something it runs.
+      - name: close the brief this story was planned from
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: .harness/scripts/close-brief.sh "$HEAD_BRANCH"
