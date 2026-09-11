@@ -1,0 +1,168 @@
+story:
+  id: story-136
+  title: A filed brief names the area of the system it concerns, from a vocabulary the target declares
+  description: |
+    A brief says what kind of work it is and how much it matters, and nothing
+    about which part of the system it concerns. On a board of 108 that is the
+    axis a developer sorts by and it is the one that is missing: category
+    spreads usefully, severity does not — 66 of the 84 triageable briefs sit at
+    severity 2 and 75 of 84 at confidence high. The Inspector files roughly
+    three briefs per story and this deployment implements one story at a time,
+    so the sorting is a standing cost rather than a one-off.
+
+    Where the vocabulary lives is the whole design. Which areas a system has is
+    target knowledge: the harness cannot know them, must not carry them, and
+    cannot assume the target has a tracker to display them on. So the
+    vocabulary is a document the target writes in its own standards directory,
+    which the Inspector is already handed whole — `orchestration/inspection.py`
+    globs that directory, looks for no file by name, and reads a target with
+    none as declaring none. A target that declares no areas is unaffected by
+    every part of this story.
+
+    What the harness gains is a slot and not a taxonomy: one optional
+    free-text field on the brief schema, carrying the area the producer named.
+    That is the relationship the contract already has with `paths` — the
+    harness knows a brief may name paths and knows nothing about any target's
+    paths. The producer names the area at the moment it knows most: the
+    Inspector has just read the code, and the assist agent proposes one from
+    the same document for the developer to confirm or correct.
+
+    Nothing may coin a name. A vocabulary that grows by agent fragments into
+    three spellings of one area inside a quarter, so growth goes through the
+    developer, and three things follow. Naming nothing has to be a first-class
+    answer, because a model told to name an area will name one and a wrong
+    area is worse than a missing one — a missing one is reported and a wrong
+    one is silent. The report may not be a trailing clause: `dedupe did not
+    run` sat at the end of a summary line and was true on every story from 101
+    to 130 without being read as the standing failure it was, so an area-less
+    brief gets its own line before the summary, as story-131 gave that one.
+    And the suggestion is reported and never written, so nothing is filed
+    under a name the developer has not approved.
+
+    This supersedes the brief filed under 235, which asked for the same board
+    field filled from an ordered path-prefix mapping held as a constant in the
+    installed script. A fixed mapping cannot name an area that does not exist
+    yet, and the file most briefs name — orchestration/story_coordinator.py,
+    in 31 of 108 — is not an area but the module everything passes through.
+    What survives from 235 unchanged is the board field and the sync branch
+    writing it; only where the value comes from has changed.
+
+    Planned from the brief filed under key 236.
+  workflow: story-workflow
+
+tasks:
+  - Widen schemas/story-brief.schema.json with an optional free-text `area`, described as the area of the target's own declared vocabulary that this work concerns, carried by the harness and understood by it no further than `paths` already is.
+  - Leave orchestration/story_brief.py unchanged and say why in the story's verification: `payload` spreads the brief, so an area reaches the tracker payload without a line of change, and `identity` must not carry it because an identity carrying the area would refile every brief whose area a growing vocabulary re-sorts.
+  - Widen schemas/inspection-findings.schema.json with an optional sibling of `findings`, holding the Inspector's suggestions for briefs it could name no area for — each naming the brief it is about by slug and saying what that brief seems to concern.
+  - Carry both new values through orchestration/inspection.py: the suggestions off the envelope onto the scope result and the Report, and the area of a filed brief onto Filed, each defaulted so every existing construction stays valid.
+  - Instruct the Inspector in prompts/inspector.md to name one area from the vocabulary in the standards body it was handed, to treat naming none as a first-class answer, never to coin a name, and to write a suggestion where it names none.
+  - Give an area-less filed brief its own line before the summary in orchestration/story_inspection.py, naming the briefs and printing the Inspector's suggestion for each.
+  - Give the broad inspection's report in scripts/l5-inspect the same line, on the same terms.
+  - Have the assist agent propose an area from the same document in plugin/skills/file-a-brief/SKILL.md, put it in front of the developer with the rest of the brief, take none for an answer, and never invent one.
+  - Add an area field to the sync branch of templates/scripts/github.sh as a sixth user of the existing board-field mechanism, and correct the comment that says five.
+  - Add a standing test module holding this behaviour, in the tester stage.
+
+acceptance_criteria:
+  - schemas/story-brief.schema.json declares an optional string property for the area, absent from the required list, and its description says the harness carries the value and knows no target's vocabulary.
+  - A brief carrying no area validates against schemas/story-brief.schema.json, and a brief carrying one validates too.
+  - orchestration/story_brief.py is unchanged by this story, and a test demonstrates both halves of why: the payload of a brief carrying an area carries that area, and the identity of two briefs differing only in their area is the same identity.
+  - schemas/inspection-findings.schema.json declares an optional property beside `findings` for the Inspector's area suggestions, and an envelope carrying only `findings` still validates.
+  - An envelope carrying suggestions is read without error, and the suggestions reach the Report that both report surfaces are printed from.
+  - A filed brief's record on the Report carries the area of the brief that was filed, and carries an empty area for a brief that named none.
+  - prompts/inspector.md instructs the Inspector to name one area from the vocabulary in the standards body it was given, states in as many words that a wrong area is worse than a missing one, states that it may never coin a name, and tells it to write a suggestion rather than an area where none of the declared names fits.
+  - An inspection that files a brief with no area writes a line of its own about it in the run's events.log, before the summary line, naming the brief.
+  - That line carries the Inspector's suggestion for the brief where the envelope offered one.
+  - A suggestion naming a brief that was dropped rather than filed is not printed by either report surface.
+  - An inspection where every filed brief named an area writes no such line at all.
+  - scripts/l5-inspect prints the same report for a broad inspection: a line of its own for area-less filed briefs, naming them and carrying their suggestions, and nothing where every filed brief named an area.
+  - plugin/skills/file-a-brief/SKILL.md tells the assist agent to read the target's declared vocabulary, propose one area, show it to the developer with the rest of the brief, accept that the answer may be none, and never invent a name that is not in the document.
+  - templates/scripts/github.sh declares an area field name beside the five it already declares, reads the area off the payload as the five others are read, and writes it through the same set_board_field call, so a board with no such field or no such option costs that field alone and is said on stderr.
+  - The comment in templates/scripts/github.sh that counts the classification fields agrees with the number of fields beside it.
+  - A target whose standards directory declares no area vocabulary files briefs exactly as it does today: no area on any brief, and no report line about it.
+
+technical_plan:
+  implementation_steps:
+    - Add the optional `area` property to schemas/story-brief.schema.json, beside `paths` and `not_in_scope`, describing it as the target's own vocabulary name for the part of the system this work concerns — free text because the vocabulary is the target's, held by the harness and resolved by nothing, exactly as `paths` is. Say in the description that it is payload rather than identity, and why.
+    - Add the optional suggestions property to schemas/inspection-findings.schema.json beside `findings`, each item naming the brief it concerns by slug and carrying the concern in the Inspector's own words. Say in its description that it is read for the report and filed by nothing, so that a name the developer has not approved never reaches a tracker.
+    - In orchestration/inspection.py, read the suggestions off the envelope where the findings are read, carry them on the scope result and on Report as a defaulted field, and record the area of each filed brief on Filed as a defaulted empty string.
+    - In prompts/inspector.md, beside the standards section that already injects the body, state the area rule: name exactly one from the vocabulary that body declares if it declares one, name none where none fits, never coin a name, and where you name none write a suggestion saying what the brief concerns so a person can decide whether the vocabulary is missing a line.
+    - In orchestration/story_inspection.py, write the area-less line through the same note seam the dedupe failure uses and above the summary, naming each area-less filed brief and carrying its suggestion where one was offered, and matching a suggestion to a brief by slug so a suggestion for a dropped brief is not printed.
+    - In scripts/l5-inspect, print the same thing from the Report the module returns, keeping every word of the report in that script as it already is.
+    - In plugin/skills/file-a-brief/SKILL.md, add the area to what the agent writes and to what it shows the developer before filing, with the rule that the vocabulary is the target's document and that proposing nothing is a correct answer.
+    - In templates/scripts/github.sh, declare AREA_FIELD beside the other five field names, read the area through payload_value, pass it to set_board_field beside the others, and update the comment that says five board fields.
+    - Add the standing test module under tests/, holding the schema widening, the payload-and-identity split, the two report surfaces, the dropped-suggestion rule, and the no-vocabulary case.
+  likely_file_changes:
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: The optional area field the whole story turns on.
+    - file: schemas/inspection-findings.schema.json
+      stage: implementer
+      reason: The channel the Inspector's suggestion rides, read for the report and filed by nothing.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: The envelope is read here and the Report both report surfaces print from is built here, so neither the suggestion nor a filed brief's area can reach a terminal without it.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: The producer that files most briefs is told to name an area, told that naming none is an answer, and told never to coin a name.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The post-story report gains its own line for area-less filed briefs, before the summary.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: The broad inspection's report gains the same line, on the same terms.
+    - file: plugin/skills/file-a-brief/SKILL.md
+      stage: implementer
+      reason: The assist agent proposes an area from the same document for the developer to confirm or correct.
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: The area becomes a sixth user of the existing board-field mechanism, needing no new failure path.
+    - file: tests/test_a_brief_names_its_area.py
+      stage: tester
+      reason: The standing module holding this behaviour: the optional field, the payload-and-identity split, both report surfaces, the dropped-suggestion rule, and the target that declares no vocabulary.
+
+scope:
+  modify:
+    - schemas/story-brief.schema.json
+    - schemas/inspection-findings.schema.json
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - prompts/inspector.md
+    - scripts/l5-inspect
+    - plugin/skills/file-a-brief/SKILL.md
+    - templates/scripts/github.sh
+    - tests/
+  do_not_modify:
+    - .harness/standards/areas.md
+    - orchestration/story_brief.py
+
+verification_requirements:
+  - Confirm that a brief carrying no area and a brief carrying one both validate against the widened brief schema, and that the area is absent from the schema's required list.
+  - Confirm that orchestration/story_brief.py was not changed, that the payload of a brief carrying an area carries it, and that two briefs differing only in their area derive the same identity.
+  - Confirm that an inspection-findings envelope carrying only `findings` still validates against the widened envelope schema.
+  - Confirm that the Inspector's suggestions read off an envelope reach the Report, and that each filed brief's record carries the area of the brief it filed.
+  - Confirm that an area-less filed brief produces a line of its own before the summary in the post-story report, that the line names the brief and carries its suggestion, and that an inspection where every filed brief named an area produces no such line.
+  - Confirm that the broad inspection's report in scripts/l5-inspect does the same, on the same terms.
+  - Confirm that a suggestion naming a brief that was dropped rather than filed is printed by neither report surface.
+  - Confirm that prompts/inspector.md states the area rule in its own words: one area from the declared vocabulary, none where none fits, a wrong area worse than a missing one, never coin a name, and a suggestion where none fits.
+  - Confirm that plugin/skills/file-a-brief/SKILL.md tells the assist agent to propose an area from the target's document, show it before filing, accept none, and never invent one.
+  - Confirm that templates/scripts/github.sh writes the area through the existing set_board_field mechanism and adds no new failure path, and that its comment counting the classification fields agrees with the fields beside it.
+  - Confirm that a target declaring no area vocabulary behaves exactly as it does today, with no area on any brief and no report line about it.
+
+constraints:
+  - The harness may not hold, resolve, normalize or validate any target's area vocabulary. The area is free text carried as given, on the terms `paths` is already carried.
+  - The area may not become part of what a brief is filed under. `identity` keeps the kind, the category, the sorted bare paths and the slug, and nothing else.
+  - The Inspector's suggestion is reported and never written: it may not reach a brief, a payload, an outbox entry or a tracker, so that nothing is filed under a name the developer has not approved.
+  - Naming no area must stay a valid brief. Nothing may make the field required, default it, infer it, or refuse a brief that lacks it.
+  - The area may not be derived from a brief's paths, by prefix mapping or otherwise. That is the design this story supersedes.
+  - The board write adds no new failure path: a field or an option the board does not offer is said on stderr and skipped while the entry still lands, exactly as the five classification fields beside it already behave.
+  - Briefs already filed are not backfilled and keep no area.
+  - An inspection must not be stopped, delayed or failed by anything this story adds. A missing area, an unreadable suggestion and a report that cannot be written each cost the report and nothing else.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-11 15:12:34
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 236
