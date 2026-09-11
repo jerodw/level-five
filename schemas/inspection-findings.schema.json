@@ -9,6 +9,24 @@
       "type": "array",
       "description": "The findings this inspection of this scope produced, each of which is separately held to schemas/story-brief.schema.json. An empty array is an answer rather than an absence: it says the Inspector looked at this scope and found nothing worth filing.",
       "items": { "type": "object" }
+    },
+    "area_suggestions": {
+      "type": "array",
+      "description": "What the Inspector could name no area for, and what it thinks each such brief concerns. Optional: an envelope carrying only `findings` is what every inspection wrote before this existed and is what an inspection of a target declaring no area vocabulary goes on writing. Each item names by slug the brief it is about, so a suggestion for a finding that was dropped rather than filed is matched to nothing and is not printed. IT IS READ FOR THE REPORT AND FILED BY NOTHING: a suggestion never reaches a brief, a payload, an outbox entry or a tracker, because the vocabulary grows by a person editing the target's own document and a name no developer has approved must not be filed under. What it buys is that a missing area is reported rather than silent, which is the whole reason naming none is a first-class answer.",
+      "items": {
+        "type": "object",
+        "required": ["slug", "concerns"],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "The slug of the finding this suggestion is about, spelled exactly as that finding spells it. It is how a report matches a suggestion to a brief that was actually filed."
+          },
+          "concerns": {
+            "type": "string",
+            "description": "What that brief seems to concern, in the Inspector's own words, so a person can decide whether the target's vocabulary is missing a line. It is not a name being proposed for the vocabulary and nothing files it."
+          }
+        }
+      }
     }
   }
 }

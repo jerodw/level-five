@@ -2237,6 +2237,25 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "them is controlled against the wordings this story superseded, "
         "carried here as literals, and against copies of the shipped sections "
         "with the violation planted in them",
+    "test_a_brief_names_its_area.py":
+        "the artifacts it resolves live are the ones its criteria are about: "
+        "schemas/story-brief.schema.json, whose optional free-text area and "
+        "absent required entry are the whole of what this story adds to a "
+        "brief; schemas/inspection-findings.schema.json, whose optional "
+        "sibling of the findings is the channel a suggestion rides; "
+        "prompts/inspector.md and plugin/skills/file-a-brief/SKILL.md, because "
+        "the claim is that this repository's own two producers of briefs are "
+        "told to name one area from the target's vocabulary, to take none for "
+        "an answer and never to coin a name; and both copies of the sync "
+        "script, because a sixth user of the board mechanism is a claim about "
+        "the text this harness installs. A fixture schema would say back only "
+        "what the module wrote into it and a fixture prompt would say nothing "
+        "about what either producer is told. Where something *is* an input — "
+        "the target whose standards declare no vocabulary, the envelope an "
+        "invocation writes, the report a surface prints, the board the value "
+        "lands on — the module builds it under tmp_path, and every absence it "
+        "asserts of a shipped document is controlled by the same check against "
+        "the same declaration with the violation planted in it",
     "test_a_completed_story_is_inspected.py":
         "every run it drives goes through a workflow it builds, against a "
         "target repository it constructs and configures, because the stage "
@@ -3119,6 +3138,18 @@ PENDING = "pending conversion"
 #: An empty pending class is a state this list can be in, not a state it has
 #: retired into.
 DECLARED_HISTORY_READERS = {
+    "test_a_brief_names_its_area.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story giving a brief an area left "
+        "orchestration/story_brief.py alone, because the area is payload a "
+        "spread already carries and identity must not carry. No constructed "
+        "repository can say what this story did not touch, and the comparison "
+        "is made through conftest.story_diff over the story's own range rather "
+        "than against HEAD, which would go vacuously green the moment the "
+        "working tree is committed. Its control is a pair of histories the "
+        "module builds with conftest.constructed_story — one story respecting "
+        "that path and one editing it — so an empty diff here is the story "
+        "having left it alone rather than a range bounded at the wrong commits",
     "test_baseline_honesty.py":
         "its regression set is committed evidence rather than a constructed "
         "fixture: the five known vacuous assertions are recovered from this "

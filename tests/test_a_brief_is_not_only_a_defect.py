@@ -117,6 +117,14 @@ EFFORTS_BEFORE = ["S", "M", "L"]
 
 FIELDS_BEFORE = ("title", "slug", "body", "category", "severity", "confidence",
                  "effort", "workflow", "paths", "not_in_scope")
+
+#: What a later story appended beside them, each optional and each named here
+#: rather than the comparison below being loosened into a containment check.
+#: Held shut from both sides: a field added to the schema without an entry here
+#: fails, and an entry naming a field the schema no longer declares fails too.
+#: The required list is untouched by every one of them, which is what keeps the
+#: second half of that comparison an exact equality.
+FIELDS_ADDED_SINCE = ("area",)
 REQUIRED_BEFORE = ("title", "slug", "body", "category", "severity",
                    "confidence", "effort", "workflow")
 
@@ -253,8 +261,18 @@ def test_the_severity_and_confidence_enums_are_unchanged_in_value_and_in_type():
     assert max(SEVERITIES) == SEVERITIES[-1]
 
 
-def test_no_field_was_added_or_removed_and_the_required_list_is_unchanged():
-    assert DECLARED_FIELDS == FIELDS_BEFORE
+def test_no_field_was_removed_and_the_required_list_is_unchanged():
+    """This story added none, and what a later one added is declared above.
+
+    The fields this story found are still every field the schema declares
+    except the ones named as appended, still in the order it found them, and
+    the required list is exactly what it was — which is the half that matters
+    for a brief written before any of this, since a field nothing requires
+    cannot make one fail.
+    """
+    assert set(DECLARED_FIELDS) == set(FIELDS_BEFORE) | set(FIELDS_ADDED_SINCE)
+    assert tuple(one for one in DECLARED_FIELDS
+                 if one not in FIELDS_ADDED_SINCE) == FIELDS_BEFORE
     assert REQUIRED_FIELDS == REQUIRED_BEFORE
 
 
