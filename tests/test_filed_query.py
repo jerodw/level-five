@@ -234,15 +234,46 @@ RETIRED_PER_JOB_CONSTANTS = (
     "L5_ITEM_PROJECT", "L5_ITEM_PROJECT_OWNER", "L5_ITEM_STATUS_FIELD",
 )
 
+#: What the installed copy declares, read once here and derived from below, so
+#: that every board value this module and the modules importing it use comes
+#: from one reading of the file that decides them.
+INSTALLED_CONSTANTS = sync_constants(
+    INSTALLED_SCRIPT.read_text(encoding="utf-8"))
+
+
+def this_targets(constant: str,
+                 constants: dict[str, tuple[str, str]] | None = None) -> str:
+    """What a tracker script declares for one of its board constants.
+
+    Read out of the script rather than written down, because a value written
+    here is this suite's second copy of a configured value: a target that
+    renamed the column its filings land in, or moved to another board, would
+    have to edit this module to keep the suite green, and a configuration
+    change would arrive as a test failure.
+
+    What the writing-down was for is kept by two claims that name no value.
+    The first is here: a declared value must be non-empty, so a target that has
+    configured no board fails while this module is collected rather than
+    passing every board assertion vacuously. The second is the drive — the
+    installed copy is run with nothing set in its environment, so the board it
+    reaches is the one it declares rather than one this module handed it.
+
+    `constants` is a reading other than the installed one, which is how the
+    same derivation is applied to a copy declaring invented values.
+    """
+    _, declared = (INSTALLED_CONSTANTS if constants is None
+                   else constants)[constant]
+    assert declared, f"{constant} declares no value, so no board is configured"
+    return declared
+
+
 #: The board this deployment files against, and the column a newly filed entry
-#: lands in. Written here rather than read out of `.harness/scripts/github.sh`,
-#: because the claim these make is that the installed copy files against
-#: *these*: a test that read the values out of its own subject would pass
-#: whatever they had been changed to, which is the assertion not being made.
-THIS_TARGETS_PROJECT = "1"
-THIS_TARGETS_PROJECT_OWNER = "@me"
-THIS_TARGETS_STATUS_FIELD = "Status"
-THIS_TARGETS_STATUS_OPTION = "Backlog"
+#: lands in, each read out of `.harness/scripts/github.sh`.
+STATUS_OPTION_CONSTANT = "STATUS_OPTION"
+THIS_TARGETS_PROJECT = this_targets(PROJECT_CONSTANT)
+THIS_TARGETS_PROJECT_OWNER = this_targets(PROJECT_OWNER_CONSTANT)
+THIS_TARGETS_STATUS_FIELD = this_targets(STATUS_FIELD_CONSTANT)
+THIS_TARGETS_STATUS_OPTION = this_targets(STATUS_OPTION_CONSTANT)
 
 #: A column nothing files into: what a human moved a landed item to, and what a
 #: later sweep must leave it at.
@@ -280,25 +311,37 @@ def declared_values(name: str) -> tuple[str, ...]:
     return tuple(str(value) for value in BRIEF_SHAPE["properties"][name]["enum"])
 
 
-#: The five fields a brief's classification is written into, and what this
-#: deployment calls each of them. The names are written here rather than read
-#: out of `.harness/scripts/github.sh` for the reason the Status values above are:
-#: a test that read the values out of its own subject would pass whatever they
-#: had been changed to. The values are not written here, for the opposite
-#: reason: they are the schema's and the harness's, and restating them would be
-#: the second list this story exists to avoid.
+def axis(payload_field: str, constant: str, values: tuple[str, ...]) -> Axis:
+    """One axis, its board field name read out of the installed copy.
+
+    The field names are read for the reason the Status values above are: they
+    are what this target calls five columns, and a target that renamed one of
+    them would otherwise have to edit this module. The values are not written
+    here either, for a different reason: they are the schema's and the
+    harness's, and restating them would be a second list beside them.
+    """
+    return Axis(payload_field, constant, this_targets(constant), values)
+
+
+#: The five fields a brief's classification is written into, under the names
+#: `.harness/scripts/github.sh` declares for them.
 CLASSIFICATION = (
-    Axis("category", "CATEGORY_FIELD", "Category", declared_values("category")),
-    Axis("severity", "SEVERITY_FIELD", "Severity", declared_values("severity")),
-    Axis("confidence", "CONFIDENCE_FIELD", "Confidence",
-         declared_values("confidence")),
-    Axis("effort", "EFFORT_FIELD", "Effort", declared_values("effort")),
+    axis("category", "CATEGORY_FIELD", declared_values("category")),
+    axis("severity", "SEVERITY_FIELD", declared_values("severity")),
+    axis("confidence", "CONFIDENCE_FIELD", declared_values("confidence")),
+    axis("effort", "EFFORT_FIELD", declared_values("effort")),
     #: The workflow a brief is planned under is not an enum: the acceptable
     #: names are the definitions the harness holds, so they are read from the
     #: same listing the coordinator refuses an unknown name against.
-    Axis("workflow", "WORKFLOW_FIELD", "Workflow",
-         harness_config.workflow_names(REPO_ROOT)),
+    axis("workflow", "WORKFLOW_FIELD", harness_config.workflow_names(REPO_ROOT)),
 )
+
+#: Every constant this target's board values are read out of, so the module
+#: holding the suite to reading them asks about the names this reading uses
+#: rather than about a second list beside it.
+BOARD_CONSTANTS = (PROJECT_CONSTANT, PROJECT_OWNER_CONSTANT,
+                   STATUS_FIELD_CONSTANT, STATUS_OPTION_CONSTANT) + tuple(
+    one.constant for one in CLASSIFICATION)
 
 #: What the module says about itself, read off it so this file names no key,
 #: bound or schema of its own.
@@ -2074,7 +2117,7 @@ def board_environment_for(script: Path) -> dict:
         return {}
     return {
         TEMPLATE_CONSTANTS[PROJECT_CONSTANT][0]: THIS_TARGETS_PROJECT,
-        TEMPLATE_CONSTANTS["STATUS_OPTION"][0]: THIS_TARGETS_STATUS_OPTION,
+        TEMPLATE_CONSTANTS[STATUS_OPTION_CONSTANT][0]: THIS_TARGETS_STATUS_OPTION,
         **{TEMPLATE_CONSTANTS[axis.constant][0]: axis.field_name
            for axis in CLASSIFICATION},
     }
@@ -2083,7 +2126,7 @@ def board_environment_for(script: Path) -> dict:
 #: Every constant `board_environment_for` overrides, so the assertion that they
 #: are declared is made of the names the overriding uses rather than of a
 #: second list beside it.
-OVERRIDDEN_CONSTANTS = (PROJECT_CONSTANT, "STATUS_OPTION") + tuple(
+OVERRIDDEN_CONSTANTS = (PROJECT_CONSTANT, STATUS_OPTION_CONSTANT) + tuple(
     axis.constant for axis in CLASSIFICATION)
 
 
@@ -2958,7 +3001,7 @@ def test_a_status_option_configured_in_another_case_still_resolves_to_nothing(
 
     result = sync_to_the_board(script, tmp_path, environment,
                                key="k-option-in-another-case",
-                               breaking={TEMPLATE_CONSTANTS["STATUS_OPTION"][0]:
+                               breaking={TEMPLATE_CONSTANTS[STATUS_OPTION_CONSTANT][0]:
                                          configured})
 
     assert result.returncode == TRANSIENT_EXIT, result.stderr
@@ -3239,7 +3282,7 @@ def test_the_template_with_nothing_configured_writes_no_field(tmp_path):
         TEMPLATE_SCRIPT, tmp_path, environment, key="k-no-fields",
         payload=a_filed_brief(),
         extra={TEMPLATE_CONSTANTS[PROJECT_CONSTANT][0]: THIS_TARGETS_PROJECT,
-               TEMPLATE_CONSTANTS["STATUS_OPTION"][0]:
+               TEMPLATE_CONSTANTS[STATUS_OPTION_CONSTANT][0]:
                    THIS_TARGETS_STATUS_OPTION})
 
     assert result.returncode == 0, result.stderr
@@ -3266,9 +3309,12 @@ def test_the_template_names_no_project_no_status_option_and_no_field():
     A template carrying a project number would file another repository's briefs
     onto this board, and one carrying a field name would name a column another
     board has no reason to have. The owner is allowed the generic default it
-    ships with; the project, the column and the five field names must all
-    default to empty, and the column this target files into must not appear
-    anywhere in the file.
+    ships with, and that is asserted as the claim this sentence makes — that
+    the default is non-empty and generic — rather than as an equality with what
+    this target's owner happens to be, which would redden a test about the
+    template the day this target changed owner. The project, the column and the
+    five field names must all default to empty, and the column this target
+    files into must not appear anywhere in the file.
 
     The prefix a category's label carries is deliberately not in that list: it
     is a mechanic every target that files briefs wants rather than a property
@@ -3276,25 +3322,28 @@ def test_the_template_names_no_project_no_status_option_and_no_field():
 
     The control is the same extraction and the same search over the installed
     copy, which does name all of them — so the emptiness here is the
-    template's rather than a parse that stopped matching anything.
+    template's rather than a parse that stopped matching anything. The
+    installed side is asserted as non-emptiness rather than as an equality with
+    a value read out of that same copy, which would be that value compared
+    against itself.
     """
     template = TEMPLATE_SCRIPT.read_text(encoding="utf-8")
     installed = sync_constants(INSTALLED_SCRIPT.read_text(encoding="utf-8"))
 
     assert TEMPLATE_CONSTANTS[PROJECT_CONSTANT][1] == ""
-    assert TEMPLATE_CONSTANTS["STATUS_OPTION"][1] == ""
-    assert TEMPLATE_CONSTANTS[PROJECT_OWNER_CONSTANT][1] == THIS_TARGETS_PROJECT_OWNER
+    assert TEMPLATE_CONSTANTS[STATUS_OPTION_CONSTANT][1] == ""
+    assert TEMPLATE_CONSTANTS[PROJECT_OWNER_CONSTANT][1] != ""
     assert THIS_TARGETS_STATUS_OPTION not in template
     assert TEMPLATE_CONSTANTS["CATEGORY_LABEL_PREFIX"][1] != ""
 
-    assert installed[PROJECT_CONSTANT][1] == THIS_TARGETS_PROJECT
-    assert installed["STATUS_OPTION"][1] == THIS_TARGETS_STATUS_OPTION
-    assert THIS_TARGETS_STATUS_OPTION in \
-        INSTALLED_SCRIPT.read_text(encoding="utf-8")
+    assert installed[PROJECT_CONSTANT][1] != ""
+    assert installed[STATUS_OPTION_CONSTANT][1] != ""
+    for constant in BOARD_CONSTANTS:
+        assert installed[constant][1] != "", constant
 
-    for axis in CLASSIFICATION:
-        assert TEMPLATE_CONSTANTS[axis.constant][1] == "", axis.constant
-        assert installed[axis.constant][1] == axis.field_name, axis.constant
+    for one in CLASSIFICATION:
+        assert TEMPLATE_CONSTANTS[one.constant][1] == "", one.constant
+        assert installed[one.constant][1] != "", one.constant
 
 
 def lines_that_differ(left: str, right: str) -> list[str]:

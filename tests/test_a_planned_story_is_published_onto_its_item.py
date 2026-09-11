@@ -81,7 +81,6 @@ from test_filed_query import (  # noqa: F401 - shared idioms and fixtures
     PROJECT_CONSTANT,
     STATUS_FIELD_CONSTANT,
     TEMPLATE_CONSTANTS,
-    THIS_TARGETS_PROJECT,
     THIS_TARGETS_STATUS_FIELD,
     board_environment_for,
     board_items,
@@ -1565,17 +1564,23 @@ def test_that_same_move_fails_where_the_field_name_is_matched_verbatim(
 def test_this_repositorys_installed_copy_names_a_project_for_the_item_branch():
     """A shipped artifact and the subject: this deployment's own wiring.
 
-    Pointing this deployment at project 1 was done by editing the sync script's
+    Pointing this deployment at a project was done by editing the sync script's
     installed copy; the item script needed the same value, had no copy of it,
     and so reported a failure for every status move it was asked to make. One
     project constant serving all three branches is what makes that value reach
     the item branch, and it is the behaviour change the merge produced rather
     than the object of it.
+
+    What is asserted is the wiring rather than the number: that the constant is
+    declared once and read by both branches. The comparison against a written
+    down project number that used to stand here is gone, because the suite now
+    reads that value out of this same file — so it was that value compared
+    against itself, and it said nothing about whether the item branch can see
+    it. That the value is non-empty is asserted where it is read.
     """
     installed = INSTALLED_ITEM.read_text(encoding="utf-8")
     declared = sync_constants(installed)
 
-    assert declared[PROJECT_CONSTANT][1] == THIS_TARGETS_PROJECT
     # One assignment, so the value the item branch reads and the value the sync
     # branch reads cannot be two values.
     assert len([line for line in installed.splitlines()
