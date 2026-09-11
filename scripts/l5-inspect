@@ -37,6 +37,14 @@ finding beneath it is rated exactly as the scale says and is dropped under a
 reason of its own, before the cap, so it is never reported as having been
 crowded out by findings that mattered more.
 
+A brief may name the area of the system it concerns, from a vocabulary the
+target declares in its own standards directory. The harness holds no such
+vocabulary and resolves no name in it. Naming none is a first-class answer —
+a wrong area is worse than a missing one — so a filed brief that named none
+gets a line of its own here, carrying whatever the Inspector said that brief
+seems to concern. A target that declares no areas files exactly as it did
+before: no area on any brief, and no line about it.
+
 --dry-run reports exactly what an ordinary invocation would file and
 enqueues nothing. It still makes the invocations, because what would be
 filed is not knowable without them.
@@ -152,6 +160,25 @@ def report(found, dry_run: bool) -> int:
     else:
         print(f"  severity floor: {found.min_severity}, so a finding below "
               f"severity {found.min_severity} is not filed")
+
+    # A filed brief that named no area, on its own lines and above the list of
+    # what was filed, on the same terms the post-story report says it: the list
+    # below reports what was filed, and this says what one of those filings is
+    # missing. The area is the axis a developer sorts the board by, so a brief
+    # filed without one is sorted by nothing, and the Inspector's suggestion is
+    # what tells a person whether the vocabulary is missing a line. A
+    # suggestion is matched to a filed brief by slug, so one naming a finding
+    # that was dropped is printed nowhere. Where every filed brief named an
+    # area — and on every inspection of a target that declares no vocabulary —
+    # there is nothing here to say and nothing is said.
+    unnamed = found.unnamed_areas
+    if unnamed:
+        print("the brief(s) below were filed with no area, so they are "
+              "sorted by nothing on the board:")
+        for brief, suggestion in unnamed:
+            print(f"  {brief.slug}")
+            if suggestion:
+                print(f"      the Inspector says it concerns: {suggestion}")
 
     verb = "would file" if dry_run else "filed"
     print(f"{verb} {len(found.filed)} brief(s):")

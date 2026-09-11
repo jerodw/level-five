@@ -746,8 +746,15 @@ def test_a_brief_titled_the_superseded_way_still_validates():
 
 def test_the_shape_this_story_leaves_is_the_shape_it_found():
     """Imported rather than restated: the pre-story fields, required list and
-    enums are recorded once, in the module whose subject they are."""
-    assert tuple(BRIEF_SCHEMA["properties"]) == contract.FIELDS_BEFORE
+    enums are recorded once, in the module whose subject they are — including
+    what a later story appended beside them, so this comparison stays an
+    equality rather than becoming a containment check that a removed field
+    would pass."""
+    assert tuple(one for one in BRIEF_SCHEMA["properties"]
+                 if one not in contract.FIELDS_ADDED_SINCE) \
+        == contract.FIELDS_BEFORE
+    assert set(BRIEF_SCHEMA["properties"]) \
+        == set(contract.FIELDS_BEFORE) | set(contract.FIELDS_ADDED_SINCE)
     assert tuple(BRIEF_SCHEMA["required"]) == contract.REQUIRED_BEFORE
     assert BRIEF_SCHEMA["properties"]["severity"]["enum"] \
         == contract.SEVERITIES_BEFORE

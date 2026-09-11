@@ -68,6 +68,10 @@
       "description": "The repository-relative paths this work is about, bare and carrying no line number, no column and no selector — see the reason in this schema's own description. Optional, because work about the absence of something has no path to name, which is the ordinary case for a feature that was never built; a brief carrying none is filed under an identity with no paths, and no scoped query will find it.",
       "items": { "type": "string" }
     },
+    "area": {
+      "type": "string",
+      "description": "The part of the system this work concerns, named from the target's own declared vocabulary of areas. Free text, held by the harness and resolved by nothing: which areas a system has is the target's knowledge, written in a document in the target's own standards directory, and the harness neither holds that vocabulary, nor normalizes a name against it, nor refuses a name it has not seen. That is exactly the relationship the contract already has with `paths` — the harness knows a brief may name paths and knows nothing about any target's paths. Optional, and naming none is a first-class answer rather than an omission to be repaired: a wrong area is worse than a missing one, because a missing one is reported and a wrong one is silent, so nothing may make this required, default it, infer it or refuse a brief that lacks it. It is payload rather than identity, and the reason is that the vocabulary grows: an identity carrying the area would refile every brief whose area a growing vocabulary re-sorts, against the same piece of work. It is never derived from the brief's paths, because the file a brief names is frequently the module everything passes through rather than the area the work is about."
+    },
     "not_in_scope": {
       "type": "array",
       "description": "What a story planned from this brief should deliberately leave alone, in the Inspector's own words. Optional, and advisory: nothing reads it, and the human planning the brief decides what it is worth.",

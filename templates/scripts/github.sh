@@ -21,7 +21,7 @@
 # option's id from a project's field listing. Each of those is declared once
 # below and used by whichever branches need it, so a fix to one of them is a
 # fix everywhere rather than a fix in one of three copies. What is genuinely
-# per-job — the label and the column a newly filed item lands in, the five
+# per-job — the label and the column a newly filed item lands in, the six
 # classification field names, the three moment options, the search limit —
 # stays with its branch.
 #
@@ -328,6 +328,13 @@ SEVERITY_FIELD="${L5_SYNC_SEVERITY_FIELD:-}"
 CONFIDENCE_FIELD="${L5_SYNC_CONFIDENCE_FIELD:-}"
 EFFORT_FIELD="${L5_SYNC_EFFORT_FIELD:-}"
 WORKFLOW_FIELD="${L5_SYNC_WORKFLOW_FIELD:-}"
+# The area of the target's own vocabulary the work concerns. It is one more
+# user of the mechanism above and needs nothing new of it: the value is free
+# text the payload carries and this script neither holds the vocabulary nor
+# checks a name against it, exactly as it holds none of the values above.
+# A brief that named no area writes nothing here, which is the ordinary case
+# rather than a failure.
+AREA_FIELD="${L5_SYNC_AREA_FIELD:-}"
 
 # The label a brief's category is applied under: this prefix followed by the
 # category the payload carries. It defaults to something non-empty because it is
@@ -496,7 +503,7 @@ do_sync() {
   BOARD_FAIL=fail_transient
   require_tools fail_transient
 
-  local key entry title body category severity confidence effort workflow
+  local key entry title body category severity confidence effort workflow area
   local marker paths encoded existing url category_label current field_id option_id added
 
   key="${L5_SYNC_KEY:-}"
@@ -509,9 +516,10 @@ do_sync() {
   body="$(printf '%s' "$entry" | jq -r '.payload.body // ""')" \
     || fail_terminal "the entry carries no body this command can use"
 
-  # The classification the payload carries: one label below, five board fields
+  # The classification the payload carries: one label below, six board fields
   # further down. An absent value reads as empty and nothing is written for it,
-  # which is what an entry that is not a brief gets.
+  # which is what an entry that is not a brief gets, and what a brief that
+  # named no area gets for that one field.
   payload_value() {
     printf '%s' "$entry" | jq -r --arg name "$1" '(.payload[$name] // "") | tostring'
   }
@@ -521,6 +529,7 @@ do_sync() {
   confidence="$(payload_value confidence)" || confidence=""
   effort="$(payload_value effort)" || effort=""
   workflow="$(payload_value workflow)" || workflow=""
+  area="$(payload_value area)" || area=""
 
   # The key is written into the body, which is what makes the search below able
   # to find it. Change the marker if you like; search for whatever you write.
@@ -687,6 +696,7 @@ PATHS
     set_board_field "$CONFIDENCE_FIELD" "$confidence"
     set_board_field "$EFFORT_FIELD" "$effort"
     set_board_field "$WORKFLOW_FIELD" "$workflow"
+    set_board_field "$AREA_FIELD" "$area"
   fi
 
   echo "$url"

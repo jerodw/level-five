@@ -660,6 +660,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         cost_usd=result.cost_usd,
         scope_files=result.scope_files,
         min_severity=bound.min_severity,
+        area_suggestions=tuple(result.area_suggestions),
     )
     findings, filed_count, dropped_count = _counts(report)
     # A failed dedupe gets a line of its own, beside the summary rather than
@@ -698,6 +699,22 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
             f"dedupe query answered for a tracker the tree no longer points "
             f"at; what was filed may already be filed",
         )
+    # A filed brief that named no area gets a line of its own, before the
+    # summary and never as a clause at the end of it. The clause is what a
+    # failing dedupe had, and it stayed true for thirty stories without being
+    # read as the standing failure it was; an area nobody named is the same
+    # shape of fact — the sorting axis a developer works the board by is
+    # missing for that brief, and the vocabulary may be missing a line. Said
+    # before the summary, because the summary reports what was filed and this
+    # says what one of those filings is missing. Where every filed brief named
+    # an area, and on every inspection of a target that declares no
+    # vocabulary, nothing is said at all.
+    for brief, suggestion in report.unnamed_areas:
+        line = (f"post-story inspection of {story_id}: no area was named for "
+                f"{brief.slug}")
+        if suggestion:
+            line += f"; the Inspector says it concerns: {suggestion}"
+        _note(run_dir, line)
     _say(
         run_dir, _summary(story_id, report, excluded, trimmed),
         findings=findings, filed=filed_count, dropped=dropped_count,

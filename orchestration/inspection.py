@@ -92,6 +92,18 @@ a duplication of one fact: the filter decides, and the prompt exists so an
 invocation does not spend a three-hundred-word brief on a finding that will be
 dropped unread. The severity scale itself is untouched by all of it.
 
+**The area a brief names is the target's word, carried and resolved by
+nothing.** Which areas a system has is target knowledge: the harness cannot
+know them, must not carry them, and cannot assume a target has a tracker to
+display them on. So the vocabulary is a document in the target's own standards
+directory, which this module already hands the Inspector whole — the standards
+are globbed and no file is looked for by name, so a target that declares no
+areas is read as declaring none and is unaffected by every part of this. What
+the harness gains is a slot rather than a taxonomy: a free-text field on the
+brief, carried on the terms `paths` is already carried. Nothing here coins a
+name, and where the Inspector could name none it writes a suggestion instead,
+which is reported and filed by nothing.
+
 **No silent bound.** Every way of dropping a finding is named in the report with
 what it excluded: already filed by the tracker, already filed by this harness,
 already queued, malformed, an unknown workflow, beneath the severity floor, past
@@ -235,6 +247,10 @@ UNKNOWN_WORKFLOW = "names a workflow the harness does not define"
 BENEATH_THE_FLOOR = "beneath the severity floor"
 
 PAST_THE_CAP = "past the cap"
+#: The sibling of `findings` an envelope may carry: what the Inspector could
+#: name no area for. Spelled once here, because the envelope schema declares it
+#: and this is the only module that reads it.
+AREA_SUGGESTIONS = "area_suggestions"
 LOST_BY_THE_QUEUE = "lost by the queue"
 NO_ARTIFACT = "no findings artifact"
 
@@ -458,6 +474,22 @@ class Drop:
 
 
 @dataclass(frozen=True)
+class AreaSuggestion:
+    """One brief the Inspector could name no area for, and what it concerns.
+
+    Reported and never written: nothing here reaches a brief, a payload, an
+    outbox entry or a tracker, because the vocabulary of areas grows by a person
+    editing the target's own document and a name no developer has approved must
+    not be filed under. `slug` is what matches it to a brief that was actually
+    filed, so a suggestion about a finding that was dropped is matched to
+    nothing and printed by neither report surface.
+    """
+
+    slug: str
+    concerns: str
+
+
+@dataclass(frozen=True)
 class Filed:
     """One brief that reached the queue, and the key it was filed under."""
 
@@ -466,6 +498,15 @@ class Filed:
     title: str
     severity: int
     scope: str
+    #: The area of the target's own declared vocabulary this brief named, and
+    #: the empty string where it named none. Carried so a report can say which
+    #: filed briefs came with no area, which is the whole of what makes a
+    #: missing area reported rather than silent. Defaulted so every existing
+    #: construction stays valid, and empty is a brief that named none rather
+    #: than a record written before the field existed — the two are the same
+    #: thing here, because nothing infers an area for a brief that carries
+    #: none.
+    area: str = ""
     #: Whether the local queue held this brief's key in the terminal failed
     #: state when the inspection began. Evidence that filing this identity has
     #: been tried and keeps failing — `enqueue` overwrites the whole entry, so
@@ -539,10 +580,36 @@ class Report:
     #: nothing: a bound that is silent when it dropped nothing is
     #: indistinguishable from a bound that is not there.
     min_severity: int = DEFAULT_MIN_SEVERITY
+    #: What the invocations could name no area for, as they wrote it. Carried
+    #: to the report because both report surfaces print it beside the briefs it
+    #: is about, and filed by nothing: see `AreaSuggestion`.
+    area_suggestions: tuple[AreaSuggestion, ...] = ()
 
     def dropped_for(self, reason: str) -> tuple[Drop, ...]:
         """Everything dropped one way, so a caller can say each way once."""
         return tuple(drop for drop in self.dropped if drop.reason == reason)
+
+    @property
+    def unnamed_areas(self) -> tuple[tuple[Filed, str], ...]:
+        """Each filed brief that named no area, with its suggestion or "".
+
+        One derivation beneath both report surfaces, because the post-story
+        report and the broad inspection's report say the same thing on the same
+        terms and two derivations of one rule are two answers that can
+        disagree. A suggestion is matched to a brief **by slug**, so a
+        suggestion naming a finding that was dropped rather than filed matches
+        nothing and is printed by neither surface: what an area-less line
+        reports is briefs that were filed, and a suggestion about work nobody
+        filed would be a line about nothing.
+        """
+        suggested = {
+            one.slug: one.concerns for one in self.area_suggestions
+            if one.concerns
+        }
+        return tuple(
+            (brief, suggested.get(brief.slug, ""))
+            for brief in self.filed if not brief.area
+        )
 
     @property
     def dedupe_ran(self) -> bool:
@@ -581,6 +648,8 @@ class _ScopeResult:
     dedupe: Dedupe = None
     cost_usd: float | None = None
     scope_files: int = 0
+    #: What this invocation could name no area for, read off its envelope.
+    area_suggestions: tuple = ()
 
 
 # --------------------------------------------------------------------------
@@ -841,6 +910,50 @@ def _reported_cost(invoked) -> float | None:
     return float(reported)
 
 
+def _area_suggestions(document) -> tuple[AreaSuggestion, ...]:
+    """What one envelope said it could name no area for.
+
+    The envelope schema has already been satisfied by the time this is reached,
+    so what this adds is tolerance rather than validation: an envelope carrying
+    the sibling not at all is every envelope written before the field existed
+    and every envelope an inspection of a target declaring no areas writes, and
+    it yields nothing. An entry that is not a usable pair yields nothing of its
+    own and costs the entries beside it nothing, on the rule the findings
+    beside them already follow — a suggestion is a report and may not become the
+    thing that stops an inspection.
+    """
+    declared = document.get(AREA_SUGGESTIONS) or []
+    if not isinstance(declared, list):
+        return ()
+    found = []
+    for one in declared:
+        if not isinstance(one, dict):
+            continue
+        slug = one.get("slug")
+        concerns = one.get("concerns")
+        if not isinstance(slug, str) or not isinstance(concerns, str):
+            continue
+        if not slug.strip() or not concerns.strip():
+            continue
+        found.append(AreaSuggestion(slug=slug.strip(), concerns=concerns.strip()))
+    return tuple(found)
+
+
+def _area(finding) -> str:
+    """The area a finding named, and "" where it named none.
+
+    Carried exactly as it was given: the vocabulary is the target's and the
+    harness resolves, normalizes and validates no name in it. A finding that
+    named none is a finding that named none — nothing here infers one, and
+    nothing here reads the paths to guess.
+    """
+    if isinstance(finding, dict):
+        value = finding.get("area")
+        if isinstance(value, str):
+            return value.strip()
+    return ""
+
+
 def _severity(finding) -> int | None:
     """A finding's severity where it has a readable one, for the drop report."""
     if isinstance(finding, dict):
@@ -926,6 +1039,8 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
     if document is None:
         result.dropped.append(Drop(NO_ARTIFACT, f"{scope.label}: {problem}"))
         return result
+
+    result.area_suggestions = _area_suggestions(document)
 
     brief_schema = schema_validator.load_schema(BRIEF_SCHEMA, harness_root)
     defined = harness_config.workflow_names(harness_root)
@@ -1081,6 +1196,11 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
             title=one.finding["title"],
             severity=one.finding["severity"],
             scope=one.scope.label,
+            # Carried as the brief gave it, and empty where the brief named
+            # none. Both producers reach filing through here, so what a filed
+            # brief's record says about its area is one fact rather than one
+            # per producer.
+            area=_area(one.finding),
             refiled_over_failure=_held_failed(one.finding, failed),
         ))
     return tuple(filed), dropped
@@ -1259,6 +1379,7 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
     dropped: list = []
     dedupe: list = []
     costs: list = []
+    suggestions: list = []
     scope_files = 0
     invocations = 0
     for scope in covered:
@@ -1271,6 +1392,7 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         dropped.extend(result.dropped)
         dedupe.append(result.dedupe)
         costs.append(result.cost_usd)
+        suggestions.extend(result.area_suggestions)
         scope_files += result.scope_files
 
     filed, over = file_findings(
@@ -1296,6 +1418,7 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
         cost_usd=reported_total(costs),
         scope_files=scope_files,
         min_severity=bound.min_severity,
+        area_suggestions=tuple(suggestions),
     )
     # Written last, and not by a dry run. Two reasons, and the second is the
     # one that decides it. A dry run's filed count is zero because filing was

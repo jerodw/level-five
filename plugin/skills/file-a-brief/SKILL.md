@@ -24,8 +24,8 @@ filing one they did not ask for is not.
 says why each part of it is where it is. Read it rather than working from
 memory. Its required parts are a title, a slug, a body, a category, a
 severity, a confidence, an effort and the workflow the work should be planned
-under; it may also carry the paths the work is about and what a story planned
-from it should deliberately leave alone.
+under; it may also carry the paths the work is about, the area of the system it
+concerns, and what a story planned from it should deliberately leave alone.
 
 ### The slug
 
@@ -58,6 +58,30 @@ reports a defect, open the body by saying what is wrong today: that is the case
 for the work, the file:line evidence is already there, and `category` and
 `severity` are the fields a board sorts on to know something is broken.
 
+### The area
+
+A brief may name the `area` of the system the work concerns. The vocabulary of
+areas is the **target's own document**, in its standards directory — read it
+and propose one name from it, spelled exactly as that document spells it. The
+harness holds no vocabulary of its own and resolves no name against one, so
+there is nothing to look the name up in but that document.
+
+- Propose exactly one, and where the work touches two, the one it would land
+  in.
+- **Never invent a name that is not in the document.** The list grows by the
+  developer editing it, so that one part of the system does not end up under
+  three spellings.
+- **Proposing none is a correct answer.** Where no declared name fits, and
+  where the target declares no areas at all, leave it out and say so — a wrong
+  area is worse than a missing one, because a missing one is reported and a
+  wrong one is silent and misfiles the work for everyone who filters later.
+- Do not derive it from the paths. Many areas share a file, and the file a
+  brief names is often the module everything passes through.
+
+Show the area you propose to the developer with the rest of the brief, below,
+and take a correction or a "none" for an answer: the name goes on the brief
+only because they approved it.
+
 ### The paths, and where the evidence goes
 
 **The paths a brief carries are bare repository-relative paths**, with no line
@@ -76,8 +100,11 @@ from what the system does instead.
 
 2. **Show it to the developer** and ask whether to file it. Show the whole
    brief — the title, the slug, the category, the severity, the confidence,
-   the effort, the workflow and the body — not a summary of it, because what
-   is filed is what they are agreeing to. Do not file it until they say so.
+   the effort, the workflow, the area you propose and the body — not a
+   summary of it, because what is filed is what they are agreeing to. Say
+   outright where you propose no area and why, so that answer is one they can
+   confirm rather than something they have to notice is absent. Do not file it
+   until they say so.
 
 3. **Write the document to a file** the session can write to, and pass its
    path to the entry point:
