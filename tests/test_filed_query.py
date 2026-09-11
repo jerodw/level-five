@@ -1807,8 +1807,8 @@ def seeded_board() -> dict:
 
     A Title field sits beside the Status field so that resolving the Status
     field's id by name is a resolution rather than a choice of the only field
-    there is, and two options sit beside `Backlog` so that resolving the option
-    by name is the same.
+    there is, and two options sit beside the one this target declares so that
+    resolving the option by name is the same.
     """
     return {
         f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}": {

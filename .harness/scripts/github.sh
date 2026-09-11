@@ -317,7 +317,7 @@ LABEL="${L5_SYNC_LABEL:-l5}"
 # whatever the project's own default is, which is what a target whose board has
 # no such field gets — so it is a value a target sets in its installed copy,
 # and the template carries none of it.
-STATUS_OPTION="${L5_SYNC_STATUS_OPTION:-Backlog}"
+STATUS_OPTION="${L5_SYNC_STATUS_OPTION:-Inbox}"
 # The board's fields, by name, that a brief's classification is written into.
 # Each is empty here and set in a target's installed copy: an empty name means
 # that field is not written, so a board that has no such column files exactly as
