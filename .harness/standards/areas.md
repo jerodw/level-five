@@ -4,6 +4,13 @@ The parts of this system, as a vocabulary for saying which one a piece of work
 concerns. Not a rule about the code — a list of names, so that a backlog can be
 sorted by feature rather than only by kind and severity.
 
+**Called an area rather than a feature, deliberately.** A feature is what an
+epic delivers, and `feature` is already a value of a brief's `category` for
+work the system does not have and should. An area is not delivered by
+anything: it is a part of the system that work lands in, and a brief has one
+whether or not any epic ever touches it. Keeping the two words apart leaves
+`feature` free to mean what it means everywhere else here.
+
 **Name exactly one, or name none.** Where a brief concerns two areas, name the
 one the work would land in. Where none of them fits, name none and say so: a
 missing area is reported and gets a name added here, and a wrong one is silent
