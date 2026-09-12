@@ -1,0 +1,153 @@
+story:
+  id: story-139
+  title: A filed brief lands in the column its classification already decides
+  description: |
+    Every brief this deployment files lands in one column and a person sorts
+    them afterwards. That sorting follows a rule, the rule is almost entirely
+    mechanical, and the sync branch of the tracker script already holds
+    everything the rule needs: it reads the payload's category to write a
+    label and six board fields, it writes one marker per path the payload
+    carries, and it already decides a column through STATUS_OPTION and sets it
+    only where it finds the Status field empty. Category and paths are the
+    whole input; the deciding is not there.
+
+    This story puts the rule in the sync branch. Where any of a brief's paths
+    begins with a prefix this target reads as text an agent or a script author
+    consumes, the brief lands in the column a person reviews. Otherwise, where
+    its category is one this target reads as deferring, it lands in the
+    deferred column. Otherwise it lands in the review column. Ordering
+    matters and the path override comes first, which is what makes a
+    documentation drift in an agent-facing file reviewable while the same
+    category elsewhere defers.
+
+    This is routing rather than a verdict, which is what makes it safe to
+    decide at filing time. A judgement stamped on a brief goes stale and
+    nothing revisits it; a column is current state, corrected by dragging, and
+    leaves no record to contradict. The branch decides only where a brief
+    starts, and the existing set-only-where-empty rule guarantees it never
+    revisits that decision. It is conservative in one direction: a category
+    named in no list lands in review, so the failure mode is a fuller review
+    column rather than a buried finding.
+
+    The deciding lives in the template and the four inputs are constants, each
+    a single assignment whose value is data. A template shipping an empty
+    deferred column routes nothing: every brief lands in the column the target
+    already names, which is exactly today's behaviour, so no target inherits
+    this deployment's triage. Which categories defer, which paths override,
+    and what the two columns are called are this target's judgements and live
+    in the installed copy alone.
+
+    This story was planned from the brief filed under 237.
+
+  workflow: story-workflow
+
+tasks:
+  - Declare four new editable constants in the sync job's constants block of templates/scripts/github.sh - the review column, the deferred column, the deferring categories and the overriding path prefixes - each as one assignment in the ${L5_...:-default} form the constants beside them already use, and each with an empty default.
+  - Add the routing rule to do_sync in templates/scripts/github.sh, deciding which option the existing Status write uses - a path override first, then the deferring category list, then the review column - and leaving every other decision the branch makes alone.
+  - Make the deferred column the switch in templates/scripts/github.sh - a copy declaring no deferred column routes nothing and writes STATUS_OPTION, which is what every target that has configured nothing gets.
+  - Declare this target's four values in .harness/scripts/github.sh, so the installed copy differs from its template in constant-assignment lines alone.
+  - Read the four new constants out of the installed copy in tests/test_filed_query.py through the existing derivation, and add them to the tuple of board constants the read-don't-write guard discovers, so no test writes any of the four down.
+  - Drive the rule end to end in tests/test_filed_query.py against the stub tracker: a deferring category without an overriding path, the same brief with an overriding path, a category in no deferring list, and a payload carrying no paths.
+  - Add the copy-declaring-other-values control to tests/test_a_targets_configured_values_are_read_not_written.py - a copy of the installed script declaring a different deferring list and invented column names, driven identically against a stub board renamed to match, routing onto that copy's columns by that copy's list.
+  - Assert in tests/test_filed_query.py that the template names neither column and defers no category, and that a copy declaring no deferred column files at STATUS_OPTION whatever the brief's category and paths are.
+  - Adapt the existing filed-status expectations in tests/test_filed_query.py, tests/test_a_filed_query_scales_with_its_scope.py, tests/test_brief_fetch.py and tests/test_a_planned_story_is_published_onto_its_item.py to the column the routed filing now lands in.
+  - Record the change in .harness/docs/ARCHITECTURE.md, including that the column is a routing default rather than a verdict.
+
+acceptance_criteria:
+  - templates/scripts/github.sh declares a review-column constant, a deferred-column constant, a deferring-categories constant and an overriding-path-prefixes constant, each matching the constant-assignment form the existing sync constants use and each defaulting to empty.
+  - A filing whose payload carries a path beginning with one of the declared overriding prefixes writes the review column into the board's Status field, whatever its category.
+  - A filing whose category is one the deferring list names, and none of whose paths begins with an overriding prefix, writes the deferred column.
+  - A filing whose category is in no deferring list, and one whose payload carries no paths at all, each write the review column.
+  - A copy of the script declaring an empty deferred column writes STATUS_OPTION for every brief, whichever category and paths it carries, so a target that has configured nothing files exactly as it did before this story.
+  - The Status field is still written only where the item reports it empty, so a sweep re-running over an entry that landed earlier leaves its column alone.
+  - The label the category is applied under, the six classification fields, the path markers, the payload marker and the idempotent search are unchanged by this story.
+  - .harness/scripts/github.sh declares non-empty values for all four new constants, and the standing comparison still reports no difference between the two copies that is not a constant assignment.
+  - templates/scripts/github.sh contains neither column name this target declares and names no category in a deferring position.
+  - The four new values reach the suite by being read out of the installed copy through the same derivation the other board values use, and the guard over board values written down discovers them along with the rest.
+  - No module under tests/ binds any of the four new values to a string literal, and the guard's planted-literal control still reports one.
+  - A copy of the installed script declaring a different deferring list and invented column names, driven with nothing set in its environment against a stub board renamed to match, files onto the columns that copy declares by the list that copy declares.
+  - .harness/docs/ARCHITECTURE.md records the rule, the four constants, the empty-deferred-column switch, and that a column is where a brief starts rather than a judgement about the work.
+
+technical_plan:
+  implementation_steps:
+    - In templates/scripts/github.sh, add the four constants to the sync job's block beside STATUS_OPTION, with comments in the register of the constants around them saying that the two lists are whitespace-separated data this script neither holds nor checks, and that an empty deferred column means route nothing.
+    - In do_sync, after the payload's category and paths have been read and before the board work, compute the option the Status write uses - the review column where any path begins with one of the declared prefixes, otherwise the deferred column where the category is in the deferring list, otherwise the review column - falling back to STATUS_OPTION where the deferred column is empty.
+    - Leave the existing branch that writes Status intact - its emptiness check, its transient failures on an unresolvable field or option, and its skipping entirely where nothing is configured.
+    - Set the four values in .harness/scripts/github.sh and change nothing else in it.
+    - In tests/test_filed_query.py, name the four new constants beside STATUS_OPTION_CONSTANT, bind each through this_targets, add them to BOARD_CONSTANTS, and split the two list values where they are used rather than where they are bound, so each bound value stays the non-empty string the guard requires.
+    - Add the routing drives against the stub tracker written there, choosing each brief's category and paths from the values read out of the installed copy rather than from names written into the module.
+    - In tests/test_a_targets_configured_values_are_read_not_written.py, extend INVENTED with the four, keeping the board-renaming helper fed only the constants that name board options - the two list constants name no option and must not reach it - and drive the invented copy so the routing it performs is that copy's.
+    - Update the existing assertions that expect a filing to land at this target's STATUS_OPTION to expect the column the routed filing lands in.
+    - Write the ARCHITECTURE.md section, in the shape the sections recording the earlier tracker-script stories already use.
+
+  likely_file_changes:
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: The deciding and the four empty constants - the mechanics live here so every target gets them and no target inherits this deployment's triage.
+    - file: .harness/scripts/github.sh
+      stage: implementer
+      reason: This target's four values, and nothing else, so the two copies still differ in constant assignments alone.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: Derives the four values from the installed copy, drives the rule end to end, asserts the template carries neither column, and adapts the filed-status expectations the routing moves.
+    - file: tests/test_a_targets_configured_values_are_read_not_written.py
+      stage: tester
+      reason: The four new values join what the read-don't-write guard covers, and the copy declaring other values is driven so its routing follows its own declarations.
+    - file: tests/test_a_filed_query_scales_with_its_scope.py
+      stage: tester
+      reason: Adapts its expectation of the column a filing lands in to the routed one.
+    - file: tests/test_brief_fetch.py
+      stage: tester
+      reason: Adapts its expectation of the column a filing lands in to the routed one.
+    - file: tests/test_a_planned_story_is_published_onto_its_item.py
+      stage: tester
+      reason: Adapts its expectation of the column a filing lands in to the routed one.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the rule, the constants, the switch, and that a column is a routing default rather than a verdict.
+
+scope:
+  modify:
+    - templates/scripts/github.sh
+    - .harness/scripts/github.sh
+    - tests/test_filed_query.py
+    - tests/test_a_targets_configured_values_are_read_not_written.py
+    - tests/test_a_filed_query_scales_with_its_scope.py
+    - tests/test_brief_fetch.py
+    - tests/test_a_planned_story_is_published_onto_its_item.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - schemas/
+    - prompts/
+    - workflows/
+    - templates/scripts/l5-standards
+    - .harness/config.yaml
+
+verification_requirements:
+  - The full suite passes under the configured test command, including the standing comparison holding the installed copy to its template on constant-assignment lines alone and that comparison's planted-difference control.
+  - The rule is demonstrated by driving the script rather than by reading it: each of the four outcomes - path override, deferring category, category in no deferring list, no paths at all - is a filing against the stub tracker whose resulting Status is asserted.
+  - Driving a copy of the script that declares an empty deferred column produces this target's STATUS_OPTION for a brief the installed copy would defer, which is the claim that no target inherits this triage.
+  - Driving a copy that declares a different deferring list and invented column names produces that copy's columns, which is the claim that the suite's knowledge of the routing follows the file rather than agreeing with something written beside it.
+  - No value among the four appears as a string literal in any module under tests/, shown by the existing guard with the four included in what it discovers, and by that guard's planted-literal control still reporting one.
+  - The claims the documentation makes about the rule are supported by what the script does, in particular the empty-deferred-column switch and the ordering of the override before the category.
+
+constraints:
+  - The Status field is written only where the item reports it empty. This story decides where a brief starts and never moves an item between columns.
+  - Which categories defer, which path prefixes override and what the two columns are called are this target's judgements. They live in .harness/scripts/github.sh as constant values and are not decided anywhere else.
+  - The template carries no value particular to any deployment: all four constants default to empty there, and neither column name this target uses appears in the file.
+  - An edit to a shipped script is an edit to two files. The installed copy carries the identical mechanics and differs only in the values its constants declare.
+  - The harness learns nothing about columns here - no configuration key, no brief field, no schema change, and no code under orchestration/ that knows what a column is.
+  - The category label and the six classification board fields are written exactly as they are written now.
+  - A judgement the rule cannot make is not guessed at. A category needing a person to read the brief routes to the review column, which is what listing only the deferring categories already does for anything unlisted.
+  - Failures keep the answers they have now: an unresolvable Status field or option is transient after the issue exists, and a classification field that resolves to nothing costs that field alone.
+  - The two lists are whitespace-separated data the script neither holds a vocabulary for nor validates a member of, exactly as it holds none of the field names beside them.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-12 11:07:52
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 237
