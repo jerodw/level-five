@@ -1,21 +1,30 @@
 """A forgotten file is not a failure: the self-route budget, split by cause.
 
-A stage that left the suite red and a stage that did the work and forgot to
-write a JSON file used to cost the run the same thing. story-108 splits the
-budget: a stage declaring `max_bookkeeping_self_routes` spends it on the
-bookkeeping causes — a required artifact missing, or one the freshness check
-read as a previous attempt's — and spends `max_self_routes` on everything else.
-A stage declaring no bookkeeping budget spends `max_self_routes` on every
-cause, exactly as every stage did before, which is what makes landing the split
+A stage whose turn failed and a stage that did the work and forgot to write a
+JSON file used to cost the run the same thing. story-108 splits the budget: a
+stage declaring `max_bookkeeping_self_routes` spends it on the bookkeeping
+causes — a required artifact missing, or one the freshness check read as a
+previous attempt's — and spends `max_self_routes` on everything else. A stage
+declaring no bookkeeping budget spends `max_self_routes` on every cause,
+exactly as every stage did before, which is what makes landing the split
 nothing until a definition opts in.
+
+The failure this module spends the failure budget on is an agent process that
+died without completing. Until story-137 it was a red suite, which was
+story-101's own cause and the one the split was argued from; a red suite is
+carried forward to the verifier now rather than re-entering the stage that ran,
+so it spends no self-route budget at all and can no longer show what the split
+buys. What replaced it has the same standing under the classification — a fact
+about the turn rather than about the record of it — and the sequences are
+otherwise story-101's.
 
 What this module holds:
 
   * story-101's sequence, driven end to end rather than abstracted — a stage
-    re-entered for a stale required artifact and then met by a red suite,
-    reaching the suite failure with the failure budget it would have had if the
-    forgotten file had never happened. Its control is the identical plan under
-    a definition declaring no bookkeeping budget, which escalates one suite
+    re-entered for a stale required artifact and then met by a failure of the
+    turn itself, reaching that failure with the failure budget it would have
+    had if the forgotten file had never happened. Its control is the identical
+    plan under a definition declaring no bookkeeping budget, which escalates one
     failure earlier and with the wording it escalated with before this story.
   * a stage that never writes its required artifact, which still stops, with an
     escalation reason naming the bookkeeping budget it exhausted rather than
@@ -39,16 +48,18 @@ into something this module enforces. What this deployment declares is asserted
 where the shipped definition is the subject, in
 `tests/test_shipped_workflow_is_valid.py`.
 
-The suite the coordinator runs after the declaring stage's turn is
-`tests/test_coordinator_runs_the_suite.py`'s: a script in the target whose exit
-status follows a sentinel file a stage can repair or break. Reused rather than
-copied, so a red suite here is the same red suite that module drives.
+The target and the suite the coordinator runs after the declaring stage's turn
+are `tests/test_coordinator_runs_the_suite.py`'s: a script in the target whose
+exit status follows a sentinel file a stage repairs. Reused rather than copied,
+so the target a run here is driven against is the one that module builds. Every
+turn that completes here repairs it, so no run below meets a red suite and none
+of them exercises the route a red suite takes.
 
 Every absence asserted here carries a demonstration that it can fail:
 
   * "the failure budget was untouched by the bookkeeping re-entry" sits beside
     the same plan under a definition declaring no bookkeeping budget, where it
-    is touched and the run stops a suite failure earlier;
+    is touched and the run stops one failure earlier;
   * "the escalation names the bookkeeping budget and not the failure one" sits
     beside the run that exhausts the failure budget, whose reason names that
     one and not the other;
@@ -207,7 +218,14 @@ def test_the_no_model_guard_fires_when_a_model_is_invoked(tmp_path):
 # --------------------------------------------------------------------------
 
 OK = "ok"          #: write everything declared, and leave the suite green
-BROKEN = "broken"  #: write everything declared, and leave the suite red
+#: The agent process dies without completing. This is the *failure* cause the
+#: sequences below spend the failure budget on, and it took the red suite's
+#: place there in story-137: a red suite is carried forward to the verifier now
+#: rather than re-entering the stage that ran, so it spends no self-route budget
+#: at all and cannot show what a split budget buys. What it is replaced by is
+#: the cause with the same standing — a fact about the turn rather than about
+#: the record of it, spending `max_self_routes` and never the bookkeeping one.
+DEAD = "dead"
 #: Change the tree exactly as OK does, and write a changed-files record that
 #: does not name what was changed — the turn that did the work and did not
 #: record it, which is the third bookkeeping cause.
@@ -272,11 +290,13 @@ class Runner:
                 handle.write(f"{stage} invocation {call}\n")
 
         action = _nth(self.plan.get(stage, []), call - 1, OK)
+        if action == DEAD:
+            return AgentResult(ok=False, result_text="the process died")
+
         skipped = {action[1]} if isinstance(action, tuple) else set()
         changed: list[str] = []
-        if action in (OK, BROKEN, OMIT):
-            state = REPAIRED if action in (OK, OMIT) \
-                else "the state the stage found"
+        if action in (OK, OMIT):
+            state = REPAIRED
             path = self.tree / SENTINEL
             if path.read_text(encoding="utf-8").strip() != state:
                 write(path, f"{state}\n")
@@ -363,51 +383,52 @@ def reason_of(run_dir: Path) -> str:
 
 
 # --------------------------------------------------------------------------
-# story-101's sequence: a forgotten file, and then a red suite
+# story-101's sequence: a forgotten file, and then a failure of the turn
 #
 # story-101 spent one self-route on a genuine suite failure, spent the next on
 # a turn that repaired those failures and left test-results.json unwritten, and
 # then met a flake with nothing left. It escalated with its work complete. The
 # sequences below are that one, driven rather than described: a bookkeeping
-# re-entry, and then as many suite failures as the failure budget allows.
+# re-entry, and then as many failures of the turn as the failure budget allows.
+# The cause that follows the forgotten file is no longer story-101's red suite,
+# for the reason the module docstring gives; what it stands for is unchanged.
 # --------------------------------------------------------------------------
 
 
-def missing_then_red() -> dict:
+def missing_then_dead() -> dict:
     """The stage's first invocation forgets a file that is not at the run root
-    yet, and every invocation after it leaves the suite red."""
+    yet, and every invocation after it dies without completing."""
     return {"plan": {DECLARING: [skip(conftest.TEST_RESULTS)]
-                     + [BROKEN] * (FAILURE_BUDGET + 1)},
+                     + [DEAD] * (FAILURE_BUDGET + 1)},
             "verdicts": [PASS]}
 
 
-def stale_then_red() -> dict:
+def stale_then_dead() -> dict:
     """story-101's own shape. The stage runs once cleanly and the suite passes;
     a failed verdict routes a retry back to it; the invocation the retry brings
     leaves at the run root what the first one wrote, which is the stale case;
-    and every invocation after that leaves the suite red."""
+    and every invocation after that dies without completing."""
     return {"plan": {DECLARING: [OK, skip(conftest.TEST_RESULTS)]
-                     + [BROKEN] * (FAILURE_BUDGET + 1)},
+                     + [DEAD] * (FAILURE_BUDGET + 1)},
             "verdicts": [FAILED, PASS]}
 
 
-def omitted_then_red() -> dict:
+def omitted_then_dead() -> dict:
     """The stage's first invocation changes a repository file and writes a
-    changed-files record that does not name it; the invocation the re-entry
-    brings records what it changes and leaves the suite red, as does every one
-    after it."""
-    return {"plan": {DECLARING: [OMIT] + [BROKEN] * (FAILURE_BUDGET + 1)},
+    changed-files record that does not name it; every invocation after the
+    re-entry dies without completing."""
+    return {"plan": {DECLARING: [OMIT] + [DEAD] * (FAILURE_BUDGET + 1)},
             "verdicts": [PASS]}
 
 
 SEQUENCES = {
-    story_coordinator.MISSING_REQUIRED_ARTIFACTS: missing_then_red,
-    story_coordinator.STALE_REQUIRED_ARTIFACTS: stale_then_red,
-    story_coordinator.INCOMPLETE_CHANGED_FILES: omitted_then_red,
+    story_coordinator.MISSING_REQUIRED_ARTIFACTS: missing_then_dead,
+    story_coordinator.STALE_REQUIRED_ARTIFACTS: stale_then_dead,
+    story_coordinator.INCOMPLETE_CHANGED_FILES: omitted_then_dead,
 }
 
 
-def test_every_bookkeeping_cause_is_driven_to_a_red_suite():
+def test_every_bookkeeping_cause_is_driven_to_a_failure():
     """The companion the parametrization needs, against the declared subset
     rather than a list written here: a cause classified as bookkeeping and left
     without a sequence would leave the pair below silently untested."""
@@ -422,9 +443,9 @@ def test_a_bookkeeping_re_entry_leaves_the_failure_budget_whole(
     """The story's first acceptance criterion, driven end to end.
 
     The stage is re-entered once for a forgotten or stale file and then meets
-    the suite failing, and it gets the whole of `max_self_routes` for the suite
-    — the failure budget it would have had if the bookkeeping re-entry had
-    never happened. The counts read off state.json say the same thing twice
+    a failure of the turn itself, and it gets the whole of `max_self_routes`
+    for that — the failure budget it would have had if the bookkeeping re-entry
+    had never happened. The counts read off state.json say the same thing twice
     over: the total is every re-entry, and the subset is the one that was
     bookkeeping.
     """
@@ -436,10 +457,10 @@ def test_a_bookkeeping_re_entry_leaves_the_failure_budget_whole(
     assert state["status"] == "escalated"
     assert state["current_stage"] == DECLARING
 
-    # One bookkeeping re-entry, then a suite failure for every unit of the
+    # One bookkeeping re-entry, then a failure for every unit of the
     # failure budget — the sequence a stage whose budget was not split could
     # not have reached, because the first re-entry would have eaten one of them.
-    assert causes_of(run_dir) == [cause] + [story_coordinator.SUITE_FAILED] * \
+    assert causes_of(run_dir) == [cause] + [story_coordinator.AGENT_PROCESS_FAILED] * \
         FAILURE_BUDGET
 
     # The total is every re-entry of this stage entry; the subset is the one of
@@ -455,7 +476,7 @@ def test_a_bookkeeping_re_entry_leaves_the_failure_budget_whole(
 
 
 @pytest.mark.parametrize("cause", sorted(SEQUENCES), ids=sorted(SEQUENCES))
-def test_the_same_sequence_under_an_unsplit_budget_stops_a_suite_failure_early(
+def test_the_same_sequence_under_an_unsplit_budget_stops_one_failure_early(
     make_target, harness_root, cause,
 ):
     """The control for the assertion above, and the compatibility property in
@@ -463,7 +484,7 @@ def test_the_same_sequence_under_an_unsplit_budget_stops_a_suite_failure_early(
 
     The identical plan under a definition declaring no bookkeeping budget: the
     forgotten file spends `max_self_routes`, so the stage reaches one fewer
-    suite failure and stops. That is what the split bought, and it is also what
+    failure and stops. That is what the split bought, and it is also what
     every stage that has not opted in still does — the escalation is worded
     byte for byte as it was before this story, naming a self-route budget
     rather than a key.
@@ -473,7 +494,7 @@ def test_the_same_sequence_under_an_unsplit_budget_stops_a_suite_failure_early(
                                   **SEQUENCES[cause](), workflow=UNSPLIT)
 
     assert code == 2
-    assert causes_of(run_dir) == [cause] + [story_coordinator.SUITE_FAILED] * \
+    assert causes_of(run_dir) == [cause] + [story_coordinator.AGENT_PROCESS_FAILED] * \
         (FAILURE_BUDGET - 1)
 
     state = state_of(run_dir)
@@ -490,14 +511,15 @@ def test_the_same_sequence_under_an_unsplit_budget_stops_a_suite_failure_early(
 
 
 @pytest.mark.parametrize("cause", sorted(SEQUENCES), ids=sorted(SEQUENCES))
-def test_the_split_run_reached_a_suite_failure_the_unsplit_one_never_saw(
+def test_the_split_run_reached_a_failure_the_unsplit_one_never_saw(
     make_target, harness_root, cause,
 ):
     """The two runs above, compared where the comparison is the point.
 
     Same plan, same target builder, same harness root: the stage under the
     split budget was invoked once more than the stage under the unsplit one,
-    and that extra invocation is a suite failure rather than a forgotten file.
+    and that extra invocation is a failure of the turn rather than a forgotten
+    file.
     A split that changed the accounting without changing what the stage got to
     do would pass both tests above and fail this one.
     """
@@ -509,8 +531,8 @@ def test_the_split_run_reached_a_suite_failure_the_unsplit_one_never_saw(
                                     **SEQUENCES[cause](), workflow=UNSPLIT)
 
     assert split.calls.count(DECLARING) == unsplit.calls.count(DECLARING) + 1
-    assert causes_of(split_dir).count(story_coordinator.SUITE_FAILED) == \
-        causes_of(unsplit_dir).count(story_coordinator.SUITE_FAILED) + 1
+    assert causes_of(split_dir).count(story_coordinator.AGENT_PROCESS_FAILED) == \
+        causes_of(unsplit_dir).count(story_coordinator.AGENT_PROCESS_FAILED) + 1
 
 
 # --------------------------------------------------------------------------
@@ -603,7 +625,7 @@ def test_every_record_and_prompt_is_written_under_the_running_total(
     below.
     """
     target_root = make_target("try-numbers")
-    _, _, run_dir = drive(target_root, harness_root, **missing_then_red())
+    _, _, run_dir = drive(target_root, harness_root, **missing_then_dead())
 
     attempt = 1
     names = [name for name, _ in self_route_records(run_dir)]
@@ -723,8 +745,8 @@ def test_the_same_scan_reports_a_call_site_naming_an_unclassified_cause():
 
     # And the same scan over a call site the set *does* cover reports nothing,
     # so it is the classification being read rather than the shape of the call.
-    covered = planted.replace("UNCLASSIFIED_CAUSE", "SUITE_FAILED")
-    assert self_route_call_causes(covered) == ["SUITE_FAILED"]
+    covered = planted.replace("UNCLASSIFIED_CAUSE", "AGENT_PROCESS_FAILED")
+    assert self_route_call_causes(covered) == ["AGENT_PROCESS_FAILED"]
     assert unclassified_causes(covered) == []
 
 

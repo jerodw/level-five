@@ -2851,6 +2851,38 @@ def _suite_rerun_started(
     )
 
 
+def suite_failure_carried_forward_note(outstanding: dict) -> str:
+    """What the events log says where a red suite advances instead of routing back.
+
+    A red suite says the tree is broken and says nothing about which stage
+    broke it, so the coordinator records the failure and advances; the verifier
+    is where the failure is judged, from the routing table it already reads.
+    Without this line the run would appear to advance on a passing suite, which
+    is the one thing a reader of events.log must not conclude here — so the
+    message names the declaring stage, the exit code, and the retained record
+    and output the failure left behind, all off the outstanding-failure record
+    rather than off a second reading of the run.
+
+    This composes the line and does not append it. Both routes that carry a
+    failure forward append it with the generic `note` kind, and the kind is
+    spelled in `run_story` alone, where every other note in this run's stream
+    is spelled: one kind, one emitting function. `note` rather than a kind of
+    its own because a kind has to be declared in the history schema, which a
+    run's history is validated against and which this story does not own; and
+    the reader that a shared kind could collide with asserts the *absence* of
+    notes on a run whose suite never failed, while this line is written only
+    where one did.
+    """
+    return (
+        f"the suite the coordinator ran after {outstanding.get('stage')} exited "
+        f"{outstanding.get('exit_code')}; carrying the failure forward to the "
+        f"next stage rather than re-entering {outstanding.get('stage')}, for "
+        f"the verifier to judge. Its record is "
+        f"{outstanding.get('result_path')} and its output is "
+        f"{outstanding.get('output_path')}"
+    )
+
+
 def clean_clone_check(
     run_dir: Path,
     target_root: Path,
@@ -4989,13 +5021,6 @@ AGENT_PROCESS_FAILED = "agent-process-failed"
 MISSING_REQUIRED_ARTIFACTS = "missing-required-artifacts"
 STALE_REQUIRED_ARTIFACTS = "stale-required-artifacts"
 
-#: The suite a stage declared, run by the coordinator after the stage's turn
-#: ended, exiting non-zero. It belongs beside the others for the reason
-#: defective-retry-guidance does rather than because it is mechanical: it is a
-#: fact computed from what the stage produced — an exit status from a
-#: subprocess the coordinator owns — and not a judgement about the work.
-SUITE_FAILED = "suite-failed"
-
 #: The stage changed a repository file its own changed-files record does not
 #: name. Like the two artifact causes it is a fact about what the stage did
 #: not write down rather than a judgement about what it did, and the only
@@ -5013,7 +5038,6 @@ SELF_ROUTE_FAILURES = (
     MISSING_REQUIRED_ARTIFACTS,
     STALE_REQUIRED_ARTIFACTS,
     DEFECTIVE_RETRY_GUIDANCE,
-    SUITE_FAILED,
     INCOMPLETE_CHANGED_FILES,
 )
 
@@ -5029,8 +5053,9 @@ SELF_ROUTE_FAILURES = (
 #: without completing produced no account of what it did, so what is missing
 #: is not the bookkeeping but the whole turn: nobody can say whether the work
 #: was done, and re-entering it is not a correction pass over a known-good
-#: tree. suite-failed and defective-retry-guidance are not here for the
-#: plainer reason that each is a fact about the work or the judgement of it.
+#: tree. defective-retry-guidance is not here for the plainer reason that it
+#: is a fact about the judgement of the work rather than about the record of
+#: it.
 BOOKKEEPING_SELF_ROUTE_FAILURES = (
     MISSING_REQUIRED_ARTIFACTS,
     STALE_REQUIRED_ARTIFACTS,
@@ -5146,19 +5171,6 @@ def self_route_statement(
     one.
     """
     named = ", ".join(artifacts)
-    if failure == SUITE_FAILED:
-        return (
-            f"The coordinator ran the configured test command after your turn "
-            f"ended, and it exited non-zero. This is not a judgement about the "
-            f"work — no verifier saw it — and it is not an assertion by any "
-            f"agent: it is the exit status of a subprocess the coordinator "
-            f"owns. Its record and the whole of its combined output are "
-            f"{named}; read the output file rather than re-running the suite "
-            f"yourself, which is the command this stage no longer runs. Repair "
-            f"what failed and record what you wrote; the coordinator runs the "
-            f"suite again after this turn ends. No retry has been spent and no "
-            f"attempt archived; this is the same attempt, running again."
-        )
     if failure == DEFECTIVE_RETRY_GUIDANCE:
         listed = "; ".join(entries or [])
         return (
@@ -8572,9 +8584,13 @@ def run_story(
                 )
             if ran.exit_code != 0:
                 # The failure is outstanding from the moment it happens, and it
-                # is written here — where the failure is already being routed —
-                # rather than in a second place that could disagree with this
-                # one. Everything a later refusal has to name comes off the run
+                # is written here — where the failure is met — rather than in a
+                # second place that could disagree with this one. Its shape and
+                # its values are what this block wrote before the failure
+                # started being carried forward rather than routed back: the
+                # stage, the attempt, the try, the recorded scope, the exit
+                # code, and the retained result and output paths.
+                # Everything a later refusal has to name comes off the run
                 # just made and the retained paths already computed above, so
                 # the failure is reconstructable from state.json alone.
                 state.unshadowed_suite_failure = {
@@ -8586,42 +8602,30 @@ def run_story(
                     "result_path": retained_suite,
                     "output_path": ran.output_path or "",
                 }
-                # A red suite is a fact computed from what the stage produced,
-                # so it takes the route the other such facts take: the stage
-                # runs again in place on the budget it already declares,
-                # spending no retry, archiving no attempt and appending no
-                # retry-history entry. Routed through the existing self_route
-                # decision, so an exhausted budget escalates with the reason
-                # that decision already returns rather than through a second
-                # escalation path written for this.
-                decision = self_route(
+                # The failure is carried forward rather than attributed. A red
+                # suite says the tree is broken and says nothing about which
+                # stage broke it, which is a judgement the coordinator is not
+                # able to make — and for the stage that authors validation it
+                # is backwards by construction, since that stage may only
+                # change files under the tests directory and is the one stage
+                # forbidden to fix the usual cause. So the run advances to the
+                # next stage, no self-route is taken and no retry is spent, and
+                # the failure reaches the verifier, which already reads the
+                # workflow's retry_routing table and already writes back a
+                # category the coordinator routes on. The harness gains no
+                # judgement source and no category: the judgement moves to the
+                # agent that was always making judgements of this kind. What
+                # stops a run that nothing superseded the failure for is the
+                # refusal at the end of this function.
+                append_event(
                     run_dir,
-                    state,
-                    stage,
-                    failure=SUITE_FAILED,
-                    reason=(
-                        f"the suite the coordinator ran after {name} exited "
-                        f"{ran.exit_code}: {_clean_clone_failures(ran.output_tail or '')}"
+                    suite_failure_carried_forward_note(
+                        state.unshadowed_suite_failure
                     ),
-                    # The retained record and the retained whole output, so the
-                    # statement the re-running stage reads names both and the
-                    # record's own artifacts array carries both — the paths
-                    # that still hold this run when the rerun has written the
-                    # canonical pair over with its own.
-                    artifacts=[retained_suite, ran.output_path or retained_suite],
-                    attempt=attempt,
+                    kind="note",
+                    stage=name,
                 )
-                if decision.taken:
-                    self_routed = True
-                    continue
-                return _escalate(
-                    run_dir,
-                    state,
-                    decision.reason,
-                    target_root=target_root,
-                    harness_root=harness_root,
-                    duration_seconds=elapsed(),
-                )
+                save_state(run_dir, state)
             elif state.unshadowed_suite_failure:
                 # A green suite is the more recent result, which is not by
                 # itself a reason to supersede the failure before it: a rerun
@@ -8637,44 +8641,20 @@ def run_story(
                     # failure recorded that a shadowing pass has superseded.
                     save_state(run_dir, state)
                 else:
-                    # What stands is the suite failure, so it takes the route a
-                    # suite failure already takes rather than a category of its
-                    # own, and the artifacts are the *original* failure's
-                    # retained pair rather than this rerun's — the re-running
-                    # stage is pointed at the failure that still stands.
-                    decision = self_route(
+                    # What stands is the suite failure, and a standing red
+                    # suite never re-enters the authoring stage by any path:
+                    # this route advances too, leaving the outstanding failure
+                    # in state for the verifier to judge and for the
+                    # end-of-run refusal to stop the run on if nothing
+                    # supersedes it. The event names the *original* failure's
+                    # stage, exit code and retained pair rather than this
+                    # rerun's, because that is the failure a reader has to be
+                    # pointed at.
+                    append_event(
                         run_dir,
-                        state,
-                        stage,
-                        failure=SUITE_FAILED,
-                        reason=(
-                            f"the suite the coordinator ran after "
-                            f"{outstanding.get('stage')} exited "
-                            f"{outstanding.get('exit_code')} and still stands: "
-                            "the rerun that passed ran a strict subset of what "
-                            "failed, so it established nothing about what it "
-                            "stopped running"
-                        ),
-                        artifacts=[
-                            path
-                            for path in (
-                                outstanding.get("result_path"),
-                                outstanding.get("output_path"),
-                            )
-                            if path
-                        ],
-                        attempt=attempt,
-                    )
-                    if decision.taken:
-                        self_routed = True
-                        continue
-                    return _escalate(
-                        run_dir,
-                        state,
-                        decision.reason,
-                        target_root=target_root,
-                        harness_root=harness_root,
-                        duration_seconds=elapsed(),
+                        suite_failure_carried_forward_note(outstanding),
+                        kind="note",
+                        stage=name,
                     )
 
         if name == "verifier":
@@ -9148,11 +9128,14 @@ def run_story(
 
     if state.unshadowed_suite_failure:
         # A run must not reach completion carrying a declared suite failure
-        # nothing has superseded. Every route out of the suite-run block either
-        # clears the failure or refuses the advance, so arriving here with one
-        # outstanding is a state no route should have produced — it escalates
-        # naming the failure that still stands rather than completing. It costs
-        # no suite run: the verdict is read off state.json.
+        # nothing has superseded. The suite-run block records a failure and
+        # advances — it attributes nothing and refuses nothing — and the
+        # verifier is where the failure is judged, so arriving here with one
+        # outstanding means no judgement superseded it: a verifier that read a
+        # red suite and passed the work anyway, or one that never met it. This
+        # refusal is what stops such a run completing, escalating naming the
+        # failure that still stands. It costs no suite run: the verdict is read
+        # off state.json.
         outstanding = state.unshadowed_suite_failure
         return _escalate(
             run_dir,

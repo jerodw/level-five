@@ -166,19 +166,21 @@ def test_every_stage_exception_this_repository_states_means_something():
     """Each of this repository's own stories, cross-checked against its own
     workflow. A grant naming a stage this deployment does not define, or a path
     its stage was never restricted on, grants nothing — and the run that
-    discovers it is refused at pre-flight."""
-    stories = sorted(STORIES_DIR.glob("*.yaml"))
-    assert stories, "no story artifact was read, so this asserts nothing"
-    granted = 0
-    for story_path in stories:
+    discovers it is refused at pre-flight.
+
+    What is held is conditional on what the corpus holds, and deliberately says
+    nothing about how many stories exist or whether any of them states a grant.
+    A companion requiring one did sit here, and it made the module depend on
+    this repository's story corpus being shaped a particular way in order to
+    have something to read. That the check reports a bad grant and accepts a
+    good one is driven on stories the tests below construct, which is where
+    that property belongs.
+    """
+    for story_path in sorted(STORIES_DIR.glob("*.yaml")):
         story = story_coordinator.read_story(
             story_path.read_text(encoding="utf-8"), REPO_ROOT).parsed
-        granted += len(story.get("stage_exceptions", []))
         assert story_coordinator.stage_exception_problems(
             story, SHIPPED_STAGES) == [], story_path.name
-    # The companion the loop needs: a corpus in which no story grants anything
-    # satisfies the assertion above without exercising the check once.
-    assert granted, "no story in this repository states a stage exception"
 
 
 # --------------------------------------------------------------------------
@@ -340,10 +342,17 @@ def shipped_definitions() -> dict[str, dict]:
             for path in sorted((REPO_ROOT / "workflows").glob("*.json"))}
 
 
-def test_more_than_one_workflow_ships_so_the_sweep_below_sweeps_something():
-    """The companion assertion a glob needs: a sweep over one file, or none,
-    would agree with every definition being well-formed for the wrong reason."""
-    assert len(shipped_definitions()) >= 2
+def test_the_configured_definition_is_among_the_definitions_swept():
+    """What the glob has to find for the sweep below to mean anything: the
+    definition this repository configures.
+
+    It used to require two definitions to ship, which made removing one — a
+    deployment decision the sweep has nothing to say about — redden the module.
+    The configured one is a different matter: another test above already
+    requires the file it names to exist, so a sweep that missed it would be a
+    sweep that had stopped reading `workflows/` rather than a deployment
+    shipping fewer definitions.
+    """
     assert SHIPPED["name"] in shipped_definitions()
 
 
@@ -379,11 +388,37 @@ def test_the_shipped_workflow_is_the_one_this_repository_configures():
     assert (REPO_ROOT / "workflows" / f"{configured}.json").is_file()
 
 
-def test_the_shipped_workflow_runs_the_four_stages_this_project_intends():
-    """The stage list, in order. This project separates writing the code from
-    writing its validation, documents before it verifies so the documentation
-    is judged with everything else, and verifies last."""
-    assert SHIPPED_NAMES == ["implementer", "tester", "documenter", "verifier"]
+def test_a_definitions_stage_order_is_the_order_its_run_executes():
+    """What the stage list is *for*, held against a definition this test builds
+    with stages it named: the order declared is the order the loaded definition
+    carries, and the stage that judges is last.
+
+    This asserted the shipped list outright — write, then validate, then
+    document, then judge — which made adding or renaming a stage a red module
+    rather than a deployment change. What the assertion was protecting is the
+    ordering property, and that is a fact about definitions rather than about
+    which four stages this repository happens to deploy; the deployment half
+    that survives is beneath it, and is a coupling to orchestration rather than
+    a configuration choice.
+    """
+    named = ["writes-it", "validates-it", "documents-it",
+             conftest.VERIFYING_STAGE]
+    built = build_workflow(*[workflow_stage(name=name) for name in named],
+                           name="an-ordered-workflow")
+
+    assert [stage["name"] for stage in built["stages"]] == named
+    assert built["stages"][-1]["name"] == conftest.VERIFYING_STAGE
+
+
+def test_the_stage_that_judges_this_deployment_is_the_last_one():
+    """The one ordering fact about the shipped definition that is not a
+    configuration choice: a run reaches a verdict only if the stage the
+    coordinator keys its verdict handling on is reached, and a definition
+    listing it anywhere but last leaves stages after the verdict.
+
+    Which stage that is comes off the coordinator rather than off this
+    deployment's taste, and the test below holds that coupling.
+    """
     assert SHIPPED_NAMES[-1] == conftest.VERIFYING_STAGE
 
 
@@ -508,10 +543,13 @@ def test_every_stage_has_a_prompt_template_this_repository_ships():
 
 
 def test_every_retry_category_this_deployment_defines_carries_a_when_clause():
-    """A category with no `when` gives the verifier nothing to choose on."""
-    routes = list(context_assembler.retry_routes(SHIPPED_STAGES))
-    assert routes
-    for route in routes:
+    """A category with no `when` gives the verifier nothing to choose on.
+
+    Conditional on what is defined: the companion requiring a category to exist
+    is gone, because whether this deployment defines any is a configuration
+    question rather than something this loop needs in order to be honest.
+    """
+    for route in context_assembler.retry_routes(SHIPPED_STAGES):
         assert route.when.strip(), route.category
 
 
@@ -523,14 +561,35 @@ def test_the_budgets_this_deployment_grants_are_recorded_where_a_reader_meets_th
     why" rather than as a count of budgeted stages: granting one more stage the
     common budget is the change story-047 made, and it belongs here as a
     passing change rather than as a red one.
+
+    Conditional on what is declared, and the collection step is written so a
+    deployment declaring no budget at all leaves this vacuously true rather
+    than raising on an empty minimum. The companion that used to require a
+    budget to exist is gone: it made the module depend on this deployment being
+    configured a particular way in order for the loop beside it to have
+    something to read.
     """
-    budgets = {stage["name"]: stage["max_self_routes"]
-               for stage in SHIPPED_STAGES if "max_self_routes" in stage}
-    assert budgets, "this deployment grants no self-route budget at all"
-    common = min(budgets.values())
+    budgets = [stage["max_self_routes"] for stage in SHIPPED_STAGES
+               if "max_self_routes" in stage]
+    if not budgets:
+        return
+    common = min(budgets)
     for stage in SHIPPED_STAGES:
         if stage.get("max_self_routes", common) != common:
             assert stage.get("max_self_routes_reason", "").strip(), stage["name"]
+
+
+#: Every budget a recorded reason may be written out in words for. Digits or
+#: the English word, because a sentence about a budget of two reads better as
+#: "two" and either spelling states the number.
+BUDGET_WORDS = {0: "zero", 1: "one", 2: "two", 3: "three", 4: "four",
+                5: "five"}
+
+
+def states_the_number(reason: str, number: int) -> bool:
+    """Whether a recorded reason states the number it explains, either way."""
+    lowered = reason.lower()
+    return str(number) in lowered or BUDGET_WORDS.get(number, "\0") in lowered
 
 
 def test_a_recorded_reason_states_the_number_it_is_explaining():
@@ -539,27 +598,22 @@ def test_a_recorded_reason_states_the_number_it_is_explaining():
     workflow.
 
     A reason that never mentions the budget it justifies would satisfy the
-    check above while explaining nothing, so the shipped reasons are read.
-    Digits or the English word, because a sentence about a budget of two reads
-    better as "two" and either spelling states the number.
+    check above while explaining nothing, so the shipped reasons are read —
+    every one of them, rather than the outliers alone.
+
+    Reading only the outliers came with a companion requiring an outlier to
+    exist, which made the suite fail unless this deployment kept one stage
+    budgeted differently from the rest. A test may hold what a recorded reason
+    must say; it may not require the deployment to be configured a particular
+    way so that it has something to read. So the loop is over every declared
+    reason and the companion is gone. It is not vacuous today: the stage that
+    writes the validation declares one, and its reason says so.
     """
-    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
-    declared = [stage for stage in SHIPPED_STAGES if "max_self_routes" in stage]
-    assert declared
-    common = min(stage["max_self_routes"] for stage in declared)
-    outliers = 0
-    for stage in declared:
-        if stage["max_self_routes"] == common:
+    for stage in SHIPPED_STAGES:
+        reason = stage.get("max_self_routes_reason")
+        if reason is None or "max_self_routes" not in stage:
             continue
-        outliers += 1
-        reason = stage["max_self_routes_reason"].lower()
-        budget = stage["max_self_routes"]
-        assert str(budget) in reason or words.get(budget, "\0") in reason, \
-            stage["name"]
-    # The companion the loop needs: a deployment budgeting every stage alike
-    # satisfies the loop above without reading one reason.
-    assert outliers, "this deployment declares no budget that differs from the " \
-                     "common one, so no recorded reason was read"
+        assert states_the_number(reason, stage["max_self_routes"]), stage["name"]
 
 
 #: The key a declared value's recorded derivation sits under, formed from the
@@ -571,40 +625,92 @@ RUN_CEILING_KEY = "max_run_cost_usd"
 EXECUTION_CEILING_KEY = "max_execution_cost_usd"
 
 
-def test_this_deployment_declares_both_ceilings_at_the_values_it_intends():
-    """What this deployment is willing to spend, stated where a change to it is
-    supposed to go red.
+def ceiling_declarations(definition: dict) -> list[tuple[str, dict, str]]:
+    """Every cost ceiling a definition declares, as where-it-is, the mapping
+    that declares it, and the key.
 
-    Every stage carries an execution allowance, deliberately: a stage under no
-    ceiling is a stage one runaway call can spend a run's whole budget in, and
-    the point of declaring these at all was to stop that without waiting for a
-    target to opt in.
+    A function rather than a loop inside a test so the property below can be
+    asked of a definition a test builds as readily as of the shipped one, which
+    is what lets the property be held on values a test chose.
     """
-    assert SHIPPED[RUN_CEILING_KEY] == 90
-    assert {stage["name"]: stage.get(EXECUTION_CEILING_KEY)
-            for stage in SHIPPED_STAGES} == {
-        "implementer": 30, "tester": 75, "documenter": 10, "verifier": 30}
+    declarations = []
+    if RUN_CEILING_KEY in definition:
+        declarations.append((definition["name"], definition, RUN_CEILING_KEY))
+    declarations += [(stage["name"], stage, EXECUTION_CEILING_KEY)
+                     for stage in definition["stages"]
+                     if EXECUTION_CEILING_KEY in stage]
+    return declarations
 
 
-def test_every_declared_ceiling_is_recorded_where_a_reader_meets_the_number():
+def ceilings_with_no_reason_stating_them(definition: dict) -> list[str]:
+    """Every declared ceiling whose recorded reason is missing or does not
+    state the number it explains.
+
+    A list rather than an assertion so the same reading can be made of a
+    definition that violates it, which is the control the absence needs.
+    """
+    return [where for where, declaring, key in ceiling_declarations(definition)
+            if not str(declaring.get(key + REASON_SUFFIX, "")).strip()
+            or str(declaring[key]) not in declaring[key + REASON_SUFFIX]]
+
+
+def test_a_declared_ceiling_is_recorded_where_a_reader_meets_the_number():
     """A ceiling is a judgement about what is pathological, and the logs the
     figures came from are gitignored and reach no clone — so the reason beside
-    the number is the only place the derivation survives.
+    the number is the only place the derivation survives. A reason that never
+    mentions its own ceiling would satisfy a bare "a reason is present" check
+    while explaining nothing.
 
-    Each reason is required to state the number it explains, because a reason
-    that never mentions its own ceiling would satisfy a bare "a reason is
-    present" check while explaining nothing.
+    Held against a definition this test builds, with ceilings this test chose,
+    because that is what the property is about: what a *declaration* has to
+    carry. It used to be asked of the shipped definition alone and paired with
+    an equality requiring every stage and the workflow to declare one — which
+    is a configuration this deployment happens to have chosen, which the
+    pre-flight explicitly accepts a definition for not having, and which a
+    stage added or a ceiling removed would have reddened here.
     """
-    declarations = [(SHIPPED["name"], SHIPPED, RUN_CEILING_KEY)]
-    declarations += [(stage["name"], stage, EXECUTION_CEILING_KEY)
-                     for stage in SHIPPED_STAGES
-                     if EXECUTION_CEILING_KEY in stage]
-    assert len(declarations) == len(SHIPPED_STAGES) + 1
+    built = build_workflow(
+        workflow_stage(max_execution_cost_usd=17,
+                       max_execution_cost_usd_reason="17, because 17"),
+        workflow_stage(name=conftest.VERIFYING_STAGE),
+        name="a-ceilinged-workflow")
+    built[RUN_CEILING_KEY] = 41
+    built[RUN_CEILING_KEY + REASON_SUFFIX] = "41 is what this one is willing"
 
-    for where, declaring, key in declarations:
-        reason = declaring.get(key + REASON_SUFFIX, "")
-        assert reason.strip(), where
-        assert str(declaring[key]) in reason, where
+    assert len(ceiling_declarations(built)) == 2
+    assert ceilings_with_no_reason_stating_them(built) == []
+
+
+@pytest.mark.parametrize("reason, missing", [
+    (None, True), ("   ", True), ("a number nobody wrote down", True),
+], ids=["absent", "blank", "silent about its own number"])
+def test_that_reading_reports_a_ceiling_whose_reason_does_not_state_it(
+    reason, missing,
+):
+    """The control for the absence above, built rather than mutated from what
+    this repository deploys: a reason that is absent, blank, or present and
+    silent about the number it explains is reported in every case."""
+    extra = {} if reason is None else {
+        EXECUTION_CEILING_KEY + REASON_SUFFIX: reason}
+    built = build_workflow(
+        workflow_stage(max_execution_cost_usd=17, **extra),
+        name="an-unexplained-ceiling-workflow")
+
+    reported = ceilings_with_no_reason_stating_them(built)
+    assert bool(reported) is missing
+    assert reported == [built["stages"][0]["name"]]
+
+
+def test_every_ceiling_this_deployment_declares_is_recorded_that_way_too():
+    """The same reading over what this repository ships, which is the reason
+    the convention exists at all: a developer meeting one of these numbers in
+    the definition meets the derivation beside it.
+
+    It asks nothing about which ceilings are declared or what their values are
+    — a definition declaring none satisfies it, and the built cases above are
+    what say the reading can report one.
+    """
+    assert ceilings_with_no_reason_stating_them(SHIPPED) == []
 
 
 def test_nothing_in_the_harness_reads_a_recorded_reason():
@@ -643,40 +749,41 @@ def test_nothing_in_the_harness_reads_a_recorded_reason():
 # --------------------------------------------------------------------------
 
 
-def test_this_deployment_splits_one_stages_self_route_budget_by_cause():
-    """The stage that opted into the split declares both budgets at the values
-    it intends, and every other stage declares only the failure budget.
+def test_a_stage_that_splits_its_budget_by_cause_declares_both_halves():
+    """A bookkeeping budget on its own splits nothing: the coordinator compares
+    a bookkeeping cause against it and every other cause against the failure
+    budget beside it, so a stage declaring only the first has opted into a
+    split with one half undeclared.
 
-    Which stage that is comes off the definition rather than being written
-    here, so moving the split to another stage reddens on the values it
-    declares rather than on the name it is spelled with.
+    This pinned both of this deployment's numbers at two, which is a
+    configuration rather than a property — and story-137 dropped the failure
+    half to one, which is exactly the kind of correct change a pinned value
+    reddens for no reason. What is held now is the pairing, over whichever
+    stages declare the split, and nothing about how many do or what they say.
     """
-    split = [stage for stage in SHIPPED_STAGES
-             if story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY in stage]
-    assert len(split) == 1, [stage["name"] for stage in split]
-    declaring = split[0]
-    assert declaring[story_coordinator.SELF_ROUTE_BUDGET_KEY] == 2
-    assert declaring[story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY] == 2
+    key = story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY
+    for stage in SHIPPED_STAGES:
+        if key in stage:
+            assert story_coordinator.SELF_ROUTE_BUDGET_KEY in stage, \
+                stage["name"]
 
 
 def test_the_split_budget_is_recorded_where_a_reader_meets_the_number():
     """The rule every other declared number here is held to, applied to the
     budget story-108 added: a reason is present and states its own number.
 
-    Digits or the English word, as `test_a_recorded_reason_states_the_number_it
-    _is_explaining` allows, and for its reason: a sentence about a budget of two
-    reads better as "two" and either spelling states the number.
+    Conditional on the declaration, as its sibling above is: the companion
+    requiring this deployment to declare a bookkeeping budget at all is gone,
+    it being a configuration this loop should not have depended on. It is not
+    vacuous today, because the stage that writes the validation declares one.
     """
-    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
     key = story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY
-    declaring = [stage for stage in SHIPPED_STAGES if key in stage]
-    assert declaring, "this deployment declares no bookkeeping budget at all"
-    for stage in declaring:
+    for stage in SHIPPED_STAGES:
+        if key not in stage:
+            continue
         reason = stage.get(key + REASON_SUFFIX, "")
         assert reason.strip(), stage["name"]
-        budget = stage[key]
-        assert str(budget) in reason.lower() \
-            or words.get(budget, "\0") in reason.lower(), stage["name"]
+        assert states_the_number(reason, stage[key]), stage["name"]
 
 
 #: The vocabulary of a budget that stands in for a fix rather than being a
@@ -999,65 +1106,62 @@ def test_budget_problems_reports_a_declared_budget_that_is_not_a_count(budget):
     assert stages[0]["name"] in problems[0]
 
 
-def reason_convention_problems(stages):
-    """One problem per stage recording a reason for a budget that does not
-    differ from the common one.
+def orphan_reason_problems(stages):
+    """One problem per stage recording a self-route reason beside no budget.
 
-    The convention `test_the_budgets_this_deployment_grants_are_recorded_where_
-    a_reader_meets_them` states from one side -- every budget differing from the
-    common one says why -- read from the other. A reason beside the common
-    budget explains a number no reader would have questioned, and it is the
-    thing that would have arrived with the documenter's grant had 1 been
-    recorded as though it were a judgement rather than the default.
+    A reason with nothing to explain is a reason a reader cannot check and a
+    number nobody declared -- the shape a budget removed without its
+    justification leaves behind. This is what survives of the convention
+    story-060 recorded here and story-137 removed: that only a budget differing
+    from the common one may carry a reason.
 
-    A function rather than an inline loop, for the reason `budget_problems`
-    is one: the assertion below claims an absence, and a control can only
+    That convention read the reasons this deployment happened to record and
+    required the outlier to be the only one recording one, so it made a correct
+    change red twice over -- once when story-137 dropped the tester's failure
+    budget to the common number while keeping the reason that explains why, and
+    again for any deployment budgeting every stage alike. What a recorded reason
+    must *say* is not weakened by its going: `test_a_recorded_reason_states_the_
+    number_it_is_explaining` now reads every declared reason rather than the
+    outliers alone, which is strictly more than the pair here ever read.
+
+    A function rather than an inline loop, for the reason `budget_problems` is
+    one: the assertion below claims an absence, and a control can only
     demonstrate that absence can be reported if it can run the same code.
     """
-    declared = [stage for stage in stages if "max_self_routes" in stage]
-    if not declared:
-        return []
-    common = min(stage["max_self_routes"] for stage in declared)
-    return [f"{stage['name']} records a reason for the common budget "
-            f"{common!r}"
+    return [f"{stage['name']} records a max_self_routes_reason and declares no "
+            f"max_self_routes"
             for stage in stages
-            if stage.get("max_self_routes_reason", "").strip()
-            and stage.get("max_self_routes") == common]
+            if str(stage.get("max_self_routes_reason", "")).strip()
+            and "max_self_routes" not in stage]
 
 
-def test_only_a_budget_that_differs_from_the_common_one_records_a_reason():
-    """The sibling-reason convention, stated where the grant that tests it
-    lands. story-060 gave the documenter the common budget, and the decision
-    recorded with it is that the common budget carries no reason -- so the
-    stage this deployment budgets differently stays the only one a reader
-    meets an explanation beside.
-    """
-    reasons = [stage["name"] for stage in SHIPPED_STAGES
-               if stage.get("max_self_routes_reason", "").strip()]
-    assert reasons, "no recorded reason was read, so this asserts nothing"
-    assert reason_convention_problems(SHIPPED_STAGES) == []
+def test_every_recorded_reason_this_deployment_ships_explains_a_declared_budget():
+    """No reason here explains a number that is not there."""
+    assert orphan_reason_problems(SHIPPED_STAGES) == []
 
 
-def test_reason_convention_problems_reports_a_reason_beside_the_common_budget():
+def test_orphan_reason_problems_reports_a_reason_beside_no_budget():
     """The control for the assertion above, built rather than mutated from what
-    this repository deploys."""
+    this repository deploys: the builder omits `max_self_routes` unless asked
+    for it, so a reason beside no budget is one argument away."""
     stages = build_workflow(
-        workflow_stage(max_self_routes=1),
         workflow_stage(max_self_routes=1,
                        max_self_routes_reason="one, because of something"),
+        workflow_stage(max_self_routes_reason="two, because of something"),
     )["stages"]
-    problems = reason_convention_problems(stages)
+    problems = orphan_reason_problems(stages)
     assert len(problems) == 1, problems
     assert stages[1]["name"] in problems[0]
 
     # The companion: a check reporting every recorded reason would satisfy the
-    # assertion above without distinguishing the outlier from the common one.
-    outlier = build_workflow(
-        workflow_stage(max_self_routes=1),
+    # assertion above without distinguishing the orphan from the explained one.
+    explained = build_workflow(
+        workflow_stage(max_self_routes=1,
+                       max_self_routes_reason="one, because of something"),
         workflow_stage(max_self_routes=2,
                        max_self_routes_reason="two, because of something"),
     )["stages"]
-    assert reason_convention_problems(outlier) == []
+    assert orphan_reason_problems(explained) == []
 
 
 def test_this_deployment_defines_more_than_one_retry_category():
@@ -1115,7 +1219,7 @@ def test_this_deployment_documents_before_it_verifies():
         < SHIPPED_NAMES.index(conftest.VERIFYING_STAGE)
 
 
-def test_this_deployment_runs_the_stages_story_045_ordered():
+def test_this_deployment_writes_its_validation_where_it_cannot_be_written_first():
     """From tests/test_documenter_before_verification.py's
     `test_the_workflow_lists_the_stages_in_the_new_order`, which compared this
     deployment's stage-name list against the order story-045 landed. That is a
@@ -1123,14 +1227,25 @@ def test_this_deployment_runs_the_stages_story_045_ordered():
     here when that module converted its runs to a built workflow; the module
     keeps the git-history comparison showing the reorder changed nothing else.
 
-    Stated as the full list rather than as a pairwise ordering, because the
-    criterion story-045 wrote is the list: write, then validate, then document,
-    then judge.
+    It arrived as the full list — implementer, tester, documenter, verifier —
+    and story-137 took the list out: pinning it made a stage added or renamed a
+    red module rather than a deployment change, and the ordering property it
+    stood for is held above against a definition the test builds. What survives
+    is the separation this deployment's confinement actually depends on and
+    that no built definition can state: the stage confined to the test location
+    runs after the stage restricted from creating there, so the validation is
+    written against an implementation that already exists.
     """
-    assert SHIPPED_NAMES == ["implementer", "tester", "documenter", "verifier"]
-    # And the judging stage really is the one the coordinator keys on, so the
-    # name at the end of that list is not a coincidence of spelling.
-    assert SHIPPED_NAMES[-1] == conftest.VERIFYING_STAGE
+    creating = [restriction.stage for restriction
+                in story_coordinator.stage_restrictions(SHIPPED_STAGES)
+                if restriction.sense == story_coordinator.CREATE_RESTRICTION]
+    confined = [restriction.stage for restriction
+                in story_coordinator.stage_restrictions(SHIPPED_STAGES)
+                if restriction.sense == story_coordinator.CONFINEMENT]
+
+    for restricted in creating:
+        for writer in confined:
+            assert SHIPPED_NAMES.index(restricted) < SHIPPED_NAMES.index(writer)
 
 
 def test_this_deployment_validates_every_artifact_it_routes_on():

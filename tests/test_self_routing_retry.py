@@ -677,19 +677,21 @@ FAILURE_IDS = [name for name, _ in FAILURES]
 #: retry guidance that was met in full by an attempt the same verdict then
 #: failed is a fact computed from what the stage produced, not a stage failing
 #: to produce what it declared, so it has no plan here and is driven by
-#: tests/test_defective_retry_guidance.py instead. story-066 added the second
-#: on the same terms: a suite the coordinator ran after the stage's turn ended
-#: and that exited non-zero is a fact computed from what the stage produced —
-#: an exit status of a subprocess the coordinator owns — rather than the stage
-#: failing to produce what it declared, so it has no plan here either and is
-#: driven by the module validating that check. story-111 added the third on
+#: tests/test_defective_retry_guidance.py instead. story-111 added the second on
 #: exactly those terms: a changed-files record that does not name a path the
 #: coordinator's own before-and-after comparison of the target tree shows the
 #: stage changed is a fact computed from what the stage produced rather than
 #: an output it failed to produce at all, so it has no plan here and is driven
 #: by the module validating that check.
+#:
+#: story-066 added a third — a suite the coordinator ran after the stage's turn
+#: ended and that exited non-zero — and story-137 removed it again, because a
+#: red suite says the tree is broken and says nothing about which stage broke
+#: it. It is carried forward to the verifier now rather than routed back, so no
+#: call site passes it to self_route and no value for it remains in the enum
+#: this list is compared against.
 NON_MECHANICAL_FAILURES = [
-    "defective-retry-guidance", "suite-failed", "incomplete-changed-files",
+    "defective-retry-guidance", "incomplete-changed-files",
 ]
 
 
