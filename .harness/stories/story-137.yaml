@@ -1,0 +1,186 @@
+story:
+  id: story-137
+  title: A red suite carries forward to the verifier rather than halting the authoring stage
+  description: |
+    When the coordinator's declared suite run comes back non-zero, the
+    coordinator re-enters the stage that just ran. That attribution is a
+    guess the coordinator is not able to make: a red suite says the tree is
+    broken and says nothing about which stage broke it. For the tester it is
+    backwards by construction, because the tester's job is to write
+    assertions that can fail against somebody else's code and it may only
+    change files under the tests directory, so the one stage the coordinator
+    sends the failure to is the one stage forbidden to fix the usual cause.
+
+    story-136 is the case this was filed from. Five tests failed on one
+    implementation defect, the tester re-ran twice and changed nothing that
+    could matter, and the run stopped at $29.10. Two of the five failures
+    were in a module that landed in story-131 and that the branch never
+    touched, so the failure was not even about the tester's new assertions.
+
+    This story stops the coordinator judging attribution at all. A red suite
+    is recorded exactly as it is recorded now and the run advances to the
+    next stage, so the failure reaches the verifier, which already reads the
+    workflow's retry_routing table and already writes back a category the
+    coordinator routes on. The harness gains no new judgement source and no
+    new category: the judgement moves to the agent that was always making
+    judgements of this kind.
+
+    Two properties this relies on are already in place and are not rebuilt
+    here. The verifier is already injected with the coordinator's suite-run
+    record and already told its exit code is the whole-suite verdict. And a
+    verifier that read a red suite and passed the work anyway is already
+    closed deterministically at the end of the run, which refuses to
+    complete a run still carrying a suite failure nothing has superseded,
+    reading the verdict off saved state at no cost.
+
+    What the verifier does need is one paragraph it has never needed, because
+    structurally it could not meet a red suite: the prompt says elsewhere
+    that a finding can be correct and still be too small to fail a run, and
+    that recording a finding does not fail the run, so a verifier meeting its
+    first non-zero suite exit could record five failing tests as findings on
+    a passing verdict. The run would still stop at the end-of-run refusal,
+    which is the outcome this work exists to remove.
+
+    The cost is one documenter turn on a failing run, because the documenter
+    sits between the tester and the verifier and a forward route past a stage
+    is refused at pre-flight. Over the 24 runs since story-100, n=37
+    documenter invocations, that turn is a median of $0.93 and $3.80 at its
+    worst, and a median of 1.6 minutes. It is paid only on runs that are
+    already failing, it is less wall clock than the suite run it follows, and
+    routing back to the implementer re-runs the documenter, so a document
+    written against an implementation about to change is rewritten and never
+    shipped.
+
+    This story was planned from the brief filed under 238.
+  workflow: story-workflow
+
+tasks:
+  - Change the coordinator's declared-suite-run block so a non-zero exit records the outstanding failure as it does now and then lets the run advance to the next stage, taking no self-route. The record written to state is unchanged in shape and content: the stage, the attempt, the try, the recorded scope, the exit code, and the retained result and output paths.
+  - Change the same block's other route into a self-route — a green rerun whose recorded scope does not shadow the failure that still stands — so it too advances rather than re-entering. A standing red suite never re-enters the authoring stage by any path.
+  - Emit an event where the advance is decided, so the events log says a red suite was carried forward and names the retained record and output, rather than the run appearing to advance on a passing suite.
+  - Remove the suite-failed self-route cause now that no site can produce it: the constant, its membership in the declared set of self-route causes, its branch in the self-route statement, and its value and its sentence in the self-route-result schema's failure description. A cause no call site passes is a cause a later reader will believe is reachable.
+  - Correct the comment above the end-of-run refusal, which says every route out of the suite-run block either clears the failure or refuses the advance. That is the claim this story makes false. The refusal itself, its condition, its reason text and what it reads are untouched.
+  - Add a paragraph to the verifier prompt's whole-suite passage saying that a non-zero suite exit is a failing verdict rather than a finding, and that its retry target comes from the routing table like any other. It names no category, as the rest of that prompt names none.
+  - Reduce the tester's max_self_routes from two to one in the shipped workflow, and rewrite its recorded reason to justify one. The old reason says one budget covers the dropped connection or the red suite and the second covers a correction landing incomplete; the red suite is no longer among the causes it is spent on. max_bookkeeping_self_routes is unchanged at two.
+  - Repair tests/test_shipped_workflow_is_valid.py's reason-reading assertion, which this change reddens, and repair it at the cause rather than by adjusting a number. It reads the recorded reason only of a stage whose budget differs from the common one, and then asserts that such a stage exists - which makes the suite fail unless this deployment keeps a stage budgeted differently from the rest. A test may hold what a recorded reason must say; it may not require the deployment to be configured a particular way so that it has something to read. Read every declared max_self_routes_reason rather than the outliers alone, and drop the assertion that an outlier exists. The property that survives is conditional on what the definition declares: every recorded reason states the number it explains. It is not vacuous today, because the tester declares one.
+  - Sweep the rest of tests/test_shipped_workflow_is_valid.py for the same pattern and repair every instance the same way. The pattern is a companion assertion that constrains how this deployment or this repository is configured so that a neighbouring loop has something to read, usually carrying a message saying the neighbour would otherwise assert nothing. Each becomes conditional on what is declared - the loop holds every declaration present and asserts nothing about which declarations exist. The instances are these. In test_the_budgets_this_deployment_grants_are_recorded_where_a_reader_meets_them, the assertion that this deployment grants some self-route budget at all; the min over the collected budgets that guard also protected must be handled so a deployment declaring none leaves the test vacuously true rather than raising. In test_a_recorded_reason_states_the_number_it_is_explaining, the assertion that some stage declares a budget, alongside the outlier assertion already named above. In test_every_stage_exception_this_repository_states_means_something, the assertion that some story in this repository states a stage exception. In test_more_than_one_workflow_ships_so_the_sweep_below_sweeps_something, the assertion that at least two definitions ship: what survives is that the configured workflow is among the definitions swept, which another test in the module already requires to exist, and the test's name changes to say what it now holds. In test_every_retry_category_this_deployment_defines_carries_a_when_clause, the assertion that some retry category is defined. In test_every_declared_ceiling_is_recorded_where_a_reader_meets_the_number, the equality requiring every stage and the workflow to declare a ceiling, which the pre-flight explicitly accepts a definition for not doing, and which the value-pinning test in the same module already records as this deployment's intent.
+  - Do the same to the tests that pin particular values in the shipped definition, and repair them by construction rather than by deletion. A property that depends on a definition being shaped a certain way is tested against a definition the test builds for the purpose, using the module's existing workflow builder and its no-filesystem guard, with the values the test chose; what is asked of the shipped definition is that it is valid, which is what self_route_problems, retry_routing_problems, cost_ceiling_problems, stage_exception_problems and the prompt-and-schema existence sweeps already ask. So test_this_deployment_declares_both_ceilings_at_the_values_it_intends stops asserting that the run ceiling is 90 and that each stage carries the per-stage number it carries today, and the property worth holding - that a declared ceiling is accompanied by a reason stating the number it explains - is held against a built definition declaring ceilings the test set. test_the_shipped_workflow_runs_the_four_stages_this_project_intends stops asserting the stage list, and whatever it was protecting about stage order is held against a built definition with stages the test named.
+  - Remove the assertion in test_every_stage_exception_this_repository_states_means_something that the story glob read some story artifact. Cross-checking this repository's real stories against this repository's real workflow stays, and it asserts nothing about how many stories exist; that stage_exception_problems reports a bad grant and accepts a good one is already driven on constructed stories elsewhere in the module, which is where that property belongs.
+  - Where a value in the shipped definition really is coupled to something outside it, hold the coupling rather than the value. The verifying stage name is the case: the coordinator keys on that literal, so the assertion that the definition and the coordinator source agree on it is a claim about the harness rather than a configuration a test is forcing, and it stays.
+  - Adapt the standing modules that assert a red suite re-enters the stage in place, and add a standing module for the behaviour this story establishes.
+  - Update the ARCHITECTURE.md passages that state the old route, in "The coordinator runs the suite a stage declares" and in "A rerun only shadows a broader failure". Both describe a red suite bringing the stage back in place through the existing self-route decision, and the second describes the narrowing rerun taking the same route.
+
+acceptance_criteria:
+  - A run whose declared suite run exits non-zero advances to the stage after the declaring one. No self-route is recorded for it, self_route_count does not move, no self-route result artifact is written for it, and no self-routed event names it.
+  - The outstanding-failure record the coordinator writes to state on that non-zero exit is the same record it wrote before this story - same keys, same values, same retained paths - and the retained result and output pair is still written.
+  - An event recorded at that advance names the declaring stage, the exit code, and the retained result and output paths, so a reader of events.log sees the red suite and the carry-forward rather than an unexplained advance.
+  - A green rerun whose recorded scope does not shadow the failure that still stands also advances rather than re-entering, and leaves the outstanding failure standing in state.
+  - A green rerun whose recorded scope shadows the failure still clears it and still saves state at the decision, exactly as it does now.
+  - The verifier is invoked on a run carrying a red suite, and the suite-run record rendered into its context is the failing one.
+  - A verifier that fails the verdict on a red suite and names the implementation category is routed to the implementer through the existing table lookup, spending a retry and archiving the attempt as any failed verification does. A category the workflow does not define still escalates.
+  - A verifier that passes the verdict on a run still carrying an unshadowed suite failure still escalates at the end of the run, with the reason and the named paths unchanged from what that refusal produces today.
+  - The suite-failed cause is absent from orchestration and from schemas/self-route-result.schema.json, and the totality check that holds the bookkeeping classification against the declared set of causes passes without it.
+  - The verifier prompt's whole-suite passage states that a non-zero suite exit is a failing verdict rather than a finding, and names no retry category.
+  - The shipped workflow gives the tester max_self_routes of one with a recorded reason that states one, and max_bookkeeping_self_routes of two with its reason unchanged.
+  - The reason-reading assertion in tests/test_shipped_workflow_is_valid.py reads every declared max_self_routes_reason rather than the outliers alone, and still asserts that each states the number it explains. The assertion requiring this deployment to declare a budget differing from the common one is gone, and no assertion about what a reason must say was weakened to remove it.
+  - Setting every stage's max_self_routes to the same value, whatever that value is, leaves the suite green. No test requires this deployment to budget one stage differently from another.
+  - No assertion in tests/test_shipped_workflow_is_valid.py requires a declaration to be present in order for a neighbouring loop to have something to read. Each such companion is gone and the loop beside it holds every declaration that is present, so removing a self-route budget, a retry category, a per-stage cost ceiling, a shipped workflow definition other than the configured one, or the last stage_exceptions grant in the story corpus does not redden the module.
+  - Each of those loops still asserts what it asserted about a declaration that is present, and the collection step that a removed companion also protected from raising - the minimum over the collected budgets - handles the empty case rather than failing on it.
+  - No assertion in tests/test_shipped_workflow_is_valid.py requires a particular value in the shipped definition. Changing the run ceiling, changing any stage's cost ceiling, adding a stage, renaming a stage other than the verifying one, or removing a workflow definition other than the configured one leaves the module green, and what the module asks of the shipped definition is that it is valid and that its prompts and schemas exist.
+  - Every property that needed a definition shaped a particular way is held against a definition the test builds, with the values that test chose, through the module's existing builder rather than by reading workflows/. A ceiling's reason is still required to state the number it explains, on a built definition whose ceilings the test set.
+  - The assertion that the definition and the coordinator source agree on the verifying stage name is unchanged, that being a coupling to orchestration rather than a configuration choice.
+  - The story-corpus cross-check still validates every story artifact this repository holds against this repository's workflow, and asserts nothing about how many stories exist or whether any states a grant.
+  - A standing test module holds the property this story establishes - that a red declared suite run reaches the verifier rather than re-entering the authoring stage - and it drives run_story against a temporary target with the agent runner faked, so it does not depend on the running coordinator process having loaded the code under test.
+  - ARCHITECTURE.md no longer states that a non-zero declared suite run brings the stage back in place, in either passage that states it now.
+
+technical_plan:
+  implementation_steps:
+    - In the declared-suite-run block of run_story, keep the write of the outstanding-failure record on a non-zero exit and replace the self_route call and its escalation with the advance, appending the carry-forward event where the decision is made.
+    - Do the same for the non-shadowing branch of the zero-exit path, which currently refuses the advance through the same self-route.
+    - Delete SUITE_FAILED, its entry in SELF_ROUTE_FAILURES, and its branch in self_route_statement; remove its value from the enum in schemas/self-route-result.schema.json and the sentence describing it from that property's description.
+    - Rewrite the comment above the end-of-run refusal so it states what is now true: the suite-run block records a failure and advances, the verifier is where the failure is judged, and this refusal is what stops a run completing when no judgement superseded it.
+    - Add the paragraph to the whole-suite passage of prompts/story-verifier.md.
+    - Set the tester's max_self_routes to 1 in workflows/story-workflow.json and rewrite max_self_routes_reason for that number, keeping the record of what the budget is spent on and why it was two before.
+    - Adapt the standing modules that assert the old route, widen the reason-reading assertion in tests/test_shipped_workflow_is_valid.py to every declared reason and drop its requirement that an outlier exist, and write the new standing module.
+    - Rewrite the two ARCHITECTURE.md passages that state the old route, recording what changed and why the coordinator is not the stage to make this call.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The declared-suite-run block advances instead of self-routing on both of its routes into self_route, the carry-forward event is appended there, the suite-failed cause and its statement branch are removed, and the comment above the end-of-run refusal is corrected.
+    - file: schemas/self-route-result.schema.json
+      stage: implementer
+      reason: The suite-failed value leaves the failure enum and the sentence describing it leaves that property's description, because no site can produce that cause any more.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The whole-suite passage gains the paragraph saying a non-zero suite exit is a failing verdict rather than a finding, with its retry target read off the table.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The tester's max_self_routes drops to one and its recorded reason is rewritten for that number, the red suite no longer being among the causes the budget is spent on.
+    - file: tests/test_coordinator_runs_the_suite.py
+      stage: tester
+      reason: Asserts the non-zero exit self-routes and that the recorded cause is suite-failed, including that the cause is in the schema's enum.
+    - file: tests/test_suite_run_shadow.py
+      stage: tester
+      reason: Asserts both firing points route through the suite-failed self-route, including the non-shadowing rerun.
+    - file: tests/test_retained_suite_runs.py
+      stage: tester
+      reason: Asserts the retained pair is cited by a self-route taken on the red suite; the retention is unchanged and what cites it is not.
+    - file: tests/test_bookkeeping_self_route_budget.py
+      stage: tester
+      reason: Uses suite-failed as the non-bookkeeping cause its budget-splitting sequences spend, and plants the constant name in its classification-totality fixture.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: Its reason-reading assertion reads only budgets that differ from the common one and then requires such a stage to exist, which makes the suite depend on how this deployment is configured; it must read every declared reason instead, and the requirement that an outlier exist goes away. The module carries the same pattern in several other places and the sweep repairs all of them.
+    - file: tests/test_a_red_suite_reaches_the_verifier.py
+      stage: tester
+      reason: The standing module for the property this story establishes - a red declared suite run advances, is recorded, reaches the verifier with the failing record rendered, routes on the category the verifier names, and still refuses completion when nothing superseded it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Two passages state that a non-zero declared suite run brings the stage back in place, one of them for the narrowing rerun as well; both now describe the carry-forward and where the judgement is made.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/self-route-result.schema.json
+    - prompts/story-verifier.md
+    - workflows/story-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The implementer's revert check and its nominated-test short circuit. A full suite there would have caught story-136 while the implementer was still live; the developer has judged that the nominated-test gate saves more than it costs, and that judgement is not revisited here.
+    - The end-of-run refusal that stops a run completing with an unshadowed suite failure. Its condition, its reason text and what it reads stay exactly as they are; only the comment above it, whose claim this story makes false, is corrected.
+    - The retry_routing table's shape. Its categories already cover this case and none is added, renamed or reworded - including the documentation category's rule that a document accurately describing wrong behaviour is an implementation defect, which is what a red run arriving via the documenter produces.
+    - The scope-shadowing rule itself, suite_run_shadows, and what the coordinator's suite-run records carry. What changes is where a standing failure goes, not how one is recognised.
+    - prompts/documenter.md. The documenter is not told anything new; writing documentation against an implementation about to change is waste rather than damage, and the route back rewrites it.
+    - The retry ceiling, the correction pass, the clean-clone check, and the cost ceilings other than the tester's self-route budget.
+
+verification_requirements:
+  - Confirm that no site under orchestration/ passes a suite failure to self_route, and that the suite-failed cause is gone from orchestration and from the self-route-result schema.
+  - Confirm from a driven run's own artifacts that a red declared suite run advanced to the next stage with no self-route recorded for it, and that the outstanding-failure record written to state is unchanged in shape from what the block wrote before.
+  - Confirm the events log of such a run names the red suite and the carry-forward, and that the retained result and output pair it names exists.
+  - Confirm the verifier's rendered context on such a run carries the failing suite record, and that a failed verdict naming the implementation category routed to the implementer through the existing table lookup.
+  - Confirm the end-of-run refusal still escalates on a passing verdict over an unshadowed failure, with its reason unchanged.
+  - Confirm the shipped workflow still validates at pre-flight with the tester at one self-route and two bookkeeping self-routes, and that the recorded reason states the number it explains.
+  - Confirm no assertion about what a declaration must say was deleted or weakened in the adapted test modules. What is deleted is the companion requiring the declaration to exist, and the check it propped up now holds every declaration present.
+  - Confirm by inspection of tests/test_shipped_workflow_is_valid.py that no assertion remains which requires the shipped definition or the story corpus to be configured a particular way in order for the module to have something to check, and that the properties those assertions stood for are now driven on definitions the tests build.
+  - Confirm the verifier prompt's new paragraph names no retry category.
+
+constraints:
+  - The coordinator gains no classification of failures and consults no additional agent. The category comes from the verifier and the destination from the workflow's table, as they do for every other failed verification.
+  - The shape and content of the outstanding-failure record, the retained suite-run pairs, and the suite-run result artifacts are unchanged. This story changes routing and nothing about what is recorded.
+  - A green declared suite run is routed exactly as it is today, and a workflow declaring no suite run behaves exactly as it does today.
+  - Nothing under orchestration/ derives a count of tests, or a list of failing test names, from a suite run's output. The output is stored and passed on as text.
+  - The forward advance is to the next stage in workflow order. No stage is skipped, and no forward route past a stage is introduced.
+  - The verifier prompt does not grow beyond the one paragraph, and names no stage or category the rest of the prompt does not name.
+  - No test added or adapted here requires the shipped workflow, or this repository's story corpus, to be configured a particular way in order to have something to assert. A property that needs a definition shaped a certain way is driven against a definition the test builds. What is asked of the shipped definition is that it is valid, that the files it names exist, and that it agrees with the literals orchestration keys on.
+  - The sweep removes companions and moves properties onto built definitions. It does not remove a property: every check on what a declaration must say survives, exercised on a definition the test controls where it was previously exercised on whatever the shipped one happened to declare.
+
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-11 21:53:18
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 238
