@@ -28,3 +28,4 @@
 {"story_id": "story-134", "mode": "narrow", "cost_usd": 2.427763, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-10 18:23:11", "findings": 3, "filed": 3, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-135", "mode": "narrow", "cost_usd": 1.3964385, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-10 22:06:13", "findings": 3, "filed": 3, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-137", "mode": "narrow", "cost_usd": 3.3811780000000007, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-11 23:15:07", "findings": 4, "filed": 4, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-136", "mode": "narrow", "cost_usd": 3.4421595000000003, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-12 08:10:34", "findings": 2, "filed": 2, "dropped": 0, "dedupe_ran": true}
