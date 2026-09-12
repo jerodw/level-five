@@ -126,19 +126,31 @@ def test_tester_deleting_blocked_path_escalates(target_root, harness_root):
 
 
 def _invocations_before_escalating(harness_root: Path, stage_name: str) -> int:
-    """How many times a stage runs before a mechanical failure escalates it.
+    """How many times a stage runs before an unwritten required output escalates it.
 
-    Its first invocation plus its declared self-route budget, read off the
-    stage's own declaration. Written out as a literal, this was
+    Its first invocation plus the budget that failure actually spends, read off
+    the stage's own declaration. Written out as a literal, this was
     `["implementer", "tester"]` — a list that assumed the tester never runs
     again in place, and that went red the moment story-047 granted it a budget
-    of two. What the assertion below claims is unchanged; only how it resolves
+    of two. What the assertions below claim is unchanged; only how they resolve
     the number of calls is.
+
+    Both call sites drive the same failure — a stage that did the work and did
+    not write a required output — which is one of the bookkeeping causes, so a
+    stage that splits its budget spends `max_bookkeeping_self_routes` and one
+    that declares no split spends `max_self_routes`, exactly as the coordinator
+    decides. Reading the failure budget unconditionally was right only while
+    the tester's two numbers happened to be the same, and went red in
+    story-137 when the failure budget dropped to one. Both keys come off the
+    coordinator's own constants, so neither is spelled here.
     """
     workflow = json.loads(
         (harness_root / "workflows" / "story-workflow.json").read_text())
     declaration = next(s for s in workflow["stages"] if s["name"] == stage_name)
-    return 1 + declaration.get("max_self_routes", 0)
+    split = declaration.get(story_coordinator.BOOKKEEPING_SELF_ROUTE_BUDGET_KEY)
+    if split is None:
+        split = declaration.get(story_coordinator.SELF_ROUTE_BUDGET_KEY, 0)
+    return 1 + split
 
 
 def test_tester_without_record_escalates_before_verifier(target_root, harness_root):

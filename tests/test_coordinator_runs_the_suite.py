@@ -3,9 +3,14 @@
 A stage that authors validation used to run the target's whole suite inside its
 own turn. This story moves that run to the coordinator: the stage declares
 `suite_run`, ends its turn, and the coordinator runs the configured
-`test_command` as a subprocess and reads its exit status. Zero advances the
-workflow; non-zero brings the declaring stage back in place on its own
-self-route budget.
+`test_command` as a subprocess and reads its exit status.
+
+Zero advances the workflow. Non-zero used to bring the declaring stage back in
+place on its own self-route budget, and since story-137 it advances too: the
+failure is recorded in state, a line naming it is appended to the event stream,
+and the run carries on to the next stage, so the failure reaches the verifier —
+the agent that already reads the workflow's retry_routing table — instead of
+being attributed by a coordinator that cannot tell which stage broke the tree.
 
 Every case below is driven through `story_coordinator.run_story` with a fake
 agent runner, against a target repository built under `tmp_path`. What is
@@ -37,12 +42,14 @@ Every absence asserted here carries a demonstration that it can fail:
   * "the record carries no count of tests" sits beside the same scan over a
     record with a count planted in it, and beside the counts the suite
     announced being present in the output the record passes on as text;
-  * "the self-route spends no retry budget" — `retry_count` unchanged, no
-    attempt archive, no retry-history entry — sits beside a run through the
-    same fixture whose verdict routes a retry, which spends all three;
-  * "a workflow declaring no suite run writes no record and takes no
-    self-route" sits beside the identical run under the declaring workflow,
-    which does both;
+  * "a red suite records no self-route" — no self-route artifact, no
+    self-routed event, `self_route_count` unmoved — sits beside a run through
+    the same fixture whose declaring stage withholds a required output, which
+    self-routes on the budget that stage declares, so the absence is a fact
+    about the red suite rather than about a stage that could never self-route;
+  * "a workflow declaring no suite run writes no record and records no
+    outstanding failure" sits beside the identical run under the declaring
+    workflow, which does both;
   * "the early marker is absent from the retained tail" is what makes the
     file's copy of it evidence, and both halves are asserted of each of the
     three coordinator suite runs;
@@ -152,9 +159,11 @@ BUDGET = 2
 def declaring_stage(**extra) -> dict:
     """The stage that authors validation and declares the suite run.
 
-    It declares a self-route budget above one, because a red suite routes
-    through the self-route decision and a budget of one cannot show the
-    difference between "the budget is spent" and "the stage ran again once".
+    It declares a self-route budget above one, which since story-137 is what
+    makes "no self-route was taken for the red suite" worth asserting: this
+    stage *can* self-route, and a run below shows it doing so for a required
+    output it did not write, so the absence beside a red suite is a fact about
+    the routing rather than about a stage with nowhere to go.
     """
     return workflow_stage(
         outputs=(conftest.TEST_RESULTS, conftest.TESTER_CHANGED_FILES),
@@ -294,6 +303,22 @@ BROKEN = "broken"     #: the stage leaves the sentinel as it found it
 REPAIR = "repair"     #: the stage repairs it, so the suite exits zero
 
 
+def plan_touching_nothing_after(declaring: list[str]) -> dict:
+    """`declaring`'s plan, with the judging stage told to touch nothing.
+
+    The runner's default action is REPAIR, which was harmless while a red suite
+    brought the declaring stage back before any other stage ran: the judging
+    stage was never reached over a failing suite. Since story-137 it is, and a
+    default that repairs would have the stage that *judges* the failure quietly
+    fix it — so every run below that carries a failure forward says what the
+    judging stage does with the sentinel rather than letting the default say
+    it. One more invocation than the declaring stage's plan allows for, so the
+    default is never reached on either stage.
+    """
+    return {DECLARING: list(declaring),
+            VERIFYING: [BROKEN] * (len(declaring) + 1)}
+
+
 def _nth(sequence: list, index: int, default):
     if not sequence or index >= len(sequence):
         return default
@@ -377,6 +402,53 @@ class Runner:
             write(path, f"{artifact} written by {stage} call {call}.\n")
 
 
+class WithholdingRunner(Runner):
+    """The same fake runner, with one invocation's required output withheld.
+
+    `withhold` maps an invocation number of a stage to the artifact that
+    invocation does not write, which is the mechanical failure the coordinator
+    *does* route back in place. It exists so the absence a red suite leaves can
+    be shown beside a self-route the same stage of the same workflow takes.
+    """
+
+    def __init__(self, target_root: Path, plan: dict | None = None,
+                 verdicts: list | None = None, workflow: dict | None = None,
+                 *, withhold: dict | None = None):
+        super().__init__(target_root, plan, verdicts, workflow)
+        self.withhold = dict(withhold or {})
+
+    def _write(self, artifact, stage, call, verdict, changed):
+        if self.withhold.get(call) == artifact:
+            return
+        super()._write(artifact, stage, call, verdict, changed)
+
+
+class SnapshotRunner(Runner):
+    """The same fake runner, recording what the run directory held at the top
+    of every invocation.
+
+    The coordinator saves the state before each stage iteration, so the file an
+    invocation opens on holds what the iteration before it decided. That is
+    where the cost of the carry-forward is observable *at the moment it
+    happens*, rather than only in whatever the run ended with — which matters
+    here, because the verdict the carry-forward advances into goes on to route
+    a retry of its own.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.snapshots: list[dict] = []
+        self.attempts_dir_at: list[bool] = []
+        self.retry_history_at: list[bool] = []
+
+    def __call__(self, prompt, **kwargs):
+        self.snapshots.append(state_of(self.run_dir))
+        self.attempts_dir_at.append((self.run_dir / "attempts").exists())
+        self.retry_history_at.append(
+            (self.run_dir / "retry-history.json").exists())
+        return super().__call__(prompt, **kwargs)
+
+
 def run_dir_of(target_root: Path) -> Path:
     return conftest.run_dir_for(Path(target_root), STORY_ID)
 
@@ -431,11 +503,19 @@ def green_run(target_root, harness_root):
 
 
 @pytest.fixture
-def red_then_green_run(target_root, harness_root):
+def carried_forward_run(target_root, harness_root):
     """The central failing run: the declaring stage's first invocation leaves
-    the suite red, and the invocation the coordinator brings it back for
-    repairs it."""
-    return drive(target_root, harness_root, {DECLARING: [BROKEN, REPAIR]})
+    the suite red, the run carries the failure forward to the verifier, the
+    verifier fails the verdict and names the category the table routes back to
+    the declaring stage, and the invocation that retry brings repairs it.
+
+    Two coordinator suite runs of the declaring stage, in two attempts rather
+    than in two tries of one — which is what a carried-forward failure makes
+    the shape of a red-then-green story.
+    """
+    return drive(target_root, harness_root,
+                 plan_touching_nothing_after([BROKEN, REPAIR]),
+                 verdicts=[FAILED, PASS])
 
 
 # --------------------------------------------------------------------------
@@ -586,182 +666,247 @@ def test_the_same_scan_reports_a_record_that_does_carry_a_count(green_run):
 
 
 # --------------------------------------------------------------------------
-# A red suite brings the declaring stage back in place
+# A red suite is carried forward to the stage after the declaring one
 # --------------------------------------------------------------------------
 
 
-def test_a_red_suite_re_runs_the_declaring_stage_in_place(red_then_green_run):
-    """The invocation after the failure is the same stage — no reroute — and
-    the run then reaches the end."""
-    code, runner, run_dir = red_then_green_run
+def test_a_red_suite_advances_to_the_next_stage(carried_forward_run):
+    """The invocation after the failure is the *next* stage rather than the
+    declaring one run again, so the failure reaches the stage that judges it.
+
+    What brings the declaring stage back afterwards is the ordinary retry the
+    verifier's failed verdict routes, which is a different mechanism spending
+    different budget, and the run then reaches the end green.
+    """
+    code, runner, run_dir = carried_forward_run
 
     assert code == 0
-    assert runner.calls == [DECLARING, DECLARING, VERIFYING]
+    assert runner.calls == [DECLARING, VERIFYING, DECLARING, VERIFYING]
     assert state_of(run_dir)["status"] == "completed"
     assert record_of(run_dir)["exit_code"] == 0
 
 
-def test_the_run_writes_a_self_route_record_naming_the_new_failure(
-    red_then_green_run,
+def test_the_red_suite_records_no_self_route_of_any_kind(carried_forward_run):
+    """The absence the story is about, in the three places a self-route is
+    visible: the record artifact, the event, and the counter on the state.
+
+    The counter is read off the state the *verifying* stage opened on rather
+    than off the state the run ended with, because the count is live: it is
+    zeroed when a stage completes and a run that had spent it would read as
+    zero at the end either way.
+    """
+    _, _, run_dir = carried_forward_run
+
+    assert self_route_records(run_dir) == []
+    assert [e for e in history_of(run_dir) if e["event"] == "self-routed"] == []
+    assert state_of(run_dir)["self_route_count"] == 0
+    assert not (run_dir / story_coordinator.prompt_file(DECLARING, 1, 1)).exists()
+
+
+def test_the_same_stage_does_self_route_when_it_withholds_an_output(
+    make_target, harness_root,
 ):
-    _, _, run_dir = red_then_green_run
-    records = self_route_records(run_dir)
-    assert len(records) == 1
-    _, record = records[0]
+    """The control for the absence above.
 
-    assert record["stage"] == DECLARING
-    assert record["failure"] == story_coordinator.SUITE_FAILED
-    assert record["try"] == 1
-    assert schema_validator.validate(
-        record, schema_validator.load_schema("self-route-result")) == []
+    The same stage of the same workflow, whose declared budget is therefore the
+    same budget, meeting a cause that *is* routed back in place: a required
+    output it did not write. It re-runs, writes a self-route record, appends a
+    self-routed event and moves the counter — so the emptiness beside the red
+    suite is a fact about which failures route back rather than about a stage
+    that could not have self-routed whatever happened to it.
+    """
+    target_root = make_target("withholds-an-output")
+    runner = WithholdingRunner(target_root, {DECLARING: [REPAIR]},
+                               withhold={1: conftest.TEST_RESULTS})
+    code = story_coordinator.run_story(
+        STORY_ID, harness_root, target_root, runner)
+    run_dir = run_dir_of(target_root)
+
+    assert code == 0
+    assert runner.calls == [DECLARING, DECLARING, VERIFYING]
+    assert [record["failure"] for _, record in self_route_records(run_dir)] == [
+        story_coordinator.MISSING_REQUIRED_ARTIFACTS]
+    assert [e["stage"] for e in history_of(run_dir)
+            if e["event"] == "self-routed"] == [DECLARING]
+    assert (run_dir / story_coordinator.prompt_file(DECLARING, 1, 1)).is_file()
 
 
-def test_that_failure_value_is_one_the_shipped_schema_declares():
-    """The constant the coordinator routes on and the value the schema permits
-    are the same string."""
-    schema = schema_validator.load_schema("self-route-result")
-    assert story_coordinator.SUITE_FAILED in schema["properties"]["failure"]["enum"]
-
-
-def test_the_statement_names_both_the_record_and_the_path_to_the_output(
-    red_then_green_run,
+def test_the_carry_forward_spends_no_retry_at_the_moment_it_happens(
+    target_root, harness_root,
 ):
-    """What the re-running stage is told: where the coordinator's record is,
-    and where the whole output of the run it is diagnosing lives. Both are the
-    retained pair, keyed by this stage, attempt and try, rather than the
-    canonical pair the rerun writes over."""
-    _, _, run_dir = red_then_green_run
-    _, record = self_route_records(run_dir)[0]
+    """Nothing a retry spends is spent by the advance itself.
+
+    Observed at the verifying stage's first invocation — the iteration the
+    carry-forward advanced into — rather than at the end of the run, because
+    the verdict that verification returns does route a retry and would spend
+    all three afterwards. Its control is the state that same run ends with,
+    where the retry the *verifier* asked for has moved every one of them.
+    """
+    runner = SnapshotRunner(target_root,
+                            plan_touching_nothing_after([BROKEN, REPAIR]),
+                            verdicts=[FAILED, PASS])
+    code = story_coordinator.run_story(
+        STORY_ID, harness_root, target_root, runner)
+    run_dir = run_dir_of(target_root)
+    at_the_verifier = runner.snapshots[1]
+
+    assert code == 0
+    assert at_the_verifier["retry_count"] == 0
+    assert runner.attempts_dir_at[1] is False
+    assert runner.retry_history_at[1] is False
+
+    ended = state_of(run_dir)
+    assert ended["retry_count"] == 1
+    assert (run_dir / "attempts" / "attempt-1").is_dir()
+    assert (run_dir / "retry-history.json").is_file()
+
+
+# --------------------------------------------------------------------------
+# The advance is recorded where a reader of events.log meets it
+# --------------------------------------------------------------------------
+
+
+def carry_forward_lines(run_dir: Path) -> list[dict]:
+    """Every event whose message says a suite failure was carried forward.
+
+    Read by what the message says rather than by an event kind, because the
+    kind it is appended under is a shared one — a list rather than an
+    assertion, so the same reading can be made of a run whose suite never
+    failed, which is the control.
+    """
+    return [entry for entry in history_of(run_dir)
+            if "carrying the failure forward" in entry["message"]]
+
+
+def test_the_events_log_says_the_red_suite_was_carried_forward(
+    carried_forward_run,
+):
+    """Without this line a reader of events.log meets an advance and has no way
+    to tell it from an advance over a passing suite. So the line names the
+    declaring stage, the exit code, and the pair the failing run's evidence was
+    retained under — and both paths it names are files that exist and hold that
+    failing run.
+    """
+    _, _, run_dir = carried_forward_run
+    (line,) = carry_forward_lines(run_dir)
     failed_result = story_coordinator.retained_suite_result_file(
         SUITE_ARTIFACT, DECLARING, 1, 0)
     failed_output = str(run_dir / story_coordinator.suite_output_file(
         failed_result))
 
-    assert record["artifacts"] == [failed_result, failed_output]
-    assert failed_result in record["statement"]
-    assert failed_output in record["statement"]
+    assert line["stage"] == DECLARING
+    assert DECLARING in line["message"]
+    assert "exited 1" in line["message"]
+    assert failed_result in line["message"]
+    assert failed_output in line["message"]
+    assert read_json(run_dir / failed_result)["exit_code"] == 1
+    assert Path(failed_output).is_file()
+    assert schema_validator.validate(
+        history_of(run_dir),
+        schema_validator.load_schema("execution-history")) == []
 
 
-def test_the_re_run_invocation_is_given_the_record_and_the_output_path(
-    red_then_green_run,
-):
-    """Read off the prompts the coordinator rendered: the second invocation
-    carries the coordinator's record, and the first carries none."""
-    _, runner, run_dir = red_then_green_run
-    first, second = runner.prompts[DECLARING]
-    failed_output = str(run_dir / story_coordinator.suite_output_file(
-        story_coordinator.retained_suite_result_file(
-            SUITE_ARTIFACT, DECLARING, 1, 0)))
-
-    assert '"exit_code": 1' in second
-    assert failed_output in second
-    assert '"exit_code"' not in first
-    # And the same thing is on disk under the re-run's own prompt filename.
-    assert failed_output in rendered_prompt(run_dir, DECLARING, 1, 1)
+def test_a_run_whose_suite_never_failed_carries_no_such_line(green_run):
+    """The control for the reading above: the same scan over a run that made
+    the same declared suite run and passed it finds nothing, so the line is
+    written where a failure was met rather than at every advance."""
+    _, _, run_dir = green_run
+    assert carry_forward_lines(run_dir) == []
+    assert record_of(run_dir)["exit_code"] == 0
 
 
-def test_the_output_that_stage_is_pointed_at_holds_the_failing_run(
-    red_then_green_run,
-):
-    """The path named is a file that exists, and it is the *failing* run's
-    output. Since story-084 it still is when the run ends: the passing run
-    writes over the canonical pair and leaves this one, so the path the record
-    cites holds the run that self-route was caused by rather than the one that
-    ended the story."""
-    _, runner, run_dir = red_then_green_run
-    _, record = self_route_records(run_dir)[0]
-    assert Path(record["artifacts"][1]).is_file()
-    # The record the second invocation was handed said the suite had failed.
-    assert '"exit_code": 1' in runner.prompts[DECLARING][1]
+def test_the_verifier_is_handed_the_failing_suite_record(carried_forward_run):
+    """What the carry-forward is *for*, read off the prompt the coordinator
+    rendered: the stage the run advanced into was given the record of the run
+    that failed, and the path to the whole of its output.
 
+    The declaring stage's own first prompt is the control beside it — it
+    carries no suite record at all, because no suite had run when it was
+    written.
+    """
+    _, runner, run_dir = carried_forward_run
+    first_verification = runner.prompts[VERIFYING][0]
 
-# --------------------------------------------------------------------------
-# The self-route spends nothing a retry spends
-# --------------------------------------------------------------------------
-
-
-def test_the_re_run_leaves_every_piece_of_retry_bookkeeping_untouched(
-    red_then_green_run,
-):
-    _, _, run_dir = red_then_green_run
-    assert state_of(run_dir)["retry_count"] == 0
-    assert not (run_dir / "attempts").exists()
-    assert not (run_dir / "retry-history.json").exists()
-    assert not (run_dir / story_coordinator.prompt_file(DECLARING, 2)).exists()
-
-
-def test_a_run_that_does_spend_the_retry_budget_shows_all_three(
-    target_root, harness_root,
-):
-    """The control beside it: a failed verdict routes a retry to the same
-    stage, so the three assertions above are looking at the right places and
-    would report a self-route that spent any of them."""
-    code, _, run_dir = drive(target_root, harness_root,
-                             verdicts=[FAILED, PASS])
-    assert code == 0
-    assert state_of(run_dir)["retry_count"] == 1
-    assert (run_dir / "attempts" / "attempt-1").is_dir()
-    assert (run_dir / "retry-history.json").is_file()
-    assert (run_dir / story_coordinator.prompt_file(DECLARING, 2)).is_file()
-
-
-def test_the_stages_own_budget_is_what_moved(red_then_green_run):
-    """What the route does spend, so the absences above are not the whole
-    story: the stage's own self-route budget, recorded where the run records
-    every routing decision. Read off the event rather than off `state.json`,
-    because the count is live — it is back to zero once the stage succeeds,
-    which is the property tests/test_self_routing_retry.py holds."""
-    _, _, run_dir = red_then_green_run
-    routed = [e for e in history_of(run_dir) if e["event"] == "self-routed"]
-    assert len(routed) == 1
-    assert routed[0]["stage"] == DECLARING
-    assert routed[0]["retry_stage"] == DECLARING
-    assert f"self-route 1 of {BUDGET}" in routed[0]["message"]
+    assert '"exit_code": 1' in first_verification
+    assert str(run_dir / story_coordinator.suite_output_file(
+        SUITE_ARTIFACT)) in first_verification
+    assert '"exit_code"' not in runner.prompts[DECLARING][0]
+    # And the same thing is on disk under that invocation's prompt filename.
+    assert '"exit_code": 1' in rendered_prompt(run_dir, VERIFYING, 1)
 
 
 # --------------------------------------------------------------------------
-# An exhausted budget escalates, with the reason the decision returns
+# A suite that stays red still stops the run, through the verifier's retries
 # --------------------------------------------------------------------------
+
+
+#: More invocations than any run of this fixture can take. The plan is made
+#: longer than the run so that the run ending is the ceiling being reached
+#: rather than the plan running out and the default repairing the suite; the
+#: assertions below hold the run to being shorter than this, which is what says
+#: the plan never ran out.
+MORE_THAN_ANY_RUN_TAKES = 10
 
 
 @pytest.fixture
 def never_repaired_run(target_root, harness_root):
-    """Every invocation leaves the suite red, so the budget is the only thing
-    that ends the run."""
-    return drive(target_root, harness_root, {DECLARING: [BROKEN] * (BUDGET + 1)})
+    """Every invocation leaves the suite red and every verdict fails it.
+
+    The failure is carried forward each time, so what ends this run is the
+    retry ceiling the verifier's own recommendations spend — the declaring
+    stage's self-route budget is never touched, a red suite no longer being
+    among the causes it is spent on.
+    """
+    return drive(target_root, harness_root,
+                 plan_touching_nothing_after(
+                     [BROKEN] * MORE_THAN_ANY_RUN_TAKES),
+                 verdicts=[FAILED])
 
 
-def test_a_suite_still_failing_past_the_budget_escalates(never_repaired_run):
-    code, runner, run_dir = never_repaired_run
-
-    assert code == 2
-    state = state_of(run_dir)
-    assert state["status"] == "escalated"
-    assert state["current_stage"] == DECLARING
-    # It spent the whole budget before stopping rather than escalating early.
-    assert runner.calls.count(DECLARING) == BUDGET + 1
-    assert len(self_route_records(run_dir)) == BUDGET
-    assert VERIFYING not in runner.calls
-
-
-def test_that_escalation_carries_the_reason_the_self_route_decision_returns(
+def test_a_suite_that_stays_red_stops_the_run_at_the_retry_ceiling(
     never_repaired_run,
 ):
-    """The exhausted-budget clause is the one `self_route` already composes,
-    naming the stage and the number it exhausted, rather than a second
-    escalation path written for this."""
-    _, _, run_dir = never_repaired_run
+    code, runner, run_dir = never_repaired_run
     reason = story_coordinator.escalation_reason(run_dir)
-    assert reason
-    assert f"{DECLARING} has exhausted its self-route budget of {BUDGET}" in reason
+
+    assert code == 2
+    assert state_of(run_dir)["status"] == "escalated"
+    assert "retries are exhausted" in reason
+    # Every red suite advanced rather than re-running the stage: the declaring
+    # stage and the judging one were invoked the same number of times.
+    assert runner.calls.count(DECLARING) == runner.calls.count(VERIFYING)
+    assert 1 < runner.calls.count(DECLARING) < MORE_THAN_ANY_RUN_TAKES
+    assert state_of(run_dir)["retry_count"] == runner.calls.count(VERIFYING) - 1
 
 
-def test_the_escalation_says_which_run_it_stopped_for(never_repaired_run):
-    """The reason names the exit status the suite reported, so a reader meets
-    the failure rather than only the exhausted budget."""
-    _, _, run_dir = never_repaired_run
-    reason = story_coordinator.escalation_reason(run_dir)
-    assert f"exited {record_of(run_dir)['exit_code']}" in reason
+def test_that_run_took_no_self_route_for_any_of_its_red_suites(
+    never_repaired_run,
+):
+    """The absence over a whole run rather than over one advance, with the
+    carry-forward lines beside it: one per red suite the run met, so the empty
+    self-route list is a run that recorded its failures somewhere rather than a
+    run that met none."""
+    _, runner, run_dir = never_repaired_run
+
+    assert self_route_records(run_dir) == []
+    assert [e for e in history_of(run_dir) if e["event"] == "self-routed"] == []
+    assert len(carry_forward_lines(run_dir)) == runner.calls.count(DECLARING)
+
+
+def test_the_failure_still_standing_is_the_last_one_and_state_names_it(
+    never_repaired_run,
+):
+    """What a reader of state.json is left with: the most recent failure, whose
+    retained record and output are both files that exist and describe a run
+    that exited non-zero."""
+    _, runner, run_dir = never_repaired_run
+    outstanding = state_of(run_dir)["unshadowed_suite_failure"]
+
+    assert outstanding["stage"] == DECLARING
+    assert outstanding["attempt"] == runner.calls.count(DECLARING)
+    assert outstanding["exit_code"] == 1
+    assert read_json(run_dir / outstanding["result_path"])["exit_code"] == 1
+    assert Path(outstanding["output_path"]).is_file()
 
 
 # --------------------------------------------------------------------------
@@ -818,7 +963,8 @@ def test_a_workflow_declaring_no_suite_run_runs_the_stage_as_it_did_before(
 ):
     """The compatibility property, driven as a run: the declaring stage leaves
     the suite red and the run completes anyway, because no suite was run, no
-    record was written and no self-route was taken on that account."""
+    record was written, no failure was recorded as outstanding and no line was
+    written saying one had been carried forward."""
     harness, workflow = without_the_declaration(tmp_path)
     target_root = make_target("undeclared", workflow=workflow["name"])
     code, runner, run_dir = drive(target_root, harness,
@@ -832,26 +978,26 @@ def test_a_workflow_declaring_no_suite_run_runs_the_stage_as_it_did_before(
     assert not (run_dir / story_coordinator.suite_output_file(
         SUITE_ARTIFACT)).exists()
     assert not self_route_records(run_dir)
+    assert not state_of(run_dir)["unshadowed_suite_failure"]
+    assert carry_forward_lines(run_dir) == []
     assert [e for e in history_of(run_dir)
             if e["event"] == "suite-rerun-started"
             and e["stage"] == STAGE_NAMES[0]] == []
 
 
-def test_the_identical_run_under_the_declaring_workflow_self_routes(
+def test_the_identical_run_under_the_declaring_workflow_records_a_failure(
     make_target, harness_root,
 ):
     """The control beside it. Same fake runner, same plan, same target — and
-    the declaration is the only difference — so the completion above is a fact
+    the declaration is the only difference — so the silence above is a fact
     about the missing key rather than about a suite that passed anyway."""
     target_root = make_target("declared-control")
-    code, runner, run_dir = drive(target_root, harness_root,
-                                  {DECLARING: [BROKEN]})
+    _, _, run_dir = drive(target_root, harness_root, {DECLARING: [BROKEN]})
 
-    assert runner.calls != STAGE_NAMES
     assert (run_dir / SUITE_ARTIFACT).is_file()
-    assert [record["failure"] for _, record in self_route_records(run_dir)] \
-        == [story_coordinator.SUITE_FAILED]
-    assert code == 0
+    assert carry_forward_lines(run_dir)
+    assert [e["stage"] for e in history_of(run_dir)
+            if e["event"] == "suite-rerun-started"] != []
 
 
 # --------------------------------------------------------------------------

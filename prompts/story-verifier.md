@@ -188,6 +188,15 @@ result — its exit code — and read the file its output_path names when you
 need more than the tail it carries. test-results.json is the authoring
 stage's record of what it wrote, not an account of a run it made.
 
+A non-zero exit code in that record is a failing verdict and not a finding.
+Elsewhere this prompt says a finding can be correct and still be too small to
+fail a run, and that recording a finding does not fail the run; neither
+applies here. The whole suite failing is the tree being broken, so the verdict
+is failed, a retry is recommended, and the retry target is the category the
+injected routing table gives to the defect you judge caused it — read off
+that table like any other retry, from the same evidence you would use for any
+other failure.
+
 If retry state is active, evaluate whether the targeted verifier findings
 were resolved, and confirm the retry stayed within its authorized scope.
 

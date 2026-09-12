@@ -19,13 +19,12 @@
     },
     "failure": {
       "type": "string",
-      "description": "Which failure occurred. None of the values below is a judgement about the work, which is why running the stage again is a plausible answer to all of them and why a boundary or schema violation is not among them. agent-process-failed, missing-required-artifacts and stale-required-artifacts are mechanical: the stage simply did not produce what it declared. defective-retry-guidance belongs beside them for the same reason rather than because it is mechanical — it is a fact computed from what the stage produced, that the retry guidance in force was met in full and the verdict failed the work anyway, so the guidance sanctioned the outcome it fails. Nothing there reads a guidance entry, an unmet reason or a blocking issue as language; the whole comparison is set equality over strings the verifier echoed. suite-failed belongs beside them on the same terms: the suite a stage declared, run by the coordinator as a subprocess after that stage's turn ended, exited non-zero. It is an exit status the coordinator owns rather than an agent's assertion about a run it made itself, and nothing reads the run's output for a count of tests or a list of failing names. incomplete-changed-files is the same kind of computed fact about the record rather than about the work: the coordinator took a signature of the target tree before the stage was invoked and compared it after the stage's turn, subtracting the repository-wide blocked paths and whatever git excludes as ignored, and the stage's changed-files record does not name a path that comparison shows it changed. It reports omissions alone — a record naming a path the tree does not show as changed is not reported — and the coordinator does not amend the record: it re-enters the stage that wrote it, which is the only stage that may correct its own account of its own work.",
+      "description": "Which failure occurred. None of the values below is a judgement about the work, which is why running the stage again is a plausible answer to all of them and why a boundary or schema violation is not among them. agent-process-failed, missing-required-artifacts and stale-required-artifacts are mechanical: the stage simply did not produce what it declared. defective-retry-guidance belongs beside them for the same reason rather than because it is mechanical — it is a fact computed from what the stage produced, that the retry guidance in force was met in full and the verdict failed the work anyway, so the guidance sanctioned the outcome it fails. Nothing there reads a guidance entry, an unmet reason or a blocking issue as language; the whole comparison is set equality over strings the verifier echoed. incomplete-changed-files is the same kind of computed fact about the record rather than about the work: the coordinator took a signature of the target tree before the stage was invoked and compared it after the stage's turn, subtracting the repository-wide blocked paths and whatever git excludes as ignored, and the stage's changed-files record does not name a path that comparison shows it changed. It reports omissions alone — a record naming a path the tree does not show as changed is not reported — and the coordinator does not amend the record: it re-enters the stage that wrote it, which is the only stage that may correct its own account of its own work.",
       "enum": [
         "agent-process-failed",
         "missing-required-artifacts",
         "stale-required-artifacts",
         "defective-retry-guidance",
-        "suite-failed",
         "incomplete-changed-files"
       ]
     },
@@ -39,7 +38,7 @@
     },
     "artifacts": {
       "type": "array",
-      "description": "The artifacts the failure named, as the check reported them: the required outputs that were missing or stale, or — for a defective retry guidance — the artifacts the contradiction is between, the guidance that was met and the verdict that failed it anyway, or — for a failed suite run — the coordinator's record of that run and the path to its whole output. Absent for a failed agent process, which names none.",
+      "description": "The artifacts the failure named, as the check reported them: the required outputs that were missing or stale, or — for a defective retry guidance — the artifacts the contradiction is between, the guidance that was met and the verdict that failed it anyway. Absent for a failed agent process, which names none.",
       "items": { "type": "string" }
     }
   }

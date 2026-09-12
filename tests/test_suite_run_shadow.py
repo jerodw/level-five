@@ -1,11 +1,17 @@
 """A passing suite run supersedes a failing one only if it ran at least as much.
 
-A declared suite run fails, the stage self-routes, and the rerun after it
-passes. The pass is the more recent result, so before this it became the current
-one and the workflow advanced — whether the rerun had run as much as the failure
-did or had been narrowed until the answer was convenient. `suite_run_shadows`
-decides that question, by set containment over the scopes story-083 recorded,
-and a pass that shadows nothing leaves the failure standing.
+A declared suite run fails, a later invocation of the declaring stage runs the
+suite again, and that rerun passes. The pass is the more recent result, so
+before this it became the current one and the workflow advanced — whether the
+rerun had run as much as the failure did or had been narrowed until the answer
+was convenient. `suite_run_shadows` decides that question, by set containment
+over the scopes story-083 recorded, and a pass that shadows nothing leaves the
+failure standing.
+
+What a standing failure *does* is story-137's, and it is the one thing here that
+moved: neither the failure nor the non-shadowing rerun brings the declaring
+stage back in place any more. Both record and advance, and the failure they
+leave in state is what the refusal at the end of the run reads.
 
 What is asserted here, and what each assertion's subject is:
 
@@ -44,8 +50,9 @@ Every absence asserted here carries a demonstration that it can fail:
     that states the rule and stops there, which the reading rejects;
   * "the field is empty by default" sits beside the same load of a state file
     carrying a failure, which reads it back;
-  * "no self-route names a failure kind other than the one that already exists"
-    sits beside the enumeration of the kinds the refusing run did take;
+  * "the non-shadowing rerun takes no self-route" sits beside the carry-forward
+    line it does write, and beside the same reading of a run whose suite never
+    failed, which finds no such line;
   * "the clean-clone check and the revert check neither read nor write the
     field" is enumerated over every definition under `orchestration/` rather
     than sampled, and sits beside the same scan over that source with a write of
@@ -75,7 +82,9 @@ import story_coordinator
 from test_coordinator_runs_the_suite import (  # noqa: F401
     ALL_THREE,
     BROKEN,
-    BUDGET,
+    FAILED,
+    MORE_THAN_ANY_RUN_TAKES,
+    PASS,
     DECLARING,
     REPAIR,
     SENTINEL,
@@ -85,10 +94,12 @@ from test_coordinator_runs_the_suite import (  # noqa: F401
     VERIFYING,
     Runner,
     all_three_run,
+    carry_forward_lines,
     drive,
     harness_root,
     history_of,
     make_target,
+    plan_touching_nothing_after,
     read_json,
     record_of,
     run_dir_of,
@@ -409,9 +420,16 @@ def green_run(target_root, harness_root):
 @pytest.fixture
 def red_then_green_run(target_root, harness_root):
     """The ordinary fix-and-rerun: the first invocation leaves the suite red and
-    the invocation the coordinator brings the stage back for repairs it. Both
-    runs record the same scope, because the coordinator narrows neither."""
-    return drive(target_root, harness_root, {DECLARING: [BROKEN, REPAIR]})
+    the invocation that comes back to the declaring stage repairs it. Both runs
+    record the same scope, because the coordinator narrows neither.
+
+    What brings the stage back is the retry the verifier's failed verdict
+    routes, which since story-137 is the only thing that does: the red suite
+    itself advances rather than re-entering.
+    """
+    return drive(target_root, harness_root,
+                 plan_touching_nothing_after([BROKEN, REPAIR]),
+                 verdicts=[FAILED, PASS])
 
 
 def failure_in(run_dir: Path) -> dict:
@@ -430,16 +448,22 @@ def retained_pair(run_dir: Path, attempt: int, try_number: int) -> list[str]:
 def test_a_red_declared_suite_run_leaves_the_failure_outstanding(
     target_root, harness_root,
 ):
-    """Observed while the run is still going, off the state the second
-    invocation of the declaring stage opened on: the failure is outstanding from
-    the moment it happens, and everything a refusal has to name is there — the
+    """Observed while the run is still going, off the state the invocation
+    *after* the declaring stage opened on: the failure is outstanding from the
+    moment it happens, and everything a refusal has to name is there — the
     stage, the attempt, the try, the recorded scope, the exit code and the pair
-    of paths that run's evidence was retained under.
+    of paths that run's evidence was retained under. That record's shape and its
+    values are what this block wrote before story-137 moved where the failure
+    goes; only the routing changed.
 
-    The first invocation's snapshot is the control beside it: the same file, one
-    iteration earlier, carries no failure.
+    Which invocation that is says the other half of it: the stage the run
+    advanced into is the judging one rather than the declaring one run again.
+    The first invocation's snapshot is the control beside it — the same file,
+    one iteration earlier, carries no failure.
     """
-    runner = Snapshotting(target_root, {DECLARING: [BROKEN, REPAIR]})
+    runner = Snapshotting(target_root,
+                          plan_touching_nothing_after([BROKEN, REPAIR]),
+                          verdicts=[FAILED, PASS])
     code = story_coordinator.run_story(
         STORY_ID, harness_root, target_root, runner)
     run_dir = run_dir_of(target_root)
@@ -447,6 +471,7 @@ def test_a_red_declared_suite_run_leaves_the_failure_outstanding(
     result, output = retained_pair(run_dir, 1, 0)
 
     assert code == 0
+    assert runner.calls[:2] == [DECLARING, VERIFYING]
     assert before[FIELD] == {}
     assert after[FIELD] == {
         "stage": DECLARING,
@@ -463,16 +488,21 @@ def test_a_red_declared_suite_run_leaves_the_failure_outstanding(
 def test_a_rerun_at_the_same_scope_clears_the_failure_and_the_run_completes(
     red_then_green_run,
 ):
-    """The ordinary fix-and-rerun, unchanged by this story: one self-route, the
-    workflow advances over the pass, the run completes, and the state it ends
-    with carries no outstanding failure."""
+    """The ordinary fix-and-rerun: the rerun runs the same scope, so it
+    supersedes the failure, the workflow advances over the pass and the run
+    completes with nothing outstanding.
+
+    What the rerun *is* moved with story-137 — a retry the verifier routed
+    rather than a self-route the suite failure took — so no self-route record
+    is written anywhere in it.
+    """
     code, runner, run_dir = red_then_green_run
 
     assert code == 0
-    assert runner.calls == [DECLARING, DECLARING, VERIFYING]
+    assert runner.calls == [DECLARING, VERIFYING, DECLARING, VERIFYING]
     assert state_of(run_dir)["status"] == "completed"
     assert failure_in(run_dir) == {}
-    assert len(self_route_records(run_dir)) == 1
+    assert self_route_records(run_dir) == []
 
 
 def test_a_run_in_which_no_declared_suite_run_fails_is_routed_as_before(
@@ -495,11 +525,16 @@ def test_a_run_in_which_no_declared_suite_run_fails_is_routed_as_before(
 def narrowing_rerun(target_root, harness_root, monkeypatch):
     """The run this story is about: the declared suite run fails unnarrowed, the
     rerun passes narrowed to one selection the failure did not carry, and the
-    third invocation reruns unnarrowed — so the refusal is visible and so is the
-    way out of it."""
+    third invocation reruns unnarrowed — so the failure standing through the
+    narrowed pass is visible and so is the way out of it.
+
+    Each invocation of the declaring stage after the first is a retry the
+    verifier routed, which is what brings that stage back now.
+    """
     used = scoping(monkeypatch, [(), NARROWED, ()])
     return drive(target_root, harness_root,
-                 {DECLARING: [BROKEN, REPAIR, REPAIR]}), used
+                 plan_touching_nothing_after([BROKEN, REPAIR, REPAIR]),
+                 verdicts=[FAILED, FAILED, PASS]), used
 
 
 def test_the_fixture_really_makes_two_runs_of_differing_scope(narrowing_rerun):
@@ -511,118 +546,130 @@ def test_the_fixture_really_makes_two_runs_of_differing_scope(narrowing_rerun):
     assert SHADOWS(used[1], used[0]) is False
 
 
-def test_a_narrowing_rerun_does_not_advance_the_workflow(narrowing_rerun):
-    """The pass is the more recent result and the workflow does not move on it:
-    the declaring stage is brought back a second time, which is one invocation
-    more than the same run takes when the rerun is unnarrowed."""
+def test_a_narrowing_rerun_advances_and_leaves_the_failure_standing(
+    narrowing_rerun,
+):
+    """The pass is the more recent result and the workflow does not *supersede*
+    the failure on it. Since story-137 the workflow advances anyway — that is
+    what a standing red suite does by every path — so what is left behind is
+    the failure rather than a re-entry: no self-route, no re-run prompt, and
+    the field still set when the run reaches the judging stage again.
+
+    The way out is unchanged and is asserted beside it: a rerun the comparison
+    can see is no narrower shadows, the failure is cleared and the run ends.
+    """
     (code, runner, run_dir), _ = narrowing_rerun
 
-    assert runner.calls == [DECLARING, DECLARING, DECLARING, VERIFYING]
-    assert len(self_route_records(run_dir)) == 2
-    # And the way out is a rerun the comparison can see is no narrower: the
-    # third invocation's run shadows, the failure is cleared and the run ends.
+    assert runner.calls == [DECLARING, VERIFYING] * 3
+    assert self_route_records(run_dir) == []
+    assert not (run_dir / story_coordinator.prompt_file(DECLARING, 2, 1)).exists()
     assert code == 0
     assert failure_in(run_dir) == {}
     assert state_of(run_dir)["status"] == "completed"
 
 
-def test_the_refusal_introduces_no_failure_kind_of_its_own(narrowing_rerun):
-    """What stands is the suite failure, so it is routed as one. Both records
-    the run wrote name the failure kind that already existed, and the second is
-    the refusal — keyed as the declaring stage's second try, spending no retry
-    budget, exactly as the first."""
-    (_, _, run_dir), _ = narrowing_rerun
-    records = [record for _, record in self_route_records(run_dir)]
-
-    assert {record["failure"] for record in records} == {
-        story_coordinator.SUITE_FAILED}
-    assert [record["try"] for record in records] == [1, 2]
-    assert state_of(run_dir)["retry_count"] == 0
-    assert not (run_dir / "retry-history.json").exists()
-
-
-def test_the_refusal_cites_the_original_failures_retained_evidence(
-    narrowing_rerun,
+def test_the_failure_stands_while_the_narrowed_pass_is_the_latest_result(
+    target_root, harness_root, monkeypatch,
 ):
-    """The re-running stage is pointed at the failure that still stands rather
-    than at the rerun that passed: the artifacts are the pair the *first*
-    invocation's red run retained, and the record at that path is the failing
-    one. The passing rerun's own retained pair is the control beside it — it
-    exists, it records a pass, and it is not what the refusal cites."""
-    (_, _, run_dir), _ = narrowing_rerun
-    _, refusal = self_route_records(run_dir)[1]
-    failing_result, failing_output = retained_pair(run_dir, 1, 0)
-    passing_result, _ = retained_pair(run_dir, 1, 1)
+    """The middle of that run, which its end does not show: at the moment the
+    judging stage is entered after the narrowed pass, the record in state is
+    still the *original* failure's — the pass that ran less did not clear it.
 
-    assert refusal["artifacts"] == [failing_result, failing_output]
-    assert read_json(run_dir / failing_result)["exit_code"] != 0
-    assert Path(failing_output).is_file()
-    assert read_json(run_dir / passing_result)["exit_code"] == 0
-    assert passing_result not in refusal["artifacts"]
-
-
-def test_the_refusal_names_the_failure_and_says_what_the_rerun_ran(
-    narrowing_rerun,
-):
-    """The reason a reader meets: which stage's suite run failed, what it exited
-    with, and that the rerun that passed ran a strict subset of it — so the
-    refusal is legible without opening the state."""
-    (_, _, run_dir), _ = narrowing_rerun
-    _, red = self_route_records(run_dir)[0]
-    _, refusal = self_route_records(run_dir)[1]
+    Its control is the same snapshot one iteration later in the same run, after
+    the unnarrowed rerun, where the field is empty.
+    """
+    scoping(monkeypatch, [(), NARROWED, ()])
+    runner = Snapshotting(target_root,
+                          plan_touching_nothing_after([BROKEN, REPAIR, REPAIR]),
+                          verdicts=[FAILED, FAILED, PASS])
+    story_coordinator.run_story(STORY_ID, harness_root, target_root, runner)
+    run_dir = run_dir_of(target_root)
     failing_result, _ = retained_pair(run_dir, 1, 0)
-    exit_code = read_json(run_dir / failing_result)["exit_code"]
 
-    assert DECLARING in refusal["reason"]
-    assert f"exited {exit_code}" in refusal["reason"]
-    assert "strict subset" in refusal["reason"]
-    # The reason is the whole of what is said about this refusal in particular:
-    # the statement beside it is the one a suite failure is already stated in,
-    # word for word what the red run's own record carries, because the refusal
-    # routes as that failure and cites the same retained pair.
-    assert refusal["statement"] == red["statement"]
+    # snapshots: [declaring, verifier, declaring, verifier, declaring, verifier]
+    after_the_narrowed_pass = runner.snapshots[3][FIELD]
+    after_the_unnarrowed_one = runner.snapshots[5][FIELD]
 
-
-@pytest.fixture
-def narrowing_past_the_budget(target_root, harness_root, monkeypatch):
-    """Every rerun after the failure passes narrowed, so the refusal is taken
-    until the stage's own self-route budget is gone."""
-    scoping(monkeypatch, [(), NARROWED])
-    return drive(target_root, harness_root,
-                 {DECLARING: [BROKEN] + [REPAIR] * (BUDGET + 1)})
+    assert after_the_narrowed_pass["stage"] == DECLARING
+    assert after_the_narrowed_pass["attempt"] == 1
+    assert after_the_narrowed_pass["result_path"] == failing_result
+    assert read_json(run_dir / failing_result)["exit_code"] != 0
+    assert after_the_unnarrowed_one == {}
 
 
-def test_a_refusal_past_the_budget_escalates_with_the_decisions_own_reason(
-    narrowing_past_the_budget,
+def test_the_narrowing_rerun_records_no_self_route_and_spends_no_retry_of_its_own(
+    narrowing_rerun,
 ):
-    """No escalation path was written for this: the exhausted-budget clause is
-    the one `self_route` already composes, naming the stage and the budget it
-    exhausted, and the refusal's own reason is carried in front of it."""
-    code, runner, run_dir = narrowing_past_the_budget
-    reason = story_coordinator.escalation_reason(run_dir)
+    """What the advance over a standing failure costs: nothing a self-route
+    spends and nothing extra a retry spends.
 
-    assert code == 2
-    assert state_of(run_dir)["status"] == "escalated"
-    assert runner.calls.count(DECLARING) == BUDGET + 1
-    assert VERIFYING not in runner.calls
-    assert f"{DECLARING} has exhausted its self-route budget of {BUDGET}" in reason
-    assert "strict subset" in reason
+    Every retry this run took was one the verifier asked for — three
+    verifications, two retries — so the count is the verdicts rather than the
+    reruns, and the self-route budget is untouched.
+    """
+    (_, runner, run_dir), _ = narrowing_rerun
+
+    assert self_route_records(run_dir) == []
+    assert [e for e in history_of(run_dir) if e["event"] == "self-routed"] == []
+    assert state_of(run_dir)["retry_count"] == runner.calls.count(VERIFYING) - 1
 
 
-def test_the_same_clause_ends_a_run_whose_suite_simply_stays_red(
+def test_the_carry_forward_line_cites_the_original_failures_retained_evidence(
+    narrowing_rerun,
+):
+    """A reader of events.log is pointed at the failure that still stands rather
+    than at the rerun that passed: the line the non-shadowing rerun writes names
+    the *first* invocation's red run — its stage, its exit code and the pair its
+    evidence was retained under.
+
+    The passing rerun's own retained pair is the control beside it: it exists,
+    it records a pass, and it is not what the line names.
+    """
+    (_, _, run_dir), _ = narrowing_rerun
+    failing_result, failing_output = retained_pair(run_dir, 1, 0)
+    narrowed_result, _ = retained_pair(run_dir, 2, 0)
+    lines = carry_forward_lines(run_dir)
+
+    assert len(lines) == 2
+    for line in lines:
+        assert line["message"].count(DECLARING) >= 1
+        assert failing_result in line["message"]
+        assert failing_output in line["message"]
+        assert narrowed_result not in line["message"]
+    assert read_json(run_dir / failing_result)["exit_code"] != 0
+    assert read_json(run_dir / narrowed_result)["exit_code"] == 0
+    assert Path(failing_output).is_file()
+
+
+def test_a_run_whose_suite_never_failed_writes_no_such_line(green_run):
+    """The control for that reading: the same scan over a run that made the
+    same declared suite run and passed it finds nothing, so the lines above are
+    written where a failure stood rather than at every advance."""
+    _, _, run_dir = green_run
+    assert carry_forward_lines(run_dir) == []
+
+
+def test_a_run_whose_suite_stays_red_ends_on_the_verifiers_exhausted_retries(
     target_root, harness_root,
 ):
-    """The control beside it: a run that never narrows anything and never
-    repairs the suite escalates through the same clause, so the escalation above
-    is the existing route being taken rather than one added for the refusal."""
-    code, _, run_dir = drive(target_root, harness_root,
-                             {DECLARING: [BROKEN] * (BUDGET + 1)})
+    """A run that never narrows anything and never repairs the suite still
+    stops, and what stops it is the retry ceiling the judging stage's own
+    recommendations spend rather than the declaring stage's self-route budget —
+    which this run never touches.
+
+    The failure that ended it is outstanding in the state the run left, which is
+    what the resume cases below are built on.
+    """
+    code, runner, run_dir = drive(
+        target_root, harness_root,
+        plan_touching_nothing_after([BROKEN] * MORE_THAN_ANY_RUN_TAKES),
+        verdicts=[FAILED])
     reason = story_coordinator.escalation_reason(run_dir)
 
     assert code == 2
-    assert f"{DECLARING} has exhausted its self-route budget of {BUDGET}" in reason
-    assert "strict subset" not in reason
-    # The failure that ended it is outstanding in the state the run left.
+    assert "retries are exhausted" in reason
+    assert self_route_records(run_dir) == []
+    assert runner.calls.count(DECLARING) == runner.calls.count(VERIFYING)
     assert failure_in(run_dir)["stage"] == DECLARING
 
 
@@ -636,16 +683,18 @@ def resumable_run(target_root, harness_root):
     """A run left with a failure outstanding and re-enterable past the stage
     that declares the suite run.
 
-    The run is driven until its suite failure exhausts the declaring stage's
-    budget, which is how a real run leaves the field set. The developer then
+    The run is driven until the retry ceiling stops it with the suite still
+    red, which is how a real run leaves the field set. The developer then
     repairs the suite by hand and commits, and the run directory is marked as
     one that was interrupted at the verifying stage — the shape a crashed run
     leaves, which re-enters with no guard. The re-entry therefore makes no
     declared suite run at all, which is the only way the end of a workflow is
     reached with a failure still outstanding.
     """
-    code, _, run_dir = drive(target_root, harness_root,
-                             {DECLARING: [BROKEN] * (BUDGET + 1)})
+    code, _, run_dir = drive(
+        target_root, harness_root,
+        plan_touching_nothing_after([BROKEN] * MORE_THAN_ANY_RUN_TAKES),
+        verdicts=[FAILED])
     assert code == 2, "the shape was meant to escalate"
     assert failure_in(run_dir), "the shape was meant to leave a failure"
 

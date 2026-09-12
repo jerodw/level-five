@@ -1,10 +1,17 @@
 """Independent validation for story-084: a rerun keeps the output that explains it.
 
-A self-route caused by a red suite used to point its reader at a file the rerun
-then wrote over. This story keeps every suite run the coordinator makes: the
+What a red suite left behind used to point its reader at a file the rerun then
+wrote over. This story keeps every suite run the coordinator makes: the
 canonical pair at the run-directory root keeps its present meaning exactly — the
 most recent run — and beside it each run writes a pair keyed by the stage, the
 attempt and the try, so no run's evidence is written over by the run after it.
+
+Since story-137 the reader pointed at that evidence is the events log rather
+than a self-route record: a red suite is carried forward to the verifier, and
+the line written where that advance is decided names the retained pair. The
+keying is unchanged and so is what survives; a red-then-green story is now two
+attempts rather than two tries of one, because what brings the declaring stage
+back is the retry the verifier's verdict routes.
 
 The subject is *what a finished run directory holds*, so almost nothing here is
 asserted from source. Every case is driven through `story_coordinator.run_story`
@@ -30,10 +37,10 @@ Every absence asserted here carries a demonstration that it can fail:
   * "a retained run of the failing turn is not the run that ended the story"
     sits beside the canonical record from the same run directory, which is the
     passing one;
-  * "the self-route reason carries no more than the truncated summary it
-    carried before" sits beside the retained output file it cites, which does
-    hold the line the reason lacks — so the absence is about the reason rather
-    than about a marker that was never printed;
+  * "the carry-forward line carries no more than the one-line summary" sits
+    beside the retained output file it cites, which does hold the line the
+    message lacks — so the absence is about the message rather than about a
+    marker that was never printed;
   * "no coordinator decision reads a retained file" is a run whose retained
     files are deleted at the end of every turn, routing identically to the run
     that keeps them, and it sits beside the same deletion applied to the
@@ -63,9 +70,11 @@ import story_coordinator
 from test_self_routing_retry import git, write
 from test_coordinator_runs_the_suite import (  # noqa: F401 - fixtures by name
     BROKEN,
-    BUDGET,
     DECLARING,
     EARLY_MARKER,
+    FAILED,
+    MORE_THAN_ANY_RUN_TAKES,
+    PASS,
     REPAIR,
     REPO_ROOT,
     STORY_ID,
@@ -76,15 +85,17 @@ from test_coordinator_runs_the_suite import (  # noqa: F401 - fixtures by name
     WORKFLOW,
     Runner,
     all_three_run,
+    carried_forward_run,
+    carry_forward_lines,
     drive,
     events_of,
     green_run,
     harness_root,
     make_target,
     never_repaired_run,
+    plan_touching_nothing_after,
     read_json,
     record_of,
-    red_then_green_run,
     rendered_prompt,
     run_dir_of,
     self_route_records,
@@ -151,82 +162,107 @@ def tries_present(run_dir: Path, name_of, count: int) -> set[int]:
             if (Path(run_dir) / name_of(try_number)).is_file()}
 
 
+def attempts_present(run_dir: Path, name_of, count: int) -> set[int]:
+    """Which of the first `count` attempt numbers `name_of` finds a file for.
+
+    The companion to `tries_present`, and since story-137 the one a red-then-
+    green story is read by: a red suite is carried forward rather than
+    re-entering the declaring stage, so the second suite run of that stage is
+    the retry's rather than a second try of the same attempt.
+    """
+    return {attempt for attempt in range(1, count + 1)
+            if (Path(run_dir) / name_of(attempt)).is_file()}
+
+
+def pair_of_attempt(attempt: int) -> list[str]:
+    """The two names one attempt's first suite run of the declaring stage
+    retains, through the coordinator's own helpers rather than spelled here."""
+    return [retained_result(0, attempt=attempt),
+            retained_output(0, attempt=attempt)]
+
+
 # --------------------------------------------------------------------------
 # Both runs of a red-then-green story survive
 # --------------------------------------------------------------------------
 
 
-def test_the_fixture_really_makes_two_suite_runs(red_then_green_run):
+def test_the_fixture_really_makes_two_suite_runs(carried_forward_run):
     """The premise every case in this section rests on, stated so a change to
-    the fixture reddens here rather than quietly halving the assertions."""
-    code, runner, run_dir = red_then_green_run
+    the fixture reddens here rather than quietly halving the assertions.
+
+    Two invocations of the stage that declares the suite run, which is what
+    makes two coordinator suite runs of it. Since story-137 they sit in two
+    attempts rather than in two tries of one: the red suite is carried forward
+    and the retry the verifier routed is what brought the stage back, so no
+    self-route sits between them and the one line that does is the
+    carry-forward.
+    """
+    code, runner, run_dir = carried_forward_run
     assert code == 0
-    # Two invocations of the stage that declares the suite run, which is what
-    # makes two coordinator suite runs of it, and the one self-route between
-    # them is the red suite that caused the second.
     assert runner.calls.count(DECLARING) == 2
-    assert [record["failure"] for _, record in self_route_records(run_dir)] == [
-        story_coordinator.SUITE_FAILED]
+    assert self_route_records(run_dir) == []
+    assert len(carry_forward_lines(run_dir)) == 1
 
 
-def test_both_suite_runs_are_readable_when_the_run_ends(red_then_green_run):
+def test_both_suite_runs_are_readable_when_the_run_ends(carried_forward_run):
     """The story's central guarantee: each run's result record and each run's
     whole combined output, still there after the run that followed."""
-    _, _, run_dir = red_then_green_run
+    _, _, run_dir = carried_forward_run
 
-    for try_number in (0, 1):
-        record = run_dir / retained_result(try_number)
-        output = run_dir / retained_output(try_number)
+    for attempt in (1, 2):
+        record, output = (run_dir / name for name in pair_of_attempt(attempt))
         assert record.is_file(), record.name
         assert output.is_file(), output.name
         assert EARLY_MARKER in output.read_text(encoding="utf-8")
 
 
 def test_each_retained_run_holds_the_verdict_of_the_turn_it_judged(
-    red_then_green_run,
+    carried_forward_run,
 ):
     """The two runs are distinguishable, which is what makes the survival above
     worth anything: the first turn left the suite red and the second repaired
     it, and the retained records say exactly that."""
-    _, _, run_dir = red_then_green_run
-    assert record_of(run_dir, retained_result(0))["exit_code"] == 1
-    assert record_of(run_dir, retained_result(1))["exit_code"] == 0
+    _, _, run_dir = carried_forward_run
+    assert record_of(run_dir, retained_result(0, attempt=1))["exit_code"] == 1
+    assert record_of(run_dir, retained_result(0, attempt=2))["exit_code"] == 0
 
 
-def test_the_retained_runs_are_keyed_by_the_prompt_files_own_try_number(
-    red_then_green_run,
+def test_the_retained_runs_are_keyed_by_the_prompt_files_own_attempt_number(
+    carried_forward_run,
 ):
     """The invocation's prompt and the suite run judging that turn share a key,
-    so the two can be read together. Compared as sets of try numbers against
-    each other rather than against literals: what has to hold is that they
-    agree, and the first suite run of an attempt is the one whose prompt is
-    try 0."""
-    _, runner, run_dir = red_then_green_run
+    so the two can be read together. Compared as sets of attempt numbers
+    against each other rather than against literals: what has to hold is that
+    they agree."""
+    _, runner, run_dir = carried_forward_run
     invocations = len(runner.prompts[DECLARING])
     # One more than were taken, so a retained run keyed past the last prompt
     # would show up as a disagreement rather than going unlooked-for.
     horizon = invocations + 1
 
-    prompts = tries_present(
-        run_dir, lambda n: story_coordinator.prompt_file(DECLARING, 1, n),
-        horizon)
-    retained = tries_present(run_dir, retained_result, horizon)
+    prompts = attempts_present(
+        run_dir, lambda n: story_coordinator.prompt_file(DECLARING, n), horizon)
+    retained = attempts_present(
+        run_dir, lambda n: retained_result(0, attempt=n), horizon)
 
-    assert prompts == retained == set(range(invocations))
-    assert 0 in retained, "the first suite run of an attempt is try 0"
+    assert prompts == retained == set(range(1, invocations + 1))
+    assert 1 in retained, "the first suite run of a story is attempt 1"
 
 
-def test_the_self_route_cites_the_run_it_was_caused_by(red_then_green_run):
+def test_the_carry_forward_line_cites_the_run_it_was_caused_by(
+    carried_forward_run,
+):
     """The whole point of the keying, read the way a human reads it: follow the
-    paths the self-route record names and arrive at the failing run — in a run
-    whose later suite run passed."""
-    _, _, run_dir = red_then_green_run
-    _, record = self_route_records(run_dir)[0]
-    cited_record, cited_output = record["artifacts"]
+    paths the events log names and arrive at the failing run — in a run whose
+    later suite run passed."""
+    _, _, run_dir = carried_forward_run
+    (line,) = carry_forward_lines(run_dir)
+    cited_record, cited_output = pair_of_attempt(1)
 
+    assert cited_record in line["message"]
+    assert str(run_dir / cited_output) in line["message"]
     assert read_json(run_dir / cited_record)["exit_code"] == 1
-    assert Path(cited_output).is_file()
-    assert EARLY_MARKER in Path(cited_output).read_text(encoding="utf-8")
+    assert EARLY_MARKER in (run_dir / cited_output).read_text(encoding="utf-8")
     # And the run it sits in is the one that ended green, so the cited record
     # is not simply the only run there was.
     assert record_of(run_dir)["exit_code"] == 0
@@ -239,52 +275,63 @@ def test_the_self_route_cites_the_run_it_was_caused_by(red_then_green_run):
 
 
 def test_every_record_of_a_two_run_story_names_the_output_beside_it(
-    red_then_green_run,
+    carried_forward_run,
 ):
     """Both pointers followed, in both directions: the canonical record names
     the canonical output and each retained record names its own, so neither
     points at the other's. The two are required to describe different runs,
     which is what a collapsed pair could not do."""
-    _, _, run_dir = red_then_green_run
+    _, _, run_dir = carried_forward_run
     canonical = record_of(run_dir)
 
     assert canonical["output_path"] == str(run_dir / canonical_output())
-    for try_number in (0, 1):
-        record = record_of(run_dir, retained_result(try_number))
-        assert record["output_path"] == str(
-            run_dir / retained_output(try_number))
+    for attempt in (1, 2):
+        result, output = pair_of_attempt(attempt)
+        record = record_of(run_dir, result)
+        assert record["output_path"] == str(run_dir / output)
         assert Path(record["output_path"]).is_file()
 
-    failing = record_of(run_dir, retained_result(0))
+    failing = record_of(run_dir, retained_result(0, attempt=1))
     assert failing["output_path"] != canonical["output_path"]
     assert failing["exit_code"] != canonical["exit_code"]
 
 
-def test_the_canonical_pair_still_holds_the_most_recent_run(red_then_green_run):
+def test_the_canonical_pair_still_holds_the_most_recent_run(carried_forward_run):
     """The compatibility guarantee: every existing reader of these two names
     sees what it saw before this story — the run that happened last."""
-    _, _, run_dir = red_then_green_run
+    _, _, run_dir = carried_forward_run
     canonical = record_of(run_dir)
-    latest = record_of(run_dir, retained_result(1))
+    latest = record_of(run_dir, retained_result(0, attempt=2))
 
     assert (run_dir / canonical_output()).is_file()
     assert canonical["exit_code"] == latest["exit_code"] == 0
     assert canonical["output_tail"] == latest["output_tail"]
 
 
-def test_the_verifier_is_still_given_the_canonical_record(red_then_green_run):
-    """What the rendered context carries is unmoved: the canonical record, and
-    the canonical output path in it. The retained failing run is *not* there —
-    and the control beside that absence is the re-run's own prompt, which does
-    carry it."""
-    _, _, run_dir = red_then_green_run
-    verifier_prompt = rendered_prompt(run_dir, VERIFYING)
-    failing_output = str(run_dir / retained_output(0))
+def test_the_verifier_is_still_given_the_canonical_record(carried_forward_run):
+    """What the rendered context carries is unmoved: the canonical record as it
+    stood when that verification began, and the canonical output path in it.
 
-    assert str(run_dir / canonical_output()) in verifier_prompt
-    assert '"exit_code": 0' in verifier_prompt
-    assert failing_output not in verifier_prompt
-    assert failing_output in rendered_prompt(run_dir, DECLARING, 1, 1)
+    Since story-137 that is the *failing* record on the verification the red
+    suite advanced into, which is the whole point of carrying it forward, and
+    the passing one on the verification after the retry. Neither carries a
+    retained name — the retention is evidence a reader follows from the events
+    log, not something rendered into a prompt — and the control for that
+    absence is the carry-forward line, which does name both.
+    """
+    _, _, run_dir = carried_forward_run
+    over_the_failure = rendered_prompt(run_dir, VERIFYING, 1)
+    over_the_repair = rendered_prompt(run_dir, VERIFYING, 2)
+    failing_result, failing_output = pair_of_attempt(1)
+
+    assert str(run_dir / canonical_output()) in over_the_failure
+    assert '"exit_code": 1' in over_the_failure
+    assert '"exit_code": 0' in over_the_repair
+    assert failing_result not in over_the_failure
+    assert str(run_dir / failing_output) not in over_the_failure
+    (line,) = carry_forward_lines(run_dir)
+    assert failing_result in line["message"]
+    assert str(run_dir / failing_output) in line["message"]
 
 
 # --------------------------------------------------------------------------
@@ -325,24 +372,26 @@ def test_a_run_that_could_not_start_the_command_keeps_a_pair_too(
 
 
 # --------------------------------------------------------------------------
-# The reason a self-route carries is the reason it carried
+# What is written about the failure is a pointer, not a copy of the run
 # --------------------------------------------------------------------------
 
 
-def test_the_self_route_reason_still_truncates_to_a_summary(red_then_green_run):
-    """Only the path moved. The reason is still one line naming the exit status
-    and the summary, and it is *not* the whole output — which the file it now
-    points at is, so the absence is about the reason rather than about a line
-    the suite never printed."""
-    _, _, run_dir = red_then_green_run
-    _, record = self_route_records(run_dir)[0]
-    reason = record["reason"]
+def test_the_carry_forward_line_is_a_summary_and_not_the_output(
+    carried_forward_run,
+):
+    """Only the path moved. What events.log carries is one line naming the exit
+    status and where the evidence is, and it is *not* the whole output — which
+    the file it points at is, so the absence is about the line rather than
+    about content the suite never printed."""
+    _, _, run_dir = carried_forward_run
+    (line,) = carry_forward_lines(run_dir)
+    message = line["message"]
+    result, output = pair_of_attempt(1)
 
-    assert f"exited {record_of(run_dir, retained_result(0))['exit_code']}" in reason
-    assert "\n" not in reason
-    assert EARLY_MARKER not in reason
-    assert EARLY_MARKER in (run_dir / retained_output(0)).read_text(
-        encoding="utf-8")
+    assert f"exited {record_of(run_dir, result)['exit_code']}" in message
+    assert "\n" not in message
+    assert EARLY_MARKER not in message
+    assert EARLY_MARKER in (run_dir / output).read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -380,7 +429,8 @@ class SweepingRunner(Runner):
 #: they are files the coordinator demonstrably does decide on.
 REQUIRED_GLOBS = tuple(story_coordinator.required_artifacts(DECLARING_STAGE))
 
-RED_THEN_GREEN = {DECLARING: [BROKEN, REPAIR]}
+RED_THEN_GREEN = plan_touching_nothing_after([BROKEN, REPAIR])
+RED_THEN_GREEN_VERDICTS = [FAILED, PASS]
 
 
 def routing_of(code: int, runner: Runner, run_dir: Path) -> tuple:
@@ -402,18 +452,19 @@ def routing_of(code: int, runner: Runner, run_dir: Path) -> tuple:
 
 
 def sweep_run(target: Path, harness: Path, patterns) -> tuple:
-    runner = SweepingRunner(target, RED_THEN_GREEN, sweep=patterns)
+    runner = SweepingRunner(target, RED_THEN_GREEN, RED_THEN_GREEN_VERDICTS,
+                            sweep=patterns)
     code = story_coordinator.run_story(STORY_ID, harness, target, runner)
     return routing_of(code, runner, run_dir_of(target)), runner
 
 
 def test_deleting_every_retained_file_changes_no_routing_decision(
-    make_target, harness_root, red_then_green_run,
+    make_target, harness_root, carried_forward_run,
 ):
     """The absence, held as behaviour rather than argued from source: a run
     whose retained files are gone the moment they are written takes exactly the
     route the run that keeps them takes."""
-    code, runner, run_dir = red_then_green_run
+    code, runner, run_dir = carried_forward_run
     kept = routing_of(code, runner, run_dir)
 
     target = make_target("swept-retained")
@@ -424,14 +475,14 @@ def test_deleting_every_retained_file_changes_no_routing_decision(
 
 
 def test_the_same_deletion_of_a_routed_on_file_changes_the_run(
-    make_target, harness_root, red_then_green_run,
+    make_target, harness_root, carried_forward_run,
 ):
     """The control beside it. The same runner, the same plan, the same moment
     in the turn — and applied to the stage's declared required outputs, which
     the coordinator does decide on, the run goes somewhere else entirely. So
     the identity above is a fact about retained files rather than about a sweep
     that could never have mattered."""
-    code, runner, run_dir = red_then_green_run
+    code, runner, run_dir = carried_forward_run
     kept = routing_of(code, runner, run_dir)
 
     target = make_target("swept-required")
@@ -587,6 +638,18 @@ def contents_at_root(run_dir: Path, names: list[str]) -> dict[str, bytes]:
     return {name: (run_dir / name).read_bytes() for name in names}
 
 
+def interrupted_attempt_of(runner: Runner) -> int:
+    """Which attempt the escalated run was in when it stopped.
+
+    Every invocation of the declaring stage in that run is an attempt of its
+    own now, the red suite being carried forward rather than re-entering it, so
+    the count of invocations is the attempt number the resume will re-enter
+    under. Derived rather than written down, so a change to the retry ceiling
+    moves it.
+    """
+    return runner.calls.count(DECLARING)
+
+
 def test_the_interrupted_attempt_wrote_a_retained_pair_per_suite_run(
     never_repaired_run,
 ):
@@ -595,8 +658,10 @@ def test_the_interrupted_attempt_wrote_a_retained_pair_per_suite_run(
     code, runner, run_dir = never_repaired_run
     assert code == 2
     assert state_of(run_dir)["status"] == "escalated"
-    assert tries_present(run_dir, retained_result, BUDGET + 2) == set(
-        range(runner.calls.count(DECLARING)))
+    assert attempts_present(
+        run_dir, lambda n: retained_result(0, attempt=n),
+        MORE_THAN_ANY_RUN_TAKES) == set(
+            range(1, interrupted_attempt_of(runner) + 1))
 
 
 def test_a_resume_does_not_write_over_the_interrupted_attempts_retained_runs(
@@ -605,13 +670,21 @@ def test_a_resume_does_not_write_over_the_interrupted_attempts_retained_runs(
     """The archive happens before the resumed stage's first suite run lands on
     those names, so every byte of the interrupted attempt is still findable
     afterwards — while the root copies of those same names now hold the
-    resumed run, which is what makes the survival a fact about the archive."""
+    resumed run, which is what makes the survival a fact about the archive.
+
+    Every retained name at the root is watched rather than the last attempt's
+    alone: the entry the resume opens zeroes the counters, so a run that had
+    reached its third attempt lands back on attempt one and the names of every
+    attempt before it are names the resumed run could reach.
+    """
     _, _, run_dir = never_repaired_run
     before = contents_at_root(run_dir, retained_names(run_dir))
     assert before, "the interrupted attempt retained nothing to write over"
 
     ready_to_resume(target_root)
-    code, runner, _ = drive(target_root, harness_root, {DECLARING: [REPAIR]})
+    resumed = Runner(target_root, {DECLARING: [REPAIR]})
+    code = story_coordinator.run_story(
+        STORY_ID, harness_root, target_root, resumed, DECLARING)
     assert code == 0
 
     for name, content in before.items():
@@ -622,26 +695,30 @@ def test_a_resume_does_not_write_over_the_interrupted_attempts_retained_runs(
         assert any(path.parent != run_dir for path in survivors), (
             f"{name} was not kept anywhere but the root the resume writes on")
 
-    # The control: the root copies were written over, by the resumed run.
-    assert (run_dir / retained_result(0)).read_bytes() != before[
-        retained_result(0)]
-    assert record_of(run_dir, retained_result(0))["exit_code"] == 0
+    # The control: the root copy the resumed run's own suite run lands on was
+    # written over, so the survival above is a fact about the archive.
+    landed = retained_result(0, attempt=1)
+    assert (run_dir / landed).read_bytes() != before[landed]
+    assert record_of(run_dir, landed)["exit_code"] == 0
 
 
 def test_the_resume_discovery_functions_name_the_retained_pairs(
     never_repaired_run,
 ):
     """The same fact by search over the functions that decide what a resume
-    takes with it, rather than by driving one: both the attempt archive's
-    discovery and the entry move's report every retained name at the root."""
-    _, _, run_dir = never_repaired_run
+    takes with it, rather than by driving one: the attempt archive's discovery
+    reports the interrupted attempt's retained names, and the entry move's
+    reports every retained name at the root."""
+    _, runner, run_dir = never_repaired_run
     stages = WORKFLOW["stages"]
-    names = set(retained_names(run_dir))
-    assert names
+    interrupted = interrupted_attempt_of(runner)
+    names = set(pair_of_attempt(interrupted))
+    assert names <= set(retained_names(run_dir))
 
     assert names <= set(story_coordinator.interrupted_attempt_artifacts(
-        stages, 1, run_dir=run_dir))
-    assert names <= set(story_coordinator.entry_artifacts(run_dir, stages))
+        stages, interrupted, run_dir=run_dir))
+    assert set(retained_names(run_dir)) <= set(
+        story_coordinator.entry_artifacts(run_dir, stages))
 
 
 def test_those_functions_report_none_of_them_without_the_declaration(
