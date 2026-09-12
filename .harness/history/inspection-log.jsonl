@@ -30,3 +30,4 @@
 {"story_id": "story-137", "mode": "narrow", "cost_usd": 3.3811780000000007, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-11 23:15:07", "findings": 4, "filed": 4, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-136", "mode": "narrow", "cost_usd": 3.4421595000000003, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-12 08:10:34", "findings": 2, "filed": 2, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-138", "mode": "narrow", "cost_usd": 2.7200795, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-12 09:19:47", "findings": 2, "filed": 2, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-139", "mode": "narrow", "cost_usd": 2.7200444999999993, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-12 11:47:49", "findings": 2, "filed": 2, "dropped": 0, "dedupe_ran": true}
