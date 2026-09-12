@@ -1,0 +1,125 @@
+story:
+  id: story-138
+  title: A malformed area suggestion costs itself and leaves the findings beside it filed
+  description: |
+    Planned from the brief filed under 244.
+
+    An envelope whose `area_suggestions` carries one unusable entry loses every
+    finding in that scope. `schemas/inspection-findings.schema.json` declares
+    `required: ["slug", "concerns"]` on each suggestion item and types both as
+    strings; the validator descends into array items and enforces `required`
+    there, so a slip in one entry is reported as a problem with the whole
+    document. `_read_findings` returns no document on any envelope problem, and
+    `inspect_scope` turns that into a single "no findings artifact" drop and
+    returns before the findings loop ever runs. Every brief the invocation
+    actually wrote is gone, reported as the scope having produced no usable
+    artifact, and the invocation that produced them is paid for and discarded.
+
+    This breaks the one rule the envelope was built around. The envelope's own
+    description says its findings are typed as objects and nothing more so that
+    one malformed finding costs only itself — it is dropped and named with the
+    field that failed, and the findings beside it are filed exactly as they
+    would have been — and `inspect_scope` implements exactly that for a finding.
+    The two arrays in one envelope answer that question oppositely, and the
+    strict one is the one carrying a field that reaches no brief, no payload, no
+    outbox entry and no tracker.
+
+    The tolerance written for this case is unreachable. `_area_suggestions`
+    skips an entry that is not a dict, whose `slug` or `concerns` is not a
+    string, or that is blank, and its docstring states the rule it is
+    enforcing — a suggestion is a report and may not become the thing that stops
+    an inspection. Its opening line concedes what defeats it: the envelope
+    schema has already been satisfied by the time it is reached, so every case
+    its tolerance names has already been refused by the validator.
+
+    This story moves the shape of a suggestion out of the enforced declaration
+    and into prose beside the filter that has always judged it. The tolerance
+    covers the whole field rather than the entries alone: an `area_suggestions`
+    that is not a list at all is as unusable as an entry that is not a pair, and
+    neither may stop an inspection, which is the rule the existing docstring
+    already states and the filter already implements. The failure is ordinary
+    rather than exotic — the producer is a model told to write a suggestion for
+    each brief it names no area for, so an omitted, misspelled or null
+    `concerns` is the kind of slip the findings array was deliberately made
+    tolerant of, and it costs a whole scope's findings on the broad path and a
+    whole post-story inspection's findings on the narrow one.
+  workflow: story-workflow
+
+tasks:
+  - Relax the `area_suggestions` declaration in schemas/inspection-findings.schema.json so the envelope no longer holds the field or its entries to a shape, and say in its description that the pair is judged by the reader rather than by the envelope, and why.
+  - Rewrite the `_area_suggestions` docstring in orchestration/inspection.py so it states what is now true: its filter is the only thing that judges a suggestion, and that is deliberate.
+  - Adapt the two assertions in tests/test_a_brief_names_its_area.py that assert the old item declaration, so the suite states the new rule rather than the one being removed.
+  - Add the assertion nobody has written: drive an inspection whose envelope carries one good finding beside an unusable suggestion and show the finding is filed.
+  - Correct the architecture note that records the item requirement as the design.
+
+acceptance_criteria:
+  - An envelope carrying one well-formed finding and an `area_suggestions` entry with no `concerns` key satisfies schemas/inspection-findings.schema.json, and the same holds for an entry with no `slug`, an entry whose `concerns` is null, and an entry that is a string rather than an object.
+  - An envelope carrying one well-formed finding and an `area_suggestions` that is not a list at all satisfies the same schema.
+  - An inspection whose invocation writes an envelope carrying one well-formed finding beside an unusable suggestion files that finding, and records no drop reporting the scope as having produced no usable artifact.
+  - A well-formed suggestion beside a filed finding still reaches the report, matched to that brief by its slug, exactly as it does today.
+  - An unusable suggestion yields nothing of its own — it reaches no brief, no payload, no outbox entry and no tracker — and is not printed in the report.
+  - The `area_suggestions` description in the shipped schema says the shape it expects of an entry and says that an entry failing it yields nothing and costs the entries beside it nothing.
+  - The `_area_suggestions` docstring no longer states that the envelope schema has already been satisfied by the time it is reached.
+  - An envelope whose `findings` is absent, or is not an array, is still reported, so the relaxation is the suggestions field and not the validator.
+
+technical_plan:
+  implementation_steps:
+    - In schemas/inspection-findings.schema.json, remove `items` from the `area_suggestions` property along with the `required` list and the `slug` and `concerns` sub-declarations it holds, and remove the property's own `type` constraint, leaving the field declared by its description alone.
+    - Fold into that description what the removed declarations said — each entry names by slug the brief it is about and says what that brief concerns — together with the reason nothing enforces it: the field is read for the report and filed by nothing, so it may not become the thing that stops an inspection, and the reader judges each entry the way the findings loop judges a finding.
+    - Rewrite the `_area_suggestions` docstring in orchestration/inspection.py, replacing the opening concession that the envelope schema has already been satisfied with what is now true: the envelope declares the field and holds it to nothing, so this filter is where a suggestion is judged, and an entry that is not a usable pair yields nothing of its own and costs the entries beside it nothing.
+    - Leave the body of `_area_suggestions` as it is. Its guards already cover a non-list field, a non-dict entry, a non-string slug or concerns, and a blank one; the story's change is what reaches them.
+    - In tests/test_a_brief_names_its_area.py, adapt the assertion that reads `items["required"]` off the shipped declaration and the half of the neighbouring test that plants a headless suggestion and asserts the schema reports it. Both assert the declaration this story removes; state the new rule in their place and keep the half that proves the field is optional.
+    - Correct the sentence in .harness/docs/ARCHITECTURE.md that records each item as requiring `slug` and `concerns`, so the note describes the field the schema now declares and says where the pair is judged.
+  likely_file_changes:
+    - file: schemas/inspection-findings.schema.json
+      stage: implementer
+      reason: The `area_suggestions` item declaration is what turns one unusable entry into an envelope-wide problem; relaxing it is the correctness change.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: The `_area_suggestions` docstring opens by conceding that the schema has already refused everything its filter tolerates; it must say what is true once the schema stops.
+    - file: tests/test_a_brief_names_its_area.py
+      stage: implementer
+      reason: Two assertions read the item declaration this story removes — one reads `items["required"]` off the shipped schema, the other plants a suggestion with no slug and asserts the schema reports it. Both must state the new rule instead.
+      reverting_breaks_the_suite: These two assertions are pinned to the declaration the story removes, so they go red the moment the schema changes. Reverting this file while keeping the schema change leaves the suite red, which is what makes the edit a forced adaptation rather than the implementer writing tests.
+    - file: tests/test_a_brief_names_its_area.py
+      stage: tester
+      reason: The regression the story exists for — an envelope carrying one unusable suggestion beside a good finding files that finding — has no assertion anywhere, and this module is where the envelope and the suggestions are already driven.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The note recording this field states each item as requiring `slug` and `concerns`, which is the design the story replaces.
+
+scope:
+  modify:
+    - schemas/inspection-findings.schema.json
+    - orchestration/inspection.py
+    - tests/test_a_brief_names_its_area.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/story-brief.schema.json
+    - orchestration/schema_validator.py
+    - prompts/inspector.md
+    - orchestration/story_inspection.py
+
+verification_requirements:
+  - Confirm that validating an envelope of one well-formed finding beside a suggestion missing `concerns`, a suggestion missing `slug`, a suggestion whose `concerns` is null, a suggestion that is a string, and an `area_suggestions` that is not a list, reports nothing in every case.
+  - Confirm that an inspection driven with an unusable suggestion in its envelope files the finding beside it and records no drop naming the scope as having produced no usable artifact.
+  - Confirm that a well-formed suggestion still reaches the report matched to its brief, so the relaxation did not cost the field the one thing it buys.
+  - Confirm that an envelope missing `findings`, and one whose `findings` is not an array, are still reported, so what changed is the suggestions declaration and not the validator's handling of items or required properties.
+  - Confirm the full suite passes, including the modules that drive inspections and post-story inspections through `inspect_scope`.
+
+constraints:
+  - A suggestion still reaches no brief, no payload, no outbox entry and no tracker; nothing this story does may make one file anything.
+  - A suggestion that matches no filed brief is still matched to nothing and not printed.
+  - The `findings` array's own declaration is unchanged: it stays required, stays typed as an array of objects, and each finding stays separately held to schemas/story-brief.schema.json with one malformed finding dropped and named.
+  - `orchestration/schema_validator.py` is not touched; the relaxation is stated by the schema that ships, not by changing how schemas are read.
+  - An envelope carrying only `findings` still validates, as every envelope written before this field existed does.
+  - The Inspector prompt goes on asking for a well-formed `slug` and `concerns` pair; what changes is the cost of not getting one, not what is asked for.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-12 08:50:40
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 244
