@@ -312,11 +312,11 @@ PAYLOAD_MARKER_PREFIX="l5-payload: "
 
 # --- what only the sync job uses. Edit these. ----------------------------
 LABEL="${L5_SYNC_LABEL:-l5}"
-# The option a newly filed entry is put in, by the name the board spells it
-# with. An empty option means the item is added and its Status is left at
-# whatever the project's own default is, which is what a target whose board has
-# no such field gets — so it is a value a target sets in its installed copy,
-# and the template carries none of it.
+# The option a newly filed entry is put in where the rule below routes nothing,
+# by the name the board spells it with. An empty option means the item is added
+# and its Status is left at whatever the project's own default is, which is what
+# a target whose board has no such field gets — so it is a value a target sets in
+# its installed copy, and the template carries none of it.
 STATUS_OPTION="${L5_SYNC_STATUS_OPTION:-Inbox}"
 # The board's fields, by name, that a brief's classification is written into.
 # Each is empty here and set in a target's installed copy: an empty name means
@@ -335,6 +335,24 @@ WORKFLOW_FIELD="${L5_SYNC_WORKFLOW_FIELD:-Workflow}"
 # A brief that named no area writes nothing here, which is the ordinary case
 # rather than a failure.
 AREA_FIELD="${L5_SYNC_AREA_FIELD:-Area}"
+
+# --- where a filed brief lands -------------------------------------------
+# The two columns the rule below chooses between, and the two lists it decides
+# with. Every one of them is empty here: they are this target's judgements
+# about its own backlog, and a template carrying them would hand one
+# deployment's triage to every other.
+#
+# The deferred column is the switch. Empty, the rule routes nothing and the
+# Status write uses STATUS_OPTION, which is exactly what a target that has
+# configured none of this filed before any of it existed.
+#
+# The two lists are whitespace-separated data. This script holds no vocabulary
+# of categories and no vocabulary of paths, and checks a member of neither
+# against anything, exactly as it holds none of the field names above.
+REVIEW_COLUMN="${L5_SYNC_REVIEW_COLUMN:-Inbox}"
+DEFERRED_COLUMN="${L5_SYNC_DEFERRED_COLUMN:-Backlog}"
+DEFERRING_CATEGORIES="${L5_SYNC_DEFERRING_CATEGORIES:-docs-drift standards-drift complexity refactor}"
+OVERRIDING_PATH_PREFIXES="${L5_SYNC_OVERRIDING_PATH_PREFIXES:-prompts/ plugin/ templates/ .harness/standards/}"
 
 # The label a brief's category is applied under: this prefix followed by the
 # category the payload carries. It defaults to something non-empty because it is
@@ -505,6 +523,7 @@ do_sync() {
 
   local key entry title body category severity confidence effort workflow area
   local marker paths encoded existing url category_label current field_id option_id added
+  local status_option overridden prefix
 
   key="${L5_SYNC_KEY:-}"
   [ -n "$key" ] || fail_terminal "L5_SYNC_KEY is empty; there is no key to be idempotent on"
@@ -550,6 +569,46 @@ do_sync() {
     done <<PATHS
 $paths
 PATHS
+  fi
+
+  # --- where this brief lands -------------------------------------------
+  # The column the Status write below uses. This is routing rather than a
+  # verdict: it decides only where a brief starts, the write below happens only
+  # where the board reports Status empty, and a person corrects it by dragging
+  # the card.
+  #
+  # A copy declaring no deferred column routes nothing and files at
+  # STATUS_OPTION, which is what a target that has configured none of this gets.
+  # Otherwise: a path overriding first, then the deferring categories, then the
+  # review column. The ordering is what makes a brief about an agent-facing file
+  # reviewable while the same category elsewhere defers, and a category named in
+  # no list lands in review — so an unlisted category costs a fuller review
+  # column rather than a buried finding.
+  status_option="$STATUS_OPTION"
+  if [ -n "$DEFERRED_COLUMN" ]; then
+    status_option="$REVIEW_COLUMN"
+
+    overridden=""
+    if [ -n "$OVERRIDING_PATH_PREFIXES" ] && [ -n "$paths" ]; then
+      while IFS= read -r one; do
+        [ -n "$one" ] || continue
+        for prefix in $OVERRIDING_PATH_PREFIXES; do
+          case "$one" in
+            "$prefix"*) overridden=yes ;;
+          esac
+        done
+      done <<PATHS
+$paths
+PATHS
+    fi
+
+    if [ -z "$overridden" ]; then
+      for one in $DEFERRING_CATEGORIES; do
+        if [ "$one" = "$category" ]; then
+          status_option="$DEFERRED_COLUMN"
+        fi
+      done
+    fi
   fi
 
   # The whole payload, recorded once under its own marker so the query branch
@@ -623,7 +682,7 @@ PATHS
       || fail_transient "the issue was added to project ${L5_TRACKER_PROJECT} but the item id could not be read"
     [ -n "$item_id" ] || fail_transient "the issue was added to project ${L5_TRACKER_PROJECT} but it named no item"
 
-    if [ -n "$STATUS_OPTION" ]; then
+    if [ -n "$status_option" ]; then
       read_the_item
       current="$(board_value "$L5_TRACKER_STATUS_FIELD")" \
         || fail_transient "the item's ${L5_TRACKER_STATUS_FIELD} could not be read"
@@ -635,7 +694,7 @@ PATHS
         read_the_project
         field_id="$(field_id_for "$L5_TRACKER_STATUS_FIELD")" \
           || fail_transient "the fields of project ${L5_TRACKER_PROJECT} could not be read"
-        option_id="$(option_id_for "$L5_TRACKER_STATUS_FIELD" "$STATUS_OPTION")" \
+        option_id="$(option_id_for "$L5_TRACKER_STATUS_FIELD" "$status_option")" \
           || fail_transient "the options of ${L5_TRACKER_STATUS_FIELD} could not be read"
 
         # A Status name that resolves to no id is transient like everything else
@@ -645,11 +704,11 @@ PATHS
         # skipped instead, because the column an item lands in is not something
         # this branch may quietly decline to set.
         [ -n "$field_id" ] || fail_transient "project ${L5_TRACKER_PROJECT} has no field named ${L5_TRACKER_STATUS_FIELD}"
-        [ -n "$option_id" ] || fail_transient "${L5_TRACKER_STATUS_FIELD} in project ${L5_TRACKER_PROJECT} has no option named ${STATUS_OPTION}"
+        [ -n "$option_id" ] || fail_transient "${L5_TRACKER_STATUS_FIELD} in project ${L5_TRACKER_PROJECT} has no option named ${status_option}"
 
         gh project item-edit --id "$item_id" --project-id "$project_id" \
           --field-id "$field_id" --single-select-option-id "$option_id" >/dev/null 2>&1 \
-          || fail_transient "the item is on project ${L5_TRACKER_PROJECT} but its ${L5_TRACKER_STATUS_FIELD} could not be set to ${STATUS_OPTION}"
+          || fail_transient "the item is on project ${L5_TRACKER_PROJECT} but its ${L5_TRACKER_STATUS_FIELD} could not be set to ${status_option}"
       fi
     fi
 

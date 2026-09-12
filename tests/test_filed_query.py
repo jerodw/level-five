@@ -80,6 +80,18 @@ implementation. The subjects are kept apart deliberately:
     option it does not offer — costs that field alone and the entry still
     lands.
 
+  * **the column a filed brief lands in.** Routing rather than a verdict: the
+    installed copy is driven with nothing set in its environment over a
+    deferring category, the same category under a path the rule overrides on,
+    a path that merely begins like one, a category no list names, a payload
+    carrying no paths and an entry that is not a brief at all — and the column
+    each reaches is asserted. Every category and every path driven is chosen
+    out of the two lists that copy declares rather than written here. A copy
+    of it declaring no deferred column is driven over the same cases and files
+    every one of them at its `STATUS_OPTION`, which is what a target that has
+    configured none of this gets, and a brief a person then moves out of the
+    column it landed in is left where they put it.
+
   * **the split between the two copies.** The template carries no project, no
     column and no field name, the installed copy carries all of them, and
     every line the two do not share is one of the editable constant
@@ -116,6 +128,8 @@ Every absence asserted here carries a demonstration that it can fail:
     which does create one;
   * "the template names no project, no column and no field" sits beside the
     same extraction over the installed copy, which names all of them;
+  * "the template names neither column the routing chooses between" sits
+    beside the same search over the installed copy, which names both;
   * "a payload carrying no category adds no label and creates none" sits beside
     the same filing of a brief, which does both;
   * "the field the board already reports is not edited" sits beside a field
@@ -279,6 +293,37 @@ THIS_TARGETS_STATUS_OPTION = this_targets(STATUS_OPTION_CONSTANT)
 #: later sweep must leave it at.
 A_COLUMN_A_HUMAN_MOVED_IT_TO = "In progress"
 
+#: The rule that decides which column a filed brief lands in: the two columns
+#: it chooses between, and the two lists it decides with. All four are read out
+#: of `.harness/scripts/github.sh` for the reason the column above is — which
+#: categories defer, which paths override and what the two columns are called
+#: are this target's judgements about its own backlog, and a copy of any of
+#: them here would be a second answer to a question the file already answers.
+REVIEW_COLUMN_CONSTANT = "REVIEW_COLUMN"
+DEFERRED_COLUMN_CONSTANT = "DEFERRED_COLUMN"
+DEFERRING_CATEGORIES_CONSTANT = "DEFERRING_CATEGORIES"
+OVERRIDING_PREFIXES_CONSTANT = "OVERRIDING_PATH_PREFIXES"
+
+#: The two lists are bound whole rather than split, because what the derivation
+#: promises is that a declared value is non-empty and a tuple is not a value
+#: the script declares. They are split where they are used, just below.
+THIS_TARGETS_REVIEW_COLUMN = this_targets(REVIEW_COLUMN_CONSTANT)
+THIS_TARGETS_DEFERRED_COLUMN = this_targets(DEFERRED_COLUMN_CONSTANT)
+THIS_TARGETS_DEFERRING_CATEGORIES = this_targets(DEFERRING_CATEGORIES_CONSTANT)
+THIS_TARGETS_OVERRIDING_PREFIXES = this_targets(OVERRIDING_PREFIXES_CONSTANT)
+
+#: Which of those constants name a column on the board, and which name a list
+#: the rule decides with. The distinction is what keeps a whitespace-separated
+#: list out of anything that expects the name of a board option.
+COLUMN_CONSTANTS = (STATUS_OPTION_CONSTANT, REVIEW_COLUMN_CONSTANT,
+                    DEFERRED_COLUMN_CONSTANT)
+LIST_CONSTANTS = (DEFERRING_CATEGORIES_CONSTANT, OVERRIDING_PREFIXES_CONSTANT)
+
+#: The two lists as the script reads them: whitespace-separated data, split
+#: here rather than where they are bound.
+DEFERRING_CATEGORIES = tuple(THIS_TARGETS_DEFERRING_CATEGORIES.split())
+OVERRIDING_PREFIXES = tuple(THIS_TARGETS_OVERRIDING_PREFIXES.split())
+
 
 class Axis(NamedTuple):
     """One part of a brief's classification, on its way to the board.
@@ -340,8 +385,29 @@ CLASSIFICATION = (
 #: holding the suite to reading them asks about the names this reading uses
 #: rather than about a second list beside it.
 BOARD_CONSTANTS = (PROJECT_CONSTANT, PROJECT_OWNER_CONSTANT,
-                   STATUS_FIELD_CONSTANT, STATUS_OPTION_CONSTANT) + tuple(
-    one.constant for one in CLASSIFICATION)
+                   STATUS_FIELD_CONSTANT) + COLUMN_CONSTANTS + LIST_CONSTANTS \
+    + tuple(one.constant for one in CLASSIFICATION)
+
+#: A category the routing defers and one it does not, chosen out of the two
+#: lists this target declares and the categories the brief schema allows, so
+#: neither is a name this module writes down. A category the schema allows and
+#: no list names is what an unlisted category is, and the rule lands it in the
+#: review column.
+A_DEFERRED_CATEGORY = next(
+    (one for one in declared_values("category") if one in DEFERRING_CATEGORIES),
+    None)
+A_REVIEWED_CATEGORY = next(
+    (one for one in declared_values("category")
+     if one not in DEFERRING_CATEGORIES), None)
+
+#: A path the routing overrides on, a path that merely begins with the same
+#: letters as one of the declared prefixes, and the paths every other filing in
+#: this module carries — which the rule must not override on.
+A_PATH_UNDER_AN_OVERRIDING_PREFIX = \
+    f"{OVERRIDING_PREFIXES[0]}a-file-an-agent-reads.md" \
+    if OVERRIDING_PREFIXES else ""
+A_PATH_MERELY_BEGINNING_LIKE_ONE = \
+    f"not-{A_PATH_UNDER_AN_OVERRIDING_PREFIX}"
 
 #: What the module says about itself, read off it so this file names no key,
 #: bound or schema of its own.
@@ -1800,6 +1866,25 @@ def classification_fields() -> list[dict]:
     ]
 
 
+def status_options() -> list[dict]:
+    """The columns the stub's Status field offers.
+
+    Every column one of this target's constants names — the one a copy that
+    routes nothing files at, and the two the rule chooses between — and two
+    columns nothing files into beside them, so resolving an option by name is
+    a resolution rather than the only option there was. Built from the
+    constants rather than listed, and de-duplicated by name, because a target
+    whose review column *is* the column it filed into before this rule existed
+    declares one name twice and a board cannot offer one option twice.
+    """
+    options: list[dict] = []
+    for name in [this_targets(constant) for constant in COLUMN_CONSTANTS] + \
+            [A_COLUMN_A_HUMAN_MOVED_IT_TO, "Done"]:
+        if name not in [one["name"] for one in options]:
+            options.append({"id": f"opt-{len(options)}", "name": name})
+    return options
+
+
 def seeded_board() -> dict:
     """The board the stub starts with: this target's project, a Status field
     with the options a project of this kind has, and the five classification
@@ -1807,8 +1892,8 @@ def seeded_board() -> dict:
 
     A Title field sits beside the Status field so that resolving the Status
     field's id by name is a resolution rather than a choice of the only field
-    there is, and two options sit beside the one this target declares so that
-    resolving the option by name is the same.
+    there is, and columns nothing files into sit beside the ones this target
+    declares so that resolving the option by name is the same.
     """
     return {
         f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}": {
@@ -1820,11 +1905,7 @@ def seeded_board() -> dict:
                     "id": "PVTSSF_status",
                     "name": THIS_TARGETS_STATUS_FIELD,
                     "type": "SINGLE_SELECT",
-                    "options": [
-                        {"id": "opt-backlog", "name": THIS_TARGETS_STATUS_OPTION},
-                        {"id": "opt-moved", "name": A_COLUMN_A_HUMAN_MOVED_IT_TO},
-                        {"id": "opt-done", "name": "Done"},
-                    ],
+                    "options": status_options(),
                 },
             ] + classification_fields(),
             "items": [],
@@ -2130,6 +2211,46 @@ OVERRIDDEN_CONSTANTS = (PROJECT_CONSTANT, STATUS_OPTION_CONSTANT) + tuple(
     axis.constant for axis in CLASSIFICATION)
 
 
+def a_copy_declaring(values: dict[str, str]) -> str:
+    """The installed copy with the named constants' defaults rewritten.
+
+    A rendering of the shipped file rather than a script written here, so the
+    copy that is driven is the one this target runs in every respect except
+    the values it declares. Used both for a copy declaring another board and
+    for a copy declaring no deferred column, which is the target that has
+    configured none of the routing.
+    """
+    def rewrite(found) -> str:
+        replacement = values.get(found.group("name"))
+        if replacement is None:
+            return found.group(0)
+        return (f'{found.group("name")}="${{{found.group("variable")}'
+                f':-{replacement}}}"')
+
+    return CONSTANT_ASSIGNMENT.sub(
+        rewrite, INSTALLED_SCRIPT.read_text(encoding="utf-8"))
+
+
+def the_column_a_filing_lands_in(script: Path) -> str:
+    """Where a brief no list names and no path overrides lands, for one copy.
+
+    That one outcome and no other, deliberately: the rule's own outcomes are
+    asserted by the drives below, against the values read out of the copy that
+    decides them, and a second statement of the rule here would be the thing
+    those drives exist instead of. What this answers is where the filings the
+    rest of this module makes land — none of them carries a category the
+    routing defers or a path it overrides on — so those assertions name the
+    column the routed filing reaches rather than the one it used to.
+
+    A copy declaring no deferred column routes nothing and files at its
+    `STATUS_OPTION`, which is the template, driven at the value
+    `board_environment_for` hands it.
+    """
+    routing = sync_constants(
+        script.read_text(encoding="utf-8"))[DEFERRED_COLUMN_CONSTANT][1]
+    return THIS_TARGETS_REVIEW_COLUMN if routing else THIS_TARGETS_STATUS_OPTION
+
+
 def sync_to_the_board(script: Path, tmp_path: Path, environment: dict, *,
                       key: str, payload: dict | None = None,
                       breaking: dict | None = None):
@@ -2200,7 +2321,7 @@ def test_an_entry_filed_with_a_project_configured_lands_on_the_board(
     items = board_items(ledger)
     assert len(items) == 1, items
     assert items[0]["url"] == url
-    assert items[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert items[0]["status"] == the_column_a_filing_lands_in(script)
 
 
 @needs_jq
@@ -2279,7 +2400,7 @@ def test_the_next_sweep_reaches_the_board_for_an_issue_already_created(
     items = board_items(ledger)
     assert len(items) == 1, items
     assert items[0]["url"] == created
-    assert items[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert items[0]["status"] == the_column_a_filing_lands_in(script)
 
     other = sync_to_the_board(script, tmp_path, environment, key="k-a-different-one")
     assert other.returncode == 0, other.stderr
@@ -2302,7 +2423,8 @@ def test_an_item_whose_status_the_board_reports_is_left_where_it_is(
     environment, ledger = stub_tracker(tmp_path)
     first = sync_to_the_board(script, tmp_path, environment, key="k-settled")
     assert first.returncode == 0, first.stderr
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == \
+        the_column_a_filing_lands_in(script)
     assert len(project_calls(ledger, "item-edit")) == 1
 
     state = ledger_state(ledger)
@@ -2361,7 +2483,8 @@ def test_an_item_whose_field_values_were_not_obtained_is_a_failure_to_know(
     seeing = sync_to_the_board(script, tmp_path, environment, key="k-unread",
                                payload=brief)
     assert seeing.returncode == 0, seeing.stderr
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == \
+        the_column_a_filing_lands_in(script)
     for axis in CLASSIFICATION:
         assert board_field_value(ledger, axis.field_name) == \
             str(brief[axis.payload_field]), axis.field_name
@@ -2435,7 +2558,7 @@ def test_the_installed_copy_files_to_this_targets_board_with_nothing_set(
     landed = projects[
         f"{THIS_TARGETS_PROJECT_OWNER}/{THIS_TARGETS_PROJECT}"]["items"]
     assert len(landed) == 1, landed
-    assert landed[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert landed[0]["status"] == THIS_TARGETS_REVIEW_COLUMN
 
 
 @needs_jq
@@ -2725,7 +2848,8 @@ def test_a_filed_brief_carries_its_classification_on_the_board(
     for axis in CLASSIFICATION:
         assert board_field_value(ledger, axis.field_name) == \
             str(brief[axis.payload_field]), axis.field_name
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == \
+        the_column_a_filing_lands_in(script)
 
     # One edit per field written, the Status among them, and nothing repeated.
     assert len(project_calls(ledger, "item-edit")) == 1 + len(CLASSIFICATION)
@@ -2788,7 +2912,8 @@ def test_a_field_the_project_does_not_have_costs_that_field_alone(
     assert missing.field_name in result.stderr
     assert board_field_value(ledger, missing.field_name) == ""
     assert len(board_items(ledger)) == 1
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == \
+        the_column_a_filing_lands_in(script)
     for axis in CLASSIFICATION:
         if axis is not missing:
             assert board_field_value(ledger, axis.field_name) == \
@@ -2948,7 +3073,8 @@ def test_a_status_field_configured_in_another_case_is_resolved_and_written(
 
     assert result.returncode == 0, result.stderr
     assert len(board_items(ledger)) == 1
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == \
+        the_column_a_filing_lands_in(script)
 
 
 @needs_jq
@@ -2976,7 +3102,8 @@ def test_a_classification_field_configured_in_another_case_reaches_the_board(
     assert result.returncode == 0, result.stderr
     assert board_field_value(ledger, axis.field_name) == \
         str(brief[axis.payload_field]), result.stderr
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == \
+        the_column_a_filing_lands_in(script)
 
 
 @needs_jq
@@ -2995,14 +3122,20 @@ def test_a_status_option_configured_in_another_case_still_resolves_to_nothing(
     That the item's Status is left unwritten is controlled by the ordinary
     filing above, where the same drive with the option spelled as the board
     spells it writes it.
+
+    Every column a filing can be routed to is configured in that other case,
+    rather than the one a copy that routes nothing files at: whichever of them
+    the copy being driven ends up writing, the name it carries is one the
+    board does not spell that way.
     """
     environment, ledger = stub_tracker(tmp_path)
     configured = in_a_case_the_board_does_not_use(THIS_TARGETS_STATUS_OPTION)
 
     result = sync_to_the_board(script, tmp_path, environment,
                                key="k-option-in-another-case",
-                               breaking={TEMPLATE_CONSTANTS[STATUS_OPTION_CONSTANT][0]:
-                                         configured})
+                               breaking={
+                                   TEMPLATE_CONSTANTS[constant][0]: configured
+                                   for constant in COLUMN_CONSTANTS})
 
     assert result.returncode == TRANSIENT_EXIT, result.stderr
     assert configured in result.stderr
@@ -3186,7 +3319,7 @@ def test_a_board_larger_than_the_retired_bound_files_the_item_added_last(
     assert len(items) == A_BOARD_LARGER_THAN_THE_RETIRED_BOUND + 1
     filed = items[-1]
     assert filed["url"] == result.stdout.strip().splitlines()[-1]
-    assert filed["status"] == THIS_TARGETS_STATUS_OPTION
+    assert filed["status"] == the_column_a_filing_lands_in(script)
     for axis in CLASSIFICATION:
         assert filed.get(axis.field_name.replace(" ", "").lower()) == \
             str(a_filed_brief()[axis.payload_field]), axis.field_name
@@ -3299,6 +3432,186 @@ def test_the_template_with_nothing_configured_writes_no_field(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Where a filed brief lands: the column its classification already decides
+#
+# Every drive here is against the installed copy, run with nothing set in its
+# environment, so the column an item reaches can only have come from the four
+# constants that copy declares. None of those four is written down: the two
+# columns are read out of the file, and the category and the path each case
+# carries are chosen out of the two lists the file declares.
+# --------------------------------------------------------------------------
+
+#: The axis a routed brief's category is written into, picked out of the table
+#: by the field the payload carries rather than by its position in it.
+CATEGORY_AXIS = next(one for one in CLASSIFICATION
+                     if one.payload_field == "category")
+
+#: The rule's outcomes, one case each: a deferring category, the same category
+#: with a path the rule overrides on, the same category with a path that merely
+#: begins with the same letters as a declared prefix, a deferring category
+#: with no paths at all, a category no list names, and an entry that is not a
+#: brief. Every value comes out of the installed copy or the brief schema.
+ROUTED = [
+    pytest.param(A_DEFERRED_CATEGORY, ASKED, THIS_TARGETS_DEFERRED_COLUMN,
+                 id="a-deferring-category"),
+    pytest.param(A_DEFERRED_CATEGORY, (A_PATH_UNDER_AN_OVERRIDING_PREFIX,),
+                 THIS_TARGETS_REVIEW_COLUMN, id="an-overriding-path"),
+    pytest.param(A_DEFERRED_CATEGORY, (A_PATH_MERELY_BEGINNING_LIKE_ONE,),
+                 THIS_TARGETS_DEFERRED_COLUMN, id="a-path-only-beginning-alike"),
+    pytest.param(A_DEFERRED_CATEGORY, (), THIS_TARGETS_DEFERRED_COLUMN,
+                 id="a-deferring-category-and-no-paths"),
+    pytest.param(A_REVIEWED_CATEGORY, ASKED, THIS_TARGETS_REVIEW_COLUMN,
+                 id="a-category-no-list-names"),
+    pytest.param(A_REVIEWED_CATEGORY, (), THIS_TARGETS_REVIEW_COLUMN,
+                 id="a-category-no-list-names-and-no-paths"),
+    pytest.param(A_REVIEWED_CATEGORY, (A_PATH_UNDER_AN_OVERRIDING_PREFIX,),
+                 THIS_TARGETS_REVIEW_COLUMN, id="overridden-and-not-deferred"),
+    pytest.param(None, ASKED, THIS_TARGETS_REVIEW_COLUMN,
+                 id="an-entry-that-is-not-a-brief"),
+]
+
+
+def a_brief_routed_by(category: str | None,
+                      paths: tuple[str, ...]) -> dict:
+    """One payload, carrying the category and the paths a case is about.
+
+    A category of `None` is an entry that is not a brief at all, which carries
+    no category and so is named by no list — the payload every other board
+    test here files.
+    """
+    payload = dict(AN_ENTRY if category is None else a_filed_brief())
+    if category is not None:
+        payload["category"] = category
+    payload.pop("paths", None)
+    if paths:
+        payload["paths"] = list(paths)
+    return payload
+
+
+def test_the_routing_cases_are_drawn_from_what_the_installed_copy_declares():
+    """What the drives below rest on, asserted rather than assumed.
+
+    Each case is built out of the two lists and the two columns the installed
+    copy declares, so a case that resolved to nothing — a deferring list naming
+    no category the schema allows, a prefix list that is empty, two columns
+    that are one column — would be a sweep driving something other than the
+    rule while going on passing.
+    """
+    assert A_DEFERRED_CATEGORY, DEFERRING_CATEGORIES
+    assert A_REVIEWED_CATEGORY, DEFERRING_CATEGORIES
+    assert A_DEFERRED_CATEGORY != A_REVIEWED_CATEGORY
+
+    assert OVERRIDING_PREFIXES
+    assert any(A_PATH_UNDER_AN_OVERRIDING_PREFIX.startswith(prefix)
+               for prefix in OVERRIDING_PREFIXES)
+    # The near miss and the paths every other filing here carries begin with
+    # no declared prefix, so the override is a prefix match rather than a
+    # substring one and the rest of this module is unaffected by it.
+    for path in (A_PATH_MERELY_BEGINNING_LIKE_ONE,) + ASKED:
+        assert not any(path.startswith(prefix)
+                       for prefix in OVERRIDING_PREFIXES), path
+
+    assert THIS_TARGETS_REVIEW_COLUMN != THIS_TARGETS_DEFERRED_COLUMN
+    assert THIS_TARGETS_DEFERRED_COLUMN != THIS_TARGETS_STATUS_OPTION, \
+        "the column a deferred brief lands in is the one a copy that routes " \
+        "nothing files at, so nothing below could tell the two apart"
+    offered = {one["name"] for one in status_options()}
+    assert {THIS_TARGETS_REVIEW_COLUMN,
+            THIS_TARGETS_DEFERRED_COLUMN} <= offered, offered
+    # The table expects both columns, so a rule that answered one of them for
+    # everything would fail rather than satisfy every case.
+    assert len({case.values[2] for case in ROUTED}) == 2
+
+
+@needs_jq
+@pytest.mark.parametrize("category,paths,column", ROUTED)
+def test_a_filed_brief_lands_in_the_column_its_classification_decides(
+        category, paths, column, tmp_path):
+    """The rule, driven rather than read.
+
+    The installed copy is run with nothing in its environment, so the column
+    the item reaches is the one that copy's own constants decide. The label and
+    the category field are asserted beside it, because this story moves where a
+    brief lands and nothing else about how it is filed.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+
+    result = run_the_sync(INSTALLED_SCRIPT, tmp_path, environment,
+                          key="k-routed", payload=a_brief_routed_by(category,
+                                                                    paths),
+                          extra={})
+
+    assert result.returncode == 0, result.stderr
+    items = board_items(ledger)
+    assert len(items) == 1, items
+    assert items[0]["status"] == column
+    if category is not None:
+        assert board_field_value(ledger, CATEGORY_AXIS.field_name) == category
+        _, prefix = label_constants(INSTALLED_SCRIPT)
+        assert f"{prefix}{category}" in issue_labels(ledger)
+
+
+@needs_jq
+@pytest.mark.parametrize("category,paths,column", ROUTED)
+def test_a_copy_declaring_no_deferred_column_files_where_it_always_did(
+        category, paths, column, tmp_path):
+    """The switch: a target that has configured none of this inherits none of
+    it.
+
+    A copy of the installed script differing in one value — the deferred column
+    emptied — is driven over the same cases the test above drives, and every
+    one of them files at that copy's `STATUS_OPTION`, whatever its category and
+    whatever its paths. That is what a template shipping four empty constants
+    gives every other deployment.
+
+    The contrast is the test above rather than a claim made here: the same
+    table through the copy that does declare a deferred column reaches two
+    different columns, and one of them is not this one.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    routing_nothing = fixture_file(
+        tmp_path / "no-deferred-column", INSTALLED_SCRIPT.name,
+        a_copy_declaring({DEFERRED_COLUMN_CONSTANT: ""}))
+
+    result = run_the_sync(routing_nothing, tmp_path, environment,
+                          key="k-routes-nothing",
+                          payload=a_brief_routed_by(category, paths), extra={})
+
+    assert result.returncode == 0, result.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+
+
+@needs_jq
+def test_a_routed_item_the_board_already_reports_is_left_where_it_is(tmp_path):
+    """Routing decides where a brief starts and never moves it afterwards.
+
+    A brief the rule defers is filed, a person moves it out of that column, and
+    the same entry is swept again: the second sweep makes no `item-edit` at all.
+    The write the first sweep makes is what controls the absence — without it
+    the second sweep would have nothing to decline to do.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    deferred = a_brief_routed_by(A_DEFERRED_CATEGORY, ASKED)
+
+    first = run_the_sync(INSTALLED_SCRIPT, tmp_path, environment,
+                         key="k-routed-settled", payload=deferred, extra={})
+    assert first.returncode == 0, first.stderr
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_DEFERRED_COLUMN
+    assert len(project_calls(ledger, "item-edit")) == 1 + len(CLASSIFICATION)
+
+    state = ledger_state(ledger)
+    stub_project(state)["items"][0]["status"] = A_COLUMN_A_HUMAN_MOVED_IT_TO
+    state["calls"] = []
+    ledger.write_text(json.dumps(state), encoding="utf-8")
+
+    again = run_the_sync(INSTALLED_SCRIPT, tmp_path, environment,
+                         key="k-routed-settled", payload=deferred, extra={})
+    assert again.returncode == 0, again.stderr
+    assert board_items(ledger)[0]["status"] == A_COLUMN_A_HUMAN_MOVED_IT_TO
+    assert project_calls(ledger, "item-edit") == []
+
+
+# --------------------------------------------------------------------------
 # The template carries no value particular to this deployment
 # --------------------------------------------------------------------------
 
@@ -3344,6 +3657,40 @@ def test_the_template_names_no_project_no_status_option_and_no_field():
     for one in CLASSIFICATION:
         assert TEMPLATE_CONSTANTS[one.constant][1] == "", one.constant
         assert installed[one.constant][1] != "", one.constant
+
+
+def test_the_template_names_neither_column_and_defers_no_category():
+    """A shipped artifact and the subject: what the template routes.
+
+    A template carrying this deployment's columns would file another
+    repository's briefs into columns its board has no reason to have, and one
+    carrying this deployment's deferring list would hand every other target the
+    judgement about which findings can wait. All four default to empty, each is
+    written in the constant-assignment form the constants beside them use, and
+    each is spelled with the prefix the drives strip out of the environment —
+    without which a copy driven "with nothing set" would inherit whatever the
+    suite was run under.
+
+    The two absences are controlled beside themselves: the same extraction and
+    the same search over the installed copy report all four declared and both
+    column names present, so silence here is the template rather than a parse
+    that stopped matching.
+    """
+    template = TEMPLATE_SCRIPT.read_text(encoding="utf-8")
+    installed = INSTALLED_SCRIPT.read_text(encoding="utf-8")
+    routing = COLUMN_CONSTANTS[1:] + LIST_CONSTANTS
+
+    for constant in routing:
+        assert constant in TEMPLATE_CONSTANTS, constant
+        assert TEMPLATE_CONSTANTS[constant][1] == "", constant
+        assert TEMPLATE_CONSTANTS[constant][0].startswith(
+            SYNC_VARIABLE_PREFIX), constant
+        assert INSTALLED_CONSTANTS[constant][1] != "", constant
+
+    assert THIS_TARGETS_REVIEW_COLUMN not in template
+    assert THIS_TARGETS_DEFERRED_COLUMN not in template
+    assert THIS_TARGETS_REVIEW_COLUMN in installed
+    assert THIS_TARGETS_DEFERRED_COLUMN in installed
 
 
 def lines_that_differ(left: str, right: str) -> list[str]:
@@ -3502,7 +3849,7 @@ def test_this_repositorys_own_pair_files_and_answers_through_its_configured_quer
     url = file_through_the_reference_sync(
         tmp_path, environment, key="k-this-repositorys-own", payload=brief,
         script=INSTALLED_SCRIPT)
-    assert board_items(ledger)[0]["status"] == THIS_TARGETS_STATUS_OPTION
+    assert board_items(ledger)[0]["status"] == THIS_TARGETS_REVIEW_COLUMN
 
     previous = dict(os.environ)
     os.environ.update({name: environment[name]

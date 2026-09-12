@@ -41,6 +41,15 @@ implementation. The subjects are kept apart deliberately:
     follows its own declarations, rather than that it agrees with a number
     written down beside it.
 
+  * **the triage a copy declares, on the same two files.** Which categories a
+    filing defers for, which paths override that, and what the two columns are
+    called are configured values like the rest, so they are read the same way
+    and driven the same way: the invented copy declares a deferring list that
+    is every category this target does *not* defer, and the column each brief
+    reaches is that copy's, by that copy's list. A suite that had learned this
+    target's triage rather than read it files the third case in the wrong
+    column.
+
 Every absence asserted here carries a demonstration that it can fail:
 
   * "no covered module binds a board value to a string literal" sits beside the
@@ -73,15 +82,23 @@ import test_filed_query
 from test_filed_query import (  # noqa: F401 - shared idioms and fixtures
     BOARD_CONSTANTS,
     CLASSIFICATION,
+    COLUMN_CONSTANTS,
     CONSTANT_ASSIGNMENT,
+    DEFERRED_COLUMN_CONSTANT,
+    DEFERRING_CATEGORIES_CONSTANT,
     INSTALLED_CONSTANTS,
     INSTALLED_SCRIPT,
+    LIST_CONSTANTS,
+    OVERRIDING_PREFIXES_CONSTANT,
     PROJECT_CONSTANT,
     PROJECT_OWNER_CONSTANT,
     REPO_ROOT,
+    REVIEW_COLUMN_CONSTANT,
     STATUS_FIELD_CONSTANT,
     STATUS_OPTION_CONSTANT,
+    a_copy_declaring,
     a_filed_brief,
+    declared_values,
     fixture_file,
     ledger_state,
     needs_jq,
@@ -367,7 +384,7 @@ def test_the_same_derivation_refuses_a_copy_declaring_an_empty_constant():
     refusing what it is looking for, over a copy of the installed script with
     one constant emptied."""
     for constant in BOARD_CONSTANTS:
-        emptied = sync_constants(a_script_declaring({constant: ""}))
+        emptied = sync_constants(a_copy_declaring({constant: ""}))
         assert emptied[constant][1] == "", constant
         with pytest.raises(AssertionError):
             this_targets(constant, constants=emptied)
@@ -382,32 +399,30 @@ def test_the_same_derivation_refuses_a_copy_declaring_an_empty_constant():
 #: a copy declaring these has nothing whatever in common with the installed
 #: copy's own board — which is what makes "the values that took effect are the
 #: ones it declares" a statement about the file rather than about a coincidence.
+#: The categories a copy declaring another triage defers: every category the
+#: brief schema allows that this target does *not* defer. Derived rather than
+#: written, so it is a different list by construction — and the brief the
+#: drives below file, which this target reviews, is one that copy defers.
+INVENTED_DEFERRING = tuple(
+    value for value in declared_values("category")
+    if value not in this_targets(DEFERRING_CATEGORIES_CONSTANT).split())
+
+#: A prefix no path this module files under, so a copy declaring it overrides
+#: on the path this module builds from it and on nothing else.
+INVENTED_PREFIX = "an-invented-prefix/"
+
 INVENTED = {
     PROJECT_CONSTANT: "4219",
     PROJECT_OWNER_CONSTANT: "@an-owner-this-target-is-not",
     STATUS_FIELD_CONSTANT: "Stage",
     STATUS_OPTION_CONSTANT: "Intake",
+    REVIEW_COLUMN_CONSTANT: "Needs A Person",
+    DEFERRED_COLUMN_CONSTANT: "Not Yet",
+    DEFERRING_CATEGORIES_CONSTANT: " ".join(INVENTED_DEFERRING),
+    OVERRIDING_PREFIXES_CONSTANT: f"{INVENTED_PREFIX} another-invented-one/",
     **{one.constant: f"An Invented {one.payload_field.title()}"
        for one in CLASSIFICATION},
 }
-
-
-def a_script_declaring(values: dict[str, str]) -> str:
-    """The installed copy with its board constants rewritten to `values`.
-
-    A rendering of the shipped file rather than a script written here, so the
-    copy that is driven is the one this target runs in every respect except the
-    board it names.
-    """
-    def rewrite(found) -> str:
-        replacement = values.get(found.group("name"))
-        if replacement is None:
-            return found.group(0)
-        return (f'{found.group("name")}="${{{found.group("variable")}'
-                f':-{replacement}}}"')
-
-    return CONSTANT_ASSIGNMENT.sub(
-        rewrite, INSTALLED_SCRIPT.read_text(encoding="utf-8"))
 
 
 def test_the_invented_board_shares_nothing_with_the_one_this_target_declares():
@@ -425,7 +440,7 @@ def test_the_same_derivation_over_a_copy_reports_what_that_copy_declares():
     declaring other ones, and reports those — so what the assertions elsewhere
     rest on is a reading rather than a constant that happens to agree with one.
     """
-    declared = sync_constants(a_script_declaring(INVENTED))
+    declared = sync_constants(a_copy_declaring(INVENTED))
     for constant, invented in INVENTED.items():
         assert this_targets(constant, constants=declared) == invented, constant
     # The mechanics are untouched: only the values moved, so the copy is the
@@ -439,21 +454,51 @@ def a_board_named_by(ledger: Path, values: dict[str, str]) -> str:
     The project, its owner, the Status field and every column a classification
     reaches are renamed in place, so what the stub offers is the board the copy
     declares and nothing else. Returned as the key it now answers to.
+
+    The Status field's own options are rebuilt rather than renamed. A rename
+    is a map from the name the board spells to the name the copy declares, and
+    this target declares one name for two of its columns — the column a copy
+    that routes nothing files at is the column it reviews in — so the map
+    would carry one key with two answers and silently keep whichever came
+    last. Rebuilt, the board offers exactly one option per column the copy
+    declares.
+
+    `values` may name only constants that name a board field or a board
+    column: the two whitespace-separated lists the routing decides with name
+    neither, and a list handed to a rename would be a column nothing calls a
+    column.
     """
+    assert not [constant for constant in values if constant in LIST_CONSTANTS], \
+        "a list the routing decides with is not the name of anything on a board"
     state = ledger_state(ledger)
     renamed = {this_targets(constant): value
-               for constant, value in values.items()}
+               for constant, value in values.items()
+               if constant not in COLUMN_CONSTANTS}
     board = state["projects"].pop(
         f"{this_targets(PROJECT_OWNER_CONSTANT)}/"
         f"{this_targets(PROJECT_CONSTANT)}")
     for field in board["fields"]:
+        was_the_status_field = field["name"] == \
+            this_targets(STATUS_FIELD_CONSTANT)
         field["name"] = renamed.get(field["name"], field["name"])
+        if was_the_status_field:
+            field["options"] = [
+                {"id": f"opt-invented-{index}", "name": values[constant]}
+                for index, constant in enumerate(COLUMN_CONSTANTS)]
+            continue
         for option in field.get("options", []):
             option["name"] = renamed.get(option["name"], option["name"])
     key = f"{values[PROJECT_OWNER_CONSTANT]}/{values[PROJECT_CONSTANT]}"
     state["projects"][key] = board
     ledger.write_text(json.dumps(state), encoding="utf-8")
     return key
+
+
+#: What `a_board_named_by` may be handed: the constants that name something a
+#: board has. The two lists are left out, which is the whole of what makes the
+#: invented copy's routing a property of that copy rather than of the stub.
+NAMES_ON_A_BOARD = {constant: value for constant, value in INVENTED.items()
+                    if constant not in LIST_CONSTANTS}
 
 
 def column(name: str) -> str:
@@ -482,7 +527,11 @@ def drive_with_nothing_set(script: Path, tmp_path: Path, environment: dict,
 def test_the_installed_copy_files_onto_the_board_it_declares(tmp_path):
     """The property this target already had, kept: driven with nothing set, the
     installed copy files against its own project and lands in its own column,
-    with each classification written into the column it names."""
+    with each classification written into the column it names.
+
+    The column is the one the routing reaches for a brief whose category no
+    list defers and whose paths override nothing, which is what this brief is.
+    """
     environment, ledger = stub_tracker(tmp_path)
     brief = a_filed_brief()
 
@@ -494,7 +543,7 @@ def test_the_installed_copy_files_onto_the_board_it_declares(tmp_path):
         ledger, f"{this_targets(PROJECT_OWNER_CONSTANT)}/"
                 f"{this_targets(PROJECT_CONSTANT)}")
     assert filed[column(this_targets(STATUS_FIELD_CONSTANT))] == \
-        this_targets(STATUS_OPTION_CONSTANT)
+        this_targets(REVIEW_COLUMN_CONSTANT)
     for one in CLASSIFICATION:
         assert filed.get(column(this_targets(one.constant))) == \
             str(brief[one.payload_field]), one.constant
@@ -509,19 +558,82 @@ def test_a_copy_declaring_an_invented_board_files_onto_that_one(tmp_path):
     effect is the invented one. Green above therefore says the copy follows its
     own declarations, rather than that this module and that file happen to
     agree about a number.
+
+    The column is that copy's deferred one: this brief carries a category
+    *this* target reviews, and the invented deferring list is every category
+    this target does not defer, so a filing that lands anywhere else is one
+    following a list written somewhere other than the file being driven.
     """
     environment, ledger = stub_tracker(tmp_path)
-    key = a_board_named_by(ledger, INVENTED)
+    key = a_board_named_by(ledger, NAMES_ON_A_BOARD)
     copied = fixture_file(tmp_path / "an-invented-board",
-                          INSTALLED_SCRIPT.name, a_script_declaring(INVENTED))
+                          INSTALLED_SCRIPT.name, a_copy_declaring(INVENTED))
     brief = a_filed_brief()
+    assert brief["category"] in INVENTED_DEFERRING, brief["category"]
 
     result = drive_with_nothing_set(copied, tmp_path, environment, brief)
 
     assert result.returncode == 0, result.stderr
     filed = the_item_filed_onto(ledger, key)
     assert filed[column(INVENTED[STATUS_FIELD_CONSTANT])] == \
-        INVENTED[STATUS_OPTION_CONSTANT]
+        INVENTED[DEFERRED_COLUMN_CONSTANT]
     for one in CLASSIFICATION:
         assert filed.get(column(INVENTED[one.constant])) == \
             str(brief[one.payload_field]), one.constant
+
+
+#: Which column a copy declaring the invented triage files each kind of brief
+#: into: a category that copy defers with no overriding path, the same
+#: category under a path that copy overrides on, and a category that copy's
+#: list does not name — which is one *this* target defers, so a filing that
+#: landed in the deferred column here would be following this target's list
+#: rather than the file being driven.
+INVENTED_ROUTING = [
+    pytest.param(INVENTED_DEFERRING[0], ("src/app.py",),
+                 DEFERRED_COLUMN_CONSTANT, id="that-copys-deferring-list"),
+    pytest.param(INVENTED_DEFERRING[0], (f"{INVENTED_PREFIX}a-file.md",),
+                 REVIEW_COLUMN_CONSTANT, id="that-copys-overriding-prefix"),
+    pytest.param(this_targets(DEFERRING_CATEGORIES_CONSTANT).split()[0],
+                 ("src/app.py",), REVIEW_COLUMN_CONSTANT,
+                 id="a-category-only-this-target-defers"),
+]
+
+
+def test_the_invented_triage_is_not_the_one_this_target_declares():
+    """What the drives below rest on, asserted rather than assumed."""
+    assert INVENTED_DEFERRING
+    this_targets_list = this_targets(DEFERRING_CATEGORIES_CONSTANT).split()
+    assert this_targets_list
+    assert not set(INVENTED_DEFERRING) & set(this_targets_list)
+    for case in INVENTED_ROUTING:
+        assert case.values[0], case.id
+    # The three cases expect two different columns, so a copy answering one
+    # column for everything fails rather than satisfying all of them.
+    assert len({case.values[2] for case in INVENTED_ROUTING}) == 2
+
+
+@needs_jq
+@pytest.mark.parametrize("category,paths,expected", INVENTED_ROUTING)
+def test_a_copy_declaring_another_triage_routes_by_its_own(
+        category, paths, expected, tmp_path):
+    """The routing follows the file rather than something written beside it.
+
+    A copy of the installed script declaring a different deferring list,
+    different overriding prefixes and two invented column names is driven with
+    nothing set in its environment against a stub board renamed to match, and
+    the column each brief reaches is one that copy declares, chosen by the
+    list that copy declares. A suite that had learned this target's triage
+    rather than read it would put the third case in the deferred column.
+    """
+    environment, ledger = stub_tracker(tmp_path)
+    key = a_board_named_by(ledger, NAMES_ON_A_BOARD)
+    copied = fixture_file(tmp_path / "an-invented-triage",
+                          INSTALLED_SCRIPT.name, a_copy_declaring(INVENTED))
+
+    result = drive_with_nothing_set(
+        copied, tmp_path, environment,
+        {**a_filed_brief(), "category": category, "paths": list(paths)})
+
+    assert result.returncode == 0, result.stderr
+    filed = the_item_filed_onto(ledger, key)
+    assert filed[column(INVENTED[STATUS_FIELD_CONSTANT])] == INVENTED[expected]
