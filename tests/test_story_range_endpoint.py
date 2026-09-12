@@ -521,33 +521,65 @@ def test_the_live_control_module_resolves_exactly_as_it_did():
     assert resolved.baseline == parent_of(REPO_ROOT, oldest_add)
 
 
+def story_still_running(repo: Path, relative: str) -> bool:
+    """Whether `relative` belongs to a story of `repo` that has not finished.
+
+    Two states answer yes and there is no third. A path HEAD does not carry has
+    no add-commit *because it has not been committed yet*, which is the
+    original shape of the exemption. A path HEAD does carry whose oldest add is
+    an escalation commit is carried by a run that stopped part-way: the story
+    that commit names has no completion commit anywhere in this history, so the
+    resolution has no endpoint to advance to and answers None for exactly the
+    reason an uncommitted module does. A tester's module written on the first
+    attempt of a story that then escalated is committed in that state, and it
+    reaches this predicate on its own re-entry.
+
+    Everything else HEAD carries is refused. In particular a path whose
+    escalating story *did* complete answers no even when the resolution
+    returned None, because the completion the advance failed to find is asked
+    for here directly — so a resolution that had stopped resolving cannot buy
+    itself an exemption by producing the same None.
+    """
+    if not head_carries(repo, relative):
+        return True
+    adds = add_commits(repo, relative)
+    if not adds:
+        return False
+    escalated = escalated_story_at(repo, adds[-1])
+    if escalated is None:
+        return False
+    return not story_coordinator.completion_commits(repo, "HEAD", escalated)
+
+
 def committed_history_readers() -> list[str]:
     """Every declared history reader whose own story has been committed.
 
-    A module whose story is still in flight has no add-commit and so no
-    endpoint — the case the resolution answers with None and the caller reads
-    the working tree for. Any *other* module answering None would be a
-    resolution that had stopped resolving, so it is refused here rather than
-    quietly skipped, which is what stops the loops below emptying themselves
-    into green.
+    A module whose story is still in flight has no endpoint — the case the
+    resolution answers with None and the caller reads the working tree for. Any
+    *other* module answering None would be a resolution that had stopped
+    resolving, so it is refused here rather than quietly skipped, which is what
+    stops the loops below emptying themselves into green.
 
     "Still in flight" is asked of the repository rather than assumed to be this
-    module: a module HEAD does not carry has no add-commit *because it has not
-    been committed yet*, which is the whole of the exemption. It was written as
+    module, through `story_still_running`. It was written as
     `module == Path(__file__).name` while this module was the only history
     reader whose story was in flight; story-070 added a second one, written by
-    the story that was running, and that spelling could not say so. A module
-    HEAD does carry and that still resolves to None is refused exactly as
-    before.
+    the story that was running, and that spelling could not say so. It then
+    became `not head_carries(...)`, which could not say so either once a
+    tester's module was written on a first attempt and committed by that
+    story's own escalation: HEAD carries it while its story is still the one
+    running. The path resolution keys on is the module's declared origin, which
+    is what the range itself was resolved from.
     """
     committed = []
     for module in DECLARED_HISTORY_READERS:
         if live_range(module).committed:
             committed.append(module)
         else:
-            assert not head_carries(REPO_ROOT, f"tests/{module}"), (
+            assert story_still_running(REPO_ROOT, origin_of(module)), (
                 f"{module} resolves to no endpoint, and this repository's HEAD "
-                f"carries it, so its story is not the one still running")
+                f"carries it under a story that has finished, so its story is "
+                f"not the one still running")
     return committed
 
 
@@ -571,6 +603,45 @@ def test_the_committed_question_answers_both_ways(tmp_path):
     assert not head_carries(root, "not-yet.py")
     # And against this repository, where this module itself is carried.
     assert head_carries(REPO_ROOT, f"tests/{Path(__file__).name}")
+
+
+def test_a_story_that_escalated_over_its_own_module_is_still_running(tmp_path):
+    """`story_still_running` answering yes where `head_carries` answered no.
+
+    The state is a tester's module written on the first attempt, committed by
+    the escalation that stopped that attempt, and the story not yet finished —
+    which is the one shape the previous spelling of this exemption could not
+    express, because HEAD carries the module and its story is nonetheless the
+    one still running.
+    """
+    root = escalating_story(tmp_path, resumed=False, name="stopped")
+
+    assert head_carries(root, CONSTRUCTED_VALIDATION_REL), (
+        "the escalation commit committed the module, so HEAD carries it")
+    assert constructed_story_range(root).endpoint is None, (
+        "and the resolution has no completion to advance to")
+    assert story_still_running(root, CONSTRUCTED_VALIDATION_REL)
+
+
+def test_a_carried_module_whose_story_finished_is_not_still_running(tmp_path):
+    """The other side, in both the shapes that could otherwise be let through.
+
+    An exemption for "carried by an escalation" that did not ask whether the
+    story finished would readmit every module it was written to refuse, so the
+    predicate is shown answering no twice: once for the same escalating story
+    resumed to its completion, and once for a module added by an ordinary
+    commit, which is how every other declared history reader reaches HEAD.
+    """
+    resumed = escalating_story(tmp_path, resumed=True, name="resumed")
+    assert head_carries(resumed, CONSTRUCTED_VALIDATION_REL)
+    assert not story_still_running(resumed, CONSTRUCTED_VALIDATION_REL), (
+        "the story that escalated over it has a completion commit")
+
+    ordinary = constructed_story(tmp_path, name="ordinary")
+    assert head_carries(ordinary, CONSTRUCTED_VALIDATION_REL)
+    assert escalated_story_at(
+        ordinary, add_commits(ordinary, CONSTRUCTED_VALIDATION_REL)[-1]) is None
+    assert not story_still_running(ordinary, CONSTRUCTED_VALIDATION_REL)
 
 
 def test_no_declared_history_reader_ends_at_an_escalation_commit():

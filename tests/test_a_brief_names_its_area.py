@@ -73,24 +73,18 @@ Every absence asserted here carries a demonstration that it can fail:
 
 One reading is written down here rather than left implicit, because two
 criteria pull against each other and the constraints decide which wins: an
-area-less filing is reported **where the Inspector offered a suggestion for
-it**. The harness may read no target's vocabulary, so a suggestion is the only
-thing that tells a target which declared one from a target which declared none
-— and a line per area-less filing regardless would put a line on every brief
-every target that never opted in ever files, which the criterion that such a
-target is reported exactly as it is today forbids. The test that says so carries
-the argument beside its assertion.
+area-less filing is reported **where that inspection shows the target declares
+a vocabulary at all**, which is either a suggestion the Inspector wrote or a
+sibling filing that named an area. The harness may read no target's vocabulary,
+so those are the only things that tell a target which declared one from a target
+which declared none — and a line per area-less filing regardless would put a
+line on every brief every target that never opted in ever files, which the
+criterion that such a target is reported exactly as it is today forbids. The
+tests that say so carry the argument beside their assertions.
 
-At the time this module was written the code under it does not do that:
-`Report.unnamed_areas` in `orchestration/inspection.py` yields every filed
-brief carrying no area, whatever the envelope offered, so both surfaces write a
-line for a target that declares no vocabulary and never named one — and
-`tests/test_a_failed_dedupe_is_visible.py`, whose subject is a different story
-entirely, reddens on the lines that appear in its runs. Those two modules
-reddening together is the criterion failing rather than two tests disagreeing:
-gate the derivation on something an inspection of a target with no vocabulary
-cannot have — the suggestion, or an area named by any brief in the same
-inspection — and both go green with no assertion here or there changed.
+`Report.unnamed_areas` in `orchestration/inspection.py` is where that gate
+lives, and both report surfaces derive their lines from it, so the rule is one
+answer rather than one per surface.
 
 Nothing here reaches a model: the fake runner every inspection is driven
 against is a subclass of `tests/test_an_inspection_records_what_it_cost.py`'s,
@@ -589,10 +583,13 @@ def test_an_area_less_brief_the_envelope_offered_nothing_for_is_not_reported(
     is today forbids, and which would also start writing lines into the reports
     of targets this suite already holds still.
 
-    So the suggestion is the signal, and this is what the Inspector writing one
-    buys: where it declares a vocabulary and names no area, it writes a
-    suggestion and the line is written; where there is no vocabulary to name
-    from, it writes neither and nothing is said. The control for this absence is
+    So the gate is evidence of a vocabulary in the inspection itself, and a
+    suggestion is one of the two things that carry it: where the Inspector was
+    handed a vocabulary and named no area it writes a suggestion, and where
+    there was none to name from it writes neither an area nor a suggestion and
+    nothing is said. The other is a sibling filing that named an area, which
+    `test_an_area_less_brief_beside_one_that_named_an_area_is_reported` holds.
+    The control for this absence is
     `test_an_area_less_filed_brief_gets_a_line_of_its_own_before_the_summary`,
     which is this run with a suggestion added and nothing else changed, and
     which does report a line.
@@ -605,6 +602,36 @@ def test_an_area_less_brief_the_envelope_offered_nothing_for_is_not_reported(
     assert inspector.invocations, "the inspection was never attempted"
     assert notes_in(target) == [], inspection_lines(target)
     assert "1 finding(s)" in summary_of(target)
+
+
+def test_an_area_less_brief_beside_one_that_named_an_area_is_reported(
+        tmp_path, harness, monkeypatch):
+    """The other half of the gate, so the rule above is as narrow as it claims.
+
+    A sibling filing that named an area is the second thing an inspection of a
+    target declaring no vocabulary cannot have, and it is evidence of a
+    vocabulary as good as a suggestion: the Inspector named one of its names. So
+    the area-less brief here is reported on the criterion's own terms — named,
+    on a line of its own, before the summary — with no suggestion to carry,
+    which is what distinguishes this run from
+    `test_an_area_less_brief_the_envelope_offered_nothing_for_is_not_reported`.
+    The brief that named an area must not be among the lines, or the line would
+    be about filings rather than about missing areas.
+    """
+    target = a_target(tmp_path, "one-named-and-one-not")
+    named, unnamed = finding(1, area=AN_AREA), finding(2)
+    code, inspector = narrow_run_with(target, harness, monkeypatch,
+                                      findings=[named, unnamed])
+
+    assert code == 0
+    assert inspector.invocations, "the inspection was never attempted"
+
+    said = lines_about(target, unnamed["slug"])
+    assert len(said) == 1, inspection_lines(target)
+    assert lines_about(target, named["slug"]) == [], inspection_lines(target)
+
+    ordered = inspection_lines(target)
+    assert ordered.index(said[0]) < ordered.index(summary_of(target)), ordered
 
 
 def test_an_inspection_where_every_filed_brief_named_an_area_says_nothing(

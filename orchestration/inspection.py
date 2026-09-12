@@ -591,7 +591,8 @@ class Report:
 
     @property
     def unnamed_areas(self) -> tuple[tuple[Filed, str], ...]:
-        """Each filed brief that named no area, with its suggestion or "".
+        """Each filed brief that named no area, with its suggestion or "", and
+        nothing at all from an inspection of a target that declares no areas.
 
         One derivation beneath both report surfaces, because the post-story
         report and the broad inspection's report say the same thing on the same
@@ -601,11 +602,26 @@ class Report:
         nothing and is printed by neither surface: what an area-less line
         reports is briefs that were filed, and a suggestion about work nobody
         filed would be a line about nothing.
+
+        The gate is what keeps a target that declares no vocabulary reported
+        exactly as it was before. The harness may hold and read no target's
+        vocabulary, so it never sees the document, and every brief such a target
+        files names no area — a line per area-less filing would therefore be a
+        line on every brief every target that never opted in ever files. What an
+        inspection of such a target cannot have is either of the two things
+        below: a suggestion, which the Inspector writes only where a vocabulary
+        it was handed declares names none of which fit, or a sibling filing that
+        named an area. Where neither is present there is no evidence of a
+        vocabulary at all, and nothing is said.
         """
         suggested = {
             one.slug: one.concerns for one in self.area_suggestions
             if one.concerns
         }
+        declares_areas = bool(suggested) or any(
+            brief.area for brief in self.filed)
+        if not declares_areas:
+            return ()
         return tuple(
             (brief, suggested.get(brief.slug, ""))
             for brief in self.filed if not brief.area
