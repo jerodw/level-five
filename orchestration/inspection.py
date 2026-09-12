@@ -929,14 +929,18 @@ def _reported_cost(invoked) -> float | None:
 def _area_suggestions(document) -> tuple[AreaSuggestion, ...]:
     """What one envelope said it could name no area for.
 
-    The envelope schema has already been satisfied by the time this is reached,
-    so what this adds is tolerance rather than validation: an envelope carrying
-    the sibling not at all is every envelope written before the field existed
-    and every envelope an inspection of a target declaring no areas writes, and
-    it yields nothing. An entry that is not a usable pair yields nothing of its
-    own and costs the entries beside it nothing, on the rule the findings
-    beside them already follow — a suggestion is a report and may not become the
-    thing that stops an inspection.
+    The envelope declares the field and holds it to nothing, so this filter is
+    where a suggestion is judged and it is the only thing that judges one. That
+    is deliberate: the field is read for the report and filed by nothing, so a
+    suggestion may not become the thing that stops an inspection, and a shape
+    the envelope enforced would cost a whole scope's findings over one slip in
+    an entry that reaches no brief, no payload, no outbox entry and no tracker.
+    So an envelope carrying the sibling not at all — every envelope written
+    before the field existed, and every envelope an inspection of a target
+    declaring no areas writes — yields nothing, a field that is not a list at
+    all yields nothing, and an entry that is not a usable pair of strings
+    yields nothing of its own and costs the entries beside it nothing, on the
+    rule the findings loop already follows for one malformed finding.
     """
     declared = document.get(AREA_SUGGESTIONS) or []
     if not isinstance(declared, list):

@@ -11,22 +11,7 @@
       "items": { "type": "object" }
     },
     "area_suggestions": {
-      "type": "array",
-      "description": "What the Inspector could name no area for, and what it thinks each such brief concerns. Optional: an envelope carrying only `findings` is what every inspection wrote before this existed and is what an inspection of a target declaring no area vocabulary goes on writing. Each item names by slug the brief it is about, so a suggestion for a finding that was dropped rather than filed is matched to nothing and is not printed. IT IS READ FOR THE REPORT AND FILED BY NOTHING: a suggestion never reaches a brief, a payload, an outbox entry or a tracker, because the vocabulary grows by a person editing the target's own document and a name no developer has approved must not be filed under. What it buys is that a missing area is reported rather than silent, which is the whole reason naming none is a first-class answer.",
-      "items": {
-        "type": "object",
-        "required": ["slug", "concerns"],
-        "properties": {
-          "slug": {
-            "type": "string",
-            "description": "The slug of the finding this suggestion is about, spelled exactly as that finding spells it. It is how a report matches a suggestion to a brief that was actually filed."
-          },
-          "concerns": {
-            "type": "string",
-            "description": "What that brief seems to concern, in the Inspector's own words, so a person can decide whether the target's vocabulary is missing a line. It is not a name being proposed for the vocabulary and nothing files it."
-          }
-        }
-      }
+      "description": "What the Inspector could name no area for, and what it thinks each such brief concerns. Optional: an envelope carrying only `findings` is what every inspection wrote before this existed and is what an inspection of a target declaring no area vocabulary goes on writing. THE SHAPE IT EXPECTS IS A LIST OF ENTRIES, each an object carrying a `slug` string — the slug of the finding this suggestion is about, spelled exactly as that finding spells it, which is how a report matches a suggestion to a brief that was actually filed — and a `concerns` string, what that brief seems to concern in the Inspector's own words, so a person can decide whether the target's vocabulary is missing a line. THE ENVELOPE HOLDS THE FIELD TO NONE OF THAT, and that is deliberate rather than lax: the pair is judged by the reader rather than by the envelope, because IT IS READ FOR THE REPORT AND FILED BY NOTHING — a suggestion never reaches a brief, a payload, an outbox entry or a tracker, since the vocabulary grows by a person editing the target's own document and a name no developer has approved must not be filed under — so a field reaching nothing may not become the thing that stops an inspection. An entry that is not a usable pair, and a field that is not a list at all, therefore yield nothing of their own and cost the entries beside them nothing, exactly as the findings loop drops one malformed finding and files the findings beside it. `orchestration/inspection.py`'s `_area_suggestions` is the filter that judges each entry. What the field buys is that a missing area is reported rather than silent, which is the whole reason naming none is a first-class answer."
     }
   }
 }

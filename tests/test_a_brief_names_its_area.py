@@ -54,8 +54,21 @@ Every absence asserted here carries a demonstration that it can fail:
     same validator against the same schema with the area appended to that list,
     which reports the same brief;
   * "the suggestions are optional on the envelope" sits beside the same
-    declaration with them required, and beside an item missing its slug, both
-    of which the same validator reports;
+    declaration with them required, which the same validator reports;
+  * "the shipped envelope accepts an unusable suggestion" sits beside the same
+    validator against the same envelope with the findings absent and with the
+    findings not an array, both of which it reports — so what was relaxed is
+    the suggestions declaration and not the validator;
+  * "an inspection whose envelope carries an unusable suggestion records no
+    drop naming the scope as having produced no usable artifact" sits beside
+    the same inspection of the same fixture over an envelope whose findings are
+    absent and whose findings are not an array, both of which do record one;
+  * "an unusable suggestion is printed nowhere and reaches no queue entry" sits
+    beside the filed finding's own slug, which the identical reads of the
+    identical report and queue do find;
+  * "the filter's docstring no longer concedes that the envelope schema
+    refused everything first" sits beside that same docstring with the
+    conceding sentence spliced back onto it, which the identical search finds;
   * "this story left `orchestration/story_brief.py` alone" sits beside two
     synthetic histories built by `conftest.constructed_story`, one whose story
     respects that path and one whose story edits it, which the identical call
@@ -111,6 +124,7 @@ import story_brief
 import story_inspection
 import agent_runner
 import harness_config
+import outbox
 
 from test_an_inspection_records_what_it_cost import (  # noqa: F401 - shared
     Inspector,                                        # idioms and fixtures
@@ -344,23 +358,26 @@ def an_envelope(*found: dict, suggestions=()) -> dict:
     return envelope
 
 
-def test_the_envelope_declares_the_suggestions_beside_the_findings():
+def test_the_envelope_declares_the_suggestions_by_their_description_alone():
     """A shipped schema and the subject: what an inspection may write.
 
-    Each item is required to name the brief it is about and to say what that
-    brief concerns, because a suggestion that names neither cannot be matched
-    to a filing or read by a person. The description is required to say the
-    thing that keeps the vocabulary a person's: it is read for the report and
-    filed by nothing.
+    The field is declared and held to nothing — no type of its own and no item
+    declaration — because it is read for the report and filed by nothing, so a
+    slip in one entry may not cost a whole scope the findings beside it. What
+    the removed declarations said is required to be said in the description
+    instead: the shape expected of an entry, and that an entry failing it
+    yields nothing of its own and costs the entries beside it nothing.
     """
     declared = ENVELOPE_SCHEMA["properties"][SUGGESTIONS]
 
-    assert declared["type"] == "array"
-    assert sorted(declared["items"]["required"]) == ["concerns", "slug"]
+    assert set(declared) == {"description"}, declared
     assert SUGGESTIONS not in ENVELOPE_SCHEMA.get("required", [])
 
     said = said_of(ENVELOPE_SCHEMA, SUGGESTIONS)
     assert "read for the report and filed by nothing" in said, said
+    assert "slug" in said and "concerns" in said, said
+    assert "holds the field to none of that" in said, said
+    assert "cost the entries beside them nothing" in said, said
 
 
 def test_an_envelope_carrying_only_findings_still_validates():
@@ -377,14 +394,12 @@ def test_an_envelope_carrying_suggestions_validates_too():
     assert schema_validator.validate(envelope, ENVELOPE_SCHEMA) == []
 
 
-def test_the_same_declaration_reports_a_suggestion_that_names_no_brief():
-    """The control for "optional", and for the item shape beside it.
+def test_the_same_declaration_reports_an_envelope_missing_the_sibling():
+    """The control for "optional".
 
-    The first half makes the same declaration demand the sibling, where the
-    findings-only envelope above is reported — so its acceptance is the
-    declaration and not a validator that reads no required list. The second
-    drops the slug from an item, which the shipped declaration itself reports,
-    so the acceptance of a well-formed suggestion is a shape being satisfied.
+    It makes the same declaration demand the sibling, where the findings-only
+    envelope above is reported — so that envelope's acceptance is the
+    declaration and not a validator that reads no required list.
     """
     demanding = {**ENVELOPE_SCHEMA,
                  "required": [*ENVELOPE_SCHEMA.get("required", []),
@@ -393,10 +408,54 @@ def test_the_same_declaration_reports_a_suggestion_that_names_no_brief():
     assert reported, "the validator accepts an envelope missing the sibling"
     assert any(SUGGESTIONS in problem for problem in reported), reported
 
-    headless = an_envelope(finding(), suggestions=[{"concerns": CONCERNS}])
-    problems = schema_validator.validate(headless, ENVELOPE_SCHEMA)
-    assert problems, "a suggestion naming no brief is accepted"
-    assert any("slug" in problem for problem in problems), problems
+
+A_SLUG = finding()["slug"]
+
+UNUSABLE_SUGGESTIONS = {
+    "an entry with no concerns key": [{"slug": A_SLUG}],
+    "an entry with no slug key": [{"concerns": CONCERNS}],
+    "an entry whose concerns is null": [{"slug": A_SLUG, "concerns": None}],
+    "an entry that is a string rather than an object": ["inspection-and-briefs"],
+    "a field that is not a list at all": "inspection-and-briefs",
+}
+
+
+@pytest.mark.parametrize("described", sorted(UNUSABLE_SUGGESTIONS))
+def test_an_unusable_suggestion_satisfies_the_shipped_envelope(described):
+    """The new rule, where the item declaration used to be.
+
+    An entry the reader will refuse is not an envelope the validator refuses:
+    the field carries a shape the reader judges, so a slip in one entry — a
+    missing, misspelled or null `concerns` is the ordinary case, the producer
+    being a model asked to write one suggestion per brief it named no area for
+    — costs itself and leaves the findings beside it filed. The field not being
+    a list at all is as unusable as an entry that is not a pair, and neither
+    may stop an inspection.
+    """
+    envelope = {"findings": [finding()],
+                SUGGESTIONS: UNUSABLE_SUGGESTIONS[described]}
+    assert schema_validator.validate(envelope, ENVELOPE_SCHEMA) == []
+
+
+def test_the_same_validator_still_reports_a_malformed_findings_array():
+    """The control for the acceptances above, and the story's own boundary.
+
+    "The schema accepts an unusable suggestion" passes just as happily against
+    a validator that has stopped reading `required` and `items` at all. Here
+    the identical call is made against the same shipped envelope with the
+    findings absent and with the findings not an array, both of which it
+    reports — so what was relaxed is the suggestions declaration and not the
+    validator's handling of items or of required properties.
+    """
+    absent = schema_validator.validate(
+        {SUGGESTIONS: [a_suggestion(A_SLUG)]}, ENVELOPE_SCHEMA)
+    assert absent, "an envelope with no findings at all is accepted"
+    assert any("findings" in problem for problem in absent), absent
+
+    not_an_array = schema_validator.validate(
+        {"findings": {"slug": A_SLUG}}, ENVELOPE_SCHEMA)
+    assert not_an_array, "a findings value that is not an array is accepted"
+    assert any("findings" in problem for problem in not_an_array), not_an_array
 
 
 # ==========================================================================
@@ -526,6 +585,266 @@ def test_a_filed_briefs_record_carries_the_area_that_brief_named(tmp_path,
     areas = filed_areas(report)
     assert areas[finding(1)["slug"]] == AN_AREA, areas
     assert areas[finding(2)["slug"]] == "", areas
+
+
+# ==========================================================================
+# One unusable suggestion costs itself and leaves the findings beside it filed
+#
+# The schema section above says the relaxed envelope accepts such a suggestion.
+# What that buys is only visible through the code that reads an envelope: an
+# entry the validator used to refuse cost `_read_findings` its whole document,
+# which `inspect_scope` turned into one "no findings artifact" drop before the
+# findings loop ran, so every brief the invocation actually wrote was gone and
+# the spend was paid for and discarded. These drive real inspections against an
+# invocation that writes the envelope, on both surfaces that read one.
+# ==========================================================================
+
+
+#: An envelope key to be taken off rather than rewritten, so a planted envelope
+#: can say "no findings at all" as well as "findings of the wrong shape".
+REMOVED = object()
+
+
+class Planting(Inspecting):
+    """The same fake, writing one envelope of this module's own making.
+
+    `Inspecting` coerces each suggestion to a dict, which is exactly what an
+    unusable entry is not, so an envelope here is written key by key and
+    verbatim: a suggestion that is a bare string, a field that is not a list at
+    all, findings that are not an array. It is still the invocation that writes
+    it, so what the reader reads is a file an inspection produced rather than
+    one planted underneath it.
+    """
+
+    def __init__(self, *args, envelope=(), **keywords):
+        super().__init__(*args, **keywords)
+        self.envelope = dict(envelope)
+
+    def __call__(self, *args, **keywords):
+        result = super().__call__(*args, **keywords)
+        document = json.loads(self.artifact.read_text(encoding="utf-8"))
+        for key, value in self.envelope.items():
+            if value is REMOVED:
+                document.pop(key, None)
+            else:
+                document[key] = value
+        self.artifact.write_text(json.dumps(document), encoding="utf-8")
+        return result
+
+
+def broad_planting(target: Path, harness_root: Path, *,
+                   findings=(), envelope=()):
+    """One whole broad inspection whose invocation writes that envelope."""
+    config = harness_config.load_config(target)
+    inspector = Planting(target, config, findings=list(findings),
+                         envelope=envelope)
+    return inspection.inspect(target, config, harness_root,
+                              runner=inspector), inspector
+
+
+def narrow_planting(target: Path, harness_root: Path, monkeypatch, *,
+                    findings=(), envelope=()):
+    """One completing run whose post-story inspection reads that envelope."""
+    config = harness_config.load_config(target)
+    inspector = Planting(target, config, findings=list(findings),
+                         envelope=envelope)
+    monkeypatch.setattr(agent_runner, "run_agent", inspector)
+    return run(target, harness_root, Runner(target)), inspector
+
+
+def filed_slugs(report) -> set:
+    return {one.slug for one in report.filed}
+
+
+def as_a_path(described: str) -> str:
+    """One case's description as a directory name, so a failure names itself."""
+    return re.sub(r"[^a-z0-9]+", "-", described.lower()).strip("-")
+
+
+#: The two ways an envelope is genuinely unreadable, which is what the
+#: relaxation deliberately did not touch. They are the control for every
+#: "records no such drop" below: a run that had stopped recording drops at all,
+#: or a reader looking at the wrong report, would pass those assertions just as
+#: happily, and fails these.
+UNREADABLE_ENVELOPES = {
+    "findings absent altogether": {"findings": REMOVED},
+    "findings that are not an array": {"findings": {"slug": A_SLUG}},
+}
+
+
+@pytest.mark.parametrize("described", sorted(UNUSABLE_SUGGESTIONS))
+def test_an_inspection_files_the_finding_beside_an_unusable_suggestion(
+        described, tmp_path, harness):
+    """The regression this story exists for, driven rather than reasoned about.
+
+    One well-formed finding is written beside a suggestion the reader will
+    refuse, and the claim is that the finding is filed — named, so a report
+    that filed something else could not pass — and that nothing reports the
+    scope as having produced no usable artifact. The suggestions the report
+    carries are empty because the entry yielded nothing of its own, and the
+    control for that emptiness is
+    `test_the_suggestions_an_envelope_carries_reach_the_report`, where the same
+    reading of the same fixture carries a well-formed one.
+    """
+    target = a_target(tmp_path, f"unusable-{as_a_path(described)}")
+    report, inspector = broad_planting(
+        target, harness, findings=[finding(1)],
+        envelope={SUGGESTIONS: UNUSABLE_SUGGESTIONS[described]})
+
+    assert inspector.invocations, "the inspection was never attempted"
+    assert filed_slugs(report) == {finding(1)["slug"]}, report.dropped
+    assert report.dropped_for(inspection.NO_ARTIFACT) == (), report.dropped
+    assert report.area_suggestions == ()
+
+
+@pytest.mark.parametrize("described", sorted(UNREADABLE_ENVELOPES))
+def test_the_same_inspection_still_reports_an_envelope_it_cannot_read(
+        described, tmp_path, harness):
+    """The control for the absence above, and the story's boundary in the code.
+
+    "No drop naming the scope as having produced no usable artifact" passes
+    just as happily against an inspection that stopped recording drops, or
+    against a reader asking a report that never ran. Here the identical drive
+    of the identical fixture is given an envelope whose findings are absent and
+    one whose findings are not an array, and both are reported by that exact
+    reason with nothing filed — so what the relaxation reached is the
+    suggestions declaration and not the validator or the drop.
+    """
+    target = a_target(tmp_path, f"unreadable-{as_a_path(described)}")
+    report, inspector = broad_planting(
+        target, harness, findings=[finding(1)],
+        envelope=UNREADABLE_ENVELOPES[described])
+
+    assert inspector.invocations, "the inspection was never attempted"
+    assert report.filed == ()
+    reported = report.dropped_for(inspection.NO_ARTIFACT)
+    assert reported, report.dropped
+
+
+def test_a_post_story_inspection_files_it_too_and_says_nothing_was_missing(
+        tmp_path, harness, monkeypatch):
+    """The narrow path, where the same envelope problem cost a whole story's
+    inspection its findings.
+
+    The summary is the line that carries the counts and every way the
+    inspection dropped something, so it is where both halves are read: one
+    finding found and one filed, and the missing-artifact reason not named on
+    it. The control for that absence is the test below, where the same summary
+    of the same fixture does name it.
+    """
+    target = a_target(tmp_path, "a-story-with-an-unusable-suggestion")
+    code, inspector = narrow_planting(
+        target, harness, monkeypatch, findings=[finding(1)],
+        envelope={SUGGESTIONS:
+                  UNUSABLE_SUGGESTIONS["an entry with no concerns key"]})
+
+    assert code == 0
+    assert inspector.invocations, "the inspection was never attempted"
+
+    said = summary_of(target)
+    assert "1 finding(s), 1 filed" in said, said
+    assert inspection.NO_ARTIFACT not in said, said
+
+
+@pytest.mark.parametrize("described", sorted(UNREADABLE_ENVELOPES))
+def test_the_same_summary_names_the_missing_artifact_when_it_is_missing(
+        described, tmp_path, harness, monkeypatch):
+    """The control for the absence read off that summary.
+
+    The identical run of the identical fixture, given an envelope no reader can
+    make findings out of, names the reason on the same line and files nothing —
+    so the line above is the drop not having happened rather than a summary
+    that stopped saying what it dropped.
+    """
+    target = a_target(tmp_path, f"a-story-with-{as_a_path(described)}")
+    code, inspector = narrow_planting(
+        target, harness, monkeypatch, findings=[finding(1)],
+        envelope=UNREADABLE_ENVELOPES[described])
+
+    assert code == 0
+    assert inspector.invocations, "the inspection was never attempted"
+
+    said = summary_of(target)
+    assert inspection.NO_ARTIFACT in said, said
+    assert "0 filed" in said, said
+
+
+#: Words that exist only inside an unusable entry, so finding them anywhere is
+#: that entry having been read as usable. The entry is unusable because its
+#: `concerns` is not a string, which is the shape `_area_suggestions` refuses
+#: while leaving the words on disk for a search to find.
+UNUSABLE_WORDS = "this entry was never a pair and must reach nothing"
+
+AN_UNUSABLE_PAIR = {"slug": A_SLUG, "concerns": {"words": UNUSABLE_WORDS}}
+
+
+def queued_text(target: Path) -> str:
+    """Every entry this inspection left in the queue, as one text.
+
+    The queue entry is what a brief, its payload, its outbox entry and its
+    tracker item are all made from downstream — nothing else is written and
+    nothing is sent from anywhere else — so words absent from every byte of it
+    reach none of them.
+    """
+    queue = outbox.queue_dir(target)
+    return "\n".join(path.read_text(encoding="utf-8")
+                     for path in sorted(queue.rglob("*")) if path.is_file())
+
+
+def test_an_unusable_suggestion_reaches_no_queue_entry_and_no_report(
+        tmp_path, harness):
+    """What an unusable entry costs beside the finding: nothing, and nothing of
+    its own either.
+
+    Both absences are read beside the filed finding's own slug, which the
+    identical read of the identical report and the identical read of the
+    identical queue do find — so neither absence can be satisfied by a report
+    that printed nothing, a queue this read cannot see, or a slug resolved to
+    something that appears in neither.
+    """
+    target = a_target(tmp_path, "an-unusable-suggestion-yields-nothing")
+    report, inspector = broad_planting(
+        target, harness, findings=[finding(1)],
+        envelope={SUGGESTIONS: [AN_UNUSABLE_PAIR]})
+
+    assert inspector.invocations, "the inspection was never attempted"
+    assert report.area_suggestions == ()
+
+    text, code = printed(report)
+    assert code == 0
+    assert finding(1)["slug"] in text, text
+    assert UNUSABLE_WORDS not in text, text
+
+    queued = queued_text(target)
+    assert finding(1)["slug"] in queued, queued
+    assert UNUSABLE_WORDS not in queued, queued
+
+
+THE_CONCESSION = "the envelope schema has already been satisfied"
+
+
+def test_the_filters_docstring_no_longer_concedes_the_schema_refused_first():
+    """The sentence that made the tolerance unreachable, gone from the filter
+    that is now the only thing judging a suggestion.
+
+    A reader who believes the envelope refused these cases already has no
+    reason to keep the guards, and that belief is what this docstring used to
+    state. The absence is controlled by splicing the conceding sentence back
+    onto the shipped docstring, where the identical search finds it — so the
+    emptiness above is the words having changed rather than the search looking
+    at nothing.
+    """
+    said = flattened(inspection._area_suggestions.__doc__)
+
+    assert THE_CONCESSION not in said, said
+    assert "where a suggestion is judged" in said, said
+    assert "the only thing that judges one" in said, said
+    assert "deliberate" in said, said
+
+    spliced = flattened(f"{inspection._area_suggestions.__doc__}\n"
+                        f"The envelope schema has already been satisfied by "
+                        f"the time this is reached.")
+    assert THE_CONCESSION in spliced, spliced
 
 
 # ==========================================================================
