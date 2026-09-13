@@ -350,7 +350,7 @@ AREA_FIELD="${L5_SYNC_AREA_FIELD:-Area}"
 # of categories and no vocabulary of paths, and checks a member of neither
 # against anything, exactly as it holds none of the field names above.
 REVIEW_COLUMN="${L5_SYNC_REVIEW_COLUMN:-Inbox}"
-DEFERRED_COLUMN="${L5_SYNC_DEFERRED_COLUMN:-Backlog}"
+DEFERRED_COLUMN="${L5_SYNC_DEFERRED_COLUMN:-Deferred}"
 DEFERRING_CATEGORIES="${L5_SYNC_DEFERRING_CATEGORIES:-docs-drift standards-drift complexity refactor}"
 OVERRIDING_PATH_PREFIXES="${L5_SYNC_OVERRIDING_PATH_PREFIXES:-prompts/ plugin/ templates/ .harness/standards/}"
 
