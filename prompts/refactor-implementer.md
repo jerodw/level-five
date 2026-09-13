@@ -119,9 +119,8 @@ committed into it. When it failed, this is what the retry must resolve:
 {{clean_clone_result}}
 
 Self-route result — present only when this stage is running again in place
-after failing mechanically, or after the suite the coordinator ran in your
-tree came back red. The coordinator wrote it, not an agent: no verifier has
-judged this work, and it says what was missing, stale or failing:
+after failing mechanically. The coordinator wrote it, not an agent: no
+verifier has judged this work, and it says what was missing or stale:
 {{self_route_result}}
 
 Correction pass — present only when you are running because a passing

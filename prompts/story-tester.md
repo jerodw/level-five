@@ -147,10 +147,11 @@ This stage executes no test command, and the Bash guard denies one. The
 coordinator runs the configured command as a subprocess after your turn
 ends and reads its exit status; its record of that run is the answer.
 
-A red suite brings this stage back in place, on the same attempt, with the
-coordinator's record of the run and the path to that run's whole output
-injected below. Read the output file rather than reaching for the suite
-yourself; repair what failed, record what you wrote, and end the turn.
+A red suite does not bring this stage back. The coordinator records the
+outstanding failure, the run advances to the stages after this one, and the
+verifier judges the tree and decides where the work goes — so a suite you
+leave red is judged by another stage rather than handed back to you, and this
+turn is not repeated on this attempt to repair it.
 
 [Runtime State Layer]
 The coordinator injects the current workflow state below. Treat the

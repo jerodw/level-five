@@ -638,10 +638,21 @@ def test_the_same_child_survives_when_only_the_leader_is_killed(tmp_path):
         process.kill()
         process.wait(timeout=PATIENCE_SECONDS)
         pid = int(child_pid.read_text(encoding="utf-8").strip())
-        assert wait_until(lambda: marker.exists()), (
+        # What this control needs is the word the child writes, not the path it
+        # writes into: the child's redirect creates and truncates the marker
+        # before `echo` puts anything in it, so a read taken the moment the path
+        # appears can see an empty file. Wait for the content itself, within the
+        # same patience, and the assertion still fails when no child survived.
+        def written() -> str:
+            try:
+                return marker.read_text(encoding="utf-8").strip()
+            except OSError:
+                return ""
+
+        assert wait_until(lambda: written() == "survived"), (
             "the child outlived a leader-only kill and still wrote no marker, "
             "so the assertion it controls for could not have failed either")
-        assert marker.read_text(encoding="utf-8").strip() == "survived"
+        assert written() == "survived"
         # Reaped by init rather than by this test, since it was never this
         # test's child; what matters is that it ran to completion.
         assert wait_until(lambda: not alive(pid))
