@@ -88,6 +88,14 @@ PASSED = {"status": "passed", "blocking_issues": [], "unverified": [],
 #: module names no signal of its own.
 A_CAPACITY_SIGNAL = agent_runner.CAPACITY_SIGNALS[0]
 
+#: The kind the coordinator appends before the inspection is invoked. An event
+#: kind is the coordinator's own vocabulary rather than a name a workflow
+#: declares, so it is spelled here as the modules reading the other
+#: announcements spell theirs. What the announcement *says* is
+#: `tests/test_a_run_announces_what_it_is_waiting_on.py`'s subject; this module
+#: needs only to tell its line from the rest of the stream.
+ANNOUNCEMENT = "inspection-started"
+
 
 # ==========================================================================
 # The workflow, the rules and the target
@@ -119,6 +127,12 @@ WORKFLOW = conftest.build_workflow(
 )
 
 WRITING, VALIDATING, VERIFYING = [stage["name"] for stage in WORKFLOW["stages"]]
+
+#: The last stage this definition declares, derived rather than spelled: the
+#: seam between a run that has done its work and the inspection that follows it
+#: is wherever the definition's stages end, and a module that named one of them
+#: would stop finding the seam the moment a stage was added below it.
+LAST_STAGE = WORKFLOW["stages"][-1]["name"]
 
 #: A prefix the fixture's own rules block and this repository's do not, which
 #: is what makes "a blocked path is left out of the scope" a fact about the
@@ -428,17 +442,26 @@ class Runner:
     `extra_changed` names paths the writing stage records beside the file it
     actually edits, so a run can record a change the expansion leaves out —
     which is the only way to observe what the run's own record says about one.
+
+    `at_last_stage` is called with the tree the run works in as that tree's
+    final stage is invoked, which is the one seam between a run that has done
+    its work and the inspection that follows it. It exists so a test can break
+    something the inspection will reach without breaking the run that reaches
+    it: anything done to the tree before the run starts would be done to a
+    checkout the run never works in, and anything done after the run returns
+    would be done after the inspection had already finished.
     """
 
     def __init__(self, target_root: Path, journal: Path, *,
                  fails_at: str | None = None, capacity=None,
-                 extra_changed=()):
+                 extra_changed=(), at_last_stage=None):
         self.target_root = Path(target_root)
         self.run_dir = conftest.run_dir_for(self.target_root, STORY_ID)
         self.journal = Path(journal)
         self.fails_at = fails_at
         self.capacity = capacity
         self.extra_changed = tuple(extra_changed)
+        self.at_last_stage = at_last_stage
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
@@ -472,6 +495,8 @@ class Runner:
                 encoding="utf-8")
         elif stage == VERIFYING:
             _write(self.run_dir / conftest.VERIFICATION_RESULT, PASSED)
+        if self.at_last_stage is not None and stage == LAST_STAGE:
+            self.at_last_stage(tree)
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 
@@ -512,6 +537,50 @@ def journal_lines(journal: Path) -> list[str]:
         return []
     return [line for line in journal.read_text(encoding="utf-8").splitlines()
             if line.strip()]
+
+
+def kinds_and_messages(target: Path) -> list[tuple[str, str]]:
+    """Each event this run recorded, as its kind beside what it said.
+
+    The two renderings are one write, so the kind is how a line is told from
+    another line that reads like it — which is what the announcement needs: it
+    carries no prefix the record's own lines carry, and selecting it by wording
+    would be this module spelling a line the coordinator composes.
+    """
+    history = json.loads(
+        (run_dir_of(target) / "execution-history.json").read_text(
+            encoding="utf-8"))
+    return [(entry["event"], entry["message"]) for entry in history]
+
+
+def detail_log_of(root: Path) -> Path:
+    """The run's own log under `root`'s configured logs directory.
+
+    Derived through the same helper the run that creates the file and the
+    inspection that appends to it both read it from, so this module cannot
+    disagree with either about which file it is reading. It takes the tree
+    rather than the checkout, because an inspection appends where the run
+    worked.
+    """
+    root = Path(root)
+    return harness_config.run_log_path(
+        root, harness_config.load_config(root), STORY_ID)
+
+
+def detail_under(root: Path, label: str) -> list[str]:
+    """Every fact the run's own log carries under one label.
+
+    One fact per line, which is what keeps an assertion about the trimmed paths
+    from being satisfied by a path the expansion left out — and what keeps
+    either of them from being satisfied by the agent stream the same log
+    carries.
+    """
+    path = detail_log_of(root)
+    if not path.is_file():
+        return []
+    return [line[len(label):]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.startswith(label)]
 
 
 def in_the_runs_tree(root: Path) -> Path:
@@ -580,7 +649,7 @@ def queue_entries(target: Path) -> list[dict]:
 def completing_run(tmp_path: Path, harness: Path, monkeypatch, *,
                    name: str = "inspected", findings=(), act=None,
                    raises: str = "", ignore_history: bool = False,
-                   extra_changed=(), **config_keys):
+                   extra_changed=(), at_last_stage=None, **config_keys):
     """One completing run of the fixture, with the inspector installed.
 
     Returns `(target, journal, code, inspector, runner)`. The cap is supplied
@@ -604,7 +673,8 @@ def completing_run(tmp_path: Path, harness: Path, monkeypatch, *,
     config = harness_config.load_config(target)
     inspector = install(monkeypatch, Inspector(
         target, config, journal, findings=findings, act=act, raises=raises))
-    runner = Runner(target, journal, extra_changed=extra_changed)
+    runner = Runner(target, journal, extra_changed=extra_changed,
+                    at_last_stage=at_last_stage)
     code = run(target, harness, runner)
     return target, journal, code, inspector, runner
 
@@ -940,6 +1010,8 @@ def test_a_run_with_the_key_unset_inspects_nothing_and_says_nothing(
     assert history_records(target) == []
     assert [line for line in messages(target)
             if line.startswith("post-story inspection")] == [], messages(target)
+    assert [kind for kind, _ in kinds_and_messages(target)
+            if kind == ANNOUNCEMENT] == [], messages(target)
     assert head_subject(target).startswith(f"{STORY_ID}: ")
 
 
@@ -963,14 +1035,23 @@ def test_the_key_adds_the_inspection_line_to_events_log_and_nothing_else(
     assert inspector.invocations
 
     said = messages(configured)
-    inspected = [line for line in said if line.startswith(
-        f"post-story inspection of {STORY_ID}")]
+    kinds = [kind for kind, _message in kinds_and_messages(configured)]
+    assert len(kinds) == len(said), "the two renderings disagree in length"
+    # The inspection's own lines: its announcement, told by its kind, and its
+    # record, told by the prefix every line of it carries. The announcement
+    # carries no such prefix — it is written before there is anything to
+    # report — so a reading by prefix alone would call it something the key
+    # moved rather than something the key added.
+    inspected = [line for kind, line in zip(kinds, said)
+                 if kind == ANNOUNCEMENT
+                 or line.startswith(f"post-story inspection of {STORY_ID}")]
     # The summary line, and beside it however many lines say a scope's dedupe
     # did not answer — this target configures no filed_query_command, so there
     # is one of those. The subject is that every line the key added is one of
     # the inspection's and that nothing else in the log moved, so the summary
     # is what is counted rather than the block.
     assert len([line for line in inspected if "finding(s)" in line]) == 1, said
+    assert kinds.count(ANNOUNCEMENT) == 1, said
     assert [line for line in said if line not in inspected] == messages(unset)
 
 
@@ -1161,9 +1242,12 @@ def test_an_uncapped_expansion_is_the_control_for_both(tmp_path, harness):
     assert trimmed == ()
 
 
-#: The two labels the inspection's line introduces its dropped paths with, and
-#: the cap this run inspects under. A path named under one label may not
-#: satisfy an assertion about the other, which is what `segment` is for.
+#: The two labels the inspection introduces its dropped paths with, and the cap
+#: this run inspects under. A path named under one label may not satisfy an
+#: assertion about the other, which is what `segment` and `detail_under` are
+#: for. The same two labels appear in both places the inspection writes: the
+#: run's own log, which carries one name per line under them, and the summary
+#: line, which carries a count under each.
 TRIMMED_LABEL = "trimmed to the file cap: "
 LEFT_OUT_LABEL = "left out of scope: "
 CAP_THE_RUN_EXCEEDS = 3
@@ -1199,16 +1283,22 @@ def segment(line: str, label: str) -> str:
     return after
 
 
-def test_what_the_cap_excluded_reaches_the_runs_events_log(
+def test_what_the_cap_excluded_reaches_the_runs_own_log(
         tmp_path, harness, monkeypatch):
-    """Every trimmed path named in the record, and the invocation handed
+    """Every trimmed path named in the run's own log, and the invocation handed
     exactly the cap.
 
     Named rather than counted: a count tells a reader the scope was smaller
     than the expansion and leaves them no way to find out which file the
-    inspection did not read. The control for the naming is the other side of
-    the same run — no path the invocation *was* handed appears in the trimmed
-    segment, so the segment is reporting the cap rather than listing the scope.
+    inspection did not read. Where the names live changed with story-140 — the
+    summary line was simultaneously the notice and the whole report, and on one
+    run it named about 130 files — but nothing bounds how many are written to
+    the log, because a bound there would be exactly the silent drop the naming
+    exists against.
+
+    The control for the naming is the other side of the same run: no path the
+    invocation *was* handed appears under the trimmed label, so what is under
+    it is the cap's doing rather than a copy of the scope.
     """
     target, _journal, code, inspector, _runner = completing_run(
         tmp_path, harness, monkeypatch, name="capped", findings=[finding()],
@@ -1218,33 +1308,183 @@ def test_what_the_cap_excluded_reaches_the_runs_events_log(
     listed = rendered_paths(inspector.prompt)
     assert len(listed) == CAP_THE_RUN_EXCEEDS, listed
 
-    trimmed = segment(inspection_line(target), TRIMMED_LABEL)
+    trimmed = detail_under(in_the_runs_tree(target), TRIMMED_LABEL)
     assert DELETED_FILE in trimmed, trimmed
     assert SIBLING_TEST in trimmed, trimmed
     for path in listed:
         assert path not in trimmed, (path, trimmed)
 
 
-def test_the_paths_the_expansion_left_out_are_named_in_the_runs_events_log(
+def test_the_paths_the_expansion_left_out_are_named_in_the_runs_own_log(
         tmp_path, harness, monkeypatch):
     """A run whose writing stage records a path outside both scope keys and one
-    the repository does not track names both, with the reason each was left
-    out.
+    the repository does not track names both in that same log, with the reason
+    each was left out.
 
     The control is the change the same record names that *is* in scope: it is
-    handed to the invocation and is not in the segment, so what the segment
-    reports is the exclusion rather than the changed set.
+    handed to the invocation and is named nowhere under this label, so what is
+    under it is the exclusion rather than the changed set.
     """
     target, _journal, code, inspector, _runner = completing_run(
         tmp_path, harness, monkeypatch, name="left-out", findings=[finding()],
         extra_changed=(OUT_OF_SCOPE_FILE, UNTRACKED_CHANGE))
 
     assert code == 0
-    left_out = segment(inspection_line(target), LEFT_OUT_LABEL)
+    left_out = "\n".join(
+        detail_under(in_the_runs_tree(target), LEFT_OUT_LABEL))
     assert OUT_OF_SCOPE_FILE in left_out, left_out
     assert UNTRACKED_CHANGE in left_out, left_out
     assert CHANGED_SOURCE not in left_out, left_out
     assert CHANGED_SOURCE in rendered_paths(inspector.prompt)
+
+
+def test_the_summary_counts_what_it_no_longer_names_and_names_the_log(
+        tmp_path, harness, monkeypatch):
+    """The line is the size a reader can take in, and it says where the rest is.
+
+    Both counts, the repository-relative path of the log holding the names, and
+    neither list. The control for "neither list" is the log beside it: every
+    name the line no longer carries is in that file, so the absence is the move
+    this story made rather than a run that had nothing to name.
+    """
+    target, _journal, code, _inspector, _runner = completing_run(
+        tmp_path, harness, monkeypatch, name="counted", findings=[finding()],
+        extra_changed=(OUT_OF_SCOPE_FILE, UNTRACKED_CHANGE),
+        **{story_inspection.MAX_FILES_KEY: CAP_THE_RUN_EXCEEDS})
+
+    assert code == 0
+    tree = in_the_runs_tree(target)
+    line = inspection_line(target)
+    trimmed = detail_under(tree, TRIMMED_LABEL)
+    left_out = detail_under(tree, LEFT_OUT_LABEL)
+    assert trimmed and left_out, (trimmed, left_out)
+
+    assert segment(line, TRIMMED_LABEL).split(";")[0] == str(len(trimmed)), line
+    assert segment(line, LEFT_OUT_LABEL).split(";")[0] == str(len(left_out)), line
+
+    assert str(detail_log_of(tree).relative_to(tree)) in line, line
+
+    for named in trimmed + left_out:
+        assert named not in line, (named, line)
+
+
+def occupy_the_run_log(tree: Path) -> None:
+    """The run's own log made unwritable, constructed rather than described.
+
+    A directory stands where the log file goes, so the append the inspection
+    makes raises rather than writing. It is done to the tree the run works in,
+    at the seam between the run's last stage and the inspection, because that
+    is the only moment at which the file is the inspection's to write: the
+    coordinator creates the directory holding it as the run starts, so a tree
+    prepared before that would have the preparation undone.
+
+    What it takes away is the detail and nothing else. The stage logs that
+    share this file are the agent runner's, and this module replaces the agent
+    runner, so no part of the run other than the inspection writes here.
+    """
+    path = detail_log_of(tree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.mkdir()
+
+
+def test_an_inspection_whose_log_cannot_be_written_still_announces_and_reports(
+        tmp_path, harness, monkeypatch):
+    """A log the inspection cannot write costs the detail and never the run.
+
+    Every other call this mechanism makes is guarded on those terms, and the
+    detail append is guarded on them too: an inspection that could not write
+    the names still says it started, still says what it did, and still leaves
+    the run completing with the status it would have had.
+
+    The control is the same fixture with the log writable, run beside it: there
+    the names *are* in the log and the run exits the same way. Without it the
+    absence below would be satisfied by an inspection that had nothing to write
+    and by a check that had stopped looking, neither of which is the guard
+    holding. The counts on the two summary lines are compared for the same
+    reason: they say the occupied run still knew what it could not write down.
+    """
+    capped = {story_inspection.MAX_FILES_KEY: CAP_THE_RUN_EXCEEDS}
+    left_out = (OUT_OF_SCOPE_FILE, UNTRACKED_CHANGE)
+
+    control, _control_journal, control_code, _ci, _cr = completing_run(
+        tmp_path, harness, monkeypatch, name="log-writable",
+        findings=[finding()], extra_changed=left_out, **capped)
+    target, _journal, code, _inspector, _runner = completing_run(
+        tmp_path, harness, monkeypatch, name="log-occupied",
+        findings=[finding()], extra_changed=left_out,
+        at_last_stage=occupy_the_run_log, **capped)
+
+    control_tree = in_the_runs_tree(control)
+    tree = in_the_runs_tree(target)
+
+    # The control: with the log writable, both lists reach it.
+    assert detail_under(control_tree, TRIMMED_LABEL), control_code
+    assert detail_under(control_tree, LEFT_OUT_LABEL), control_code
+
+    # The occupied run: the detail is what was lost, and all of it.
+    assert not detail_log_of(tree).is_file()
+    assert detail_under(tree, TRIMMED_LABEL) == []
+    assert detail_under(tree, LEFT_OUT_LABEL) == []
+
+    # It still said it had started.
+    kinds = [kind for kind, _ in kinds_and_messages(target)]
+    assert ANNOUNCEMENT in kinds, kinds
+
+    # It still said what it did, still named the log, and still counted what
+    # that log does not hold.
+    line = inspection_line(target)
+    assert str(detail_log_of(tree).relative_to(tree)) in line, line
+    for label in (TRIMMED_LABEL, LEFT_OUT_LABEL):
+        assert (segment(line, label).split(";")[0]
+                == segment(inspection_line(control), label).split(";")[0]), line
+
+    # And the run completed with the status it would have had.
+    assert code == control_code == 0
+
+
+def test_an_inspection_with_nothing_in_scope_still_writes_what_it_left_out(
+        tmp_path, harness, no_model):
+    """The path that returns before any invocation still says what it left out.
+
+    Every path the stages recorded is outside both scope keys, so there is
+    nothing to inspect and the run's line is a sentence rather than a report.
+    That is the path on which the exclusions matter most: nothing else in the
+    run says why the inspection did not happen, so a move that dropped them
+    here would take away the only account of it.
+
+    Driven at the inspection rather than through a run, because the run is not
+    the subject: no invocation is made on this path, and what is asserted is
+    where the exclusions are written. The changed-files records are the
+    workflow's own declared artifacts, so this names none of its own.
+
+    The name is in the log and not on the line, and each half is the other's
+    control: the line is short because the names moved, rather than because
+    there were none.
+    """
+    journal = tmp_path / "nothing-journal.txt"
+    target = build_target(tmp_path / "nothing-in-scope", journal,
+                          **{story_inspection.MAX_FILES_KEY: ROOMY_CAP})
+    run_dir = tmp_path / "nothing-run"
+    run_dir.mkdir()
+    for stage in WORKFLOW["stages"]:
+        name = stage.get("changed_files")
+        if name:
+            _write(run_dir / name, {"modified": [OUT_OF_SCOPE_FILE],
+                                    "created": [], "deleted": []})
+
+    story_inspection.inspect_after_story(
+        run_dir, target, harness_config.load_config(target), harness,
+        STORY_ID, WORKFLOW["stages"])
+
+    assert no_model.calls == 0
+    left_out = "\n".join(detail_under(target, LEFT_OUT_LABEL))
+    assert OUT_OF_SCOPE_FILE in left_out, left_out
+
+    said = [line.split("] ", 1)[-1] for line
+            in (run_dir / "events.log").read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+    assert len(said) == 1, said
+    assert OUT_OF_SCOPE_FILE not in said[0], said
 
 
 def rendered_paths(prompt: str) -> list[str]:

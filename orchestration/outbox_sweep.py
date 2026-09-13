@@ -196,12 +196,23 @@ def sweep(target_root: Path, config: dict, harness_root: Path | None = None,
     so the entries are still read and reported and nothing is filed, and the
     problem is carried into the summary's notes rather than raised.
 
-    When `run_dir` names a run directory the sweep reports what it did into
-    that run's events.log, through the coordinator's shared append. Nothing
-    about the result is read by either coordinator call site: no branch, no
-    early return, no status.
+    When `run_dir` names a run directory the sweep says it has started, where
+    the queue holds anything to drain, and reports what it did afterwards —
+    both into that run's events.log through the coordinator's shared append.
+    The sweep given no run directory does neither. Nothing about the count, the
+    announcement or the result is read by either coordinator call site: no
+    branch, no early return, no status.
     """
     try:
+        queue = outbox.queue_dir(target_root)
+        # Counted before the drain, because after it the queue is whatever the
+        # drain left. Announced only where there is something to drain and
+        # somewhere to say it: a run over an empty queue writes no line at all,
+        # and the completion sweep, which is given no run directory, announces
+        # nothing whatever the queue holds — its silence is an existing
+        # decision with reasons of its own and this does not reopen it.
+        if run_dir is not None:
+            _announce(run_dir, queue)
         transport, problem = build_transport(config, target_root)
         limit, limit_problem = sweep_limit(config)
         if problem or limit_problem:
@@ -211,7 +222,7 @@ def sweep(target_root: Path, config: dict, harness_root: Path | None = None,
             transport = None
             limit = None
         summary = drain(
-            outbox.queue_dir(target_root),
+            queue,
             transport,
             harness_root=harness_root,
             limit=limit,
@@ -281,6 +292,35 @@ def worth_saying(summary: outbox.Summary) -> bool:
         summary.landed or summary.pending or summary.failed
         or summary.poisoned or summary.notes
     )
+
+
+def _announce(run_dir: Path, queue: Path) -> None:
+    """Say the sweep has started, where there is anything to drain.
+
+    The sweep sits at the top of a run above the first stage line and runs the
+    configured sync command once per queued entry under a per-entry timeout, so
+    a run with a full queue opened in silence at exactly the moment a developer
+    is watching for it to start. Announced through the coordinator's own
+    announcer, so the convention has one home and this module spells no event
+    kind of its own.
+
+    Both the count and the announcement are guarded, and neither is read by
+    either call site: a queue that cannot be listed is still swept and still
+    reported afterwards, and a run over an empty queue writes nothing at all,
+    on the rule `worth_saying` beside it already follows.
+    """
+    try:
+        queued = len(outbox.entry_files(queue))
+    except Exception:  # noqa: BLE001 - counting may not become the failure
+        return
+    if not queued:
+        return
+    try:
+        from story_coordinator import outbox_sweep_started
+
+        outbox_sweep_started(Path(run_dir), queued)
+    except Exception:  # noqa: BLE001 - announcing may not become the failure
+        pass
 
 
 def _report(run_dir: Path, summary: outbox.Summary) -> None:

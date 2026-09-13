@@ -2812,6 +2812,43 @@ def run_clean_clone(
     )
 
 
+#: What the post-story inspection's wait is worth. An agent invocation, so a
+#: stage's rather than a suite run's.
+INSPECTION_COST = "this takes about as long as a stage"
+
+#: What the pre-flight outbox sweep's wait is worth. One invocation of the
+#: configured sync command per queued entry, each under its own timeout, so
+#: what the wait is worth is stated in the terms the bound is stated in.
+OUTBOX_SWEEP_COST = (
+    "this runs the configured sync command once per entry, under its timeout"
+)
+
+
+def _announcement(message: str, cost: str) -> str:
+    """One line saying a long step has started and what the wait is worth.
+
+    This is the single home of the announcement convention. Every long step
+    inside a run says so *before* it starts, and says what the wait is worth
+    beside it, so a reader watching a console does not read a wait as a fault —
+    which is the one reading a silence always admits. The two halves are
+    rendered here rather than at each announcing site, so a step added later
+    carries the convention by calling this rather than by imitating a
+    neighbour's f-string.
+
+    An empty cost clause raises rather than rendering the bare message, on the
+    fail-loudly standard: a line that says a step started and not what the wait
+    is worth is the line this convention exists against, and rendering it
+    silently would make the omission indistinguishable from a step whose wait
+    genuinely costs nothing.
+    """
+    if not cost.strip():
+        raise ValueError(
+            "an announcement with no cost clause says a step started and not "
+            f"what the wait is worth: {message!r}"
+        )
+    return f"{message}; {cost}"
+
+
 def _suite_rerun_started(
     run_dir: Path,
     stage_name: str,
@@ -2841,13 +2878,69 @@ def _suite_rerun_started(
     suite run, because a check that re-runs the whole suite is what this was
     written for; a check whose wait is a different size says so rather than
     claiming a suite run's.
+
+    The line is rendered through `_announcement`, which is where the convention
+    lives; the kind stays a literal in this function's own body, because a
+    shared writer taking the kind as a parameter would forward a variable into
+    `append_event` — which the standing scan over this module's source refuses
+    outright — and would collapse the one-kind-one-emitter rule beside it. The
+    composer is therefore the shared part and the event write is not.
     """
     append_event(
         run_dir,
-        f"re-running the suite {phrase}; {cost}",
+        _announcement(f"re-running the suite {phrase}", cost),
         kind="suite-rerun-started",
         stage=stage_name,
         artifacts=[artifact],
+    )
+
+
+def inspection_started(run_dir: Path, story_id: str, scope_files: int) -> None:
+    """Announce the post-story inspection, before the invocation is made.
+
+    A run says "story completed" and the inspection then takes about as long as
+    a stage while saying nothing, so the only reasonable reading of that
+    terminal is that the run has hung after finishing. It is the one agent
+    invocation in a run that announced nothing first, and it is also the step
+    that most needs the cost clause, because it begins after the run has
+    declared itself complete — the one moment a developer has been given
+    permission to stop watching.
+
+    Public because `orchestration/story_inspection.py` calls it. It names the
+    story and the size of the scope, so a reader knows what is being inspected
+    and roughly how much of it, and renders through the shared composer with
+    the kind spelled as a literal here, on the terms `_suite_rerun_started`
+    states.
+    """
+    append_event(
+        run_dir,
+        _announcement(
+            f"inspecting what {story_id} changed, over {scope_files} file(s)",
+            INSPECTION_COST,
+        ),
+        kind="inspection-started",
+    )
+
+
+def outbox_sweep_started(run_dir: Path, queued: int) -> None:
+    """Announce the pre-flight outbox sweep, before the queue is drained.
+
+    The sweep sits at the top of a run, above the first stage line, and runs
+    the configured sync command once per queued entry under a per-entry
+    timeout — so a run over a full queue opened with the same silence the
+    inspection opened with, in the place a developer is most likely to be
+    watching for the run to start.
+
+    Public because `orchestration/outbox_sweep.py` calls it. Nothing about the
+    count it carries is read by either call site: it says how much there is to
+    drain and decides nothing.
+    """
+    append_event(
+        run_dir,
+        _announcement(
+            f"draining the outbox: {queued} entry(s) queued", OUTBOX_SWEEP_COST
+        ),
+        kind="outbox-sweep-started",
     )
 
 
@@ -7523,7 +7616,10 @@ def run_story(
 
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "verification").mkdir(exist_ok=True)
-    log_path = target_root / config.get("logs_dir", ".harness/logs") / f"{story_id}.log"
+    # Derived rather than spelled here, so this site and the post-story
+    # inspection that appends its detail to the same file cannot disagree about
+    # which file that is.
+    log_path = harness_config.run_log_path(target_root, config, story_id)
     # Created rather than assumed, for the reason the run directory above is.
     # Until story-117 the run worked in the tree it was invoked from, where the
     # log directory was whatever the developer's checkout already had; a run now

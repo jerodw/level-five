@@ -28,6 +28,16 @@ expansion is computed here, before any agent is invoked, so it is testable and
 its cost is known in advance — which is also why the cap is applied to a list
 this module built rather than to whatever an invocation happened to read.
 
+**It says it has started, and then says what it did in two sizes.** The
+announcement is written before the invocation is made, in the idiom the suite
+reruns use, because the inspection begins after the run has declared itself
+complete and a silence there reads as a hang. What it did is then one line a
+person can take in — the counts, the drop reasons and the dedupe verdict — with
+the paths it did not read appended to the run's own log under the configured
+logs directory and named from the summary. Nothing bounds how many names go
+into that log, because a bound there would be the silent drop the naming exists
+against; what bounds them is the file cap the summary reports.
+
 **What it cost is recorded twice, and neither recording enforces anything.**
 The figure the invocation reported goes into the cross-run inspection log
 beside the mode, the scope size and the three counts, so one read of one file
@@ -342,6 +352,82 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
         pass
 
 
+def _announce(run_dir: Path, story_id: str, scope_files: int) -> None:
+    """Say the inspection has started and what the wait is worth.
+
+    A run says "story completed" and then goes quiet for about as long as a
+    stage, which is the one moment a developer has been told they may stop
+    watching — so the silence reads as a hang rather than as work. This is the
+    idiom the suite reruns already use, reached through the coordinator's own
+    announcer so the announcement convention has one home and this module
+    spells no event kind of its own.
+
+    Imported inside the body and guarded for the reasons `_say` and
+    `record_cost` are: the coordinator imports this module, and an announcement
+    that cannot be written costs the announcement and never the run.
+    """
+    try:
+        from story_coordinator import inspection_started
+
+        inspection_started(Path(run_dir), story_id, scope_files)
+    except Exception:  # noqa: BLE001 - announcing may not become the failure
+        pass
+
+
+def detail_log(target_root: Path, config: dict, story_id: str) -> Path:
+    """The run's own log, where this inspection's detail is appended.
+
+    The same derivation the run that created the file made, reached through
+    `harness_config` rather than spelled here: two spellings of one path are
+    two answers about which file that is, one of which would append somewhere
+    nobody reads.
+    """
+    return harness_config.run_log_path(Path(target_root), config, story_id)
+
+
+def _relative(path: Path, target_root: Path) -> str:
+    """The log's path as a reader of the repository would name it."""
+    try:
+        return str(Path(path).relative_to(Path(target_root)))
+    except ValueError:
+        return str(path)
+
+
+def write_detail(target_root: Path, config: dict, story_id: str,
+                 trimmed, excluded) -> None:
+    """Append the paths this inspection did not read to the run's own log.
+
+    The naming exists so that a trimmed path stays recoverable rather than
+    being silently dropped, and nothing bounds how many are written here,
+    because a bound would be exactly that silent drop. What this changes is
+    where the names live: the summary line says how many and which log holds
+    them, and the log holds them in full.
+
+    Written at the moment each fact is known rather than at the end of the run,
+    which is the shape a watcher reads — a log being appended to while work
+    happens — in the separator-and-lines form this file already carries from
+    the agent stream, with the directory created the way the agent runner's own
+    append creates it.
+
+    Guarded whole: a log that cannot be written costs the detail and never the
+    run, which is the rule every other call this module makes is held to.
+    """
+    if not trimmed and not excluded:
+        return
+    try:
+        path = detail_log(target_root, config, story_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"\n===== post-story inspection: {story_id} =====\n"]
+        for one in trimmed:
+            lines.append(f"trimmed to the file cap: {one}\n")
+        for one in excluded:
+            lines.append(f"left out of scope: {one}\n")
+        with open(path, "a", encoding="utf-8") as log:
+            log.write("".join(lines))
+    except Exception:  # noqa: BLE001 - the detail may not become the failure
+        pass
+
+
 def _note(run_dir: Path, message: str) -> None:
     """Say one thing in the run's events.log, and only there.
 
@@ -471,22 +557,23 @@ def _counts(report) -> tuple[int, int, int]:
     return findings, len(report.filed), dropped
 
 
-def _summary(story_id: str, report, excluded, trimmed) -> str:
+def _summary(story_id: str, report, excluded, trimmed, log: str) -> str:
     """One line saying what the inspection did, for the run's own events.log.
 
     Every way a finding was dropped is named with how many went that way, on
     the no-silent-bound rule the rest of this mechanism already follows: a
     count with no cause reads as a change with nothing wrong in it.
 
-    A *path* left out is named rather than counted, and that is the same rule
-    one step further: a count of trimmed files tells a reader that the scope
-    was smaller than the expansion and leaves them no way to find out which
-    file the inspection did not read. The run directory is gitignored and the
-    cross-run record is deliberately a summary, so this line is the only place
-    those names survive. There is no second bound on how many are named,
-    because a bound here would be exactly the silent drop the naming exists
-    against — what bounds the list is the file cap the reader is being told
-    about.
+    A *path* left out is still named rather than counted, and nothing bounds
+    how many are named, because a bound would be exactly the silent drop the
+    naming exists against. What this line no longer carries is the names
+    themselves: they live in the run's own log under the configured logs
+    directory, and this says how many there are and which log holds them. The
+    line was simultaneously the completion notice and the whole report — on one
+    run it named about 130 files — and it is the wrong size for either job,
+    while a log being appended to as each fact becomes known is the shape a
+    watcher reads. The events log stays what it is: a short account of what the
+    run decided.
     """
     findings, filed, dropped = _counts(report)
     line = (
@@ -510,10 +597,11 @@ def _summary(story_id: str, report, excluded, trimmed) -> str:
             line += f"; {reason}: {count}"
     if not report.dedupe_ran:
         line += "; dedupe did not run"
-    if trimmed:
-        line += "; trimmed to the file cap: " + ", ".join(trimmed)
-    if excluded:
-        line += "; left out of scope: " + "; ".join(excluded)
+    if trimmed or excluded:
+        line += (
+            f"; trimmed to the file cap: {len(trimmed)}; left out of scope: "
+            f"{len(excluded)}; both named in {log}"
+        )
     return line
 
 
@@ -600,6 +688,10 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     excluded = found.excluded
 
     if not paths:
+        # The exclusions this path names are written to the log before its
+        # record, so no exclusion survives only in a line this path no longer
+        # carries. There is nothing trimmed here: the cap was never reached.
+        write_detail(target_root, config, story_id, (), excluded)
         _say(
             run_dir,
             f"post-story inspection of {story_id}: nothing the story changed "
@@ -632,6 +724,14 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         import agent_runner
 
         runner = agent_runner.run_agent
+    # The detail goes to the log at the point both facts are known — after the
+    # cap is applied and before the invocation — rather than at the end, so an
+    # inspection's progress is already in the shape a watcher reads.
+    write_detail(target_root, config, story_id, trimmed, excluded)
+    # The announcement is made here, after the scope is computed and the bound
+    # resolved and immediately before the invocation, so the gap between it and
+    # the summary is the invocation rather than the whole mechanism.
+    _announce(run_dir, story_id, len(paths))
     result = inspection.inspect_scope(
         scope, target_root, config, harness_root, bound, (), runner,
         inspection.local_index(target_root, harness_root),
@@ -716,7 +816,11 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
             line += f"; the Inspector says it concerns: {suggestion}"
         _note(run_dir, line)
     _say(
-        run_dir, _summary(story_id, report, excluded, trimmed),
+        run_dir,
+        _summary(
+            story_id, report, excluded, trimmed,
+            _relative(detail_log(target_root, config, story_id), target_root),
+        ),
         findings=findings, filed=filed_count, dropped=dropped_count,
         # A statement about the filed query alone, whatever the local index
         # said: that tier holds only what this machine filed, so reading it does
