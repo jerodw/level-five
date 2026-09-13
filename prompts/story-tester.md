@@ -151,7 +151,9 @@ A red suite does not bring this stage back. The coordinator records the
 outstanding failure, the run advances to the stages after this one, and the
 verifier judges the tree and decides where the work goes — so a suite you
 leave red is judged by another stage rather than handed back to you, and this
-turn is not repeated on this attempt to repair it.
+turn is not repeated on this attempt to repair it. That costs the run a failed
+verdict and a recommended retry, with the attempt archived and recorded in the
+run's retry history.
 
 [Runtime State Layer]
 The coordinator injects the current workflow state below. Treat the

@@ -9,7 +9,7 @@ after that behaviour changed — a prompt is an instruction to an agent, so a
 prompt that still describes the removed self-route buys a retry, an archived
 attempt and a retry-history entry where it promised none of those would move.
 
-Three rules, each derived from the shipped definitions under `workflows/`:
+The rules below, each derived from the shipped definitions under `workflows/`:
 
   * no prompt any shipped stage names says a red suite returns that stage to
     itself;
@@ -18,6 +18,10 @@ Three rules, each derived from the shipped definitions under `workflows/`:
     suite record means: a failing verdict rather than a finding, a failed
     verdict, a recommended retry, and a target read off the injected routing
     table;
+  * every prompt named by a stage that *declares* the suite run states what
+    follows a red one: the failure recorded, the run advanced, the turn not
+    handed back on this attempt, and the cost — a failed verdict, a recommended
+    retry, an archived attempt and a retry-history entry;
   * the self-route injection slots agree with one another, so the prompt that
     diverged is reported rather than read as one workflow's own wording.
 
@@ -48,6 +52,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -57,10 +62,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROMPTS = REPO_ROOT / "prompts"
 WORKFLOWS = REPO_ROOT / "workflows"
 
-#: The kinds of problem the three rules report. Each is the subject of one
-#: shipped assertion and of one constructed control.
+#: The kinds of problem the rules report. Each is the subject of one shipped
+#: assertion and of one constructed control.
 SELF_ROUTED = "self-routed"
 UNSTATED = "unstated"
+SILENT = "silent"
 DIVERGED = "diverged"
 
 #: The declaration keys the roles are read off. These are workflow *vocabulary*
@@ -98,16 +104,27 @@ def declares(stage: dict, key: str) -> bool:
     return False
 
 
-def roles(definitions: dict[str, dict]) -> dict[str, bool]:
-    """Prompt filename -> whether it is held to the judging rule.
+class Role(NamedTuple):
+    """The two positions a prompt can occupy around a declared suite run.
 
-    True for a prompt named by a stage that declares a routing table in a
-    definition that declares a suite run somewhere among its stages: that is
-    the stage a carried-forward failure arrives at, and the only stage whose
-    verdict decides what happens to it. A prompt shared by more than one
-    definition is held to the rule if any of them puts it in that position.
+    `judges` is where a carried-forward failure arrives: a stage declaring a
+    routing table, in a definition that declares a suite run somewhere among its
+    stages. `authors` is where it starts: a stage that declares the suite run
+    itself, and so the stage whose tree the run is made in. Both are positions
+    a definition puts a prompt in, which is why neither is read off a name.
     """
-    held: dict[str, bool] = {}
+
+    judges: bool
+    authors: bool
+
+
+def roles(definitions: dict[str, dict]) -> dict[str, Role]:
+    """Prompt filename -> the positions the shipped definitions give it.
+
+    A prompt shared by more than one definition holds a position if any of them
+    puts it in that position.
+    """
+    held: dict[str, Role] = {}
     for definition in definitions.values():
         stages = definition.get("stages", [])
         runs_a_suite = any(declares(stage, SUITE_RUN) for stage in stages)
@@ -115,11 +132,14 @@ def roles(definitions: dict[str, dict]) -> dict[str, bool]:
             if "prompt" not in stage:
                 continue
             judges = runs_a_suite and declares(stage, ROUTING)
-            held[stage["prompt"]] = held.get(stage["prompt"], False) or judges
+            authors = declares(stage, SUITE_RUN)
+            was = held.get(stage["prompt"], Role(False, False))
+            held[stage["prompt"]] = Role(was.judges or judges,
+                                         was.authors or authors)
     return held
 
 
-def read_prompts(prompts_dir: Path, held: dict[str, bool]) -> dict[str, str]:
+def read_prompts(prompts_dir: Path, held: dict[str, Role]) -> dict[str, str]:
     return {prompt: (prompts_dir / prompt).read_text(encoding="utf-8")
             for prompt in sorted(held)}
 
@@ -197,10 +217,10 @@ FAILING_VERDICT = (
 
 
 def a_judging_prompt_not_stating_the_failing_verdict(
-        prompts: dict[str, str], held: dict[str, bool]) -> list[str]:
+        prompts: dict[str, str], held: dict[str, Role]) -> list[str]:
     problems = []
-    for prompt, judges in sorted(held.items()):
-        if not judges:
+    for prompt, role in sorted(held.items()):
+        if not role.judges:
             continue
         text = re.sub(r"\s+", " ", prompts[prompt])
         missing = [phrase for phrase in FAILING_VERDICT if phrase not in text]
@@ -213,7 +233,87 @@ def a_judging_prompt_not_stating_the_failing_verdict(
 
 
 # --------------------------------------------------------------------------
-# Rule three: the self-route injection slots agree
+# Rule three: an authoring prompt says what follows a suite it leaves red
+# --------------------------------------------------------------------------
+
+#: What a prompt in the authoring position has to say about a suite it leaves
+#: red, as claims: a label, and the phrasings any one of which satisfies it. The
+#: label is what a failure reports, so a prompt held to this may say the thing
+#: in its own vocabulary — the two prompts here describe the same carry-forward
+#: from opposite ends, one as a turn that is not repeated and one as a stage
+#: that is not brought back, and neither wording is the rule.
+#:
+#: The claims divide into where the failure goes — recorded, advanced, not
+#: handed back — and what it costs, which is everything after those. A prompt
+#: stating only where it goes leaves its agent believing a red suite is free,
+#: which is the exposure this rule exists for.
+CARRY_FORWARD = (
+    ("the outstanding failure is recorded", (
+        "records the outstanding failure",
+        "records the failure",
+        "the failure is recorded",
+        "the outstanding failure is recorded",
+    )),
+    ("the run advances past this stage", (
+        "the run advances",
+        "the run carries on",
+        "the run continues",
+        "the run moves on",
+    )),
+    ("the turn is not handed back to repair it", (
+        "not handed back",
+        "is not repeated on this attempt",
+        "does not bring this stage back",
+        "does not hand the turn back",
+        "is not brought back",
+    )),
+    ("the verdict is a failed one", (
+        "a failed verdict",
+        "the verdict is failed",
+        "a failing verdict",
+    )),
+    ("a retry is recommended", (
+        "a recommended retry",
+        "a retry is recommended",
+        "recommends a retry",
+    )),
+    ("the attempt is archived", (
+        "an archived attempt",
+        "the attempt archived",
+        "the attempt is archived",
+    )),
+    ("the retry is recorded in the run's history", (
+        "retry history",
+        "retry-history",
+    )),
+)
+
+
+def an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts: dict[str, str], held: dict[str, Role]) -> list[str]:
+    """Every prompt whose stage declares the suite run and is silent about red.
+
+    Keyed on the declaration rather than on the prompt, so a third workflow
+    declaring a suite run on a stage of its own is held to this on arrival, and
+    a prompt no definition puts in that position is left alone.
+    """
+    problems = []
+    for prompt, role in sorted(held.items()):
+        if not role.authors:
+            continue
+        text = re.sub(r"\s+", " ", prompts[prompt]).lower()
+        missing = [claim for claim, phrasings in CARRY_FORWARD
+                   if not any(phrasing in text for phrasing in phrasings)]
+        if missing:
+            problems.append(
+                f"{SILENT}: {prompt} declares the suite run the coordinator "
+                f"makes after its turn and does not say what follows a red one "
+                f"— unmet: {'; '.join(missing)}")
+    return problems
+
+
+# --------------------------------------------------------------------------
+# Rule four: the self-route injection slots agree
 # --------------------------------------------------------------------------
 
 
@@ -273,7 +373,7 @@ def definitions() -> dict[str, dict]:
 
 
 @pytest.fixture(scope="module")
-def held(definitions) -> dict[str, bool]:
+def held(definitions) -> dict[str, Role]:
     return roles(definitions)
 
 
@@ -283,17 +383,22 @@ def shipped(held) -> dict[str, str]:
 
 
 def test_the_shipped_arrangement_is_worth_checking(definitions, held, shipped):
-    """The non-vacuity guard for the three shipped assertions below.
+    """The non-vacuity guard for the shipped assertions below.
 
     Each rule discriminates only where there is something to discriminate: a
-    prompt held to the judging rule, a prompt not held to it, and more than one
+    prompt held to the judging rule and a prompt not held to it, a prompt held
+    to the carry-forward rule and a prompt not held to it, and more than one
     slot to compare. If this repository ever held none of those, the shipped
     assertions would pass by having nothing to look at.
     """
     assert len(definitions) > 1, \
         "one definition cannot show two workflows being told the same thing"
-    assert [prompt for prompt, judges in held.items() if judges]
-    assert [prompt for prompt, judges in held.items() if not judges]
+    assert [prompt for prompt, role in held.items() if role.judges]
+    assert [prompt for prompt, role in held.items() if not role.judges]
+    assert [prompt for prompt, role in held.items() if role.authors], \
+        "no shipped stage declares the suite run, so the rule holds nothing"
+    assert [prompt for prompt, role in held.items() if not role.authors], \
+        "every shipped prompt authors, so the rule cannot be shown to exclude"
     assert all(text.strip() for text in shipped.values())
     assert len([text for text in shipped.values()
                 if slot_wording(text) is not None]) > 1
@@ -313,6 +418,13 @@ def test_every_shipped_judging_prompt_says_what_a_non_zero_suite_exit_means(
     shipped, held,
 ):
     assert a_judging_prompt_not_stating_the_failing_verdict(shipped, held) == []
+
+
+def test_every_shipped_authoring_prompt_says_what_follows_a_red_suite(
+    shipped, held,
+):
+    assert an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        shipped, held) == []
 
 
 def test_the_shipped_self_route_slots_agree_with_one_another(shipped):
@@ -365,6 +477,21 @@ BUILT_VERDICT = (
     "retry target is\nthe category the injected routing table gives to the "
     "defect you judge\ncaused it.\n")
 
+#: The carry-forward paragraph a prompt in the authoring position must carry:
+#: where a red suite goes, and what it costs. Written in the fixture's own words
+#: for the same reason as the two above.
+BUILT_CARRY_FORWARD = (
+    "The coordinator records the outstanding failure and the run advances to "
+    "the\nstages after this one; the turn is not repeated on this attempt to "
+    "repair it.\nWhat follows is a failed verdict and a recommended retry, "
+    "costing the run an\narchived attempt and an entry in its retry history.\n")
+
+#: The same paragraph with its cost removed: where the failure goes, and no more.
+BUILT_WITHOUT_THE_COST = (
+    "The coordinator records the outstanding failure and the run advances to "
+    "the\nstages after this one; the turn is not repeated on this attempt to "
+    "repair it.\n")
+
 
 def built_prompts(tmp_path: Path, texts: dict[str, str]) -> Path:
     prompts = tmp_path / "prompts"
@@ -384,20 +511,23 @@ def arrangement(tmp_path: Path, **overrides: str):
     """
     held = roles(built_definitions())
     texts = {}
-    for prompt, judges in held.items():
-        body = f"A template.\n\n{BUILT_VERDICT if judges else ''}\n{BUILT_SLOT}"
+    for prompt, role in held.items():
+        body = (f"A template.\n\n{BUILT_VERDICT if role.judges else ''}\n"
+                f"{BUILT_CARRY_FORWARD if role.authors else ''}\n{BUILT_SLOT}")
         texts[prompt] = overrides.get(prompt.removesuffix(".md").replace("-", "_"),
                                       body)
     return read_prompts(built_prompts(tmp_path, texts), held), held
 
 
 def test_an_arrangement_that_says_the_right_things_reports_nothing(tmp_path):
-    """The controls' own control: the constructed shape passes all three rules,
-    so each violation below differs from it in one thing."""
+    """The controls' own control: the constructed shape passes every rule, so
+    each violation below differs from it in one thing."""
     prompts, held = arrangement(tmp_path)
 
     assert a_red_suite_returning_a_stage_to_itself(prompts) == []
     assert a_judging_prompt_not_stating_the_failing_verdict(prompts, held) == []
+    assert an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held) == []
     assert slots_that_disagree(prompts) == []
 
 
@@ -521,15 +651,84 @@ def test_a_workflow_declaring_no_suite_run_puts_its_judge_outside_the_rule():
     definitions = built_definitions()
     stage = definitions["alpha-workflow"]["stages"][0]
 
-    assert roles(definitions)["alpha-judge.md"] is True
+    assert roles(definitions)["alpha-judge.md"].judges is True
     without = json.loads(json.dumps(definitions))
     without["alpha-workflow"]["stages"][0].pop(SUITE_RUN)
     assert roles({"alpha-workflow": without["alpha-workflow"]})[
-        "alpha-judge.md"] is False
+        "alpha-judge.md"].judges is False
     assert SUITE_RUN in stage  # the arrangement above really declared one
 
 
 # -- rule three -------------------------------------------------------------
+
+
+def test_an_authoring_prompt_silent_about_a_red_suite_is_reported(tmp_path):
+    """The exposure this story closed: a stage that declares the suite run the
+    coordinator makes after its turn, whose prompt says nothing about a red one,
+    so its agent has no reason to believe a failure it leaves costs anything."""
+    prompts, held = arrangement(
+        tmp_path, alpha_writer=f"A template.\n\n{BUILT_SLOT}")
+    problems = an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held)
+
+    assert kinds(problems) == [SILENT]
+    assert "alpha-writer.md" in problems[0]
+    for claim, _ in CARRY_FORWARD:
+        assert claim in problems[0], claim
+
+
+def test_an_authoring_prompt_stating_where_but_not_what_it_costs_is_reported(
+    tmp_path,
+):
+    """Where the failure goes is not the whole rule. A prompt saying the run
+    advances and the turn is not handed back, and nothing about the verdict, the
+    retry or the archived attempt, is reported — and the report names the claims
+    it does not meet rather than a phrase it does not contain, so the prompt is
+    free to meet them in its own words."""
+    prompts, held = arrangement(
+        tmp_path,
+        alpha_writer=f"A template.\n\n{BUILT_WITHOUT_THE_COST}\n{BUILT_SLOT}")
+    problems = an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held)
+
+    assert kinds(problems) == [SILENT]
+    assert "alpha-writer.md" in problems[0]
+    assert "the verdict is a failed one" in problems[0]
+    assert "a retry is recommended" in problems[0]
+    assert "the attempt is archived" in problems[0]
+    # And the claims it does meet are not reported against it.
+    assert "the run advances past this stage" not in problems[0]
+    assert "the outstanding failure is recorded" not in problems[0]
+
+
+def test_a_prompt_that_declares_no_suite_run_is_outside_the_rule(tmp_path):
+    """The rule keys on the position the definition gives the stage, so the same
+    silence reported in a prompt whose stage declares the suite run is not
+    reported in one whose stage does not. Without this the rule would be "every
+    prompt carries the paragraph", which is not what any workflow needs."""
+    prompts, held = arrangement(
+        tmp_path, alpha_judge=f"A template.\n\n{BUILT_VERDICT}\n{BUILT_SLOT}")
+
+    assert held["alpha-judge.md"].authors is False
+    assert an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held) == []
+
+
+def test_a_stage_that_stops_declaring_the_suite_run_stops_being_held():
+    """Derived all the way down, and the counterpart of the judging rule's own
+    derivation test: the authoring position is the suite-run declaration and
+    nothing else, so removing that declaration takes the prompt out of the rule
+    and a workflow arriving with one puts its prompt in with no edit here."""
+    definitions = built_definitions()
+
+    assert roles(definitions)["alpha-writer.md"].authors is True
+    without = json.loads(json.dumps(definitions))
+    without["alpha-workflow"]["stages"][0].pop(SUITE_RUN)
+    assert roles({"alpha-workflow": without["alpha-workflow"]})[
+        "alpha-writer.md"].authors is False
+
+
+# -- rule four --------------------------------------------------------------
 
 
 def test_a_slot_worded_unlike_every_other_is_reported(tmp_path):
@@ -563,10 +762,10 @@ def test_a_prompt_carrying_no_slot_is_not_reported_as_disagreeing(tmp_path):
 def test_the_rules_name_no_prompt_no_stage_and_no_workflow(definitions, held):
     """Grep the deciding code for the names it is about.
 
-    `declares`, `roles`, `sentences`, `slot_wording` and the three rules are
-    what a third workflow's arrival would otherwise force an edit to, so none of
-    them may contain a shipped prompt filename, a shipped stage name or a
-    shipped workflow name. The assertions and controls above are free to name
+    `declares`, `roles`, `sentences`, `slot_wording` and the rules themselves
+    are what a third workflow's arrival would otherwise force an edit to, so
+    none of them may contain a shipped prompt filename, a shipped stage name or
+    a shipped workflow name. The assertions and controls above are free to name
     what they are about; these are not.
 
     Docstrings are stripped first: an explanation naming an example is prose
@@ -580,6 +779,7 @@ def test_the_rules_name_no_prompt_no_stage_and_no_workflow(definitions, held):
     for function in (declares, roles, sentences, slot_wording,
                      a_red_suite_returning_a_stage_to_itself,
                      a_judging_prompt_not_stating_the_failing_verdict,
+                     an_authoring_prompt_not_saying_what_follows_a_red_suite,
                      slots_that_disagree):
         tree = ast.parse(inspect.getsource(function))
         for node in ast.walk(tree):

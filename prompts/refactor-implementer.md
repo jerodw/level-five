@@ -86,6 +86,15 @@ and a stage that starts a ten-minute command late in its turn can end the turn
 still waiting for it, having produced nothing. Run what tells you your change
 is sound and leave the rest to the checks that own it.
 
+A suite you leave red is not handed back to you. The coordinator records the
+outstanding failure, the run advances to the stages after this one on a broken
+tree, and this turn is not repeated on this attempt to repair it. The verifier
+judges the tree it finds, and a suite still red there is a failed verdict with a
+recommended retry, routed by the retry routing this workflow declares — which
+costs the run an archived attempt and an entry in its retry history. So the
+targeted run you make before your turn ends is the cheapest place a failure can
+be found.
+
 If retry state is active:
 - remain within the authorized retry scope,
 - preserve accepted artifacts, and
