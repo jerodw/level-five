@@ -1,0 +1,133 @@
+story:
+  id: story-141
+  title: Every prompt that describes what follows a red suite describes the carry-forward
+  description: |
+    Planned from the brief filed under 241, which covers what was filed as #241
+    and #242; #242 is closed as superseded by it.
+
+    story-137 changed what follows a red declared suite run for every workflow
+    that declares one: the coordinator records the outstanding failure, appends
+    the carry-forward note, and advances, so no self-route is taken and no
+    self-route record is written. It changed one prompt to match —
+    prompts/story-verifier.md, which gained the paragraph saying a non-zero exit
+    in the injected suite run record is a failing verdict rather than a finding.
+    The other prompts in the blast radius were not touched.
+
+    Two of them still state the removed behaviour. prompts/story-tester.md tells
+    the tester that a red suite brings its stage back in place on the same
+    attempt, with the coordinator's record injected below; none of that happens
+    any more, and the promised record never arrives. Because these prompts are
+    instructions to an agent rather than commentary, the cost is wrong work: a
+    tester that believes a red suite buys it another turn has been told it may
+    end this one with the suite red. What follows instead is that the failure
+    carries to the verifier, the verdict fails, and a retry is spent routing to
+    the implementer — a retry, an archived attempt and a retry-history entry
+    where the prompt promised none of those would move. prompts/refactor-
+    implementer.md carries the same removed fact in its self-route injection
+    slot, which still says the slot is present "after the suite the coordinator
+    ran in your tree came back red"; its five siblings carry the shorter wording
+    that is still true, so this is the one copy that diverged, and it is the
+    stage that declares the suite run under refactor-workflow.
+
+    One of them was never given the paragraph it needs. The coordinator's
+    suite-run block names no stage and no workflow — it reads the declaration
+    off whatever stage carries it — and refactor-workflow declares suite_run on
+    its implementer, so the refactor workflow is in the blast radius exactly as
+    the story workflow is. prompts/refactor-verifier.md has the identical
+    exposure and no paragraph: its whole-suite passage tells the verifier only
+    to take the verdict from the injected record's exit code, and a verifier
+    meeting its first non-zero exit is entitled by the rest of the prompt to
+    record the failures as findings on a passing verdict — after which the run
+    stops at the end-of-run refusal, which is the outcome story-137 exists to
+    remove. A refactor run whose implementer leaves the suite red therefore pays
+    a documenter turn and a verifier turn and escalates anyway, getting the
+    whole cost of story-137 and none of its benefit. The route it needs already
+    exists: that verifier declares retry_routing categories implementation and
+    documentation.
+
+    This story corrects all three prompts and writes the validation that holds
+    them, which does not exist today. The validation derives its subject from
+    the shipped workflow definitions rather than naming prompt filenames — the
+    stage that declares a suite run, the stage that declares retry_routing, and
+    every prompt carrying the self-route injection slot — following the
+    convention tests/test_prompt_workflow_ownership.py set. The defect being
+    fixed is one workflow being told something its sibling was not, so a check
+    that has to be edited per workflow would reproduce the failure mode it
+    exists to prevent.
+  workflow: story-workflow
+
+tasks:
+  - Replace the paragraph at prompts/story-tester.md:150-153 with what now follows a red declared suite run - the coordinator records the outstanding failure, the run advances, and the verifier judges the tree - so the tester is told that a suite it leaves red is judged by another stage rather than handed back to it on the same attempt.
+  - Remove the red-suite clause and the word "failing" from the self-route injection slot at prompts/refactor-implementer.md:121-125, so it reads as the five sibling prompts that carry the wording that is still true.
+  - Add to prompts/refactor-verifier.md the paragraph prompts/story-verifier.md:191-198 already carries - a non-zero exit code in the injected suite run record is a failing verdict and not a finding, the verdict is failed, a retry is recommended, and the retry target is read off the injected routing table - written in that prompt's own vocabulary, where the suite run is described as made in the tree the change left, and naming no category, as its sibling names none.
+  - Write a standing test module under tests/ that derives its subject from the shipped workflow definitions and holds all three corrections - that no shipped prompt states the removed self-route, that every prompt named by a verifying stage states what a non-zero suite exit means, and that the self-route injection slots agree with one another.
+
+acceptance_criteria:
+  - prompts/story-tester.md no longer states that a red suite brings that stage back in place on the same attempt, and states instead that the coordinator records the failure, the run advances, and the verifier judges it.
+  - prompts/story-tester.md no longer promises the tester an injected self-route record produced by a red suite, and nothing in it directs the tester to repair a suite failure on the same attempt.
+  - The self-route injection slot in prompts/refactor-implementer.md describes the slot as present only when the stage is running again in place after failing mechanically, with no red-suite clause, and says what was missing or stale rather than missing, stale or failing.
+  - prompts/refactor-verifier.md states that a non-zero exit code in the injected suite run record is a failing verdict and not a finding, that the verdict is failed, that a retry is recommended, and that the retry target is the category the injected routing table gives to the defect the verifier judges caused it.
+  - prompts/refactor-verifier.md names no specific retry category in that paragraph, as prompts/story-verifier.md names none.
+  - A test module under tests/ reports when any prompt named by a shipped workflow stage states that a red declared suite run returns that stage to itself, and passes over the prompts as this story leaves them.
+  - That module derives which prompts it reads and which stages it holds to which rule from the definitions under workflows/, writing no prompt filename, stage name or workflow name into its rules, so a third workflow shipping a verifier prompt without the paragraph is reported with no edit to the module.
+  - Each rule in that module is asserted twice - once over the shipped prompts, where it reports nothing, and once over a constructed arrangement that breaks exactly that rule, where it reports - so a rule that stopped looking cannot pass as a rule that found nothing.
+  - Nothing in that module invokes a model, runs a subprocess, or reads a clock.
+
+technical_plan:
+  implementation_steps:
+    - Read prompts/story-verifier.md:191-198 and the whole-suite passage above it, and prompts/refactor-verifier.md:209-218 and its injection slot at 254-258, so the added paragraph lands in the passage that already discusses the whole-suite verdict and reuses that prompt's own description of where the suite was run.
+    - Rewrite prompts/story-tester.md:150-153. The paragraph above it already says this stage executes no test command and that the coordinator's record of the run is the answer; the replacement continues from there, saying that a red suite is recorded as an outstanding failure and carried forward, that the run advances to the stages after this one, and that the verifier judges the tree and decides where the work goes - so a suite left red is not handed back to this stage and the turn is not repeated on the same attempt.
+    - Edit the self-route injection slot at prompts/refactor-implementer.md:121-125 to match the wording its five siblings carry, dropping the red-suite clause and the third term of missing, stale or failing.
+    - Add the failing-verdict paragraph to prompts/refactor-verifier.md immediately after its whole-suite passage, mirroring prompts/story-verifier.md:191-198 in substance and in its refusal to name a category, and using that prompt's own phrasing for where the suite was run.
+    - Write the test module. Load every definition under workflows/, take each stage's prompt filename and read the prompts it names. Derive the verifying stages as the stages declaring retry_routing and the declaring stages as those declaring suite_run, so no filename is written into the rules. Hold the three properties - no prompt says a red suite returns a stage to itself, every verifier prompt states the failing-verdict rule, and the self-route slots agree - and give each a constructed control under tmp_path that breaks it.
+  likely_file_changes:
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: Replaces the paragraph promising a self-route on a red suite with what the coordinator now does - record the failure, advance, and let the verifier judge.
+    - file: prompts/refactor-implementer.md
+      stage: implementer
+      reason: Drops the red-suite clause and the word "failing" from the self-route injection slot, matching the five sibling prompts.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: Gains the paragraph saying a non-zero suite exit is a failing verdict and not a finding, which its sibling has carried since story-137.
+    - file: tests/test_a_red_suite_is_described_where_it_lands.py
+      stage: tester
+      reason: The standing module holding all three corrections, deriving which prompts it reads and which rule each is held to from the shipped workflow definitions.
+
+scope:
+  modify:
+    - prompts/story-tester.md
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+    - tests/
+  do_not_modify:
+    - orchestration/
+    - workflows/
+    - schemas/
+    - prompts/story-verifier.md
+    - prompts/story-implementer.md
+    - prompts/documenter.md
+
+verification_requirements:
+  - Confirm that prompts/story-tester.md states the carry-forward and no longer states the self-route, and that no remaining sentence in it tells the tester it will be re-invoked in place over a red suite.
+  - Confirm that the self-route injection slot in prompts/refactor-implementer.md now reads as the corresponding slots in prompts/story-implementer.md, prompts/story-tester.md, prompts/documenter.md, prompts/story-verifier.md and prompts/refactor-verifier.md read.
+  - Confirm that prompts/refactor-verifier.md carries the failing-verdict rule in substance - failed verdict, retry recommended, target read off the injected routing table - and that it names no category.
+  - Confirm that the new test module derives its subject from the definitions under workflows/ and writes no prompt filename, stage name or workflow name into the rules it enforces, and that each rule carries a control that breaks it.
+  - Confirm that the new module reports rather than passes when the corrections are undone - that it is the assertions rather than the edits alone that hold this story.
+  - Confirm that no change was made to orchestration/, workflows/ or schemas/, since this story changes what the prompts say about behaviour that already ships.
+
+constraints:
+  - The behaviour of the coordinator, the workflow definitions and the artifact schemas is unchanged by this story; only the prompt layer and the validation that holds it change.
+  - prompts/story-verifier.md keeps the paragraph story-137 gave it, unedited - the refactor prompt is brought to it rather than the two being rewritten together.
+  - The paragraph added to prompts/refactor-verifier.md must be equivalent in substance to its sibling's without being a verbatim copy where the two prompts describe the suite run differently, because that prompt describes the run as made in the tree the change left and its sibling as made after the authoring stage's turn.
+  - The new test module follows tests/test_prompt_workflow_ownership.py's convention for assertions over shipped prompts - the mapping is derived from the shipped definitions, and every rule is asserted once over the shipped arrangement and once over a constructed arrangement that breaks it.
+  - No existing assertion is weakened, skipped or deleted.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-13 15:21:27
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 241
