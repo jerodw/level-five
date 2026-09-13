@@ -2300,6 +2300,23 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "both renders, and that a tree with no layer leaves both without it — "
         "the module builds one under tmp_path and drives the real launcher "
         "against that, rather than touching the shipped tree",
+    "test_a_red_suite_is_described_where_it_lands.py":
+        "what this harness deploys is the whole of its subject: the claim is "
+        "that every prompt this repository ships describes what actually "
+        "follows a red declared suite run, and that one workflow was not told "
+        "something its sibling was. A constructed definition cannot carry that "
+        "claim — a rule written per workflow would reproduce the very failure "
+        "mode it exists to prevent — so the definitions under workflows/ and "
+        "the prompts their stages name are read as they ship, and the mapping "
+        "between them is derived rather than written down here. Where an "
+        "arrangement *is* an input — that the rule reports a prompt saying a "
+        "red suite hands the turn back, that it leaves a denial alone, that it "
+        "holds a judging stage and not a writing one, that a diverged slot is "
+        "reported — the module builds definitions and a prompts directory "
+        "under tmp_path and puts them to exactly the deciding functions the "
+        "shipped assertions use, so every absence it asserts of the shipped "
+        "tree is controlled by the same check against a constructed tree with "
+        "the violation planted in it",
     "test_a_stage_can_check_its_own_outputs.py":
         "every verdict it drives is taken against a workflow it builds with "
         "conftest.build_workflow, in a run directory it writes for itself, "

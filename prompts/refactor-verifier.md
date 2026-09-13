@@ -217,6 +217,16 @@ carries. The coordinator's census of the suite is beside it in the run
 directory, as census-result.json, holding both counts and the comparison's
 verdict.
 
+A non-zero exit code in that record is a failing verdict and not a finding.
+Elsewhere this prompt says a finding can be correct and still be too small to
+fail a run, and that recording a finding does not fail the run; neither
+applies here. The suite failing in the tree the change left is the tree being
+broken, which is the one thing a behaviour-preserving change may not do, so
+the verdict is failed, a retry is recommended, and the retry target is the
+category the injected routing table gives to the defect you judge caused it —
+read off that table like any other retry, from the same evidence you would use
+for any other failure.
+
 If retry state is active, evaluate whether the targeted verifier findings
 were resolved, and confirm the retry stayed within its authorized scope.
 
