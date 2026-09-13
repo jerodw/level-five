@@ -1,0 +1,194 @@
+story:
+  id: story-140
+  title: A post-story inspection announces itself and reports what it did in a line a reader can take in
+  description: |
+    A run says "story completed" and then goes silent while the post-story
+    inspection runs, and a developer watching it has been told the run is
+    finished. On story-136 the completion line is at 08:05:12 and the next line
+    the run writes is at 08:10:34. Nothing in between says an inspection
+    started, what it is doing, or that it takes about as long as a stage, so the
+    only reasonable reading of that terminal is that the run has hung after
+    finishing.
+
+    Every other long step inside a run already announces itself. The harness has
+    one idiom for it: a line written before the work, carrying a clause that
+    says what the wait is worth, so a reader does not mistake a wait for a
+    fault. The inspection is the one agent invocation in a run that says nothing
+    first, which is why it is the one that reads as a hang. It is also the step
+    that most needs the cost clause, because it begins after the run has
+    declared itself complete, which is the one moment a developer has been given
+    permission to stop watching.
+
+    When the inspection does speak, it says everything at once. One line carries
+    the counts, then every drop reason with a count, then the dedupe verdict,
+    then every path trimmed to the file cap, then every path left out of scope.
+    On story-136 that was one line naming about 130 files. It is simultaneously
+    the completion notice and the whole report, and it is the wrong size for
+    either job.
+
+    The long list is deliberate and this story does not cut it. The naming
+    exists so that a trimmed path stays recoverable rather than being silently
+    dropped, and there is no second bound on how many are named because a bound
+    there would be exactly that silent drop. What this story changes is where
+    the names live, not whether they survive.
+
+    Where there is now one line there are two events and a log block. The
+    inspection says it has started and what the wait costs, in the idiom the
+    suite reruns already use. It says what it did in counts a person can read at
+    a glance. The detail that today makes the line unreadable goes to the run's
+    own log under the configured logs directory, with the summary saying how
+    much there is and which log holds it.
+
+    The log is the destination on purpose. A watcher is ahead of this on the
+    roadmap, beside the per-agent logs, and what a watcher watches is a log
+    being appended to while work happens. Writing the detail there now, at the
+    moment it is known rather than at the end, means the inspection's progress
+    is already in the shape that watcher will read. The events log stays what it
+    is: a short account of what the run decided.
+
+    The pre-flight outbox sweep is in this story on the same terms. It runs the
+    configured sync command once per queued entry under a per-entry timeout, it
+    sits at the top of a run above the first stage line, and it says nothing
+    before it starts, so a run with a full queue opens with the same silence.
+    The completion sweep is left alone: it deliberately reports into no run
+    directory at all, and announcing it would mean reopening that decision
+    rather than filling a gap.
+
+    This story was planned from the brief filed under 250.
+
+  workflow: story-workflow
+
+tasks:
+  - Add a private line composer to orchestration/story_coordinator.py that is the single home of the announcement convention - a message and a clause saying what the wait is worth, rendered into one line, with an empty clause refused rather than rendered.
+  - Rewrite _suite_rerun_started in orchestration/story_coordinator.py to render its line through that composer, keeping its own literal event kind, its default cost clause and the exact text every existing call site renders today.
+  - Add a public announcer to orchestration/story_coordinator.py for the post-story inspection, spelling the literal kind inspection-started in its own function and rendering through the same composer.
+  - Add a public announcer to orchestration/story_coordinator.py for the outbox sweep, spelling the literal kind outbox-sweep-started in its own function and rendering through the same composer.
+  - Declare inspection-started and outbox-sweep-started in the closed event enum of schemas/execution-history.schema.json, and in no cross-run log's enum in schemas/cross-run-history.schema.json.
+  - Add a shared derivation of a run's own log path to orchestration/harness_config.py, and read it at the site in orchestration/story_coordinator.py that currently spells the logs directory and the story-id filename inline.
+  - Announce the post-story inspection in orchestration/story_inspection.py immediately before the invocation is made, through the coordinator announcer, under the guarded inner-import idiom that module already uses for its other coordinator calls, naming the story and the size of the scope and saying the wait is a stage's.
+  - Append the trimmed paths and the out-of-scope reasons to the run's own log from orchestration/story_inspection.py, at the point after the cap is applied where both are known and before the invocation, in the separator-and-lines shape that file already carries, guarded so that a log that cannot be written costs the detail and never the run.
+  - Write the same detail block on the path where nothing the story changed is in an inspected scope, so the exclusions that path names today survive the move.
+  - Replace the trimmed-path list and the out-of-scope list in the inspection's summary line in orchestration/story_inspection.py with a count of each and the repository-relative path of the log that holds them, leaving the finding counts, the drop reasons and the dedupe clause exactly as they are.
+  - Rewrite the docstring above that summary so it states where the names now live and why the naming is still unbounded there.
+  - Count the queued entries in orchestration/outbox_sweep.py before the drain and announce the sweep through the coordinator announcer only where the queue holds something, so a run over an empty queue writes nothing and the second sweep, which passes no run directory, announces nothing at all.
+  - Move the assertions in tests/test_a_completed_story_is_inspected.py that read the trimmed paths and the out-of-scope reasons out of the run's events log and onto the run's own log, and assert that the summary line carries the counts and names that log.
+  - Write a standing test module covering the announcements - that the inspection announces before it invokes, that the sweep announces only over a non-empty queue, that every announcement carries a cost clause, and that the suite reruns render exactly what they rendered before.
+  - Add the two new kinds to whichever modules under tests/ pin a clean run's whole event stream and drop announcements by kind.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A completed run whose configuration enables the post-story inspection writes a line before the invocation is made, carrying the event kind inspection-started, naming the story, and carrying a clause saying what the wait is worth.
+  - That announcement is written after the scope has been computed and the bound resolved, and before the agent invocation, so the gap between it and the summary is the invocation rather than the whole mechanism.
+  - A run whose configuration leaves the post-story inspection switched off writes no inspection-started line and leaves its events log byte-for-byte what it is today.
+  - The inspection's summary line names how many paths were trimmed to the file cap and how many were left out of scope, and names the repository-relative path of the log holding them, and carries neither list itself.
+  - Every path trimmed to the file cap appears in the run's own log under the configured logs directory, and no path the invocation was handed appears there as trimmed.
+  - Every path the expansion left out appears in that same log with the reason it was left out.
+  - A run where nothing the story changed is in an inspected scope writes its exclusions to that log, so no exclusion the current line names is lost by the move.
+  - The finding counts, the named drop reasons with their counts, and the dedupe clause are carried by the summary line exactly as they are today.
+  - A run whose queue holds entries writes a line before the pre-flight sweep drains it, carrying the event kind outbox-sweep-started and a clause saying what the wait is worth.
+  - A run whose queue holds nothing writes no outbox-sweep-started line, and the sweep in the completion path, which is given no run directory, writes none whatever the queue holds.
+  - Every line the existing suite-rerun announcements render is unchanged, character for character, including the one whose cost clause is overridden to seconds.
+  - schemas/execution-history.schema.json declares inspection-started and outbox-sweep-started in its event enum, and no log declared in schemas/cross-run-history.schema.json names either kind, so neither reaches a cross-run log.
+  - The standing assertion that every kind the coordinator can pass to append_event is declared in that enum still passes, and so does the standing assertion that each kind is spelled in exactly one function, neither of them rewritten by this story.
+  - The run log path is derived in one place and read from there by both the site that creates it and the inspection that appends to it.
+  - An inspection whose log cannot be written still writes its announcement and its summary, and the run still completes with the status it would have had.
+  - The full suite passes under the configured test command.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_coordinator.py, add a private composer taking the message and the cost clause and returning the one line both halves render into. Its docstring is where the convention lives - a long step says so before it starts, and says what the wait is worth so a reader does not read a wait as a fault. An empty clause raises rather than rendering a bare message, on the fail-loudly standard.
+    - Rewrite _suite_rerun_started to build its message from the phrase it already takes, render through the composer, and append under its own literal kind. Its signature, its default cost clause and the text it produces are unchanged.
+    - Add inspection_started beside it, public because orchestration/story_inspection.py imports it, taking the run directory, the story id and the scope size, spelling the literal kind inspection-started in its own body, and rendering through the composer.
+    - Add outbox_sweep_started beside it, public because orchestration/outbox_sweep.py imports it, taking the run directory and the number of queued entries, spelling the literal kind outbox-sweep-started in its own body, and rendering through the composer.
+    - Each of the three keeps its kind as a literal argument to append_event in its own function. A shared writer taking the kind as a parameter would forward a variable into append_event, which the standing scan over the coordinator's source refuses outright, and would also collapse the one-kind-one-emitter assertion. The composer is therefore the shared part and the event write is not.
+    - Add the two kinds to the event enum in schemas/execution-history.schema.json and change no enum in schemas/cross-run-history.schema.json, so both kinds reach the events log and the run's structured history and no durable log.
+    - Add a run-log-path derivation to orchestration/harness_config.py, resolved against the target root from the configured logs directory and the story id, in the shape history_dir beside it already has, and read it at the site in orchestration/story_coordinator.py that spells it inline today. The log-directory spellings in orchestration/inspection.py and orchestration/workflow_selection.py resolve different files and are left alone.
+    - In orchestration/story_inspection.py, add a guarded detail append that writes a separator naming the story and the inspection followed by one line per fact, in the separator shape the run log already carries from the agent stream, and creates the directory the way the agent runner's own append does.
+    - Call that append immediately after the cap is applied, where the trimmed list and the exclusions are both known, and only where there is something to write, so an inspection that trimmed nothing and excluded nothing adds nothing to the log.
+    - Call it on the path that returns because nothing the story changed is in an inspected scope, before that path writes its record, so the exclusions that path names today are written to the log rather than dropped.
+    - Call the coordinator's inspection announcer immediately before inspection.inspect_scope, under the same guarded inner import _say and record_cost already use, so an announcement that cannot be written costs the announcement and never the run.
+    - Replace the two joined lists in _summary with a count of each and the repository-relative log path, derived from the same run-log-path helper rather than spelled here, and rewrite the docstring above it so it says the names are in that log and that nothing bounds how many are written there.
+    - In orchestration/outbox_sweep.py, read the queue's entry files before the drain, announce through the coordinator announcer only where that count is not zero and a run directory was given, and guard the count and the announcement so a queue that cannot be listed is still swept and still reported afterwards.
+    - In tests/test_a_completed_story_is_inspected.py, repoint the trimmed-path and out-of-scope assertions at the run's own log, keeping each one's control - the paths the invocation was handed are still absent from the trimmed detail, and the changed path in scope is still absent from the exclusions - and add assertions that the summary line carries both counts and names the log.
+    - Write the new announcement module against a completing run and against a run whose queue holds entries, asserting the ordering of the announcement against the invocation, the absence of each announcement in the case that must stay silent, and the unchanged rendering of the existing suite-rerun lines.
+    - Extend the modules under tests/ that pin a clean run's whole event stream so they drop the two new kinds the way they already drop the suite-rerun kind.
+    - Write the ARCHITECTURE.md section in the shape the sections recording the earlier announcement and inspection stories already use.
+
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The shared line composer, the rewritten suite-rerun announcer and the two new announcers, and the one site that spells the run log path inline.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Announces before the invocation, writes the trimmed paths and the exclusions to the run log, and reduces the summary line to counts and the log that holds them.
+    - file: orchestration/outbox_sweep.py
+      stage: implementer
+      reason: Counts the queue before the drain and announces a non-empty one, leaving the completion sweep, which is given no run directory, silent.
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: The shared derivation of a run's own log path, so the coordinator and the inspection cannot disagree about which file that is.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: The closed event enum gains the two new kinds.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: The trimmed-path and out-of-scope assertions move from the events log to the run log, and the summary is held to carrying both counts and naming that log.
+    - file: tests/test_a_run_announces_what_it_is_waiting_on.py
+      stage: tester
+      reason: The standing module for the announcements - the inspection announcing before it invokes, the sweep announcing only over a non-empty queue, every announcement carrying a cost clause, and the suite reruns rendering what they rendered before.
+    - file: tests/test_execution_history.py
+      stage: tester
+      reason: Holds the two new kinds through the assertions it already makes, without rewriting the scan.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the announcement convention's one home, the two new kinds, the split of the notice from the record, and why the detail goes to the run log.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - orchestration/outbox_sweep.py
+    - orchestration/harness_config.py
+    - schemas/execution-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/inspection.py
+    - orchestration/agent_runner.py
+    - orchestration/run_status.py
+    - schemas/cross-run-history.schema.json
+    - prompts/
+    - workflows/
+    - .harness/config.yaml
+
+verification_requirements:
+  - That the announcement precedes the work rather than merely existing: the inspection's announcement is shown to be written before the agent invocation is made, by the order of the run's own record rather than by reading the source.
+  - That the silent cases stay silent: a run with the inspection switched off writes no inspection-started line, and a run over an empty queue writes no outbox-sweep-started line.
+  - That the existing suite-rerun announcements render character for character what they render today, including the one whose cost clause is overridden.
+  - That every path trimmed to the file cap and every path left out of scope is present in the run's own log, with the controls the current assertions carry - no path the invocation was handed named as trimmed, and no changed path in scope named as excluded.
+  - That the summary line carries both counts and the log path, and carries neither list, so the line is the size a reader can take in.
+  - That the two new kinds are declared in the execution-history enum and reach no cross-run log, shown by the cross-run declarations naming neither.
+  - That the standing scan over the coordinator's source still reports every kind the coordinator can emit and still holds each kind to one emitting function, neither assertion rewritten for this story.
+  - That an inspection whose detail log cannot be written still announces, still summarises and still lets the run complete.
+  - The full suite passes under the configured test command.
+
+constraints:
+  - No trimmed path and no exclusion is dropped. The names move to the run's own log and nothing bounds how many are written there, because a bound there would be the silent drop the naming exists against.
+  - The file cap and the inspection's scope bound are unchanged. This story is about what the run says while it works, not about how much work it does.
+  - The post-story inspection may still never block, delay or refuse a run. Every new call it makes is guarded on the terms the calls beside it already are, and none of them introduces a value a caller could branch on.
+  - The outbox sweep may still never refuse a run, and nothing about the count it takes or the line it writes is read by either call site.
+  - The events log stays one line per event in the format it already carries, and append_event stays the only writer of it and of the structured history.
+  - Each event kind stays spelled in exactly one function, and every kind reaching append_event stays a literal at the call that passes it.
+  - The completion sweep's silence is left as it is. It reports into no run directory by an existing decision with reasons of its own, and this story does not reopen it.
+  - The broad l5-inspect report surface is unchanged except for the summary composer it shares. A developer who invoked l5-inspect directly is watching it deliberately and was never told the work had finished.
+  - Nothing here reads the log. This story writes the stream a watcher will later read and stops there.
+  - The harness gains no configuration key for any of this.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-12 23:01:45
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 250
