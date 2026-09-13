@@ -1,0 +1,206 @@
+story:
+  id: story-142
+  title: Every stage that declares the suite run is told what follows a red one
+  description: |
+    story-141 gave prompts/story-tester.md a paragraph saying what now follows
+    a red declared suite run — the coordinator records the outstanding failure,
+    the run advances, and the verifier judges the tree and decides where the
+    work goes. The stage occupying the identical position in the other shipped
+    workflow was given nothing: workflows/refactor-workflow.json declares
+    suite_run on its implementer, so prompts/refactor-implementer.md is that
+    workflow's authoring stage, and its whole-suite passage says only that the
+    suite runs after it, as coordinator subprocesses, and stops there. That
+    prompt mentions a red result nowhere; story-141's own edit to it removed the
+    one sentence that had described one.
+
+    What the refactor implementer therefore does not know is what the story
+    judged worth telling its sibling: that a suite it leaves red is not handed
+    back, that the run pays a documenter turn and a verifier turn on a broken
+    tree, and that the outcome is a failed verdict and a retry routed by that
+    workflow's own retry_routing — an archived attempt and a retry-history
+    entry.
+
+    Nothing in this repository holds a prompt to stating the carry-forward.
+    tests/test_a_red_suite_is_described_where_it_lands.py holds rules that are
+    negative about a writing stage, applied to a judging one, or comparative
+    across slot wordings; deleting the paragraph from prompts/story-tester.md
+    outright leaves every assertion in that module green, and leaves
+    test_the_shipped_tester_prompt_says_what_the_stage_does_instead green too,
+    though its docstring claims to hold what a red suite does to the stage.
+
+    This story states the carry-forward in prompts/refactor-implementer.md in
+    that stage's own vocabulary, extends the passage in prompts/story-tester.md
+    so both say what a red suite costs the run rather than only where it goes,
+    and adds a rule derived off the shipped definitions holding every prompt
+    named by a stage that declares a suite run to saying it — which gives the
+    tester paragraph an assertion, so neither copy can go missing again.
+
+    Planned from the brief filed under key 262.
+  workflow: story-workflow
+
+tasks:
+  - Extend the whole-suite passage in prompts/refactor-implementer.md so the
+    refactor workflow's authoring stage is told what a suite it leaves red does
+    to the run: the coordinator records the outstanding failure, the run
+    advances through the stages after it on a broken tree, the turn is not
+    handed back to repair it on this attempt, and the outcome is a failed
+    verdict with a recommended retry routed by the injected routing table,
+    costing an archived attempt and a retry-history entry. Write it in that
+    prompt's own vocabulary rather than copying the sibling paragraph.
+  - Extend the carry-forward paragraph in prompts/story-tester.md with the same
+    cost — a failed verdict, a recommended retry, an archived attempt and a
+    retry-history entry — keeping the claims it already makes, so the prompt
+    that is the model for the new rule satisfies it.
+  - Add a rule to tests/test_a_red_suite_is_described_where_it_lands.py holding
+    every prompt named by a stage that declares a suite run to stating what
+    follows a red one. Derive the role off the suite_run declaration key the
+    module already holds, so which prompts are held comes off the shipped
+    definitions and a third workflow shipping an authoring stage is covered
+    without an edit to the rule.
+  - Match each claim the new rule requires against any of several accepted
+    phrasings, and report the claim that is unmet rather than a phrase, so the
+    two prompts held to it can state it in their own words.
+  - Assert the new rule twice in the module's established style: once over the
+    shipped arrangement, where it reports nothing, and once over each
+    constructed arrangement that breaks exactly it — an authoring prompt silent
+    about a red suite, an authoring prompt stating where the failure goes but
+    not what it costs, and a prompt no definition puts in that position, which
+    the same silence must not report.
+  - Extend the module's non-vacuity guard with the facts the new rule needs to
+    discriminate over the shipped tree, and extend the docstring's enumeration
+    of the rules to include it.
+
+acceptance_criteria:
+  - prompts/refactor-implementer.md states, in a passage about the suite the
+    coordinator runs after that stage, that the coordinator records the
+    outstanding failure, that the run advances to the stages after it, that the
+    turn is not handed back on the same attempt, and that the outcome is a
+    failed verdict with a recommended retry.
+  - prompts/story-tester.md states what a red suite costs the run — a failed
+    verdict and a recommended retry, with the attempt archived and recorded —
+    in addition to the claims its paragraph already makes.
+  - With the carry-forward passage deleted from prompts/refactor-implementer.md,
+    an assertion in tests/test_a_red_suite_is_described_where_it_lands.py fails,
+    and the failure names that file and the claims it no longer makes.
+  - Deleting the carry-forward paragraph from prompts/story-tester.md makes an
+    assertion in the same module fail, naming that file and the claims it no
+    longer makes.
+  - The new rule holds exactly the prompts named by a stage whose declaration
+    carries suite_run, read off the shipped definitions; a prompt no definition
+    puts in that position is not reported for saying nothing about a red suite.
+  - The deciding code the new rule adds contains no shipped prompt filename, no
+    shipped stage name and no shipped workflow name, which
+    test_the_rules_name_no_prompt_no_stage_and_no_workflow covers by reading its
+    source alongside the rules already there.
+  - The rules already in the module report nothing over the shipped tree after
+    both prompt edits, including the agreement of the self-route slot wordings
+    and the absence of any sentence tying a red suite to a stage running again
+    in place.
+  - The module's non-vacuity guard fails if this repository ever ships no prompt
+    held to the new rule, or no prompt outside it.
+  - Nothing in the module invokes a model, runs a subprocess, or reads a clock.
+
+technical_plan:
+  implementation_steps:
+    - In prompts/refactor-implementer.md, extend the paragraph that already
+      explains the suite runs after the stage as coordinator subprocesses, so it
+      continues into what a red result does. Leave the self-route slot paragraph
+      introducing {{self_route_result}} untouched: a rule in the module holds the
+      slot wordings across prompts in agreement, and editing one diverges it.
+    - Phrase the new sentences so no sentence affirms that a red suite brings
+      the stage back in place; the paragraph says the opposite, and says it in a
+      sentence that denies rather than one that merely omits.
+    - In prompts/story-tester.md, extend the existing carry-forward paragraph
+      with the cost, keeping its existing sentences.
+    - In the test module, give the function that derives roles a second flag per
+      prompt, true when a stage naming that prompt declares a suite run, read
+      with the walking helper already there and off the declaration key constant
+      already there.
+    - Add the rule as a function beside the others, taking the prompt texts and
+      the derived roles and returning the same list-of-problem-strings shape,
+      prefixed with a new kind constant so the controls can assert on the kind.
+    - Express the required substance as claims, each a label with the phrasings
+      that satisfy it, so a prompt meets a claim by any of them and the reported
+      problem names the claim.
+    - Add the shipped assertion, the constructed controls, and the additions to
+      the non-vacuity guard and the docstring.
+  likely_file_changes:
+    - file: prompts/refactor-implementer.md
+      stage: implementer
+      reason: The refactor workflow's authoring stage is the prompt that says
+        nothing about a red declared suite run; this is where the carry-forward
+        and its cost are stated.
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: Its carry-forward paragraph says where the failure goes but not
+        what it costs, so it would not satisfy the rule it is the model for.
+    - file: tests/test_a_red_suite_is_described_where_it_lands.py
+      stage: tester
+      reason: The standing module that holds what prompts say about a red
+        declared suite run; the new rule, its controls, its non-vacuity facts
+        and the docstring belong to it.
+
+scope:
+  modify:
+    - prompts/refactor-implementer.md
+    - prompts/story-tester.md
+    - tests/test_a_red_suite_is_described_where_it_lands.py
+  do_not_modify:
+    - workflows/
+    - orchestration/
+    - prompts/story-implementer.md
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - prompts/documenter.md
+    - tests/test_coordinator_runs_the_suite.py
+    - tests/test_a_red_suite_reaches_the_verifier.py
+    - tests/test_prompt_workflow_ownership.py
+    - .harness/docs/ARCHITECTURE.md
+
+verification_requirements:
+  - Confirm that removing the carry-forward passage from either prompt is
+    reported by the new rule, and that the report names the file and the unmet
+    claims rather than only a phrase.
+  - Confirm the new rule derives which prompts it holds from the shipped
+    workflow definitions, so a workflow added later that declares a suite run on
+    a stage is held without an edit to the rule.
+  - Confirm the new rule does not report a prompt that no definition puts in the
+    authoring position, and that this is asserted by a control rather than only
+    by the shipped tree.
+  - Confirm the rules already in the module still report nothing over the
+    shipped prompts after both edits, in particular that the self-route slot
+    wordings still agree and that no sentence added ties a red suite to a stage
+    running again in place.
+  - Confirm the deciding code added to the module names no shipped prompt, stage
+    or workflow, and that the existing source-reading assertion covers it.
+  - Confirm both prompt edits describe what the coordinator actually does with a
+    red declared suite run, as .harness/docs/ARCHITECTURE.md and
+    tests/test_a_red_suite_reaches_the_verifier.py record it, and that neither
+    prompt now promises a route the coordinator does not take.
+
+constraints:
+  - The coordinator's behaviour on a red declared suite run is unchanged: this
+    story changes what prompts say about it and what the suite holds them to.
+  - The self-route slot paragraph in each prompt keeps its current wording, so
+    the rule holding the slots in agreement continues to report nothing.
+  - The workflow definitions are unchanged: which stage declares the suite run
+    in each workflow is the input this story derives from, not something it
+    edits.
+  - The new rule is derived from workflow vocabulary rather than from names, so
+    no prompt filename, stage name or workflow name appears in the code that
+    decides whether a prompt is held or whether it passes.
+  - The module continues to assert each rule over the shipped arrangement and
+    over a constructed arrangement breaking exactly that rule, and continues to
+    build controls under a temporary directory rather than editing the shipped
+    tree.
+  - No existing assertion in the module is weakened, deleted, or made vacuous by
+    the additions.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-13 16:47:47
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 262
