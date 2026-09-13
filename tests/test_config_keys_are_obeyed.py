@@ -769,9 +769,13 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
          "declared = None"),
     ),
     "logs_dir": (
-        ("orchestration/story_coordinator.py",
-         'config.get("logs_dir", ".harness/logs")',
-         '".harness/logs"'),
+        # The read moved into harness_config when the run log path became a
+        # shared derivation; the mutation follows it rather than the proof
+        # changing, since what it establishes — the configured directory is
+        # where the stage log is written — is unmoved.
+        ("orchestration/harness_config.py",
+         'config.get("logs_dir", DEFAULT_LOGS_DIR)',
+         "DEFAULT_LOGS_DIR"),
     ),
     "mandate_max_depth": (
         ("orchestration/story_coordinator.py",
@@ -1479,7 +1483,7 @@ def test_the_scan_does_not_count_a_subscript_through_a_variable(tmp_path):
     # reads keys by name: exactly the named reads are counted, and neither of
     # the two variables the mapping is built through joins them.
     read = keys_read_in(REPO_ROOT / "orchestration" / "harness_config.py")
-    assert read == {"tests_dir", "history_dir"}
+    assert read == {"tests_dir", "history_dir", "logs_dir"}
     assert not read & {"key", "current_list"}
 
 
@@ -2439,7 +2443,12 @@ def test_inspect_after_story_max_files_bounds_what_a_completed_run_inspects(
     # the bound took away is named rather than counted: a reader of this run
     # can tell which files the inspection did not read.
     assert CHANGED_SOURCE_FILE in reached
-    said = (run_dir / "events.log").read_text(encoding="utf-8")
+    # Named in the run's own log rather than in events.log: the summary line
+    # carries the counts and names the log, and the names themselves live where
+    # a watcher reads them. The claim is unchanged — every file the bound took
+    # away is named rather than counted.
+    said = harness_config.run_log_path(
+        run_root, values, STORY_ID).read_text(encoding="utf-8")
     for relative in files_in_the_inspected_scope():
         if relative not in reached:
             assert relative in said, (relative, said)

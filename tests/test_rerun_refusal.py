@@ -53,6 +53,11 @@ import worktrees
 import story_coordinator
 from agent_runner import AgentResult
 
+# Every kind the coordinator announces a long step with, derived from the
+# emitting code by the module that owns the convention rather than listed again
+# here. `stage_stream` below drops them all.
+from test_a_run_announces_what_it_is_waiting_on import ANNOUNCEMENT_KINDS
+
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 COORDINATOR_PATH = REPO_ROOT / "orchestration" / "story_coordinator.py"
 COORDINATOR_SOURCE = COORDINATOR_PATH.read_text(encoding="utf-8")
@@ -343,11 +348,19 @@ def stage_stream(target_root: Path) -> list[str]:
     each use holds every one of them to standing immediately before the event
     of the check it announces. What this module is about — the stage events,
     in order, and nothing else — stays an exact equality on the whole stream.
+
+    Every announcing kind is dropped rather than the suite rerun's alone, and
+    the set is derived from the emitting code by the module that owns the
+    convention. Since story-140 the post-story inspection and the pre-flight
+    outbox sweep announce themselves too, and a step that learns to announce
+    itself later would otherwise have to be added to this line by hand in every
+    module that reads a whole stream.
     """
     kinds = [entry["event"] for entry in history_of(target_root)]
     lines = messages(target_root)
     assert len(kinds) == len(lines), "the two renderings disagree in length"
-    return [line for kind, line in zip(kinds, lines) if kind != SUITE_RERUN]
+    return [line for kind, line in zip(kinds, lines)
+            if kind not in ANNOUNCEMENT_KINDS]
 
 
 def announcements_precede_their_checks(target_root: Path) -> bool:

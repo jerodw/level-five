@@ -193,6 +193,28 @@ def history_dir(target_root: Path, config: dict) -> Path:
     return target_root / config.get("history_dir", DEFAULT_HISTORY_DIR)
 
 
+#: Where a target keeps the raw output of the agents a run invokes when it says
+#: nothing about it, spelled the way runs_dir's and history_dir's own fallbacks
+#: are spelled at the sites that read them.
+DEFAULT_LOGS_DIR = ".harness/logs"
+
+
+def run_log_path(target_root: Path, config: dict, story_id: str) -> Path:
+    """The run's own log file: where the raw stream of a run's work is kept.
+
+    Resolved against the target root from the configured logs directory and the
+    story id, in the shape `history_dir` beside it has. It lives here rather
+    than being spelled at each site because there are now two of them — the run
+    that creates the directory and appends the agent stream to it, and the
+    post-story inspection that appends its detail to the same file — and two
+    spellings of one path are two answers about which file that is, one of
+    which would append somewhere nobody reads.
+    """
+    return (
+        target_root / config.get("logs_dir", DEFAULT_LOGS_DIR) / f"{story_id}.log"
+    )
+
+
 def declared_config_keys(harness_root: Path | None = None) -> tuple[str, ...]:
     """The keys the harness reads, declared in schemas/harness-config.schema.json.
 
