@@ -1,0 +1,132 @@
+story:
+  id: story-146
+  title: A run that could not reach the remote says so rather than that the story was never planned
+  description: |
+    Planned from the brief filed under 279.
+
+    `fetch_story_branch` spawns through `_bounded_fetch`, which reports a spawn
+    the platform refused, an expiry at `FETCH_TIMEOUT_SECONDS` and a non-zero
+    exit as three distinct things, and throws all three away — while its
+    sibling `refresh_base`, against the same remote in the same module, reads
+    exactly those three and says which one happened. What the caller then
+    tells the developer is not merely silent but false: `run_story` prints
+    "No story artifact at <path>, and none on branch <branch> here or on the
+    remote. Run l5-plan first." for a fetch that never answered, so a run
+    against a story that *was* planned, whose artifact *is* on the remote,
+    refuses with a statement about the remote the fetch did not establish and
+    directs the developer to plan it again. Since story-117 planning happens
+    in a worktree removed when its run offer is declined, so "the artifact is
+    only on the remote" is the ordinary case rather than an exotic one.
+
+    The same sentence is unestablished in a fourth way the brief does not
+    name: a clone with no remote configured at all falls through the same path
+    and is told there is none on the remote, when there was no remote to ask.
+    That case is in scope by the developer's decision at plan time, on the
+    ground that leaving it out would fix three of the four ways one sentence
+    lies.
+
+    This story makes `fetch_story_branch` report why it could not ask, in the
+    shape `refresh_base` already uses, and makes the caller distinguish "the
+    remote does not have this branch" from "this clone could not ask". The
+    fetch also gains the `NO_TERMINAL_PROMPT` prefix its sibling carries, so a
+    checkout without credentials reports a reason rather than blocking on a
+    prompt whose output is redirected to a file the developer never sees.
+
+    What is deliberately not changed: the run still refuses, with the same
+    exit status and creating nothing. There is no retry, no longer wait, and
+    no proceeding without the artifact. The one-directional bias the fetch's
+    docstring cites still holds — it answers rather than raises. What is wrong
+    is the sentence, not the refusal.
+  workflow: story-workflow
+
+tasks:
+  - Give `fetch_story_branch` a return shape that carries both whether the branch resolves and a single sentence saying why this clone could not ask, empty when there is nothing to say, following `refresh_base`'s convention that the empty string means the caller may go ahead on what it knows.
+  - Read `_FetchOutcome`'s three distinct failures in `fetch_story_branch` and word each as `refresh_base` words it — a spawn the platform refused, a fetch killed at `FETCH_TIMEOUT_SECONDS`, and a non-zero exit carrying what git said.
+  - Report the no-remote case as its own reason rather than as silence, so a clone with no remote configured is not told the branch is absent from a remote that does not exist.
+  - Prefix `fetch_story_branch`'s argv with `NO_TERMINAL_PROMPT`, as `refresh_base`'s already is.
+  - Change `run_story`'s refusal so a fetch that reported a reason prints a refusal naming that reason and does not direct the developer to run l5-plan, while a fetch with nothing to report prints today's sentence unchanged.
+  - Update `fetch_story_branch`'s docstring so it records what it now reports and why the one-directional bias still holds.
+  - Write the tests that hold the new refusal wording, and adapt the existing stall test to the changed return shape.
+  - Update `.harness/docs/ARCHITECTURE.md` where it records the discarded fetch outcome and the resolution of a story through its branch as they stand today.
+
+acceptance_criteria:
+  - "`fetch_story_branch` returns a value carrying both whether the branch resolves in this clone afterwards and a reason string, and the reason is empty whenever the fetch succeeded, whenever the branch already resolved without a fetch, and whenever the fetch exited zero without producing the branch."
+  - A fetch the platform refuses to spawn produces a non-empty reason naming what the platform said.
+  - A fetch killed at the bound produces a non-empty reason that names `FETCH_TIMEOUT_SECONDS`'s value and says the fetch did not answer within it, matching how `refresh_base` words the same outcome.
+  - A fetch that exits non-zero produces a non-empty reason carrying what git wrote, or the exit status when git wrote nothing.
+  - A clone with no remote configured produces a non-empty reason saying there is no remote to ask, and still answers that the branch does not resolve.
+  - "`fetch_story_branch`'s argv is prefixed with `NO_TERMINAL_PROMPT`, the same tuple `refresh_base`'s fetch is prefixed with."
+  - When the artifact is in neither the invoked tree nor the branch and the fetch reported no reason, `run_story` prints the sentence it prints today, including the direction to run l5-plan.
+  - When the fetch reported a reason, `run_story` prints a refusal that says the artifact is not in this tree and that this clone could not reach the remote to find out, includes that reason, and does not tell the developer to run l5-plan or otherwise state that the branch is absent from the remote.
+  - Both refusals return the same non-zero status `run_story` returns for this case today, and neither creates a run directory, a state.json, a log, a branch, or invokes an agent.
+  - Nothing added by this story retries the fetch, extends its bound, or lets the run proceed without the story artifact.
+  - The existing assertion that a stalled `fetch_story_branch` does not report the branch as fetched still holds under the changed return shape, and the control in that test still reports a real fetch as having brought the branch in.
+  - "`.harness/docs/ARCHITECTURE.md` no longer records `fetch_story_branch` as discarding what its fetch reported, and says what the two refusals now distinguish."
+
+technical_plan:
+  implementation_steps:
+    - Add a frozen dataclass beside `_FetchOutcome` — resolved, and a problem string defaulting to empty — as `fetch_story_branch`'s return type, with a docstring saying the empty problem means the caller may say what it already said.
+    - In `fetch_story_branch`, answer with an empty problem when the branch already resolves; answer with a problem naming the absent remote when no remote is configured; prefix the fetch argv with `NO_TERMINAL_PROMPT`; and derive the problem from the `_FetchOutcome` exactly as `refresh_base` derives its detail, wording the spawn, expiry and non-zero cases the same way.
+    - Leave the problem empty when the fetch succeeded, since a successful fetch that did not produce the branch is a remote that does not have it — which is what the existing sentence correctly says.
+    - Rewrite `fetch_story_branch`'s docstring: it now reports why it could not ask, it still raises on nothing, and the one-directional bias still means a clone that cannot ask answers that the branch does not resolve rather than refusing.
+    - In `run_story`, take the reason from the fetch and branch the refusal on it, keeping today's sentence verbatim for the empty case and printing the could-not-ask refusal otherwise; both return the status this path returns today.
+    - In `tests/test_branch_base.py`, adapt the stall test and its control to the changed return shape, and add assertions that a stall, a refused spawn, a non-zero exit and an absent remote each produce a distinct non-empty reason while a successful fetch produces none.
+    - Add the tests that drive `run_story` through both refusals and assert what each prints — that the could-not-ask refusal carries the reason and does not direct the developer to l5-plan, and that the ordinary refusal is unchanged.
+    - Update the ARCHITECTURE.md paragraphs that record the discarded outcome and the branch-resolution path so they describe what the module now does.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: "`fetch_story_branch`'s return shape, reasons and `NO_TERMINAL_PROMPT` prefix, and `run_story`'s two refusals, all live here."
+    - file: tests/test_branch_base.py
+      stage: tester
+      reason: The existing stall test and its control call `fetch_story_branch` and assert on its bool result, so the changed return shape forces them to be adapted, and this module is where the new per-reason assertions belong beside the bound they already cover.
+      reverting_breaks_the_suite: This module's existing assertions call `fetch_story_branch` and compare its result with `is False` and `is True`. Once the implementer's deliberate change in the same story gives that function a result object instead of a bool, reverting these edits restores comparisons that can no longer hold, and the suite fails.
+    - file: tests/test_run_story_refusals.py
+      stage: tester
+      reason: A new module for the assertions about what `run_story` tells the developer when the artifact is in neither the tree nor the branch, which nothing asserts today; the tester writes it if no existing module is the right home for it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: It records at two places that `fetch_story_branch` discards what its fetch reports and that its contract is therefore unchanged, which this story makes untrue.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/filed_query.py
+    - orchestration/command_transport.py
+    - orchestration/item_update.py
+    - workflows/
+    - prompts/
+    - scripts/
+    - schemas/
+    - .harness/config.yaml
+
+verification_requirements:
+  - Confirm the full suite passes with the command `.harness/config.yaml` declares as `test_command`.
+  - "Confirm `fetch_story_branch` reports a distinct non-empty reason for each of the four ways it cannot ask — a refused spawn, an expiry at the bound, a non-zero exit, and no remote configured — and an empty reason for a fetch that succeeded."
+  - "Confirm `run_story` prints today's sentence, including the direction to run l5-plan, when the fetch reported nothing, and prints a refusal carrying the reason and omitting that direction when it did."
+  - Confirm both refusals return the same non-zero status and leave no run directory, no state.json, no log and no branch behind, and invoke no agent.
+  - "Confirm `fetch_story_branch`'s argv carries the `NO_TERMINAL_PROMPT` prefix."
+  - Confirm no retry, no widened bound and no path that proceeds without the story artifact was added.
+  - "Confirm the assertions this story's tests add are new rather than replacements, and that no existing assertion in `tests/test_branch_base.py` was weakened or removed beyond what the changed return shape forces."
+  - "Confirm `.harness/docs/ARCHITECTURE.md` no longer asserts the discarded-outcome behaviour this story removes."
+
+constraints:
+  - "`fetch_story_branch` continues to raise on nothing: every way a fetch can fail comes back as an answer."
+  - "A run whose story artifact cannot be found still refuses, with the status it returns today. Nothing here retries the fetch, waits longer than `FETCH_TIMEOUT_SECONDS`, or lets the run proceed without the artifact."
+  - "One bound governs both fetches this module spawns. No second timeout constant is introduced."
+  - "The reason for an expiry, a refused spawn and a non-zero exit is worded as `refresh_base` already words it, so the module's two fetches do not describe the same outcome two ways."
+  - "The coordinator stays deterministic and reads no environment: `NO_TERMINAL_PROMPT` is set for a child rather than read from this process."
+  - No third-party runtime dependency is added; standard library only.
+  - "A clone that already holds the story branch still resolves it without spawning a fetch."
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-14 15:43:28
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 279
