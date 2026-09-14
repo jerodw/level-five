@@ -1,0 +1,128 @@
+story:
+  id: story-145
+  title: A pre-flight fetch that cannot reach its remote ends in a bounded time
+  description: |
+    Planned from the brief filed under 273.
+
+    `refresh_base` handles a fetch that fails and a spawn the platform refuses,
+    and not a fetch that never comes back. The `subprocess.run` it makes passes
+    no timeout and `communicate` is never reached with one, so the ways a fetch
+    stalls rather than answering are unhandled: a TCP connection to a host that
+    drops packets instead of refusing them, an SSH remote whose host key is
+    unknown, and an SSH key with a passphrase and no agent. The last two ask on
+    `/dev/tty`, which `GIT_TERMINAL_PROMPT` does not govern, so the prompt
+    suppression already in place does not reach them.
+
+    The docstring promises that offline, an unreachable remote or absent
+    credentials "leave the check exactly where it was". That holds for a remote
+    that answers with an error and not for one that answers with nothing. Since
+    story-144 both `l5-plan` and a fresh run do this network work on every
+    invocation, so a developer on a flaky VPN gets an invocation that sits
+    silently — output captured, nothing printed — instead of the one line naming
+    why the refresh could not be made. That is reporting becoming the failure,
+    which is the shape this harness refuses elsewhere: every other command it
+    spawns is bounded and killed at its bound by process group.
+
+    The module's other fetch, the one `fetch_story_branch` makes to bring a
+    remote-only story branch into this clone, is unbounded for the same reason,
+    so the bound chosen here belongs to both rather than to one.
+
+    What resolves it is a bound on both fetches with the process group killed at
+    it, and a timeout branch in `refresh_base` answering the same one-sentence
+    reason its failure branch already answers, so a stalled remote reaches the
+    same reported-never-refused outcome an unreachable one already reaches.
+
+    The bound is a constant in harness source rather than a configured key. The
+    developer chose that deliberately over the `sync_timeout_seconds` and
+    `filed_query_timeout_seconds` convention: a pre-flight fetch of one ref into
+    one ref is fast on any healthy remote, twenty seconds reads as slow rather
+    than as hung, and a configured key is permanent surface for a knob nobody is
+    expected to turn. Adding the key later, if a real remote proves it wrong, is
+    a small change.
+  workflow: story-workflow
+
+tasks:
+  - Add a module-level constant beside the existing fetch giving the bound in seconds for every fetch this module spawns, documented as one bound serving both fetches so they cannot be bounded differently, and as a real duration rather than zero.
+  - Add a private helper beside it that kills the process group a spawned command leads rather than the command alone, matching the ones already in orchestration/filed_query.py, orchestration/command_transport.py and orchestration/item_update.py, with a comment saying that extracting the copies into one home is a separate story and not this one.
+  - Add a private helper that spawns a git fetch in a new session, waits on it under the bound, kills the group and reaps it on expiry, and reports what happened in a shape both call sites can consume; it raises on nothing, so a caller can be total.
+  - Change refresh_base to spawn its fetch through that helper, and add a branch for the fetch that ran past the bound answering the same one-sentence reason its failure branch already answers, with a detail naming the bound.
+  - Change fetch_story_branch's fetch to go through the same helper, leaving what it answers unchanged: a fetch killed at the bound leaves the branch unfetched, which is what it already answers for a fetch that failed.
+  - Revise refresh_base's docstring so its promise covers a remote that answers with nothing, and so the reason the bound exists is written where the fetch is.
+  - Add assertions in tests/test_branch_base.py for a fetch made to stall: that it is killed at the bound rather than waited on, that refresh_base reports the one sentence and refuses nothing, that the check then reaches the decision it would have reached anyway, and that a stalled fetch of a story branch is reported as a branch this clone does not have.
+  - Update .harness/docs/ARCHITECTURE.md where refresh_base and its fetch are described, so the bound, the group kill and the timeout branch are documented beside the prompt suppression they sit with.
+
+acceptance_criteria:
+  - A fetch that stalls rather than answering is killed at the bound, and orchestration/story_coordinator.py passes that bound to the wait rather than waiting unbounded.
+  - The kill reaches the process group the fetch leads rather than the fetch process alone, so an ssh child the fetch spawned is not left running past the bound.
+  - refresh_base answers a stalled fetch with the same one-sentence shape it answers a failed fetch with — naming the base, the remote, a detail, and the tracking ref the check then answered from — and the detail names the bound in seconds.
+  - refresh_base refuses nothing on a stalled fetch: base_problems is then asked exactly as before, and the decision it reaches is the one it would have reached with no refresh attempted.
+  - fetch_story_branch's fetch is bounded by the same constant, and a fetch killed at the bound leaves it answering that the branch does not resolve, which is unchanged from what it answers for a fetch that failed.
+  - One constant in orchestration/story_coordinator.py gives the bound for both fetches, so there is no second spelling of it that can disagree.
+  - The bound is a real positive duration in harness source rather than zero, and no configuration key is added for it.
+  - A fetch that the platform will not spawn, a fetch that exits non-zero, a repository with no remote and a base with nothing to refresh each behave exactly as they did before this story.
+  - tests/test_branch_base.py asserts the stalled-fetch behaviour of both fetches against a git that does not return, and those assertions fail against the code as it stands before this story.
+  - refresh_base's docstring no longer promises a reported outcome only for a remote that answers, and says that a fetch which answers with nothing is bounded and reported the same way.
+  - .harness/docs/ARCHITECTURE.md describes the bound, the group kill and the timeout branch beside its existing account of the refspec and the terminal-prompt suppression.
+
+technical_plan:
+  implementation_steps:
+    - Add FETCH_TIMEOUT_SECONDS as a module-level constant near NO_TERMINAL_PROMPT in orchestration/story_coordinator.py, set to a real duration of twenty seconds, with a comment saying it bounds every fetch this module spawns, why a pre-flight fetch of one ref is expected to be fast, and why it is a constant here rather than a configured key.
+    - Add a private _kill_group helper taking a subprocess.Popen, killing os.getpgid of its pid with SIGKILL and falling back to killing the process when that raises OSError, matching the existing copies; note in its comment that the three near-identical copies elsewhere are known and that consolidating them is separate work.
+    - Add a private helper that takes the argument list and spawns it with start_new_session=True and captured output, waits under FETCH_TIMEOUT_SECONDS, and on subprocess.TimeoutExpired kills the group, reaps the process so no zombie is left, and reports the expiry distinctly from a non-zero exit and from a spawn the platform refused. It raises on nothing.
+    - Rewrite refresh_base's spawn to call that helper with the argument list it already builds, keeping NO_TERMINAL_PROMPT, the explicit refspec and the resolved remote branch exactly as they are.
+    - Add the timeout branch to refresh_base, producing the detail it passes into the existing sentence — naming that the fetch ran past the bound and the bound's value — so the returned sentence keeps its one shape and the existing failure and OSError branches are untouched in what they say.
+    - Change fetch_story_branch to spawn its fetch through the same helper instead of _git, discarding what the helper reports and continuing to answer with branch_exists, so its contract is unchanged.
+    - Revise refresh_base's docstring: state that the fetch is bounded and its process group killed at the bound, that a remote which answers with nothing is reported by the same sentence as one that answers with an error, and that this is why the promise about offline and absent credentials now holds for a stalled remote too.
+    - Add assertions to tests/test_branch_base.py driving both fetches against a git stub on PATH that does not return, asserting the kill happened at the bound rather than after the stub's own far-longer sleep, asserting refresh_base's sentence and that base_problems' decision is unchanged, and asserting fetch_story_branch answers False; follow the module's existing fixtures and the standard that a test bounds the operation and never the machine.
+    - Update the ARCHITECTURE.md paragraphs covering refresh_base and its fetch so the bound, the group kill and the timeout branch are recorded with the refspec and the prompt suppression already described there.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Holds both unbounded fetches, the constant, the kill helper, the bounded-spawn helper, the timeout branch and the revised docstring.
+    - file: tests/test_branch_base.py
+      stage: tester
+      reason: Where the branch and base assertions live; the stalled-fetch assertions for both fetches belong beside them.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Its account of refresh_base and its fetch describes the refspec and the prompt suppression and does not yet describe a bound.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_branch_base.py
+    - .harness/docs/ARCHITECTURE.md
+    - scripts/l5-plan
+  do_not_modify:
+    - orchestration/filed_query.py
+    - orchestration/command_transport.py
+    - orchestration/item_update.py
+    - schemas/harness-config.schema.json
+    - .harness/config.yaml
+    - workflows/
+
+verification_requirements:
+  - Confirm a stalled fetch ends at the bound: a git that does not return is killed rather than waited on, and refresh_base returns its one-sentence reason.
+  - Confirm the kill is delivered to the process group, so a child the fetch spawned does not outlive the bound.
+  - Confirm refresh_base refuses nothing on a stalled fetch and that base_problems reaches the same decision it reaches when no refresh was attempted.
+  - Confirm fetch_story_branch is bounded by the same constant and still answers whether the branch resolves, unchanged for every case that already worked.
+  - Confirm one constant gives the bound for both fetches and that no configuration key was added for it.
+  - Confirm the existing behaviour for a fetch that fails, a spawn the platform refuses, a repository with no remote and a base with nothing to refresh is unchanged, by the assertions already covering those.
+  - Confirm the full suite passes, including the standing scans over this module.
+
+constraints:
+  - The fetch keeps its NO_TERMINAL_PROMPT prefix, its explicit single refspec and its resolved remote branch; nothing about which ref is fetched changes.
+  - refresh_base keeps returning the empty string for a refresh that was made and for a repository with nothing to refresh, and keeps returning exactly one sentence otherwise. It raises on nothing and refuses nothing.
+  - fetch_story_branch keeps its signature and keeps answering whether the branch resolves afterwards; no new reporting is added to it.
+  - The coordinator continues to read no environment of its own, so the bound comes from the constant and not from a variable.
+  - No refresh rebases, pulls or moves anything on the developer's behalf, and the fetch continues to touch no ref the check is not about, no working tree, no index and no HEAD.
+  - No configuration key, schema property or default is added for the bound.
+  - The near-identical process-group kill helpers in the other orchestration modules are left where they are; consolidating them is separate work.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-14 12:47:56
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 273
