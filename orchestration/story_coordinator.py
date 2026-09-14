@@ -1496,6 +1496,31 @@ def _read_fetch_output(path: Path) -> str:
         return ""
 
 
+def _fetch_detail(fetched: _FetchOutcome) -> str:
+    """How this module words each way a fetch failed to succeed.
+
+    One wording for both fetches this module spawns, so the refresh and
+    `fetch_story_branch` cannot describe the same outcome two ways: a spawn the
+    platform refused carries what the platform said, an expiry names the bound
+    it was killed at, and a non-zero exit carries what git wrote, or the exit
+    status when git wrote nothing.
+
+    It is only asked of an outcome that did not succeed; a successful fetch has
+    no detail to give and its callers do not ask.
+    """
+    if fetched.spawn_problem:
+        return fetched.spawn_problem
+    if fetched.timed_out:
+        return (
+            f"the fetch did not answer within {FETCH_TIMEOUT_SECONDS}s and was "
+            "killed at that bound"
+        )
+    said = fetched.stderr.strip() or fetched.stdout.strip()
+    if said:
+        return " ".join(said.split())
+    return f"git fetch exited {fetched.returncode}"
+
+
 def refresh_base(target_root: Path, base: str) -> str:
     """Bring the base's remote-tracking ref up to date, reporting why not.
 
@@ -1561,17 +1586,7 @@ def refresh_base(target_root: Path, base: str) -> str:
     )
     if fetched.succeeded:
         return ""
-    if fetched.spawn_problem:
-        detail = fetched.spawn_problem
-    elif fetched.timed_out:
-        detail = (
-            f"the fetch did not answer within {FETCH_TIMEOUT_SECONDS}s and was "
-            "killed at that bound"
-        )
-    else:
-        said = fetched.stderr.strip() or fetched.stdout.strip()
-        detail = (" ".join(said.split()) if said
-                  else f"git fetch exited {fetched.returncode}")
+    detail = _fetch_detail(fetched)
     short = tracking.removeprefix("refs/remotes/")
     return (
         f"the base {base} could not be refreshed from {remote} ({detail}), so "
@@ -1824,7 +1839,28 @@ def branch_exists(target_root: Path, branch: str) -> bool:
     return _git(target_root, "rev-parse", "--verify", branch).returncode == 0
 
 
-def fetch_story_branch(target_root: Path, config: dict, branch: str) -> bool:
+@dataclass(frozen=True)
+class StoryBranchFetch:
+    """Whether a story branch resolves here, and why this clone could not ask.
+
+    `resolved` is what `fetch_story_branch` has always answered: whether the
+    branch resolves in this clone once the fetch, if there was one, is done.
+
+    `problem` follows `refresh_base`'s convention — the empty string means the
+    caller may go ahead on what it knows, so a caller that would otherwise say
+    the remote does not have the branch may say it. A non-empty problem is one
+    sentence saying why this clone could not ask, and a caller that has one may
+    not say anything about what the remote holds, because nothing established
+    it.
+    """
+
+    resolved: bool
+    problem: str = ""
+
+
+def fetch_story_branch(
+    target_root: Path, config: dict, branch: str
+) -> StoryBranchFetch:
     """Bring a story branch that exists only on the remote into this clone.
 
     A plan is pushed from the worktree it was written in and that worktree is
@@ -1832,26 +1868,47 @@ def fetch_story_branch(target_root: Path, config: dict, branch: str) -> bool:
     on its branch on the remote and in no tree here. Fetching it is what makes
     `l5-run <story-id>` work from a clone that has never seen the story.
 
-    Reported as whether the branch resolves afterwards, never raised, and a
-    repository with no remote simply answers whether it already had it — the
-    one-directional bias every other reader here takes. The fetch is bounded by
-    `FETCH_TIMEOUT_SECONDS` with its process group killed at that bound, which
-    changes nothing about what this answers: a fetch killed at the bound leaves
-    the branch unfetched, and an unfetched branch is what this already answers
-    False for when a fetch fails.
+    It reports whether the branch resolves afterwards *and* why it could not
+    ask, in the shape `refresh_base` uses: a spawn the platform refused, a
+    fetch killed at the `FETCH_TIMEOUT_SECONDS` bound together with the process
+    group it leads — being bounded changes nothing about what this answers, a
+    fetch killed at the bound leaving the branch unfetched — a non-zero
+    exit carrying what git said, and a clone with no remote configured at all
+    each come back as their own sentence. The problem is empty when the fetch
+    succeeded, when the branch already resolved without a fetch, and when the
+    fetch exited zero without producing the branch — the last because a remote
+    that answered and did not have the branch is a remote that does not have
+    it, which is what the caller's existing sentence correctly says.
+
+    It runs under `NO_TERMINAL_PROMPT`, as its sibling does, so a checkout with
+    no credentials reports a reason rather than blocking on a prompt whose
+    output is redirected to a file the developer never sees.
+
+    The one-directional bias still holds and is what the reported reason is
+    for: this answers rather than raises, so a clone that could not ask answers
+    that the branch does not resolve here — and now says why, so the caller
+    refuses with something it established rather than with a statement about a
+    remote nobody reached.
     """
     if branch_exists(target_root, branch):
-        return True
+        return StoryBranchFetch(resolved=True)
     remotes = _git(target_root, "remote")
     names = remotes.stdout.split() if remotes.returncode == 0 else []
     if not names:
-        return False
+        # Not silence: a clone with no remote is one that could not ask, and a
+        # caller told nothing here would say the branch is absent from a remote
+        # that does not exist.
+        return StoryBranchFetch(
+            resolved=False,
+            problem=(
+                f"there is no remote configured in {target_root} to ask for "
+                f"branch {branch}"
+            ),
+        )
     remote = "origin" if "origin" in names else names[0]
-    # What the fetch said is discarded, as it was when this spawned through
-    # `_git`: this function reports whether the branch resolves and nothing
-    # else, and adding reporting here would be widening its contract.
-    _bounded_fetch(
+    fetched = _bounded_fetch(
         [
+            *NO_TERMINAL_PROMPT,
             "git",
             "-C",
             str(target_root),
@@ -1860,7 +1917,15 @@ def fetch_story_branch(target_root: Path, config: dict, branch: str) -> bool:
             f"{branch}:{branch}",
         ]
     )
-    return branch_exists(target_root, branch)
+    problem = ""
+    if not fetched.succeeded:
+        problem = (
+            f"branch {branch} could not be fetched from {remote} "
+            f"({_fetch_detail(fetched)})"
+        )
+    return StoryBranchFetch(
+        resolved=branch_exists(target_root, branch), problem=problem
+    )
 
 
 def story_on_branch(target_root: Path, branch: str, relative: str) -> str | None:
@@ -7508,15 +7573,30 @@ def run_story(
         fetched = fetch_story_branch(target_root, config, invoked_branch)
         from_branch = (
             story_on_branch(target_root, invoked_branch, relative_story)
-            if fetched
+            if fetched.resolved
             else None
         )
         if from_branch is None:
-            print(
-                f"No story artifact at {story_path}, and none on branch "
-                f"{invoked_branch} here or on the remote. Run l5-plan first.",
-                file=sys.stderr,
-            )
+            # Two refusals, one status, and which one is printed turns on
+            # whether the fetch established anything. With nothing to report the
+            # remote answered and did not have the branch, so the sentence this
+            # has always printed is true. With a reason, nobody reached the
+            # remote: saying the branch is absent from it would be a statement
+            # the fetch did not establish, and telling the developer to plan a
+            # story that may already be planned is how that statement misleads.
+            if fetched.problem:
+                print(
+                    f"No story artifact at {story_path}, and this clone could "
+                    f"not reach the remote to find out whether branch "
+                    f"{invoked_branch} carries one: {fetched.problem}.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"No story artifact at {story_path}, and none on branch "
+                    f"{invoked_branch} here or on the remote. Run l5-plan first.",
+                    file=sys.stderr,
+                )
             return 1
         story_text = from_branch
 

@@ -72,14 +72,20 @@ check reporting the violation it exists to catch:
     does write its marker;
   * "a stalled fetch of a story branch answers that the branch is not there"
     sits beside the same clone and the same branch with git answering, where
-    the same call fetches it and answers True;
+    the same call fetches it and answers it did resolve;
+  * "a fetch that succeeded reports no reason" sits beside the four fetches
+    that could not ask, each of which reports one -- so the empty string is a
+    fetch that established something rather than a field nothing ever fills;
   * "no configuration key was added for the fetch bound" sits beside the same
     reader over the same schema, which finds the bounds that *are* configured.
 
-A fetch the platform refuses, a fetch that exits non-zero, a repository with no
-remote and a base with nothing to refresh are unchanged by story-145 and are
-left to the assertions above that already cover them: a bound added to a fetch
-says nothing about a fetch that never got to stall.
+Since story-146 `fetch_story_branch` reports *why* it could not ask as well as
+whether the branch resolves, so the four ways it can fail to ask -- a spawn the
+platform refused, an expiry at the bound, a non-zero exit, and no remote
+configured at all -- are each driven here against the same clone and asserted
+to produce their own sentence. What each of those sentences then makes
+`run_story` print is a different subject and lives in
+`test_a_run_that_could_not_ask_the_remote_says_so.py`.
 
 The baseline for anything read out of git is `conftest.story_commit_range`,
 never HEAD and never the working tree against the repository root: the
@@ -1364,6 +1370,22 @@ def test_what_a_failing_remote_said_still_reaches_the_reported_sentence(
         stale_tracking, DEFAULT_BRANCH, False) == []
 
 
+def only_on_the_remote(root: Path, branch: str = STORY_BRANCH) -> None:
+    """Put the story branch on the remote and take it out of this clone.
+
+    Which is the state `fetch_story_branch` exists for: a plan is pushed from
+    the worktree it was written in, that worktree is removed when its run offer
+    is declined, and the artifact is then on its branch on the remote and in no
+    tree here.
+    """
+    git(root, "checkout", "-q", "-b", branch)
+    git(root, "commit", "-q", "--allow-empty", "-m", "the story's plan")
+    git(root, "push", "-q", "origin", branch)
+    git(root, "checkout", "-q", DEFAULT_BRANCH)
+    git(root, "branch", "-q", "-D", branch)
+    assert not story_coordinator.branch_exists(root, branch)
+
+
 def test_a_stalled_fetch_of_a_story_branch_leaves_it_a_branch_this_clone_lacks(
     based, tmp_path, monkeypatch,
 ):
@@ -1375,15 +1397,15 @@ def test_a_stalled_fetch_of_a_story_branch_leaves_it_a_branch_this_clone_lacks(
     would have sat for the stub's own far longer sleep.
 
     The control is the same clone, the same branch and the same call with git
-    answering, where the branch is fetched and the answer is True -- so the
+    answering, where the branch is fetched and `resolved` is True -- so the
     False below is the stall rather than a branch that was never there to get.
+
+    Since story-146 the call answers with an object carrying `resolved` rather
+    than with the bare bool, so the assertion this test has always made is made
+    of that field. It is the same assertion: a stalled fetch does not report the
+    branch as fetched.
     """
-    git(based, "checkout", "-q", "-b", STORY_BRANCH)
-    git(based, "commit", "-q", "--allow-empty", "-m", "the story's plan")
-    git(based, "push", "-q", "origin", STORY_BRANCH)
-    git(based, "checkout", "-q", DEFAULT_BRANCH)
-    git(based, "branch", "-q", "-D", STORY_BRANCH)
-    assert not story_coordinator.branch_exists(based, STORY_BRANCH)
+    only_on_the_remote(based)
 
     config = config_of(based)
     with monkeypatch.context() as stalled:
@@ -1397,15 +1419,338 @@ def test_a_stalled_fetch_of_a_story_branch_leaves_it_a_branch_this_clone_lacks(
             based, config, STORY_BRANCH)
         elapsed = time.monotonic() - started
 
-    assert fetched is False
+    assert fetched.resolved is False
     assert elapsed < KILL_CEILING_SECONDS, elapsed
     assert elapsed < LONGER_THAN_ANY_BOUND
     assert not story_coordinator.branch_exists(based, STORY_BRANCH)
 
     # The control.
-    assert story_coordinator.fetch_story_branch(
-        based, config, STORY_BRANCH) is True
+    answered = story_coordinator.fetch_story_branch(based, config, STORY_BRANCH)
+    assert answered.resolved is True
     assert story_coordinator.branch_exists(based, STORY_BRANCH)
+
+
+# --------------------------------------------------------------------------
+# Why this clone could not ask
+#
+# `fetch_story_branch` answers whether the branch resolves *and* why it could
+# not ask. There are four ways it cannot ask -- a spawn the platform refused,
+# an expiry at the bound, a non-zero exit, and no remote configured at all --
+# and every one of them used to come back as the same silence, which is what
+# let the caller state something about the remote that nothing had established.
+#
+# Each is driven below against one clone, so the differences between the four
+# sentences are the differences between the four failures and not between four
+# repositories. The fetch that works is driven last on the same clone and is
+# the control for every emptiness asserted here.
+# --------------------------------------------------------------------------
+
+
+#: What the platform says when it will not spawn the story branch's fetch.
+#: Named so the sentence can be asserted to carry the platform's own words
+#: rather than a wording of the coordinator's.
+SPAWN_REFUSED = "no such executable to run the story fetch with"
+
+#: What the remote says when it answers with an error. Named for the same
+#: reason, and deliberately unlike anything the coordinator would compose.
+REMOTE_DECLINED = "fatal-the-remote-declined-this-branch"
+
+
+def will_not_spawn_the_fetch(patch) -> None:
+    """Make every spawn under the prompting prefix raise, as a platform with
+    nothing to run that prefix with does.
+
+    Patched at `Popen` rather than at `run` because since story-145 the fetch
+    is spawned there so it can be bounded, and guarded on the prefix so that
+    every other git these repositories need goes on working.
+    """
+    real = subprocess.Popen
+
+    def refusing(command, *args, **kwargs):
+        if list(command)[:1] == [story_coordinator.NO_TERMINAL_PROMPT[0]]:
+            raise OSError(SPAWN_REFUSED)
+        return real(command, *args, **kwargs)
+
+    patch.setattr(story_coordinator.subprocess, "Popen", refusing)
+
+
+#: The keys the fixture below answers under. Named here so each test says which
+#: way of not asking it is about, and so a way that stopped being driven would
+#: show up as a missing key rather than as an assertion nobody made.
+REFUSED_SPAWN = "a spawn the platform refused"
+EXPIRY = "a fetch killed at the bound"
+NON_ZERO = "a fetch that exited non-zero"
+NO_REMOTE = "no remote configured at all"
+THE_FETCH_THAT_WORKED = "a fetch that succeeded"
+
+
+@pytest.fixture
+def what_the_story_fetch_answered(based, tmp_path, monkeypatch) -> dict:
+    """One clone, each way of not being able to ask, then the fetch that works.
+
+    The order is what makes one clone enough: none of the four failures brings
+    the branch in, so each is asked of a clone still lacking it, and the fetch
+    that succeeds is asked last. The branch it brought in is then deleted and
+    the remote removed, which is the no-remote case -- the same clone, with the
+    one thing that case is about taken away.
+    """
+    only_on_the_remote(based)
+    config = config_of(based)
+
+    def fetch():
+        return story_coordinator.fetch_story_branch(based, config, STORY_BRANCH)
+
+    answers = {}
+    with monkeypatch.context() as refused:
+        will_not_spawn_the_fetch(refused)
+        answers[REFUSED_SPAWN] = fetch()
+    with monkeypatch.context() as stalled:
+        on_path(stalled, git_that(tmp_path / "stalling-story-reason",
+                                  never_answers()))
+        stalled.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                        STALL_BOUND_SECONDS)
+        answers[EXPIRY] = fetch()
+    with monkeypatch.context() as failing:
+        on_path(failing, git_that(tmp_path / "failing-story-reason",
+                                  fails_saying(REMOTE_DECLINED)))
+        answers[NON_ZERO] = fetch()
+
+    answers[THE_FETCH_THAT_WORKED] = fetch()
+    assert story_coordinator.branch_exists(based, STORY_BRANCH), \
+        "the control never fetched anything, so the failures above prove nothing"
+
+    git(based, "branch", "-q", "-D", STORY_BRANCH)
+    git(based, "remote", "remove", "origin")
+    answers[NO_REMOTE] = fetch()
+    return answers
+
+
+def test_every_way_the_story_fetch_could_not_ask_answers_its_own_reason(
+    what_the_story_fetch_answered,
+):
+    """Four failures, four sentences, none of them shared -- and the fetch that
+    worked answering with none.
+
+    The emptiness is the claim this story turns on, so it is asserted as an
+    equality against the four sentences beside it: a `problem` that were always
+    empty would satisfy the control alone, and a `problem` that were always
+    filled would satisfy the four alone.
+
+    Distinctness is asserted over the set rather than pair by pair, because
+    what a caller needs is that the sentence it prints tells the developer
+    which of the four happened -- two failures sharing a sentence would leave
+    the developer where the single silence left them.
+    """
+    answers = dict(what_the_story_fetch_answered)
+    worked = answers.pop(THE_FETCH_THAT_WORKED)
+
+    assert worked.resolved is True
+    assert worked.problem == ""
+
+    for way, answer in answers.items():
+        assert answer.resolved is False, way
+        assert answer.problem != "", way
+        # One line, because a caller prints it inside a sentence at an entry
+        # point, exactly as the refresh's reason is printed.
+        assert "\n" not in answer.problem, way
+
+    reasons = [answer.problem for answer in answers.values()]
+    assert len(set(reasons)) == len(reasons), reasons
+
+
+def test_each_reason_names_the_thing_that_made_that_way_of_not_asking_itself(
+    what_the_story_fetch_answered,
+):
+    """Distinctness alone would be satisfied by four sentences that differed and
+    said nothing, so each is held to naming what a developer would act on: what
+    the platform said, the bound the fetch was killed at, what git wrote, and
+    the branch there is no remote to ask for.
+
+    The control for each is the other three: `SPAWN_REFUSED` appears in the
+    refused spawn's sentence and in no other, which is what makes the first
+    assertion about that sentence rather than about a fragment every reason
+    carries.
+    """
+    answers = what_the_story_fetch_answered
+
+    assert SPAWN_REFUSED in answers[REFUSED_SPAWN].problem
+    assert str(STALL_BOUND_SECONDS) in answers[EXPIRY].problem, \
+        answers[EXPIRY].problem
+    assert REMOTE_DECLINED in answers[NON_ZERO].problem
+    assert "no remote" in answers[NO_REMOTE].problem, answers[NO_REMOTE].problem
+    assert STORY_BRANCH in answers[NO_REMOTE].problem
+
+    elsewhere = {SPAWN_REFUSED: REFUSED_SPAWN,
+                 str(STALL_BOUND_SECONDS): EXPIRY,
+                 REMOTE_DECLINED: NON_ZERO,
+                 "no remote": NO_REMOTE}
+    for fragment, its_own in elsewhere.items():
+        for way, answer in answers.items():
+            if way in (its_own, THE_FETCH_THAT_WORKED):
+                continue
+            assert fragment not in answer.problem, (fragment, way)
+
+
+def detail_of(sentence: str) -> str:
+    """The parenthesised detail a could-not-fetch sentence carries.
+
+    Both fetches report in the same shape -- what could not be done, from which
+    remote, and the detail in parentheses -- so reading the parentheses is how
+    the two sentences are compared on the one part that has to agree.
+    """
+    assert "(" in sentence and ")" in sentence, sentence
+    return sentence.split("(", 1)[1].rsplit(")", 1)[0]
+
+
+@pytest.mark.parametrize("failure", [REFUSED_SPAWN, EXPIRY, NON_ZERO],
+                         ids=["refused-spawn", "expiry", "non-zero"])
+def test_the_two_fetches_word_the_same_outcome_the_same_way(
+    based, tmp_path, monkeypatch, failure,
+):
+    """The module spawns two fetches against the same remote, and a developer
+    who saw one of them fail and then the other must not be told the same thing
+    twice in two different sentences.
+
+    So each outcome is driven through both and their details compared, rather
+    than each being compared against a wording written down here: a wording
+    written down here would be a third copy, and the defect this guards against
+    is a second.
+
+    The no-remote case is not among these. There was no fetch, so there is no
+    `_FetchOutcome` to word, and the refresh answers a repository with no remote
+    with silence rather than with a sentence.
+    """
+    only_on_the_remote(based)
+    config = config_of(based)
+
+    stub = tmp_path / "shared-wording"
+    with monkeypatch.context() as patch:
+        if failure == REFUSED_SPAWN:
+            will_not_spawn_the_fetch(patch)
+        elif failure == EXPIRY:
+            on_path(patch, git_that(stub, never_answers()))
+            patch.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                          STALL_BOUND_SECONDS)
+        else:
+            on_path(patch, git_that(stub, fails_saying(REMOTE_DECLINED)))
+        refresh = story_coordinator.refresh_base(based, DEFAULT_BRANCH)
+        story = story_coordinator.fetch_story_branch(
+            based, config, STORY_BRANCH)
+
+    assert refresh != "", "the refresh reported nothing, so there is no wording"
+    assert story.problem != ""
+    assert detail_of(story.problem) == detail_of(refresh)
+
+    # And the two sentences are not simply the same sentence: they say what
+    # could not be done, and the two acts differ.
+    assert story.problem != refresh
+    assert STORY_BRANCH in story.problem and STORY_BRANCH not in refresh
+
+
+def test_a_story_fetch_that_said_nothing_falls_back_to_naming_its_exit_status(
+    based, tmp_path, monkeypatch,
+):
+    """The control for the reason carrying what git wrote: the same failure with
+    nothing written names the exit code instead.
+
+    Without it, `REMOTE_DECLINED in problem` would hold just as well for a
+    sentence that pasted the whole of git's output in whatever the fetch did,
+    and nothing would say the words came from git rather than from the
+    coordinator.
+    """
+    only_on_the_remote(based)
+    config = config_of(based)
+
+    with monkeypatch.context() as silent:
+        on_path(silent, git_that(tmp_path / "silent-story-failure",
+                                 fails_silently()))
+        answer = story_coordinator.fetch_story_branch(
+            based, config, STORY_BRANCH)
+
+    assert answer.resolved is False
+    assert f"exited {FETCH_EXIT_CODE}" in answer.problem, answer.problem
+    assert REMOTE_DECLINED not in answer.problem
+
+
+def test_the_story_fetch_runs_with_gits_terminal_prompting_disabled(
+    based, monkeypatch,
+):
+    """A checkout with no credentials must report a reason rather than block on
+    a password prompt whose output is redirected to a file the developer never
+    sees, and `GIT_TERMINAL_PROMPT=0` is the only thing git reads for that.
+
+    The sibling assertion for the refresh's fetch is
+    `test_the_fetch_runs_with_gits_terminal_prompting_disabled` above; the
+    prefix is read from the module rather than spelled here, so the two are
+    held to the same tuple rather than to two spellings of one.
+
+    The control is the assertion that a fetch was spawned at all: an empty list
+    of fetches would satisfy a prefix check vacuously.
+    """
+    only_on_the_remote(based)
+    spawned = []
+    real = subprocess.Popen
+
+    def watched(command, *args, **kwargs):
+        spawned.append(list(command))
+        return real(command, *args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator.subprocess, "Popen", watched)
+    answer = story_coordinator.fetch_story_branch(
+        based, config_of(based), STORY_BRANCH)
+    assert answer.resolved is True
+
+    fetches = [command for command in spawned if "fetch" in command]
+    assert fetches != [], spawned
+    prefix = list(story_coordinator.NO_TERMINAL_PROMPT)
+    for fetch in fetches:
+        assert fetch[:len(prefix)] == prefix, fetch
+
+
+def test_a_clone_that_already_holds_the_story_branch_spawns_no_fetch(
+    based, monkeypatch,
+):
+    """Reporting a reason put no network call in front of a clone that needed
+    none: the branch resolves here, so nothing is asked and there is nothing to
+    say about why it could not be.
+
+    The control is the same clone and the same reader the moment that branch is
+    taken away, where a fetch of it is spawned -- so the empty list is the
+    branch being present rather than a recorder that sees no fetches.
+    """
+    only_on_the_remote(based)
+    config = config_of(based)
+    git(based, "branch", STORY_BRANCH)
+    assert story_coordinator.branch_exists(based, STORY_BRANCH)
+
+    def fetches_of_the_branch(patch) -> list[list[str]]:
+        seen: list[list[str]] = []
+        real = subprocess.Popen
+
+        def watched(command, *args, **kwargs):
+            argv = list(command) if isinstance(command, (list, tuple)) else []
+            if f"{STORY_BRANCH}:{STORY_BRANCH}" in argv:
+                seen.append(argv)
+            return real(command, *args, **kwargs)
+
+        patch.setattr(story_coordinator.subprocess, "Popen", watched)
+        return seen
+
+    with monkeypatch.context() as watching:
+        spawned = fetches_of_the_branch(watching)
+        answer = story_coordinator.fetch_story_branch(
+            based, config, STORY_BRANCH)
+
+    assert answer.resolved is True
+    assert answer.problem == ""
+    assert spawned == []
+
+    # The control.
+    git(based, "branch", "-q", "-D", STORY_BRANCH)
+    with monkeypatch.context() as watching:
+        also_spawned = fetches_of_the_branch(watching)
+        story_coordinator.fetch_story_branch(based, config, STORY_BRANCH)
+    assert also_spawned != []
 
 
 def configured_keys() -> list[str]:
