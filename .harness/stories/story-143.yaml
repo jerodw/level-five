@@ -1,0 +1,117 @@
+story:
+  id: story-143
+  title: A prompt satisfies the red-suite claims only where it is describing a red suite
+  description: |
+    Planned from the brief filed under 267.
+
+    Two of the rules in tests/test_a_red_suite_is_described_where_it_lands.py
+    decide their claims by collapsing the whole prompt to one string and asking
+    whether each accepted phrasing appears anywhere in it. Prose written about
+    something else therefore satisfies a claim about a red suite, and one of the
+    seven carry-forward claims is met that way in the shipped tree today: the
+    claim that the run advances past this stage accepts the phrasing "the run
+    carries on", which prompts/story-tester.md carries in a paragraph about an
+    out-of-confinement edit the revert check undoes — a sentence that says
+    nothing about a suite. Delete the carry-forward paragraph from that prompt
+    and six claims are reported rather than seven, so a rewrite dropping only
+    the advance claim would be reported by nothing. The judging rule shows the
+    same slippage: delete the failing-verdict paragraph from
+    prompts/story-verifier.md and two of its six phrases still match elsewhere
+    in the file.
+
+    This is the reading rule rule one was deliberately written not to have.
+    `sentences` exists so that a red suite mentioned in one paragraph and a
+    stage running again in place mentioned in another are not read as one
+    claim, and `test_the_rule_reads_each_sentence_on_its_own` holds it — so the
+    module currently answers the same kind of question two different ways, and
+    whether a claim is genuinely held depends on whether some unrelated
+    sentence elsewhere in that file happens to use the phrase. As the prompts
+    grow, more claims drift into being held by accident, and nothing reports it.
+
+    This story gives both rules the passage-wise reading: a prompt satisfies a
+    rule when some single paragraph of it meets every claim. The claim and
+    phrase vocabularies keep exactly the entries they have; what changes is
+    where they are looked for. The four shipped prompts already satisfy both
+    rules read that way, so no prompt changes and the shipped assertions stay
+    green. The control the module lacks — an authoring prompt whose
+    carry-forward paragraph is absent but which carries an accepted phrasing in
+    unrelated prose, which the rule must report — is added, along with its
+    counterpart for the judging rule.
+
+  workflow: story-workflow
+
+tasks:
+  - Add a `paragraphs` reader beside `sentences`, returning each blank-line-separated block of a prompt with its line wrapping collapsed, so a rule can ask a passage rather than a file.
+  - Give `a_judging_prompt_not_stating_the_failing_verdict` the passage-wise reading - a prompt satisfies the rule when some single paragraph carries every phrase in FAILING_VERDICT - and have its report name the paragraph that came closest, quote it, and list the phrases that paragraph does not carry.
+  - Give `an_authoring_prompt_not_saying_what_follows_a_red_suite` the same reading over CARRY_FORWARD, reporting the closest paragraph and the claims that paragraph does not meet.
+  - Add the control the brief names - an authoring prompt with no carry-forward paragraph that carries an accepted phrasing of one claim in unrelated prose, which the rule must report - and its counterpart for the judging rule, a prompt with no failing-verdict paragraph that carries two of its phrases scattered elsewhere.
+  - Add a control showing what the chosen reading costs - a prompt that meets every claim but splits them across two paragraphs is reported - so the reading rule is asserted rather than implied by the rules that happen to pass.
+  - Extend `test_the_rules_name_no_prompt_no_stage_and_no_workflow` to unparse the new reader alongside the ones it already reads.
+  - Update the module docstring so it says the two rules decide over a passage rather than over the file, and why.
+  - Record the reading rule in the ARCHITECTURE.md passage that describes this module, which today states what the rules hold without saying how they read.
+
+acceptance_criteria:
+  - A control puts an authoring prompt carrying no carry-forward paragraph, but carrying an accepted phrasing of one carry-forward claim in unrelated prose, to `an_authoring_prompt_not_saying_what_follows_a_red_suite`, and asserts it is reported.
+  - A control puts a judging prompt carrying no failing-verdict paragraph, but carrying at least two FAILING_VERDICT phrases in unrelated prose, to `a_judging_prompt_not_stating_the_failing_verdict`, and asserts it is reported.
+  - A control asserts that a prompt meeting every claim of a rule, but splitting them across two paragraphs, is reported - the cost of the passage-wise reading, asserted rather than left to be discovered.
+  - A control asserts that a prompt meeting every claim of a rule within one paragraph is not reported, for each of the two rules.
+  - Each report a rule produces names the paragraph it judged, quotes it, and lists the claims or phrases that paragraph does not carry; a control asserts that the claims the judged paragraph does meet are not listed against it.
+  - The four shipped assertions - `test_no_shipped_prompt_says_a_red_suite_returns_that_stage_to_itself`, `test_every_shipped_judging_prompt_says_what_a_non_zero_suite_exit_means`, `test_every_shipped_authoring_prompt_says_what_follows_a_red_suite` and `test_the_shipped_self_route_slots_agree_with_one_another` - report nothing against the prompts this repository ships, with no prompt edited to make that true.
+  - `test_the_rules_name_no_prompt_no_stage_and_no_workflow` unparses the new paragraph reader alongside `declares`, `roles`, `sentences`, `slot_wording` and the four rules, and passes.
+  - The entries of CARRY_FORWARD and FAILING_VERDICT are the ones the module holds today - no claim added, removed or reworded - so the story changes where a claim is looked for and not what satisfies it.
+  - `a_red_suite_returning_a_stage_to_itself` still reads each sentence on its own, and `test_the_rule_reads_each_sentence_on_its_own` passes unchanged.
+  - The module docstring states that the judging and carry-forward rules decide over one paragraph, and says what that buys - a claim met by prose about something else no longer answers for a paragraph that is not there.
+
+technical_plan:
+  implementation_steps:
+    - Read tests/test_a_red_suite_is_described_where_it_lands.py end to end. The rules are `a_judging_prompt_not_stating_the_failing_verdict` and `an_authoring_prompt_not_saying_what_follows_a_red_suite`; both currently do `re.sub(r"\s+", " ", text)` over the whole prompt and ask `phrase in text`.
+    - Write `paragraphs(text)` beside `sentences(text)`- split on blank lines, collapse each block's wrapping with the same `re.sub(r"\s+", " ", ...)`, drop empty blocks. It takes the same shape as `sentences` because it answers the same kind of question at a different width.
+    - Rewrite both rules to score each paragraph against the rule's claims, take the best-scoring paragraph (ties broken by document order, so the report is deterministic), and report only when that paragraph falls short. Keep each rule's existing problem kind - UNSTATED and SILENT - and its existing keying on the Role the definitions give the prompt.
+    - Widen each report to carry the judged paragraph as well as what it does not say, so a reader can see which passage was weighed rather than being told only what is absent.
+    - Add the controls. The two the brief names are built the way every control in this module is - a prompts directory under tmp_path through `arrangement(...)`, with one prompt overridden - and the unrelated prose is written in the fixture's own words rather than copied out of a shipped prompt, following BUILT_SLOT and BUILT_VERDICT.
+    - Add `paragraphs` to the tuple of functions `test_the_rules_name_no_prompt_no_stage_and_no_workflow` unparses.
+    - Revise the module docstring's description of the rules to say they read a passage.
+    - In ARCHITECTURE.md, extend the paragraph that describes this module with the reading rule and the defect it closes.
+  likely_file_changes:
+    - file: tests/test_a_red_suite_is_described_where_it_lands.py
+      stage: tester
+      reason: The whole change - the paragraph reader, the two rewritten rules, the new controls and the docstring - lives in this module, which is the tester's to own.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The passage describing this module states what the four rules hold without saying how they read, which is exactly the fact this story adds.
+
+scope:
+  modify:
+    - tests/test_a_red_suite_is_described_where_it_lands.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/
+    - workflows/
+    - orchestration/
+    - schemas/
+    - scripts/
+    - tests/test_a_red_suite_reaches_the_verifier.py
+    - tests/test_prompt_workflow_ownership.py
+
+verification_requirements:
+  - Confirm the four shipped assertions report nothing, and that they do so without any file under prompts/ or workflows/ having been changed - the tightening was verified at plan time to leave every shipped prompt satisfying both rules, so a prompt edit would mean the rule was tightened past what was agreed.
+  - Confirm each new control is tied to the tightening rather than passing against the old reading: with the passage-wise change reverted and the controls left in place, the control for the carry-forward rule and the control for the judging rule both fail. A control that passes either way demonstrates nothing.
+  - Confirm the report a failing rule produces names the paragraph it judged and the claims that paragraph does not carry, and that a claim the judged paragraph does meet is not listed against it.
+  - Confirm CARRY_FORWARD and FAILING_VERDICT hold the same entries they held before this story.
+  - Confirm the suite census did not fall - the module gains assertions and loses none.
+
+constraints:
+  - Rule one keeps its sentence-wise reading; this story changes the two rules that read file-wise and leaves the one that already reads a passage alone.
+  - The rules stay derived from the shipped workflow definitions: no rule function may contain a shipped prompt filename, stage name or workflow name, which `test_the_rules_name_no_prompt_no_stage_and_no_workflow` asserts.
+  - Nothing in the module invokes a model, runs a subprocess or reads a clock.
+  - Controls are built under tmp_path from the module's own constructed definitions and its own wordings; the shipped tree is never edited to make a control.
+  - A rule that reports keeps reporting the same kind of problem it reports today - UNSTATED for the judging rule, SILENT for the carry-forward rule - so `kinds(...)` assertions elsewhere in the module keep their meaning.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-13 18:10:22
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 267
