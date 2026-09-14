@@ -169,6 +169,14 @@ def main() -> None:
     # invocation, so a refused base leaves nothing claimed, nothing created and
     # nothing invoked.
     resolved_base = story_coordinator.resolve_base(target_root, config, base)
+    # The base's remote-tracking ref is brought up to date immediately above the
+    # check that reads it, so a plan is written against the base as the remote
+    # holds it rather than as the last fetch left it. A refresh that could not be
+    # made prints one line naming why and refuses nothing: the check then reaches
+    # exactly the decision it would have reached before.
+    refresh_reason = story_coordinator.refresh_base(target_root, resolved_base)
+    if refresh_reason:
+        print(refresh_reason)
     base_found = story_coordinator.base_problems(
         target_root, resolved_base, base is not None, from_head=False
     )

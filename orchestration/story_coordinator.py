@@ -1310,6 +1310,113 @@ def resolve_base(target_root: Path, config: dict, base: str | None) -> str:
     return "main"
 
 
+def _base_remote(target_root: Path, base: str) -> str:
+    """The remote the base is pushed to, or "" when there is none to name.
+
+    Git's own record first — `branch.<base>.remote`, which a branch that tracks
+    something has stated — and the repository's remotes otherwise, preferring
+    `origin` and taking the first one named when there is no `origin`. A
+    repository with no remote has nothing to name and answers "".
+
+    It is a function rather than two copies because two readers need it: the
+    tracking ref below, and the refresh that brings that ref up to date. Two
+    derivations would be two answers to which remote the base belongs to.
+    """
+    configured = _git(target_root, "config", f"branch.{base}.remote")
+    remote = configured.stdout.strip() if configured.returncode == 0 else ""
+    if remote:
+        return remote
+    remotes = _git(target_root, "remote")
+    if remotes.returncode != 0 or not remotes.stdout.split():
+        return ""
+    names = remotes.stdout.split()
+    return "origin" if "origin" in names else names[0]
+
+
+#: The prefix that runs the refresh's fetch with git's terminal prompting
+#: disabled. `GIT_TERMINAL_PROMPT=0` is the only thing git reads for this --
+#: there is no configuration equivalent -- so it has to reach the child's
+#: environment, and it reaches it through `env` rather than through a copy of
+#: this process's own. That is not a detour around the standing scan in
+#: `tests/test_foreign_work_refusal.py` but the thing that scan is about: this
+#: module reads no environment at all, so no flag or variable anywhere can tell
+#: a check here to stand down, and setting one variable for one child does not
+#: need a read to do it. A platform with no `env` on its path raises `OSError`
+#: at the spawn, which the caller reports as a refresh it could not make.
+NO_TERMINAL_PROMPT = ("env", "GIT_TERMINAL_PROMPT=0")
+
+
+def refresh_base(target_root: Path, base: str) -> str:
+    """Bring the base's remote-tracking ref up to date, reporting why not.
+
+    The empty string means the check below may go ahead on current
+    information: either the ref was refreshed, or there was nothing to refresh
+    — no remote, no remote-tracking counterpart, or a counterpart that is not a
+    remote-tracking ref at all. A single sentence means a refresh was attempted
+    and could not be made, and it is the caller's to print and to record.
+
+    This exists because `base_problems`' second leg compares the base against
+    its *local* remote-tracking ref, and nothing refreshed that ref first: a
+    checkout that has not fetched since the base moved has the two in
+    agreement, both behind, and the check passes cleanly while the branch is
+    cut from a tree the shared base left behind. Refreshing first is the whole
+    of what this changes; what the check *decides* is untouched, and nothing
+    here rebases, pulls or moves anything on the developer's behalf.
+
+    What is fetched is one ref into one ref, named explicitly rather than left
+    to the remote's configured refspec, so a refresh cannot touch a ref the
+    check is not about — and nothing else: not the working tree, not the index,
+    not HEAD. It runs under `NO_TERMINAL_PROMPT` above, so a checkout with no
+    credentials reports a reason rather than hanging a pre-flight on a password
+    prompt.
+
+    A refresh that cannot be made is reported and never refused. This is
+    network work in a pre-flight, and this harness's standing bias is that
+    reporting may not become the failure: offline, an unreachable remote or
+    absent credentials leave the check exactly where it was, answering from
+    what is known and saying that is what it did.
+    """
+    tracking = _base_tracking_ref(target_root, base)
+    if tracking is None or not tracking.startswith("refs/remotes/"):
+        return ""
+    remote = _base_remote(target_root, base)
+    if not remote:
+        return ""
+    merge = _git(target_root, "config", f"branch.{base}.merge")
+    remote_branch = merge.stdout.strip() if merge.returncode == 0 else ""
+    if not remote_branch:
+        remote_branch = f"refs/heads/{base}"
+    try:
+        fetched = subprocess.run(
+            [
+                *NO_TERMINAL_PROMPT,
+                "git",
+                "-C",
+                str(target_root),
+                "fetch",
+                "--quiet",
+                remote,
+                f"+{remote_branch}:{tracking}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as problem:
+        fetched = None
+        detail = " ".join(str(problem).split())
+    if fetched is not None and fetched.returncode == 0:
+        return ""
+    if fetched is not None:
+        said = fetched.stderr.strip() or fetched.stdout.strip()
+        detail = (" ".join(said.split()) if said
+                  else f"git fetch exited {fetched.returncode}")
+    short = tracking.removeprefix("refs/remotes/")
+    return (
+        f"the base {base} could not be refreshed from {remote} ({detail}), so "
+        f"the base check answered from {short} as the last fetch left it"
+    )
+
+
 def _base_tracking_ref(target_root: Path, base: str) -> str | None:
     """The base's remote-tracking counterpart, or None when there is none.
 
@@ -1324,13 +1431,9 @@ def _base_tracking_ref(target_root: Path, base: str) -> str | None:
     )
     if upstream.returncode == 0 and upstream.stdout.strip():
         return upstream.stdout.strip()
-    configured = _git(target_root, "config", f"branch.{base}.remote")
-    remote = configured.stdout.strip() if configured.returncode == 0 else ""
+    remote = _base_remote(target_root, base)
     if not remote:
-        remotes = _git(target_root, "remote")
-        if remotes.returncode != 0 or not remotes.stdout.split():
-            return None
-        remote = "origin" if "origin" in remotes.stdout.split() else remotes.stdout.split()[0]
+        return None
     candidate = f"refs/remotes/{remote}/{base}"
     if _git(target_root, "rev-parse", "--verify", candidate).returncode != 0:
         return None
@@ -7426,7 +7529,19 @@ def run_story(
         _git(target_root, "rev-parse", "--verify", story_branch_name).returncode == 0
     )
     resolved_base = resolve_base(target_root, config, base)
+    # Why a refresh could not be made, held for the note below once there is a
+    # run directory to record it in. Empty is the ordinary case: the ref was
+    # refreshed, or there was nothing to refresh, and neither says anything.
+    refresh_reason = ""
     if not branch_existed:
+        # The base's remote-tracking ref is brought up to date immediately above
+        # the check that reads it, inside this guard so a resume — and a story
+        # branch that already exists — does no network work. A refresh that
+        # could not be made is printed and carried, never refused: the check
+        # then reaches exactly the decision it would have reached before.
+        refresh_reason = refresh_base(target_root, resolved_base)
+        if refresh_reason:
+            print(refresh_reason)
         # Asked without its HEAD-standing-on-the-base leg: since story-117 a run
         # cuts its branch in a worktree, from the base *by name*, so where the
         # developer happens to be standing decides nothing about what the branch
@@ -7929,6 +8044,13 @@ def run_story(
                 f"{resolved_base}",
                 kind="note",
             )
+
+    # A base check that answered from an unrefreshed tracking ref says so in the
+    # run's own record, beside the note above, so a run that proceeded on old
+    # information is not indistinguishable from one that proceeded on current
+    # information. A refresh that was made appends nothing.
+    if refresh_reason:
+        append_event(run_dir, refresh_reason, kind="note")
 
     # Stage timing: started where the stage-started event is appended, read at
     # whichever event ends the stage, so a completed stage carries an elapsed
