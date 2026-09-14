@@ -121,6 +121,10 @@ CLASSIFICATION = {
     "test_config_keys_are_obeyed.py": CARRIES_PRECONDITIONS,
     # A timestamp arithmetic for history files written days in the past.
     "test_cross_run_history_retention.py": BOUNDS_ONLY_SLOWNESS,
+    # Elapsed after a kill, and a generous poll for a marker to appear: the
+    # stalled fetch's git stub was asked to sit for far longer than the
+    # ceiling, so a refresh that came back inside it can only have been killed.
+    "test_branch_base.py": BOUNDS_ONLY_SLOWNESS,
     # Elapsed after a kill, and a generous poll for a marker to appear.
     "test_filed_query.py": BOUNDS_ONLY_SLOWNESS,
     "test_no_test_bounds_the_machine.py": CARRIES_PRECONDITIONS,

@@ -62,7 +62,24 @@ check reporting the violation it exists to catch:
     the base's own name instead and the check falls silent;
   * "a fetch the platform will not spawn is reported rather than raised" sits
     beside the same repository's refresh without the refused spawn, which
-    succeeds and says nothing.
+    succeeds and says nothing;
+  * "a stalled refresh refuses nothing" sits beside the same repository the
+    moment its git answers again, where the same refresh is made and the same
+    check does refuse -- so the empty list is the stall's doing rather than a
+    repository that was never going to be refused;
+  * "no child of the killed fetch outlived it" sits beside the same child,
+    backgrounded by a fetch that answers at once instead of stalling, which
+    does write its marker;
+  * "a stalled fetch of a story branch answers that the branch is not there"
+    sits beside the same clone and the same branch with git answering, where
+    the same call fetches it and answers True;
+  * "no configuration key was added for the fetch bound" sits beside the same
+    reader over the same schema, which finds the bounds that *are* configured.
+
+A fetch the platform refuses, a fetch that exits non-zero, a repository with no
+remote and a base with nothing to refresh are unchanged by story-145 and are
+left to the assertions above that already cover them: a bound added to a fetch
+says nothing about a fetch that never got to stall.
 
 The baseline for anything read out of git is `conftest.story_commit_range`,
 never HEAD and never the working tree against the repository root: the
@@ -73,8 +90,11 @@ No model is invoked anywhere in this file.
 """
 import ast
 import json
+import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -112,6 +132,7 @@ from test_plan_commit import (
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 
+import harness_config  # noqa: E402
 import story_coordinator  # noqa: E402
 
 COORDINATOR_REL = "orchestration/story_coordinator.py"
@@ -725,13 +746,17 @@ def test_the_fetch_runs_with_gits_terminal_prompting_disabled(
     spawned under that prefix really does see the variable set.
     """
     spawned = []
-    real = subprocess.run
+    # The fetch is spawned through `Popen` rather than `run` since story-145
+    # bounded it: `run` cannot be waited on under a timeout and then have its
+    # process group killed, because it exposes no pid. What is observed here is
+    # unchanged -- the argument list the fetch is spawned with.
+    real = subprocess.Popen
 
     def watched(command, *args, **kwargs):
         spawned.append(list(command))
         return real(command, *args, **kwargs)
 
-    monkeypatch.setattr(story_coordinator.subprocess, "run", watched)
+    monkeypatch.setattr(story_coordinator.subprocess, "Popen", watched)
     assert story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH) == ""
 
     fetches = [c for c in spawned if "fetch" in c]
@@ -739,8 +764,12 @@ def test_the_fetch_runs_with_gits_terminal_prompting_disabled(
     prefix = list(story_coordinator.NO_TERMINAL_PROMPT)
     assert fetches[0][:len(prefix)] == prefix, fetches[0]
 
-    seen = real([*prefix, "sh", "-c", "printf %s \"$GIT_TERMINAL_PROMPT\""],
-                capture_output=True, text=True, check=True)
+    # This half spawns a child of its own to read the variable back, so it goes
+    # through the unpatched `subprocess.run` rather than through the `Popen`
+    # the half above is watching.
+    seen = subprocess.run(
+        [*prefix, "sh", "-c", "printf %s \"$GIT_TERMINAL_PROMPT\""],
+        capture_output=True, text=True, check=True)
     assert seen.stdout == "0"
 
 
@@ -821,7 +850,10 @@ def test_a_fetch_the_platform_will_not_spawn_is_reported_rather_than_raised(
     git(stale_tracking, "update-ref", f"refs/remotes/origin/{DEFAULT_BRANCH}",
         git(stale_tracking, "rev-parse", DEFAULT_BRANCH).stdout.strip())
 
-    real = subprocess.run
+    # Patched at `Popen` rather than `run` for the reason given above: since
+    # story-145 the fetch is spawned there so it can be bounded. What is
+    # refused, and what the refusal must be reported as, are unchanged.
+    real = subprocess.Popen
     refused = "no such executable to run the refresh with"
 
     def will_not_spawn(command, *args, **kwargs):
@@ -829,7 +861,7 @@ def test_a_fetch_the_platform_will_not_spawn_is_reported_rather_than_raised(
             raise OSError(refused)
         return real(command, *args, **kwargs)
 
-    monkeypatch.setattr(story_coordinator.subprocess, "run", will_not_spawn)
+    monkeypatch.setattr(story_coordinator.subprocess, "Popen", will_not_spawn)
 
     reason = story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
     assert REFRESH_FAILED in reason
@@ -977,6 +1009,480 @@ def test_that_same_repository_reports_it_when_the_branch_is_not_there_yet(
     assert runner.calls != []
     assert REFRESH_FAILED in out
     assert len(notes(stale_tracking)) == 1
+
+
+# --------------------------------------------------------------------------
+# A fetch that answers with nothing
+#
+# The refresh already reports a remote that answers with an *error*. What is
+# asserted here is the remote that answers with nothing at all: a host dropping
+# packets rather than refusing them, an unknown ssh host key, a passphrase with
+# no agent. None of those is reached by `GIT_TERMINAL_PROMPT`, so the bound and
+# the group kill are what make the promise hold for them.
+#
+# Every fetch below is driven against a `git` these tests write, which sits
+# there rather than answering. Nothing here waits on a real network, and
+# nothing here bounds how fast the machine must be: the stub is asked to sit
+# for far longer than any ceiling asserted against, so a call that came back
+# inside the ceiling can only have come back because the fetch was killed, and
+# a loaded machine makes that more true rather than less.
+# --------------------------------------------------------------------------
+
+
+#: How long the stub is asked to sit there rather than answering. Far longer
+#: than every bound and ceiling below, so a fetch observed coming back cannot
+#: have been waited out.
+LONGER_THAN_ANY_BOUND = 45
+
+#: The bound the stalled fetches are driven under, substituted for the shipped
+#: `FETCH_TIMEOUT_SECONDS` so a test does not wait the shipped duration. What
+#: it is substituted *into* is what the tests are about: one attribute is
+#: patched and both fetches are observed obeying it, which is the whole of
+#: "one constant, no second spelling that can disagree".
+STALL_BOUND_SECONDS = 1.0
+
+#: The wall-clock ceiling a killed fetch must come back inside. Far above the
+#: bound and far below the sleep, so it separates a kill from a wait without
+#: being a stopwatch on a loaded machine.
+KILL_CEILING_SECONDS = 20.0
+
+#: How long the child a stalling fetch backgrounds sleeps before writing its
+#: marker, and how long the tests wait for that marker to appear or fail to.
+#: Longer than the moment its leader is killed, so a marker that appears can
+#: only have been written by a child that outlived the group kill.
+CHILD_SLEEP_SECONDS = 3
+PATIENCE_SECONDS = 20.0
+
+#: The real git, resolved before anything shadows it on PATH, so the stub can
+#: hand everything that is not a fetch to it and the repositories these tests
+#: build go on working normally.
+REAL_GIT = shutil.which("git")
+
+
+def background_a_child(marker: Path) -> str:
+    """Shell that backgrounds a child which would outlive its leader.
+
+    The marker is the process-group question asked twice: a child that survived
+    its leader writes it, and a child killed with the group never does. It
+    stands for the ssh a fetch to an ssh remote really does spawn, which is the
+    reason the fetch is put in a session of its own at all.
+    """
+    return (f'sh -c \'sleep {CHILD_SLEEP_SECONDS}; '
+            f'echo survived > "{marker}"\' &\n')
+
+
+def never_answers(marker: Path | None = None) -> str:
+    """A fetch that sits there for far longer than any bound asserted here."""
+    return ((background_a_child(marker) if marker else "")
+            + f"sleep {LONGER_THAN_ANY_BOUND}\nexit 0\n")
+
+
+def answers_at_once(marker: Path | None = None) -> str:
+    """The same fetch without the stall, which is the control's only change."""
+    return (background_a_child(marker) if marker else "") + "exit 0\n"
+
+
+#: What the stub exits with when it is asked to fail. Any non-zero number
+#: would do; it is named so the sentence's fallback can be asserted to carry
+#: this one rather than some other.
+FETCH_EXIT_CODE = 7
+
+
+def fails_saying(said: str) -> str:
+    """A fetch that answers with an error and says why, as a remote does: on
+    stderr, before a non-zero exit."""
+    return f'echo "{said}" >&2\nexit {FETCH_EXIT_CODE}\n'
+
+
+def fails_silently() -> str:
+    """The same failure with nothing said, which is the control for the detail
+    a fetch that did say something produces."""
+    return f"exit {FETCH_EXIT_CODE}\n"
+
+
+def git_that(directory: Path, on_fetch: str) -> Path:
+    """A `git` doing `on_fetch` for a fetch and being real git for anything else.
+
+    Everything the refresh and `fetch_story_branch` ask git that is *not* a
+    fetch -- the upstream, the remote, the refs the check compares -- has to go
+    on answering truthfully, or what the tests below observe would be a
+    repository that stopped working rather than a fetch that stopped answering.
+    So the stub dispatches on the one subcommand it exists to intercept and
+    execs the real git for the rest.
+    """
+    assert REAL_GIT, "there is no git on PATH to hand the other subcommands to"
+    directory.mkdir(parents=True, exist_ok=True)
+    stub = directory / "git"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$arg" = fetch ]; then\n'
+        + on_fetch +
+        "  fi\n"
+        "done\n"
+        f'exec {REAL_GIT} "$@"\n',
+        encoding="utf-8")
+    stub.chmod(0o755)
+    return directory
+
+
+def on_path(patch, directory: Path) -> None:
+    """Put `directory` in front of PATH for the duration of `patch`."""
+    patch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+
+
+def recorded_waits(patch) -> list[tuple[bool, float | None]]:
+    """Every wait the coordinator makes on a spawned process, and on what.
+
+    Recorded by subclassing `Popen` rather than by reading the source, so what
+    is asserted is the timeout the fetch's wait was actually given rather than
+    the one its call site appears to pass. Each entry says whether the process
+    waited on was the fetch and what bound the wait carried, which is what lets
+    a caller assert both halves: the fetch's wait is bounded, and every other
+    git the coordinator spawns is waited on exactly as it was before.
+
+    Both ways of waiting are recorded, because the two waits differ in kind
+    rather than only in bound: the fetch waits on the *process*, so that a
+    descendant still holding its output cannot be mistaken for a fetch that
+    never answered, while everything else the coordinator spawns goes through
+    `subprocess.run` and waits on the output.
+    """
+    seen: list[tuple[bool, float | None]] = []
+    real = subprocess.Popen
+
+    class Recording(real):
+        def __init__(self, argv, *rest, **kwargs):
+            self.is_the_fetch = "fetch" in (
+                list(argv) if isinstance(argv, (list, tuple)) else [])
+            super().__init__(argv, *rest, **kwargs)
+
+        def communicate(self, *args, timeout=None, **kwargs):
+            seen.append((self.is_the_fetch, timeout))
+            return super().communicate(*args, timeout=timeout, **kwargs)
+
+        def wait(self, timeout=None):
+            seen.append((self.is_the_fetch, timeout))
+            return super().wait(timeout=timeout)
+
+    patch.setattr(story_coordinator.subprocess, "Popen", Recording)
+    return seen
+
+
+def waited_for(marker: Path, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if marker.exists():
+            return True
+        time.sleep(0.05)
+    return marker.exists()
+
+
+def test_a_fetch_that_never_answers_is_killed_at_the_bound_and_reported(
+    stale_tracking, tmp_path, monkeypatch,
+):
+    """The story in one test: a remote that answers with nothing reaches the
+    same reported-never-refused outcome an unreachable one already reaches.
+
+    The kill is observed rather than argued: the stub was asked to sit for far
+    longer than the ceiling, so a call that returned inside it can only have
+    returned because the fetch was killed at the bound.
+
+    The control is the same repository the moment its git answers again. The
+    empty refusal below would hold for a base nobody was ever going to refuse,
+    and this one is refused: one thing changes -- whether the fetch answers --
+    and the refresh is made and the check refuses.
+    """
+    tracking = f"origin/{DEFAULT_BRANCH}"
+    stood_at = git(stale_tracking, "rev-parse", tracking).stdout.strip()
+
+    with monkeypatch.context() as stalled:
+        waits = recorded_waits(stalled)
+        on_path(stalled, git_that(tmp_path / "stalling", never_answers()))
+        stalled.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                        STALL_BOUND_SECONDS)
+
+        started = time.monotonic()
+        reason = story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
+        elapsed = time.monotonic() - started
+
+    assert elapsed < KILL_CEILING_SECONDS, elapsed
+    assert elapsed < LONGER_THAN_ANY_BOUND
+
+    # The fetch was waited on under the bound and then waited on again under
+    # the same bound, which is the reap after the kill: a group killed and
+    # never reaped leaves a zombie behind, and a reap that could wait forever
+    # would give back the guarantee the kill had just established.
+    assert [wait for fetch, wait in waits if fetch] \
+        == [STALL_BOUND_SECONDS, STALL_BOUND_SECONDS]
+    # And nothing else the coordinator spawned was bounded, so this is a fetch
+    # that is bounded rather than a coordinator that became impatient with
+    # everything it runs. The second assertion is what stops the first from
+    # being a claim about an empty set.
+    assert [wait for fetch, wait in waits if not fetch] != []
+    assert {wait for fetch, wait in waits if not fetch} == {None}
+
+    # One sentence, in the shape a failed fetch already answers with: the base,
+    # the remote, a detail, and the ref the check then answered from.
+    assert REFRESH_FAILED in reason
+    assert "\n" not in reason, "one line, printed at an entry point"
+    assert DEFAULT_BRANCH in reason
+    assert "origin" in reason
+    assert tracking in reason
+    assert str(STALL_BOUND_SECONDS) in reason, reason
+
+    # Nothing was refreshed and nothing was refused: the check answers from the
+    # ref as it stands, which is the decision it reaches with no refresh at all.
+    assert git(stale_tracking, "rev-parse", tracking).stdout.strip() == stood_at
+    assert story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False) == []
+
+    # The control for that emptiness.
+    assert story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH) == ""
+    refused = story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False)
+    assert len(refused) == 1 and "behind" in refused[0]
+
+
+def test_the_kill_reaches_the_process_group_the_fetch_leads(
+    stale_tracking, tmp_path, monkeypatch,
+):
+    """A fetch to an ssh remote spawns an ssh, and killing the fetch alone
+    would leave that child running past the bound.
+
+    The absence is controlled by the test below rather than beside itself: the
+    same child, backgrounded by a fetch that is not killed, does write its
+    marker -- so a marker that never appears is a fact about the kill rather
+    than about a child that was never going to write one.
+    """
+    marker = tmp_path / "the-child-the-fetch-spawned-survived"
+    with monkeypatch.context() as stalled:
+        on_path(stalled, git_that(tmp_path / "stalling-with-a-child",
+                                  never_answers(marker)))
+        stalled.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                        STALL_BOUND_SECONDS)
+        assert story_coordinator.refresh_base(
+            stale_tracking, DEFAULT_BRANCH) != ""
+
+    assert not waited_for(marker, CHILD_SLEEP_SECONDS * 2), \
+        "a child of the killed fetch outlived it"
+
+
+def test_that_same_child_writes_its_marker_when_its_fetch_is_not_killed(
+    stale_tracking, tmp_path, monkeypatch,
+):
+    """The control for the absence above. The stub backgrounds the identical
+    child and then exits at once instead of sitting there, so nothing is killed
+    and the child runs to its marker."""
+    marker = tmp_path / "the-child-the-fetch-spawned-survived"
+    with monkeypatch.context() as answering:
+        on_path(answering, git_that(tmp_path / "answering-with-a-child",
+                                    answers_at_once(marker)))
+        answering.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                          STALL_BOUND_SECONDS)
+        assert story_coordinator.refresh_base(
+            stale_tracking, DEFAULT_BRANCH) == ""
+
+    assert waited_for(marker, PATIENCE_SECONDS), \
+        "the child never writes its marker, so its absence above proves nothing"
+
+
+def test_a_descendant_that_escaped_the_group_does_not_extend_the_bound(
+    tmp_path, monkeypatch,
+):
+    """A fetch answers, and something it spawned outlives it in a session of
+    its own -- which is what a daemonizing child does, and what git's own
+    background maintenance does.
+
+    Such a child holds whatever descriptors the fetch was given for as long as
+    it lives, so a wait on the fetch's *output* waits out the child rather than
+    the fetch. The bound is on the fetch answering, so the helper comes back
+    when the fetch does, however long its escaped descendant goes on running.
+    """
+    escaped = (f'{sys.executable} -c "import os, time; os.setsid(); '
+               f'time.sleep({LONGER_THAN_ANY_BOUND})" &\nexit 0\n')
+    script = tmp_path / "escapes.sh"
+    script.write_text("#!/bin/sh\n" + escaped, encoding="utf-8")
+    script.chmod(0o755)
+
+    with monkeypatch.context() as bounded:
+        bounded.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                        STALL_BOUND_SECONDS)
+        started = time.monotonic()
+        outcome = story_coordinator._bounded_fetch([str(script)])
+        elapsed = time.monotonic() - started
+
+    assert elapsed < KILL_CEILING_SECONDS, elapsed
+    assert elapsed < LONGER_THAN_ANY_BOUND
+    # And it answered by its exit code rather than being reported as a fetch
+    # that never answered, which is what a wait on the output would have said.
+    assert outcome.timed_out is False
+    assert outcome.succeeded
+
+
+def test_what_a_failing_remote_said_still_reaches_the_reported_sentence(
+    stale_tracking, tmp_path, monkeypatch,
+):
+    """A fetch that exits non-zero is reported exactly as it was before this
+    story, and that is not free.
+
+    Bounding the fetch moved its output off pipes and onto files -- a wait on
+    the pipes is a wait for the fetch's *descendants* to let go of them, which
+    is a different event from the fetch answering. So what a remote said now
+    reaches the sentence by a route nothing else here exercises, and a break in
+    it would show up only as a detail that quietly stopped naming the remote's
+    own words.
+
+    The control is the same failure with nothing said, where the detail falls
+    back to naming the exit code: the message found above is the remote's words
+    rather than a sentence that would have read the same whatever git wrote.
+    """
+    said = "fatal-the-remote-declined-this-one"
+
+    with monkeypatch.context() as failing:
+        on_path(failing, git_that(tmp_path / "failing-with-a-message",
+                                  fails_saying(said)))
+        reason = story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
+
+    assert REFRESH_FAILED in reason
+    assert "\n" not in reason, "one line, printed at an entry point"
+    assert said in reason, reason
+    assert f"exited {FETCH_EXIT_CODE}" not in reason, reason
+
+    with monkeypatch.context() as silent:
+        on_path(silent, git_that(tmp_path / "failing-without-a-message",
+                                 fails_silently()))
+        fallback = story_coordinator.refresh_base(
+            stale_tracking, DEFAULT_BRANCH)
+
+    assert REFRESH_FAILED in fallback
+    assert f"exited {FETCH_EXIT_CODE}" in fallback, fallback
+    assert said not in fallback
+
+    # Neither attempt refreshed anything and neither refused anything, which is
+    # what a failed fetch answered before this story and answers now.
+    assert story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False) == []
+
+
+def test_a_stalled_fetch_of_a_story_branch_leaves_it_a_branch_this_clone_lacks(
+    based, tmp_path, monkeypatch,
+):
+    """The module's other fetch, bounded by the same constant and answering
+    what it already answered for a fetch that failed.
+
+    One attribute is patched and this fetch obeys it too, which is what says
+    there is no second spelling of the bound: a fetch bounded somewhere else
+    would have sat for the stub's own far longer sleep.
+
+    The control is the same clone, the same branch and the same call with git
+    answering, where the branch is fetched and the answer is True -- so the
+    False below is the stall rather than a branch that was never there to get.
+    """
+    git(based, "checkout", "-q", "-b", STORY_BRANCH)
+    git(based, "commit", "-q", "--allow-empty", "-m", "the story's plan")
+    git(based, "push", "-q", "origin", STORY_BRANCH)
+    git(based, "checkout", "-q", DEFAULT_BRANCH)
+    git(based, "branch", "-q", "-D", STORY_BRANCH)
+    assert not story_coordinator.branch_exists(based, STORY_BRANCH)
+
+    config = config_of(based)
+    with monkeypatch.context() as stalled:
+        on_path(stalled, git_that(tmp_path / "stalling-story-branch",
+                                  never_answers()))
+        stalled.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
+                        STALL_BOUND_SECONDS)
+
+        started = time.monotonic()
+        fetched = story_coordinator.fetch_story_branch(
+            based, config, STORY_BRANCH)
+        elapsed = time.monotonic() - started
+
+    assert fetched is False
+    assert elapsed < KILL_CEILING_SECONDS, elapsed
+    assert elapsed < LONGER_THAN_ANY_BOUND
+    assert not story_coordinator.branch_exists(based, STORY_BRANCH)
+
+    # The control.
+    assert story_coordinator.fetch_story_branch(
+        based, config, STORY_BRANCH) is True
+    assert story_coordinator.branch_exists(based, STORY_BRANCH)
+
+
+def configured_keys() -> list[str]:
+    """Every key the harness's configuration surface admits.
+
+    Asked of `harness_config.declared_config_keys`, which is the whole of that
+    surface rather than a sample of it: since story-043 a loaded config
+    carrying a key the schema does not declare refuses the run, so a bound
+    that were configurable would have to be declared there to be readable at
+    all. Asked through the module's own reader rather than by resolving the
+    schema out of this repository, so this module reads no live harness
+    artifact to make the claim.
+    """
+    return list(harness_config.declared_config_keys())
+
+
+def test_one_positive_constant_bounds_the_fetches_and_no_key_configures_it():
+    """The bound is a real duration in harness source and nowhere else.
+
+    Zero would be no bound at all, which is the failure a bound exists to
+    prevent, so a positive number is part of the claim rather than a detail.
+
+    The absence of a key is controlled by the same reader over the same
+    surface, which finds the bounds that *are* configured: an empty list here
+    is the fetch bound not being configurable rather than a reader that sees
+    no configuration at all.
+    """
+    assert isinstance(story_coordinator.FETCH_TIMEOUT_SECONDS, (int, float))
+    assert story_coordinator.FETCH_TIMEOUT_SECONDS > 0
+
+    keys = configured_keys()
+    assert [key for key in keys if "fetch" in key] == []
+    assert {"sync_timeout_seconds", "filed_query_timeout_seconds"} <= set(keys)
+
+
+#: How a docstring may say that a remote answered with nothing. A vocabulary
+#: rather than one wording, so a later author rephrasing the promise is
+#: measured against what the promise has to cover rather than against the
+#: sentence that happened to cover it first.
+ANSWERED_WITH_NOTHING = ("never comes back", "never answers", "does not answer",
+                         "answers with nothing", "did not answer")
+
+
+def coordinator_docstring(function: str) -> str:
+    return function_source(COORDINATOR_PATH.read_text(encoding="utf-8"),
+                           function).split('"""')[1]
+
+
+def test_refresh_bases_promise_covers_a_remote_that_answers_with_nothing():
+    """The docstring promised that offline, an unreachable remote and absent
+    credentials leave the check exactly where it was. That held for a remote
+    which answered with an error and not for one that answered with nothing,
+    and the promise is what a reader of this function goes on.
+
+    Asserted on the paragraph that makes the promise rather than on the
+    docstring as a whole: a mention of the bound somewhere else in the text
+    would not be the promise having been widened.
+    """
+    docstring = coordinator_docstring("refresh_base")
+    promises = [paragraph for paragraph in docstring.split("\n\n")
+                if "exactly where it was" in paragraph]
+    assert len(promises) == 1, docstring
+    assert any(wording in promises[0].lower()
+               for wording in ANSWERED_WITH_NOTHING), promises[0]
+
+    # And the reason the bound exists is written where the fetch is.
+    assert "FETCH_TIMEOUT_SECONDS" in docstring
+    assert "process group" in docstring
+    assert "GIT_TERMINAL_PROMPT" in docstring
+
+
+def test_fetch_story_branch_records_the_bound_it_is_now_held_to():
+    """The other fetch's docstring says it is bounded and says that being
+    bounded changes nothing about what it answers."""
+    docstring = coordinator_docstring("fetch_story_branch")
+    assert "FETCH_TIMEOUT_SECONDS" in docstring
+    assert "bound" in docstring.lower()
 
 
 def test_base_problems_keeps_its_signature_and_decides_nothing_new(based):
