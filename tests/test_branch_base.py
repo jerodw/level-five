@@ -41,7 +41,28 @@ check reporting the violation it exists to catch:
     same scanner over a copy of the module with a second literal planted;
   * "story_branch no longer promises that no default base branch is written
     into orchestration" sits beside the same substring read out of that
-    function's pre-story source, which does promise it.
+    function's pre-story source, which does promise it;
+  * "the check has nothing to say about a base whose tracking ref is stale"
+    is asserted before the refresh and is the demonstration that the refusal
+    beside it is the refresh's doing rather than something that held anyway;
+  * "the refresh wrote no ref but the one the check reads" sits beside a
+    second tracking ref made stale in the identical way, which the same
+    function moves the moment it is the base being refreshed;
+  * "a refresh that was made prints nothing and appends no note", at both
+    entry points, sits beside the same readers over the same sessions with a
+    refresh that could not be made, where the line and the note appear;
+  * "a repository with nothing to refresh reports no failed refresh" sits
+    beside the same function over a repository that does have something to
+    refresh and cannot reach it;
+  * "a run whose story branch already exists attempted no refresh" sits beside
+    the same repository, same unreachable remote, with the branch not yet
+    created, where the refresh is attempted and reported;
+  * "the refresh fetched the branch git records as the upstream" sits beside
+    the same repository with that record removed, where the same call fetches
+    the base's own name instead and the check falls silent;
+  * "a fetch the platform will not spawn is reported rather than raised" sits
+    beside the same repository's refresh without the refused spawn, which
+    succeeds and says nothing.
 
 The baseline for anything read out of git is `conftest.story_commit_range`,
 never HEAD and never the working tree against the repository root: the
@@ -476,6 +497,501 @@ def test_a_base_identical_to_its_remote_proceeds(based):
 
 
 # --------------------------------------------------------------------------
+# Leg two answers from the base as the remote holds it
+#
+# The leg above compares the base against its *local* remote-tracking ref, and
+# until story-144 nothing refreshed that ref first: a checkout that had not
+# fetched since the base moved had `main` and `origin/main` in agreement --
+# both behind -- and the check passed cleanly while the branch was cut from a
+# tree the shared base had left behind. Everything in this section is built
+# against that state, which is why it is built by hand: a push moves the
+# tracking ref and a fetch is what the refresh now does, so the only way to
+# hold "the remote has moved and nothing here has heard about it" is to move
+# the remote and put the tracking ref back where it was.
+# --------------------------------------------------------------------------
+
+
+def move_the_remote_on(run_git, branch: str = DEFAULT_BRANCH,
+                       remote: str = "origin") -> str:
+    """Advance the remote's `branch`, leaving the tracking ref where it was.
+
+    `run_git` is a callable taking git's arguments, so the same construction
+    serves the coordinator's repositories and `Planning`'s. What is left behind
+    is a checkout whose base and whose `<remote>/<branch>` agree on a commit
+    the remote is no longer standing on, which is exactly the checkout
+    story-143 was planned in.
+
+    The commit the remote moved to is returned, so a test can say what the
+    refresh was supposed to bring back rather than inferring it.
+    """
+    tracking = f"refs/remotes/{remote}/{branch}"
+    was = run_git("rev-parse", tracking).stdout.strip()
+    assert was, f"{tracking} does not resolve, so there is nothing to make stale"
+    standing_on = run_git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    side = f"_moved-on-the-remote-{branch}"
+    # Cut from the tracking ref rather than from `branch`: where the remote
+    # stands is what this helper advances, and a remote branch the checkout has
+    # no local branch for -- which is the ordinary case for a base whose
+    # upstream is not called what the base is called -- has no name to cut from
+    # otherwise. For a branch that does have a local counterpart the two are
+    # the same commit, which is the state every caller here builds.
+    run_git("checkout", "-q", "-b", side, tracking)
+    run_git("commit", "-q", "--allow-empty", "-m",
+            f"someone else's merge, landed on {remote}/{branch}")
+    moved = run_git("rev-parse", "HEAD").stdout.strip()
+    run_git("push", "-q", remote, f"{side}:{branch}")
+    run_git("checkout", "-q", standing_on)
+    run_git("branch", "-q", "-D", side)
+    # The push moved the tracking ref, which is the fact this repository is
+    # built not to have heard: put it back.
+    run_git("update-ref", tracking, was)
+    assert run_git("rev-parse", tracking).stdout.strip() == was
+    return moved
+
+
+def unreachable_remote(run_git, tmp_path: Path, remote: str = "origin") -> None:
+    """Point the remote's *fetch* URL at a repository that is not there.
+
+    Its push URL is kept, so the only thing that stops working is a fetch:
+    everything else an entry point does with the remote -- a plan's claim, its
+    push -- goes on working, and what the test then observes is a refresh that
+    could not be made rather than a repository that is broken generally.
+    """
+    pushes_to = run_git("remote", "get-url", remote).stdout.strip()
+    assert pushes_to
+    run_git("remote", "set-url", remote,
+            str(tmp_path / "there-is-no-repository-here.git"))
+    run_git("remote", "set-url", "--push", remote, pushes_to)
+
+
+def all_refs(root: Path) -> dict[str, str]:
+    """Every ref, by what a *write to it* would change.
+
+    A symbolic ref is recorded as what it points at and an ordinary one as the
+    object it names, because `%(objectname)` resolves a symbolic ref: with it
+    alone, `refs/remotes/origin/HEAD` -- which `git remote set-head` makes a
+    symbolic ref to `refs/remotes/origin/main` -- reports a new value whenever
+    the ref it follows is written, and a reader comparing two of these
+    snapshots sees two refs changed where one was written. Reading its target
+    instead leaves it unchanged by a write to the ref it follows, and still
+    changed by a write to it -- a retarget -- so a scope assertion built on
+    this still fails if anything writes a second ref.
+    """
+    lines = git(root, "for-each-ref",
+                "--format=%(refname) "
+                "%(if)%(symref)%(then)%(symref)%(else)%(objectname)%(end)"
+                ).stdout.splitlines()
+    return dict(line.split(" ", 1) for line in lines)
+
+
+#: The fragment a refresh that could not be made carries in its sentence. It is
+#: written once here because two tests below assert its *absence* -- a refresh
+#: that was made, and a run that never attempted one -- and an absence of a
+#: string nothing else asserts is an absence that empties itself the moment the
+#: wording moves. The presence assertions beside them are what hold it: a
+#: wording change reddens those rather than quietly greening these.
+REFRESH_FAILED = "could not be refreshed"
+
+
+@pytest.fixture
+def stale_tracking(based) -> Path:
+    """`main` level with `origin/main`, and the remote a commit further on."""
+    move_the_remote_on(lambda *args: git(based, *args))
+    assert git(based, "rev-parse", DEFAULT_BRANCH).stdout \
+        == git(based, "rev-parse", f"origin/{DEFAULT_BRANCH}").stdout, \
+        "the base and its tracking ref were meant to agree"
+    return based
+
+
+def test_a_base_level_with_a_stale_tracking_ref_is_refused(stale_tracking):
+    """The story in one test: the check cannot see a stale base until the ref
+    it reads is refreshed, and once it is, it refuses.
+
+    The first assertion is the demonstration that the second one fails without
+    the implementation: asked of this repository the way it was asked before
+    the refresh existed, the check finds nothing to say, because the two things
+    it compares agree. Nothing about the repository changes between the two
+    calls except that the tracking ref has been brought up to date.
+    """
+    unrefreshed = story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False)
+    assert unrefreshed == [], \
+        "the check answered something without a refresh, so the refusal below " \
+        "would hold whether the refresh happened or not"
+
+    assert story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH) == ""
+
+    refused = story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False)
+    assert len(refused) == 1
+    assert DEFAULT_BRANCH in refused[0]
+    assert f"origin/{DEFAULT_BRANCH}" in refused[0]
+    assert "behind" in refused[0]
+
+
+def test_that_refusal_is_the_existing_drifted_base_wording_unchanged(
+    stale_tracking, make_based,
+):
+    """Word for word what a base behind its remote has always been refused
+    with: the two repositories are different repositories at different paths,
+    so equality here is equality of a message derived from the branch names
+    alone -- which is what the unchanged `_refuse_base` produces."""
+    fetched = make_based("already-fetched")
+    base_behind(fetched)
+    known = story_coordinator.base_problems(fetched, DEFAULT_BRANCH, False)
+    assert len(known) == 1 and "behind" in known[0]
+
+    story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
+    assert story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False) == known
+
+
+def test_a_run_whose_base_is_only_stale_in_the_tracking_ref_refuses(
+    stale_tracking, capsys,
+):
+    """Driven through the entry point, where the refusal has to leave nothing
+    behind. Its control is `test_a_base_identical_to_its_remote_proceeds`: the
+    same repository with a remote that has not moved runs to completion."""
+    capsys.readouterr()
+    code, runner = run(stale_tracking)
+    err = capsys.readouterr().err
+
+    assert code == 1
+    assert f"origin/{DEFAULT_BRANCH}" in err
+    assert runner.calls == []
+    assert not run_dir_of(stale_tracking).exists()
+    assert STORY_BRANCH not in branches(stale_tracking)
+
+
+def test_the_refresh_writes_the_one_tracking_ref_it_reads_and_nothing_else(
+    make_based, tmp_path,
+):
+    """Every ref before and after, with a second stale tracking ref standing
+    beside the base's so the absence is an absence and not an emptiness.
+
+    The control is the same function asked about that second branch at the end:
+    `origin/trunk` was left where it was by the refresh of `main`, and moves
+    the moment the refresh is asked about `trunk`.
+    """
+    root = make_based("only-that-ref")
+    git(root, "checkout", "-q", "-b", OTHER_DEFAULT)
+    git(root, "push", "-q", "-u", "origin", OTHER_DEFAULT)
+    git(root, "checkout", "-q", DEFAULT_BRANCH)
+    move_the_remote_on(lambda *args: git(root, *args))
+    move_the_remote_on(lambda *args: git(root, *args), branch=OTHER_DEFAULT)
+
+    tracked = f"refs/remotes/origin/{DEFAULT_BRANCH}"
+    other = f"refs/remotes/origin/{OTHER_DEFAULT}"
+    before_refs = all_refs(root)
+    before = snapshot(root)
+
+    assert story_coordinator.refresh_base(root, DEFAULT_BRANCH) == ""
+
+    after_refs = all_refs(root)
+    changed = {name for name in set(before_refs) | set(after_refs)
+               if before_refs.get(name) != after_refs.get(name)}
+    assert changed == {tracked}, (before_refs, after_refs)
+    assert after_refs[other] == before_refs[other]
+    # `origin/HEAD` follows the ref that was written, so it is the case
+    # `all_refs` is careful about: read as an object it would report a second
+    # ref changed, and it is left in the comparison above -- rather than
+    # excluded from it -- so a refresh that *retargeted* it would still fail.
+    head = "refs/remotes/origin/HEAD"
+    assert before_refs[head] == tracked and after_refs[head] == tracked
+    assert git(root, "rev-parse", head).stdout \
+        == git(root, "rev-parse", tracked).stdout
+    # The working tree, the index, HEAD, the stash and the local branches are
+    # what `snapshot` holds; only its branch listing may differ, because that
+    # listing includes the one ref above.
+    after = snapshot(root)
+    assert {k: v for k, v in after.items() if k != "branches"} \
+        == {k: v for k, v in before.items() if k != "branches"}
+
+    # The control: that other ref is stale in exactly the same way, and the
+    # same function moves it when it is the base being refreshed.
+    assert story_coordinator.refresh_base(root, OTHER_DEFAULT) == ""
+    assert all_refs(root)[other] != before_refs[other]
+
+
+def test_the_fetch_runs_with_gits_terminal_prompting_disabled(
+    stale_tracking, monkeypatch,
+):
+    """A checkout with no credentials must report a reason rather than hang a
+    pre-flight on a password prompt, and `GIT_TERMINAL_PROMPT=0` is the only
+    thing git reads for that.
+
+    Two halves, because either alone would be satisfied by something that does
+    not disable anything: the fetch is spawned under the prefix, and a child
+    spawned under that prefix really does see the variable set.
+    """
+    spawned = []
+    real = subprocess.run
+
+    def watched(command, *args, **kwargs):
+        spawned.append(list(command))
+        return real(command, *args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator.subprocess, "run", watched)
+    assert story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH) == ""
+
+    fetches = [c for c in spawned if "fetch" in c]
+    assert len(fetches) == 1, spawned
+    prefix = list(story_coordinator.NO_TERMINAL_PROMPT)
+    assert fetches[0][:len(prefix)] == prefix, fetches[0]
+
+    seen = real([*prefix, "sh", "-c", "printf %s \"$GIT_TERMINAL_PROMPT\""],
+                capture_output=True, text=True, check=True)
+    assert seen.stdout == "0"
+
+
+#: A remote-side branch name deliberately unequal to the local base's, so that
+#: a refresh which guessed the base's own name and one which read git's record
+#: of the upstream fetch different refs and land different objects.
+REMOTE_SIDE = "mainline"
+
+
+@pytest.fixture
+def upstream_under_another_name(make_based) -> tuple[Path, str, str]:
+    """A base whose upstream branch is not called what the base is called.
+
+    `main` tracks `origin/mainline`, the remote's `mainline` has moved, and the
+    remote's `main` has stayed where it was — so the object a refresh brings
+    back says which of the two names it fetched. The tracking ref is returned
+    with the commit the remote moved `mainline` to.
+    """
+    root = make_based("upstream-under-another-name")
+    git(root, "push", "-q", "origin", f"{DEFAULT_BRANCH}:{REMOTE_SIDE}")
+    git(root, "fetch", "-q", "origin")
+    git(root, "config", f"branch.{DEFAULT_BRANCH}.merge",
+        f"refs/heads/{REMOTE_SIDE}")
+    tracking = f"refs/remotes/origin/{REMOTE_SIDE}"
+    assert story_coordinator._base_tracking_ref(root, DEFAULT_BRANCH) == tracking
+    moved = move_the_remote_on(lambda *args: git(root, *args),
+                               branch=REMOTE_SIDE)
+    assert git(root, "rev-parse", f"origin/{DEFAULT_BRANCH}").stdout.strip() \
+        != moved, "the two remote branches were meant to differ"
+    return root, tracking, moved
+
+
+def test_the_refresh_fetches_the_branch_git_records_as_the_upstream(
+    upstream_under_another_name,
+):
+    """`branch.<base>.merge` is the remote-side name, and the base's own name is
+    only the fallback for a base that states no upstream.
+
+    The object is what tells the two apart: the remote's `mainline` has moved
+    and its `main` has not, so a refresh that fetched the base's own name would
+    write the *unmoved* commit into the tracking ref and the check below would
+    find nothing to say. The control beneath makes exactly that repository — the
+    same one with the upstream record removed — and shows the check falling
+    silent, so the assertions above are the record's doing rather than
+    something that held anyway.
+    """
+    root, tracking, moved = upstream_under_another_name
+
+    assert story_coordinator.refresh_base(root, DEFAULT_BRANCH) == ""
+
+    assert git(root, "rev-parse", tracking).stdout.strip() == moved
+    refused = story_coordinator.base_problems(root, DEFAULT_BRANCH, False)
+    assert len(refused) == 1 and "behind" in refused[0]
+
+    # The control: with nothing recording an upstream, the refresh has only the
+    # base's own name to go on, fetches `main`, leaves `origin/mainline` where
+    # it stands, and the check has nothing to say about a base level with it.
+    git(root, "config", "--unset", f"branch.{DEFAULT_BRANCH}.merge")
+    git(root, "update-ref", tracking,
+        git(root, "rev-parse", DEFAULT_BRANCH).stdout.strip())
+    assert story_coordinator.refresh_base(root, DEFAULT_BRANCH) == ""
+    assert git(root, "rev-parse", tracking).stdout.strip() != moved
+    assert story_coordinator.base_problems(root, DEFAULT_BRANCH, False) == []
+
+
+def test_a_fetch_the_platform_will_not_spawn_is_reported_rather_than_raised(
+    stale_tracking, monkeypatch,
+):
+    """The refresh reports every way it can fail, including the one that is not
+    a failed fetch: a platform with nothing to run the prompting prefix with
+    raises at the spawn, and a pre-flight may not die of that.
+
+    The control is the same call without the monkeypatch, in the first
+    assertion: this repository's refresh does succeed, so the sentence below is
+    the refused spawn's and not the repository's.
+    """
+    assert story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH) == ""
+    git(stale_tracking, "update-ref", f"refs/remotes/origin/{DEFAULT_BRANCH}",
+        git(stale_tracking, "rev-parse", DEFAULT_BRANCH).stdout.strip())
+
+    real = subprocess.run
+    refused = "no such executable to run the refresh with"
+
+    def will_not_spawn(command, *args, **kwargs):
+        if list(command)[:1] == [story_coordinator.NO_TERMINAL_PROMPT[0]]:
+            raise OSError(refused)
+        return real(command, *args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator.subprocess, "run", will_not_spawn)
+
+    reason = story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
+    assert REFRESH_FAILED in reason
+    assert refused in reason
+    assert "\n" not in reason
+    # And the decision is the one the unrefreshed ref gives, unchanged.
+    assert story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False) == []
+
+
+def test_a_refresh_that_could_not_be_made_leaves_the_decision_where_it_was(
+    stale_tracking, tmp_path, capsys,
+):
+    """A network condition may not refuse a run: the check reaches exactly the
+    verdict it reached before this story, from the tracking ref as it stands,
+    and the reason is reported rather than raised.
+
+    Both halves are asserted against the same repository the two tests above
+    refuse, so "the decision it would have reached" is one a reader can see is
+    different from the decision a reachable remote produces.
+    """
+    unreachable_remote(lambda *args: git(stale_tracking, *args), tmp_path)
+    tracking = git(stale_tracking, "rev-parse",
+                   f"origin/{DEFAULT_BRANCH}").stdout.strip()
+
+    reason = story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
+    assert reason != ""
+    assert "\n" not in reason, "one line, printed at an entry point"
+    assert DEFAULT_BRANCH in reason
+    assert "origin" in reason
+    assert REFRESH_FAILED in reason, \
+        "the fragment the absences below are asserted against moved"
+    # Nothing was refreshed, so the check answers from the ref as it stands.
+    assert git(stale_tracking, "rev-parse",
+               f"origin/{DEFAULT_BRANCH}").stdout.strip() == tracking
+    assert story_coordinator.base_problems(
+        stale_tracking, DEFAULT_BRANCH, False) == []
+
+    capsys.readouterr()
+    code, runner = run(stale_tracking)
+    out = capsys.readouterr().out
+    assert code == 0, "a network condition refused the run"
+    assert runner.calls != []
+    assert reason in out
+
+
+def test_a_run_that_proceeded_on_an_unrefreshed_ref_says_so_in_its_own_record(
+    stale_tracking, tmp_path,
+):
+    """One write, two renderings, beside the behind-the-base note.
+
+    Its control is `test_a_refresh_that_was_made_records_nothing` below: the
+    same readers over a run whose refresh succeeded find nothing.
+    """
+    unreachable_remote(lambda *args: git(stale_tracking, *args), tmp_path)
+    reason = story_coordinator.refresh_base(stale_tracking, DEFAULT_BRANCH)
+    assert reason != ""
+
+    assert run(stale_tracking)[0] == 0
+    entries = notes(stale_tracking)
+    assert [entry["message"] for entry in entries] == [reason]
+    assert [line for line in events(stale_tracking) if line == reason] == [reason]
+
+
+def test_a_refresh_that_was_made_records_nothing(based, capsys):
+    """The control for the two above: a reachable remote, the same run, and the
+    refresh neither prints a line nor appends a note."""
+    capsys.readouterr()
+    code, runner = run(based)
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert runner.calls != []
+    assert notes(based) == []
+    assert REFRESH_FAILED not in out
+
+
+@pytest.mark.parametrize("repository", ["no-remote", "no-counterpart",
+                                        "not-a-repository"])
+def test_nothing_to_refresh_is_not_a_failed_refresh(
+    make_based, tmp_path, repository,
+):
+    """A repository with no remote, a base nobody has pushed, and a root that
+    is not a repository each have nothing to refresh and report nothing.
+
+    The control is the fourth case, built in the same loop's shape: the same
+    function over a repository that *does* have a counterpart and cannot reach
+    its remote answers a sentence.
+    """
+    if repository == "no-remote":
+        root = make_based("nothing-no-remote", remote=False)
+        base = DEFAULT_BRANCH
+    elif repository == "no-counterpart":
+        root = make_based("nothing-no-counterpart")
+        git(root, "checkout", "-q", "-b", OTHER_DEFAULT)
+        base = OTHER_DEFAULT
+        assert git(root, "rev-parse", "--verify", f"refs/remotes/origin/{base}",
+                   check=False).returncode != 0
+    else:
+        root = tmp_path / "nothing-not-a-repository"
+        root.mkdir()
+        base = DEFAULT_BRANCH
+
+    assert story_coordinator.refresh_base(root, base) == ""
+
+    reachable = make_based("nothing-control")
+    unreachable_remote(lambda *args: git(reachable, *args), tmp_path)
+    assert story_coordinator.refresh_base(reachable, DEFAULT_BRANCH) != ""
+
+
+def test_the_refresh_is_not_attempted_for_a_story_branch_that_already_exists(
+    stale_tracking, tmp_path, capsys,
+):
+    """A resume does no network work, so it cannot be told anything about the
+    remote -- and is not refused for a base it is not cutting anything from.
+
+    The observable is the failed refresh's own report: with an unreachable
+    remote a refresh that was attempted says so, and this run says nothing. Its
+    control is the same repository with the same unreachable remote and the
+    branch not yet created, where the sentence is printed and noted.
+    """
+    unreachable_remote(lambda *args: git(stale_tracking, *args), tmp_path)
+    git(stale_tracking, "branch", STORY_BRANCH)
+
+    capsys.readouterr()
+    code, runner = run(stale_tracking)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert runner.calls != []
+    assert REFRESH_FAILED not in out
+    assert notes(stale_tracking) == []
+
+
+def test_that_same_repository_reports_it_when_the_branch_is_not_there_yet(
+    stale_tracking, tmp_path, capsys,
+):
+    """The control for the test above: one thing differs -- whether the story
+    branch already exists -- and the refresh is attempted and reported."""
+    unreachable_remote(lambda *args: git(stale_tracking, *args), tmp_path)
+
+    capsys.readouterr()
+    code, runner = run(stale_tracking)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert runner.calls != []
+    assert REFRESH_FAILED in out
+    assert len(notes(stale_tracking)) == 1
+
+
+def test_base_problems_keeps_its_signature_and_decides_nothing_new(based):
+    """The refresh changes what the second leg reads, never what the check
+    decides, so the check the rest of this module asserts against is the one it
+    was asserted against before: same parameters, in the same order."""
+    import inspect
+
+    assert list(inspect.signature(
+        story_coordinator.base_problems).parameters) \
+        == ["target_root", "base", "declared", "from_head"]
+    assert story_coordinator.base_problems(based, DEFAULT_BRANCH, False) == []
+
+
+# --------------------------------------------------------------------------
 # Both at once: which of the two is reported
 # --------------------------------------------------------------------------
 
@@ -837,6 +1353,56 @@ def test_l5_plan_refuses_on_the_same_conditions_before_anything_is_created(
     assert not planning.log.exists(), "the session was invoked"
 
 
+def test_l5_plan_refuses_a_base_that_is_stale_only_in_its_tracking_ref(
+    planning: Planning,
+):
+    """The other entry point over story-144's repository: a plan written in a
+    checkout that has not fetched since the base moved is refused, where it
+    used to be written against a tree the branch would never hold.
+
+    The first assertion is the demonstration that the refusal is the refresh's
+    doing: asked of this repository without one, the check has nothing to say.
+    """
+    move_the_remote_on(planning.git)
+    assert story_coordinator.base_problems(planning.root, "main", False) == [], \
+        "the check answered something without a refresh"
+
+    before_head = planning.head()
+    before_refs = remote_refs(planning.remote)
+
+    result = run_plan(planning, "add a thing", L5_STUB_WRITE=planning_stub())
+
+    assert result.returncode == 1
+    assert "behind" in result.stderr
+    assert planning.head() == before_head, "HEAD moved"
+    assert remote_refs(planning.remote) == before_refs, "something was pushed"
+    assert planning.status() == ""
+    assert not planning.log.exists(), "the session was invoked"
+
+
+def test_l5_plan_reports_a_refresh_it_could_not_make_and_plans_anyway(
+    planning: Planning,
+):
+    """Reporting may not become the failure, at this entry point too.
+
+    The fetch is made to fail by pointing the base's upstream at a branch the
+    remote does not carry, which leaves the remote reachable for everything
+    else the session does with it -- its claim and its push -- so what the
+    assertions below see is a refresh that could not be made rather than a
+    repository that stopped working. Its control is
+    `test_the_same_session_on_the_base_commits_and_pushes`, where the same
+    session over a base whose upstream is intact prints no such line.
+    """
+    planning.git("config", "branch.main.merge", "refs/heads/gone-from-the-remote")
+    before_head = planning.head()
+
+    result = run_plan(planning, "add a thing", L5_STUB_WRITE=planning_stub())
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert REFRESH_FAILED in result.stdout
+    assert planning.planned_head() != before_head, "the plan was not committed"
+
+
 def test_l5_plan_no_longer_refuses_a_developer_standing_off_the_base(
     planning: Planning,
 ):
@@ -872,6 +1438,10 @@ def test_the_same_session_on_the_base_commits_and_pushes(planning: Planning):
     assert planning.planned_head() != before_head
     assert remote_refs(planning.remote) != before_refs
     assert PLANNED not in planning.status()
+    # And a refresh that was made says nothing. Its control is
+    # `test_l5_plan_reports_a_refresh_it_could_not_make_and_plans_anyway`,
+    # where the same session over a base whose upstream is gone does print it.
+    assert REFRESH_FAILED not in result.stdout
 
 
 def test_l5_plan_takes_base_ahead_of_the_request_and_passes_the_rest_unchanged(

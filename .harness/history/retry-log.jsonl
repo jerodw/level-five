@@ -58,3 +58,4 @@
 {"story_id": "story-140", "timestamp": "2026-09-12 23:48:12", "stage": "verifier", "retry_decision": "retry", "retry_category": "validation", "retry_stage": "tester"}
 {"story_id": "story-141", "timestamp": "2026-09-13 15:38:33", "stage": "verifier", "retry_decision": "retry", "retry_category": "validation", "retry_stage": "tester"}
 {"story_id": "story-141", "timestamp": "2026-09-13 15:49:56", "stage": "verifier", "retry_decision": "retry", "retry_category": "validation", "retry_stage": "tester"}
+{"story_id": "story-144", "timestamp": "2026-09-14 09:54:36", "stage": "verifier", "retry_decision": "retry", "retry_category": "implementation", "retry_stage": "implementer"}
