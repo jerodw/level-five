@@ -25,6 +25,25 @@ The rules below, each derived from the shipped definitions under `workflows/`:
   * the self-route injection slots agree with one another, so the prompt that
     diverged is reported rather than read as one workflow's own wording.
 
+Those middle two rules decide over a **passage** and not over the file: a
+prompt satisfies one when some single paragraph of it carries every claim, and
+what a rule reports is the paragraph that came closest together with what that
+paragraph does not say. Deciding over the file asks only whether each accepted
+phrasing appears somewhere, which prose written about something else answers —
+a sentence about an out-of-confinement edit says "the run carries on" and a
+claim about a red suite is met by it, so a prompt can lose the paragraph
+entirely and still be reported against by nothing. Reading a passage buys back
+the thing the rules exist for: a claim met by prose about something else no
+longer answers for a paragraph that is not there. What it costs is that a
+prompt saying every one of these things, spread over two paragraphs, is
+reported — which is asserted below rather than left to be discovered, because
+the remedy for it is one paragraph and the remedy for the alternative is
+nothing at all.
+
+Rule one keeps the narrower reading it was deliberately given: it decides over
+a sentence, because a red suite mentioned in one paragraph and a stage running
+again in place mentioned in another are not one claim about the two together.
+
 The shipped prompts and definitions are this module's **subject**, not an input
 to it. "What this harness deploys says the same thing to every workflow" is not
 a claim any constructed definition could carry, and the defect being held is one
@@ -155,6 +174,49 @@ def sentences(text: str) -> list[str]:
     return [part.strip() for part in re.split(r"(?<=\.)\s+", flat) if part.strip()]
 
 
+def paragraphs(text: str) -> list[str]:
+    """The text as passages: each blank-line-separated block, wrapping collapsed.
+
+    The same shape as `sentences` because it answers the same kind of question
+    at a different width — a rule that asks a passage asks what one paragraph
+    says, rather than what the file contains somewhere.
+    """
+    blocks = [re.sub(r"\s+", " ", block).strip()
+              for block in re.split(r"\n\s*\n", text)]
+    return [block for block in blocks if block]
+
+
+#: The two halves of a passage-wise report, and what separates them. A report
+#: names what the judged paragraph does not carry and then quotes the paragraph,
+#: so the quote necessarily contains every claim that paragraph *does* meet.
+#: "This claim is not reported against it" is therefore a statement about the
+#: half before the quote, which `unmet_half` is how a control takes.
+JUDGED = " — the paragraph judged was: "
+
+
+def unmet_half(problem: str) -> str:
+    """What a report says is missing, without the paragraph it quotes after."""
+    return problem.split(JUDGED)[0]
+
+
+def closest_passage(text: str, claims, met) -> tuple[str, list]:
+    """The paragraph meeting the most claims, and the claims it does not meet.
+
+    `met(passage, claim)` decides one claim against one passage, so a rule keeps
+    its own idea of what satisfies a claim and shares only the search. Ties go
+    to the earlier paragraph, so a report is the same on every run; a text with
+    no paragraph at all answers with the empty passage, which meets nothing and
+    is reported rather than passed over.
+    """
+    judged: str | None = None
+    unmet = list(claims)
+    for passage in paragraphs(text):
+        missing = [claim for claim in claims if not met(passage, claim)]
+        if judged is None or len(missing) < len(unmet):
+            judged, unmet = passage, missing
+    return judged or "", unmet
+
+
 # --------------------------------------------------------------------------
 # Rule one: no prompt says a red suite returns a stage to itself
 # --------------------------------------------------------------------------
@@ -218,17 +280,26 @@ FAILING_VERDICT = (
 
 def a_judging_prompt_not_stating_the_failing_verdict(
         prompts: dict[str, str], held: dict[str, Role]) -> list[str]:
+    """Every judging prompt with no one paragraph carrying the whole rule.
+
+    Decided over a passage: a prompt satisfies this when some single paragraph
+    of it carries every phrase, so phrases scattered through prose about other
+    things do not answer for the paragraph they were meant to be in.
+    """
     problems = []
     for prompt, role in sorted(held.items()):
         if not role.judges:
             continue
-        text = re.sub(r"\s+", " ", prompts[prompt])
-        missing = [phrase for phrase in FAILING_VERDICT if phrase not in text]
+        judged, missing = closest_passage(
+            prompts[prompt], FAILING_VERDICT,
+            lambda passage, phrase: phrase in passage)
         if missing:
             problems.append(
                 f"{UNSTATED}: {prompt} judges a run whose suite may come back "
-                f"red and does not say what a non-zero exit means — missing "
-                f"{', '.join(repr(phrase) for phrase in missing)}")
+                f"red and no one paragraph of it says what a non-zero exit "
+                f"means — missing "
+                f"{', '.join(repr(phrase) for phrase in missing)}"
+                f"{JUDGED}{judged}")
     return problems
 
 
@@ -296,19 +367,27 @@ def an_authoring_prompt_not_saying_what_follows_a_red_suite(
     Keyed on the declaration rather than on the prompt, so a third workflow
     declaring a suite run on a stage of its own is held to this on arrival, and
     a prompt no definition puts in that position is left alone.
+
+    Decided over a passage, for the reason the judging rule is: a claim met by a
+    sentence about something else — an out-of-confinement edit the run carries
+    on without — is not this prompt saying what follows a red suite.
     """
+    def met(passage: str, claim) -> bool:
+        lowered = passage.lower()
+        return any(phrasing in lowered for phrasing in claim[1])
+
     problems = []
     for prompt, role in sorted(held.items()):
         if not role.authors:
             continue
-        text = re.sub(r"\s+", " ", prompts[prompt]).lower()
-        missing = [claim for claim, phrasings in CARRY_FORWARD
-                   if not any(phrasing in text for phrasing in phrasings)]
+        judged, missing = closest_passage(prompts[prompt], CARRY_FORWARD, met)
         if missing:
             problems.append(
                 f"{SILENT}: {prompt} declares the suite run the coordinator "
-                f"makes after its turn and does not say what follows a red one "
-                f"— unmet: {'; '.join(missing)}")
+                f"makes after its turn and no one paragraph of it says what "
+                f"follows a red one — unmet: "
+                f"{'; '.join(claim for claim, _ in missing)}"
+                f"{JUDGED}{judged}")
     return problems
 
 
@@ -492,6 +571,44 @@ BUILT_WITHOUT_THE_COST = (
     "the\nstages after this one; the turn is not repeated on this attempt to "
     "repair it.\n")
 
+#: And the cost on its own. The two above and this one carry between them every
+#: claim the carry-forward rule holds, so putting these two in separate
+#: paragraphs is a prompt that says all of it and satisfies none of it.
+BUILT_ONLY_THE_COST = (
+    "What follows is a failed verdict and a recommended retry, costing the run "
+    "an\narchived attempt and an entry in its retry history.\n")
+
+#: The first sentence of the failing-verdict paragraph, and the rest of it. Same
+#: purpose for the judging rule as the pair above serves for the carry-forward
+#: one.
+BUILT_VERDICT_OPENING = (
+    "A non-zero exit code in that record is a failing verdict and not a "
+    "finding.\n")
+
+BUILT_VERDICT_REMAINDER = (
+    "So the verdict is failed, a retry is recommended, and the retry target "
+    "is\nthe category the injected routing table gives to the defect you "
+    "judge\ncaused it.\n")
+
+#: Prose about something else that happens to carry an accepted phrasing. The
+#: sentence is about an edit the revert check undoes and says nothing about a
+#: suite, which is the shape of the defect this reading closes: read file-wise,
+#: it answers the claim that the run advances past this stage.
+BUILT_UNRELATED_CARRY_FORWARD_PHRASING = (
+    "Your own version of an edit made outside the paths this stage owns is "
+    "kept\nin the run directory as evidence, and the run carries on without "
+    "it.\n")
+
+#: The same shape for the judging rule: two FAILING_VERDICT phrases, in two
+#: paragraphs about other things, neither of which says what a non-zero exit
+#: means.
+BUILT_UNRELATED_VERDICT_PHRASES = (
+    "A finding can be correct and still be too small to fail a run, so "
+    "recording\none is not a finding you must route on.\n"
+    "\n"
+    "The injected routing table is what a retry target is read off, for any "
+    "defect\nyou judge caused a failure.\n")
+
 
 def built_prompts(tmp_path: Path, texts: dict[str, str]) -> Path:
     prompts = tmp_path / "prompts"
@@ -531,7 +648,22 @@ def test_an_arrangement_that_says_the_right_things_reports_nothing(tmp_path):
     assert slots_that_disagree(prompts) == []
 
 
-# -- rule one ---------------------------------------------------------------
+# -- the passage reader -----------------------------------------------------
+
+
+def test_a_passage_is_a_block_between_blank_lines_with_its_wrapping_collapsed():
+    """What the two passage-wise rules are given to weigh.
+
+    A blank line separates passages and a line break inside one does not, so a
+    claim made across two wrapped lines is one claim and a claim made in the
+    next paragraph is a different passage. Blank blocks are dropped, because a
+    run of blank lines is not a passage a prompt can be said to carry.
+    """
+    text = "One claim\nwrapped over lines.\n\n\nA second\tpassage.\n\n"
+
+    assert paragraphs(text) == ["One claim wrapped over lines.",
+                                "A second passage."]
+    assert paragraphs("\n  \n\n") == []
 
 #: The two superseded wordings this story removed, written out here rather than
 #: read out of the commit graph: history is not the subject of this module, and
@@ -632,6 +764,81 @@ def test_a_judging_prompt_stating_only_half_the_rule_is_reported(tmp_path):
     assert "a retry is recommended" in problems[0]
 
 
+def test_a_judging_prompt_meeting_phrases_in_unrelated_prose_is_reported(
+    tmp_path,
+):
+    """The defect the passage-wise reading closes, for this rule.
+
+    The prompt carries no failing-verdict paragraph at all. What it carries is
+    two of the rule's phrases in prose about other things — a paragraph about a
+    finding too small to fail a run, and a paragraph about where a retry target
+    is read off — neither of which says what a non-zero suite exit means. Read
+    over the file those two phrases are found and are not reported missing;
+    read over a passage the paragraph that came closest is weighed on its own,
+    so `'routing table'`, which lives in a different paragraph, is reported
+    against it.
+
+    The phrase the judged paragraph *does* carry is not reported against it,
+    which is the other half of the report being about one passage.
+    """
+    prompts, held = arrangement(
+        tmp_path,
+        beta_judge=(f"A template.\n\n{BUILT_UNRELATED_VERDICT_PHRASES}\n"
+                    f"{BUILT_SLOT}"))
+    problems = a_judging_prompt_not_stating_the_failing_verdict(prompts, held)
+
+    assert kinds(problems) == [UNSTATED]
+    assert "beta-judge.md" in problems[0]
+    assert "'routing table'" in unmet_half(problems[0])
+    assert "'not a finding'" not in unmet_half(problems[0])
+    # And the report quotes the paragraph it weighed, so a reader sees which
+    # passage was judged rather than only what is absent from it.
+    assert problems[0].split(JUDGED)[1] == paragraphs(
+        BUILT_UNRELATED_VERDICT_PHRASES)[0]
+
+
+def test_a_judging_prompt_splitting_the_rule_across_paragraphs_is_reported(
+    tmp_path,
+):
+    """What the passage-wise reading costs, asserted rather than discovered.
+
+    Every phrase the rule holds is in this prompt, and no single paragraph
+    carries them all — so the prompt is reported, and the remedy is to put them
+    in one paragraph. The two halves meet three phrases each, so the tie is
+    broken by document order and the opening paragraph is the one judged.
+    """
+    split = f"{BUILT_VERDICT_OPENING}\n{BUILT_VERDICT_REMAINDER}"
+    prompts, held = arrangement(
+        tmp_path, beta_judge=f"A template.\n\n{split}\n{BUILT_SLOT}")
+    problems = a_judging_prompt_not_stating_the_failing_verdict(prompts, held)
+
+    # Nothing is absent from the file: this is a claim about where they are.
+    flat = re.sub(r"\s+", " ", prompts["beta-judge.md"])
+    assert all(phrase in flat for phrase in FAILING_VERDICT)
+
+    assert kinds(problems) == [UNSTATED]
+    assert problems[0].split(JUDGED)[1] == paragraphs(BUILT_VERDICT_OPENING)[0]
+    assert "'a retry is recommended'" in unmet_half(problems[0])
+    assert "'routing table'" in unmet_half(problems[0])
+    assert "'not a finding'" not in unmet_half(problems[0])
+
+
+def test_a_judging_prompt_stating_the_rule_in_one_paragraph_is_not_reported(
+    tmp_path,
+):
+    """The other side of the reading, for this rule: the same phrases that are
+    reported when split are not reported when one passage carries them all."""
+    together = re.sub(r"\s+", " ",
+                      BUILT_VERDICT_OPENING + BUILT_VERDICT_REMAINDER).strip()
+    prompts, held = arrangement(
+        tmp_path, beta_judge=f"A template.\n\n{together}\n\n{BUILT_SLOT}")
+
+    assert any(all(phrase in passage for phrase in FAILING_VERDICT)
+               for passage in paragraphs(prompts["beta-judge.md"])), \
+        "the control has to put one paragraph carrying the whole rule"
+    assert a_judging_prompt_not_stating_the_failing_verdict(prompts, held) == []
+
+
 def test_a_prompt_that_judges_nothing_is_outside_the_rule(tmp_path):
     """The rule keys on the role the definition gives the stage, so the same
     text that is reported in a judging prompt is not reported in a writing one.
@@ -693,12 +900,94 @@ def test_an_authoring_prompt_stating_where_but_not_what_it_costs_is_reported(
 
     assert kinds(problems) == [SILENT]
     assert "alpha-writer.md" in problems[0]
-    assert "the verdict is a failed one" in problems[0]
-    assert "a retry is recommended" in problems[0]
-    assert "the attempt is archived" in problems[0]
-    # And the claims it does meet are not reported against it.
-    assert "the run advances past this stage" not in problems[0]
-    assert "the outstanding failure is recorded" not in problems[0]
+    assert "the verdict is a failed one" in unmet_half(problems[0])
+    assert "a retry is recommended" in unmet_half(problems[0])
+    assert "the attempt is archived" in unmet_half(problems[0])
+    # And the claims the judged paragraph does meet are not reported against
+    # it. The report quotes that paragraph, so this is a statement about the
+    # half of the report before the quote — the quote carries what it meets by
+    # definition, which is why it is there.
+    assert "the run advances past this stage" not in unmet_half(problems[0])
+    assert "the outstanding failure is recorded" not in unmet_half(problems[0])
+    assert problems[0].split(JUDGED)[1] == paragraphs(
+        BUILT_WITHOUT_THE_COST)[0]
+
+
+def test_an_authoring_prompt_meeting_a_claim_in_unrelated_prose_is_reported(
+    tmp_path,
+):
+    """The defect the passage-wise reading closes, for this rule.
+
+    This prompt has no paragraph saying what follows a red suite. It says what
+    such a suite costs in one paragraph, and elsewhere — in prose about an edit
+    made outside the paths a stage owns, which mentions no suite at all — it
+    happens to use an accepted phrasing of the claim that the run advances past
+    this stage.
+
+    Read over the file, that stray sentence answers the claim and the report
+    never mentions it, so deleting the paragraph a prompt is supposed to carry
+    is reported one claim more quietly than it should be. Read over a passage,
+    the claim is reported against the paragraph that came closest, which is the
+    paragraph that does not make it.
+    """
+    prompts, held = arrangement(
+        tmp_path,
+        alpha_writer=(f"A template.\n\n{BUILT_UNRELATED_CARRY_FORWARD_PHRASING}"
+                      f"\n{BUILT_ONLY_THE_COST}\n{BUILT_SLOT}"))
+    problems = an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held)
+
+    assert kinds(problems) == [SILENT]
+    assert "alpha-writer.md" in problems[0]
+    assert "the run advances past this stage" in unmet_half(problems[0])
+    assert "the outstanding failure is recorded" in unmet_half(problems[0])
+    # The cost, which the judged paragraph does make, is not reported against it.
+    assert "the attempt is archived" not in unmet_half(problems[0])
+    assert problems[0].split(JUDGED)[1] == paragraphs(BUILT_ONLY_THE_COST)[0]
+
+
+def test_an_authoring_prompt_splitting_the_claims_across_paragraphs_is_reported(
+    tmp_path,
+):
+    """What the passage-wise reading costs, asserted rather than discovered.
+
+    Every claim the rule holds is somewhere in this prompt — where the failure
+    goes in one paragraph, what it costs in the next — and no single paragraph
+    makes them all, so it is reported. The remedy is one paragraph, which is
+    what both shipped prompts in this position already carry.
+    """
+    split = f"{BUILT_WITHOUT_THE_COST}\n{BUILT_ONLY_THE_COST}"
+    prompts, held = arrangement(
+        tmp_path, alpha_writer=f"A template.\n\n{split}\n{BUILT_SLOT}")
+    problems = an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held)
+
+    # Nothing is absent from the file: this is a claim about where they are.
+    flat = re.sub(r"\s+", " ", prompts["alpha-writer.md"]).lower()
+    assert all(any(phrasing in flat for phrasing in phrasings)
+               for _, phrasings in CARRY_FORWARD)
+
+    assert kinds(problems) == [SILENT]
+    assert "the run advances past this stage" in unmet_half(problems[0])
+
+
+def test_an_authoring_prompt_making_the_claims_in_one_paragraph_is_not_reported(
+    tmp_path,
+):
+    """The other side of the reading, for this rule: the same claims that are
+    reported when split are not reported when one passage makes them all."""
+    prompts, held = arrangement(tmp_path)
+
+    def makes_every_claim(passage: str) -> bool:
+        lowered = passage.lower()
+        return all(any(phrasing in lowered for phrasing in phrasings)
+                   for _, phrasings in CARRY_FORWARD)
+
+    assert any(makes_every_claim(passage)
+               for passage in paragraphs(prompts["alpha-writer.md"])), \
+        "the control has to put one paragraph making every claim"
+    assert an_authoring_prompt_not_saying_what_follows_a_red_suite(
+        prompts, held) == []
 
 
 def test_a_prompt_that_declares_no_suite_run_is_outside_the_rule(tmp_path):
@@ -762,11 +1051,13 @@ def test_a_prompt_carrying_no_slot_is_not_reported_as_disagreeing(tmp_path):
 def test_the_rules_name_no_prompt_no_stage_and_no_workflow(definitions, held):
     """Grep the deciding code for the names it is about.
 
-    `declares`, `roles`, `sentences`, `slot_wording` and the rules themselves
-    are what a third workflow's arrival would otherwise force an edit to, so
-    none of them may contain a shipped prompt filename, a shipped stage name or
-    a shipped workflow name. The assertions and controls above are free to name
-    what they are about; these are not.
+    `declares`, `roles`, `sentences`, `paragraphs`, `closest_passage`,
+    `slot_wording` and the rules themselves are what a third workflow's arrival
+    would otherwise force an edit to, so none of them may contain a shipped
+    prompt filename, a shipped stage name or a shipped workflow name. The
+    readers are held to this alongside the rules because a reader is where a
+    rule's decision is made as much as the rule is. The assertions and controls
+    above are free to name what they are about; these are not.
 
     Docstrings are stripped first: an explanation naming an example is prose
     about the rule, and a rule that could not illustrate itself would be the
@@ -776,7 +1067,8 @@ def test_the_rules_name_no_prompt_no_stage_and_no_workflow(definitions, held):
     import inspect
 
     source = ""
-    for function in (declares, roles, sentences, slot_wording,
+    for function in (declares, roles, sentences, paragraphs, closest_passage,
+                     slot_wording,
                      a_red_suite_returning_a_stage_to_itself,
                      a_judging_prompt_not_stating_the_failing_verdict,
                      an_authoring_prompt_not_saying_what_follows_a_red_suite,
