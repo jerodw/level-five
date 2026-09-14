@@ -1,0 +1,123 @@
+story:
+  id: story-144
+  title: A story branch is cut from the base as the remote holds it, not as the last fetch left it
+  description: |
+    Planned from the brief filed under 272.
+
+    The check that exists to stop a story branch being cut from a stale base
+    cannot see a base that is stale. `base_problems`' second leg compares the
+    local base against its local remote-tracking ref, and nothing refreshes
+    that ref first, so a checkout that has not fetched since the base moved has
+    `main` and `origin/main` in agreement -- both behind -- and the check passes
+    cleanly while the branch is cut from a tree the shared base left behind.
+    The docstring says the leg is about "the shared one"; with an unfetched
+    tracking ref that silently means "the shared one as of the last fetch".
+
+    story-143 is the case. A pull request merged on the remote, a planning
+    session started about sixteen minutes later in a checkout that had not
+    fetched since, and `story/story-143` was cut five commits behind the real
+    base. The plan was written against a tree the branch would never hold, the
+    run delivered nothing, and the verifier escalated correctly because the
+    missing thing was a git act no stage may perform. The repair was a
+    developer resetting the branch by hand. The timing that produced it is the
+    ordinary rhythm here rather than a mistake, so it will recur.
+
+    This story refreshes the base's remote-tracking ref before the comparison,
+    so the check decides on current information. It changes nothing about what
+    the check *decides*, and it neither rebases, pulls nor moves anything on
+    the developer's behalf.
+
+    A fetch is network work in a pre-flight, and this harness's standing bias
+    is that reporting may not become the failure. A refresh that cannot be made
+    -- offline, an unreachable remote, no credentials -- leaves the check
+    exactly where it is today, answering from what is known and saying that is
+    what it did, rather than refusing a run for a network condition.
+  workflow: story-workflow
+
+tasks:
+  - Add a function beside `base_problems` in `orchestration/story_coordinator.py` that brings the base's remote-tracking ref up to date from the remote and reports, as one sentence, why it could not when it could not. It returns the empty string both for a refresh that was made and for a repository where there is nothing to refresh.
+  - Have that function find the remote and the remote branch from git's own record of the base's upstream, falling back to the remote-guessing `_base_tracking_ref` already does, and fetch only that one ref into only that one remote-tracking ref.
+  - Run the fetch with git's terminal prompting disabled, so a checkout with no credentials reports a reason rather than hanging a pre-flight on a password prompt.
+  - Call the refresh from `l5-run`'s pre-flight immediately above its `base_problems` call, inside the same not-already-existing-branch guard, so a resume does no network work.
+  - Call the refresh from `scripts/l5-plan` immediately above its `base_problems` call.
+  - Print the reason at both entry points when a refresh could not be made, and say nothing at all when it was made.
+  - Carry that reason down in `run_story` to where the run directory exists and append it to `events.log` as a note, beside the existing behind-the-base note, so a run whose base check answered from old information says so in its own record.
+  - Cover the pair in `tests/test_branch_base.py`: a base that is current against an unfetched stale tracking ref is refused, and a refresh that fails leaves the run proceeding on the old comparison with the fact recorded.
+  - Update `.harness/docs/ARCHITECTURE.md` where it describes the base check, so the second leg is documented as comparing against the base as the remote holds it and the refresh's failure behaviour is written down.
+
+acceptance_criteria:
+  - A repository whose base is level with the remote but whose remote-tracking ref is stale -- the remote branch has moved and no fetch has happened since -- is refused by the base check, where today it passes.
+  - The refusal is the existing drifted-base wording from `_refuse_base`, unchanged, naming the base and how far it differs.
+  - A repository where the refresh cannot be made reaches exactly the decision it reaches today, from the tracking ref as it stands, and the run or the plan proceeds rather than being refused for the network condition.
+  - A refresh that could not be made prints one line naming why, at whichever entry point met it.
+  - A run that proceeds after a refresh that could not be made carries a note in its `events.log` recording that the base comparison answered from an unrefreshed tracking ref.
+  - A refresh that was made prints nothing and appends no note.
+  - A repository with no remote, and a base with no remote-tracking counterpart, are unchanged in behaviour and are not reported as a failed refresh: there was nothing to refresh.
+  - `base_problems` keeps its signature, its two legs, their order and the one-directional bias that it refuses only on positive evidence.
+  - The refresh is attempted only where the base check is actually asked -- not on a resume, and not for a story branch that already exists.
+  - A test demonstrates the stale-tracking-ref refusal against a repository built so that the local base and its tracking ref agree while the remote has moved, so the assertion would pass today without the fix only if the fix were absent, and it is shown to fail without it.
+
+technical_plan:
+  implementation_steps:
+    - Add `refresh_base(target_root: Path, base: str) -> str` immediately above or below `base_problems`, returning "" when the tracking ref was refreshed or when there is nothing to refresh, and a single sentence when a refresh was attempted and failed.
+    - Resolve what to fetch from `git config branch.<base>.remote` and `git config branch.<base>.merge`, which is git's own record of the upstream and gives both the remote and the remote-side branch name; fall back to the remote `_base_tracking_ref` would guess with the base's own name when no upstream is configured. Where neither yields a remote, or `_base_tracking_ref` reports no counterpart, return "" -- there is nothing to refresh.
+    - Fetch exactly that ref into exactly that tracking ref, with an explicit refspec rather than relying on the remote's configured one, so the refresh cannot touch any ref the check is not about.
+    - Run the fetch with `GIT_TERMINAL_PROMPT=0` in its environment so a checkout without credentials fails rather than prompting. `_git` does not pass an environment today; add the fetch's environment at the call rather than changing `_git` for every other reader.
+    - In `scripts/l5-plan`, call `refresh_base` immediately above the existing `base_problems` call and print the returned reason when it is non-empty, above the check's own output.
+    - In `run_story`, call `refresh_base` inside the existing `if not branch_existed:` block above `base_problems`, print the returned reason when non-empty, and hold it in a local for the note below.
+    - Append that held reason as a `kind="note"` event beside the existing `branch ... is N commit(s) behind base ...` note, so events.log and execution-history.json stay two renderings of one write.
+    - Extend `tests/test_branch_base.py` with the pair of assertions: the stale-tracking-ref refusal, and the failed-refresh case leaving the old comparison in force with the reason reported.
+    - Update the base-check paragraphs in `.harness/docs/ARCHITECTURE.md` -- the second-leg description and the table row for a drifted base -- to say the comparison is made against the base as the remote holds it, and what a refresh that could not be made does.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: holds `base_problems`, `_base_tracking_ref` and the `run_story` pre-flight; the refresh function, its pre-flight call and the note are all here.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: the plan-path caller of `base_problems`, which needs the same refresh above it so a plan is written against the base the remote holds.
+    - file: tests/test_branch_base.py
+      stage: tester
+      reason: the standing module for the base check; the stale-tracking-ref refusal and the failed-refresh case belong beside the existing legs.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: describes the base check's second leg and its one-directional bias, which now includes what the refresh does and what a refresh that could not be made leaves behind.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - tests/test_branch_base.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/worktrees.py
+    - orchestration/story_ids.py
+    - workflows/
+    - prompts/
+    - schemas/
+
+verification_requirements:
+  - Confirm a repository whose base is level with a stale tracking ref, while the remote has moved, is refused by the base check, and that the test demonstrating it is shown to fail without the implementation change.
+  - Confirm a repository where the refresh cannot be made is not refused for that, and reaches the same decision it would have reached before this story.
+  - Confirm the reason for a refresh that could not be made is printed at the entry point that met it, and that a proceeding run carries it as a note in `events.log`.
+  - Confirm a successful refresh prints nothing and appends no note.
+  - Confirm `base_problems` still returns the empty list for a repository with no remote, a base with no tracking counterpart, and a root that is not a git repository.
+  - Confirm the refresh is not attempted for a story branch that already exists, so a resume does no network work.
+  - Confirm the full suite passes, including the existing assertions in `tests/test_branch_base.py`, `tests/test_config_keys_are_obeyed.py` and `tests/test_planning_runs_on_its_own_worktree.py` that exercise the two call sites.
+
+constraints:
+  - The check's decision is unchanged: the same two legs, in the same order, with only the first that has something to say printed, and the existing refusal wording.
+  - Nothing here rebases, pulls, merges, resets or otherwise moves a branch on the developer's behalf. The check refuses; it does not repair.
+  - A network condition may not refuse a run or a plan. Reporting must not become the failure.
+  - What a run does about an already-cut branch that is behind its base is out of scope: the existing note at `run_story`'s `branch_existed` block keeps routing on nothing, because an existing branch must be reported rather than refused so that resume keeps working.
+  - The repository-wide blocked-path rule that stops a stage merging the base in from inside a run is untouched; it behaved correctly in story-143 and is exactly what it exists to prevent.
+  - The refresh writes only the one remote-tracking ref the check reads. It does not touch the working tree, the index, HEAD, or any other ref.
+  - `base_problems` stays a reader that refuses only on positive evidence, and keeps its current signature so the existing assertions against it keep their meaning.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-14 09:33:34
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 272
