@@ -1,0 +1,172 @@
+story:
+  id: story-147
+  title: A finding about the code a story just wrote is answered by that story, not filed against the next one
+  description: |
+    Planned from the brief filed under 285.
+
+    The post-story inspection files every finding it makes as a brief, including
+    the findings about the diff the run that invoked it has just produced.
+    Across story-130 to story-145 it filed 44 briefs against sixteen stories,
+    eleven of the twelve most recent open ones carrying scope "the change made
+    by story-N" and naming a file that story had just edited. A review comment
+    on a change belongs to the change that produced it; only a finding about
+    code that was already there is a backlog item. The information to tell them
+    apart is already in hand -- `Expansion.changed` is what the run's stages
+    recorded and `Expansion.siblings` is what git tracks beside them -- and
+    nothing consumes it, because the inspection runs inside `_complete` after
+    the completion commit, where no stage of the run is left to act on what it
+    finds.
+
+    This story moves the inspection ahead of the verifier and hands it the
+    destination it was missing. A finding whose subject is among the files the
+    story changed is given to the verifier as evidence. Every other finding is
+    filed as a brief exactly as it is today, through the same floor, the same
+    brief cap, the same dedupe and the same queue.
+
+    The verifier decides and the inspection only supplies. The verifier already
+    triages findings on these terms -- a blocking defect forces a retry, a
+    correctable one spends a correction pass, and its prompt already carries the
+    rule that a finding can be correct and still be too small to fail a run.
+    What changes is that it is given the Inspector's reading of the diff beside
+    its own. No budget is added and none is widened: the retry allowance, the
+    correction-pass allowance and the too-small-to-fail rule are the whole of
+    what bounds this, and the inspection gains no veto.
+
+    Two things the plan settles rather than discovers. The inspection costs
+    about five minutes and roughly $2.70 measured over 38 runs, and moving it
+    ahead of the verifier puts it inside the loop a retry re-enters, so it runs
+    once per attempt: a re-entry into the verifier within one attempt -- a
+    self-route, a correction pass -- reuses what was already found, and a retry
+    inspects again because a retry means the code changed and a stale reading is
+    worse than none. And the distinction is file-level rather than line-level: a
+    finding about long-standing code that happens to live in a file the story
+    touched is treated as the story's own. That over-capture is the price of
+    using the changed set the harness already holds, and it is taken knowingly.
+
+    The trigger becomes a declaration on the stage the inspection runs before,
+    rather than a position in the coordinator, so a workflow that declares none
+    behaves exactly as it does today. Both shipped workflows declare it on their
+    verifier.
+  workflow: story-workflow
+
+tasks:
+  - Declare the inspection on the verifier stage of workflows/story-workflow.json and of workflows/refactor-workflow.json, naming the artifact the inspection writes for that stage to read, in the shape the clean_clone, correction_pass and suite_run declarations beside it already have.
+  - Add an entry point to orchestration/story_inspection.py that inspects before a stage rather than after a completed story, reusing the existing expansion, file cap, bound resolution, invocation and record rather than duplicating any of them.
+  - Partition what the invocation found into the findings whose paths name a file in the expansion's changed set and the findings that do not, file only the second group through inspection.file_findings, and write the first group to the declared run-directory artifact for the verifier to read.
+  - Invoke that entry point from the coordinator's stage loop immediately before entering a stage that declares an inspection, once per attempt, so a self-route or correction-pass re-entry within one attempt reuses the artifact already written and a retry inspects again.
+  - Have the coordinator's _complete invoke the post-story inspection only where no stage of the loaded workflow declares one, so no run inspects twice and a workflow declaring none is unchanged.
+  - Read the declared artifact back off disk in the stage loop beside the self-route, correction-pass, suite-run and revert-check records, pass it through context_assembler.build_context, and render it in a new section of prompts/story-verifier.md and prompts/refactor-verifier.md.
+  - Write that prompt section so it states what the evidence is and what it is not: the Inspector's reading of this story's own diff, supplied to the verifier, governed by the verifier's existing triage and carrying no authority to fail a run on its own.
+  - Make the pre-stage inspection write its events line, its cost record and its cross-run record as the post-story inspection does, and make no commit of its own.
+  - Record in .harness/docs/ARCHITECTURE.md where the inspection now runs, what the changed/siblings split decides, and that the verifier decides while the inspection supplies.
+
+acceptance_criteria:
+  - A run under story-workflow invokes the inspection before the verifier stage is entered and does not invoke it again from _complete.
+  - A run under a workflow whose stages declare no inspection invokes it from _complete exactly as it does today, with the same scope, the same filing and the same record.
+  - A finding naming a file in the expansion's changed set is written to the declared artifact and is not filed as a brief, and is not enqueued to the outbox.
+  - A finding naming no file in the changed set is filed exactly as it is today, through the same severity floor, the same brief cap, the same dedupe and the same queue call.
+  - A finding naming both a changed file and a file beside it is treated as the story's own and reaches the verifier rather than the tracker.
+  - The verifier's rendered prompt carries the findings about the changed files, and a run whose inspection produced none, or whose inspection could not run, renders a statement saying so rather than an empty section.
+  - Entering the verifier a second time within one attempt -- a self-route or a correction pass -- makes no second inspection invocation and renders the artifact the attempt already wrote.
+  - A retry makes a new inspection invocation, so an attempt greater than one renders findings about the code that attempt produced rather than the previous attempt's.
+  - The verifier's verdict remains its own: nothing in the coordinator reads the inspection artifact to decide a retry, a correction pass, a route or an escalation, and no retry, correction-pass or cost budget changes value.
+  - The pre-stage inspection makes no git commit, and the record it wrote is carried by the run's completion, escalation or pause commit.
+  - The pre-stage inspection may not block, delay or refuse a run: its entry point returns nothing, raises on no path, and declares no parameter by which a caller could be told to stop, as the post-story entry point already does.
+  - The inspection's cost is recorded in that run's cost.json and in the cross-run inspection log, and is not added to state.entry_cost_usd.
+  - Both shipped workflow definitions remain valid against what the coordinator checks at pre-flight.
+
+technical_plan:
+  implementation_steps:
+    - Add an inspection declaration to the verifier stage of both shipped workflows, naming the run-directory artifact the inspection writes. Follow the shape correction_pass and suite_run use: the key's absence disables the mechanism for that workflow with no code change.
+    - In orchestration/story_inspection.py, factor the body of _inspect_after_story so the bound resolution, the expansion, the cap, the detail log, the announcement and the invocation are shared, and add a pre-stage entry point guarded the same way -- returning nothing, raising on no path.
+    - Partition result.found on whether any of a finding's bare paths appears in the expansion's changed tuple. Hand the remainder to inspection.file_findings with the resolved floor, exactly as today. Write the changed-set findings to the declared artifact under the run directory, keyed by attempt so a re-entry finds what the attempt already wrote.
+    - Keep the events line, the cost record and the cross-run record. Do not call commit_record from the pre-stage path: an inspection commit at HEAD would sit where _complete reads HEAD to recognise a resumed escalation, and the completion, escalation and pause commits all stage the tree and carry the record.
+    - In the coordinator's stage loop, before a stage is entered, read that stage's inspection declaration and invoke the pre-stage inspection when the attempt has not already written its artifact.
+    - Beside the existing self-route, correction-pass, suite-run and revert-check reads in the stage loop, read the declared artifact off disk and pass it to context_assembler.build_context as a new keyword, defaulting to None so every stage of every workflow declaring no inspection renders nothing.
+    - Make _complete's call conditional on no stage of the loaded workflow declaring an inspection, so the two call sites cannot both fire.
+    - Add the rendering section to prompts/story-verifier.md and prompts/refactor-verifier.md, stating that the verifier decides and the inspection supplies.
+  likely_file_changes:
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Declares the inspection on the verifier stage, so the trigger lives in the workflow definition rather than in a coordinator position.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: The same declaration, so a refactor run answers its own review rather than filing it.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Adds the pre-stage entry point, the changed/siblings partition, and the artifact the verifier reads; leaves the expansion, cap, record and totality guarantee as they are.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Invokes the inspection before a stage that declares one, once per attempt; reads the artifact back for the stage's context; makes the _complete call conditional on no stage declaring one.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: Carries the new evidence into the rendered prompt, beside the suite-run, correction-pass and revert-check records.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: Renders the findings about the story's own change, and says the verifier decides while the inspection supplies.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same section, for the workflow that now declares the same inspection.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: The existing coverage of where the inspection runs and what it files, updated for the new position and the partition.
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: tester
+      reason: New coverage of the partition, the once-per-attempt rule, the re-inspection on retry, and that a changed-set finding is never enqueued.
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: Holds the new declaration on both shipped workflows to what the coordinator checks at pre-flight.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records where the inspection now runs, what the changed/siblings split decides, and that it supplies evidence rather than deciding.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - orchestration/context_assembler.py
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/inspection.py
+    - prompts/inspector.md
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - orchestration/brief_filing.py
+    - schemas/
+
+verification_requirements:
+  - Confirm the inspection is invoked before the verifier under both shipped workflows and is not invoked again from _complete under either.
+  - Confirm a workflow declaring no inspection still inspects from _complete, with the same scope, filing and record as before this story.
+  - Confirm a finding naming a changed file reaches the declared artifact and reaches neither the brief filing nor the outbox queue, and that a finding naming only a sibling is filed on exactly the terms it was filed on before.
+  - Confirm the verifier's rendered prompt carries those findings, and that an inspection producing none or failing renders an explicit statement rather than a blank.
+  - Confirm the once-per-attempt rule from the artifacts: one invocation per attempt, a re-entry within an attempt rendering the artifact already written, and a retry producing a new one.
+  - Confirm no coordinator routing decision reads the inspection artifact, and that no retry, correction-pass or cost budget changed value in either workflow definition.
+  - Confirm the pre-stage inspection makes no commit, and that the record it writes is present in the run's completion commit.
+  - Confirm the pre-stage entry point returns nothing, raises on no path, and takes no parameter by which a caller could stop it, and that a failing inspection leaves the run's outcome unchanged.
+  - Confirm the severity floor, the brief cap, the Inspector prompt, the scoping and the file cap are unchanged.
+
+constraints:
+  - The inspection may never block, delay or refuse a run. Moving it inside the stage loop does not weaken that: every path is guarded, the entry point returns nothing, and no stage outcome is conditional on it having worked.
+  - The verifier decides and the inspection supplies. No coordinator branch reads the inspection artifact, and the inspection gains no way to fail a run, force a retry or spend a correction pass on its own.
+  - No budget is added or widened. The retry allowance, the correction-pass allowance, the per-stage and per-run cost ceilings, the brief cap and the severity floor keep the values they have.
+  - The severity floor stays at its configured value and is not the instrument for this change.
+  - Attribution stays file-level, using the changed set the harness already records. No line-level attribution is introduced.
+  - The broad l5-inspect mode is unchanged: an inspection invoked against no story has no story for a finding to be answered by, and goes on filing everything it finds.
+  - What the Inspector looks for, how a scope is computed, the file cap and what a finding must contain are unchanged.
+  - The inspection's cost stays out of state.entry_cost_usd, which is the live allowance the run ceiling is compared against.
+  - A finding about the changed files is never merely reported into a place nobody reads: it reaches the verifier's rendered prompt, or it is filed.
+  - Deterministic coordinator logic added here is covered by unit tests that invoke no model, through the existing fake-runner seam.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-14 17:45:08
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 285
