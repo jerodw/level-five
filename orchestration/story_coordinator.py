@@ -1345,6 +1345,156 @@ def _base_remote(target_root: Path, base: str) -> str:
 #: at the spawn, which the caller reports as a refresh it could not make.
 NO_TERMINAL_PROMPT = ("env", "GIT_TERMINAL_PROMPT=0")
 
+#: The bound in seconds on every fetch this module spawns, and deliberately one
+#: bound rather than one per fetch: the refresh below and `fetch_story_branch`
+#: are the same act against the same remote, so a second constant would be a
+#: second answer that can disagree with this one. It is a real duration rather
+#: than zero, because zero here would mean no bound at all -- which is the
+#: failure a bound exists to prevent -- and twenty seconds is chosen because
+#: every fetch here is one ref into one ref, which is fast on any healthy
+#: remote: twenty seconds reads as slow rather than as hung.
+#:
+#: It is a constant in harness source rather than a configured key, unlike
+#: `sync_timeout_seconds` and `filed_query_timeout_seconds`, which bound
+#: commands a *target* supplies and whose cost is therefore the target's to
+#: state. Nothing about a pre-flight fetch of one ref is a target's choice, and
+#: a configured key is permanent surface for a knob nobody is expected to turn.
+#: Adding the key later, if a real remote proves this wrong, is a small change.
+FETCH_TIMEOUT_SECONDS = 20
+
+
+def _kill_group(process: subprocess.Popen) -> None:
+    """Kill the process group the fetch leads, not merely the fetch.
+
+    The fetch is spawned in its own session, so a kill delivered to its group
+    reaches the children it spawned -- the ssh the fetch runs for an ssh
+    remote, above all. Killing the process alone would leave that child running
+    past the bound, which is the whole reason the session is new.
+
+    Three near-identical copies of this live in `orchestration/filed_query.py`,
+    `orchestration/command_transport.py` and `orchestration/item_update.py`.
+    That is known; extracting them into one home is a separate story and not
+    this one, and a fourth copy here is cheaper than widening this story's
+    scope to three modules it otherwise does not touch.
+    """
+    # `getpgid` and `killpg` are imported by name rather than reached through
+    # `os`, so this module still names no environment reader at all -- see
+    # NO_TERMINAL_PROMPT above for what that property is for. A process-group
+    # kill reads no environment; being able to see at a glance that nothing
+    # here does is worth the import.
+    from os import getpgid, killpg
+    from signal import SIGKILL
+
+    try:
+        killpg(getpgid(process.pid), SIGKILL)
+    except OSError:
+        # The group is already gone, or this platform will not answer for it.
+        # Either way the process itself must not be left behind.
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+@dataclass(frozen=True)
+class _FetchOutcome:
+    """What a bounded fetch did, in a shape both fetch sites can consume.
+
+    The three ways a fetch can fail to succeed are reported distinctly, because
+    they are three different things to say to a developer: `spawn_problem` is a
+    fetch the platform would not start at all, `timed_out` is one killed at the
+    bound, and a non-zero `returncode` is a remote that answered with an error.
+    `returncode` is None for the first two, since neither produced one.
+    """
+
+    returncode: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
+    spawn_problem: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return self.returncode == 0
+
+
+def _bounded_fetch(argv: list[str]) -> _FetchOutcome:
+    """Spawn a git fetch, wait on it under FETCH_TIMEOUT_SECONDS, report.
+
+    It raises on nothing, so a caller can be total: a platform that refuses the
+    spawn, a fetch that exits non-zero and a fetch that never comes back all
+    come back as an outcome. On expiry the process group is killed and the
+    process reaped, so no child of the fetch outlives the bound and no zombie
+    is left behind.
+
+    The bound is what `refresh_base`'s docstring promises and what
+    `fetch_story_branch` needs for the same reason: the ways a fetch stalls
+    rather than answering -- a host that drops packets instead of refusing
+    them, an unknown ssh host key, a passphrase with no agent -- are not
+    reached by `GIT_TERMINAL_PROMPT`, because the last two ask on `/dev/tty`.
+
+    What is bounded is the fetch *answering*, and that is why the output goes
+    to files rather than to pipes. `communicate` waits for the pipes to reach
+    end of file, which is a different event: a fetch that exited zero while
+    something it spawned still holds the inherited descriptors -- git's own
+    background maintenance is the obvious candidate -- would be killed and
+    reported as a fetch that never answered, which is exactly backwards. It
+    would also make the reap after the kill unbounded, since a descendant that
+    escaped the group by starting a session of its own holds those pipes open
+    for as long as it lives. Waiting on the process itself has neither
+    property, and the reap is bounded by the same constant so the kill and its
+    aftermath cannot between them outlast twice the bound.
+    """
+    with tempfile.TemporaryDirectory(prefix="l5-fetch-") as scratch:
+        out_path = Path(scratch) / "stdout"
+        err_path = Path(scratch) / "stderr"
+        try:
+            with open(out_path, "w") as out, open(err_path, "w") as err:
+                process = subprocess.Popen(
+                    argv,
+                    stdout=out,
+                    stderr=err,
+                    start_new_session=True,
+                )
+        except OSError as problem:
+            return _FetchOutcome(spawn_problem=" ".join(str(problem).split()))
+        timed_out = False
+        try:
+            process.wait(timeout=FETCH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(process)
+            # Reaped after the kill so the fetch does not linger as a zombie,
+            # and reaped under a bound because a reap that could wait forever
+            # would give back the very guarantee the kill just established.
+            try:
+                process.wait(timeout=FETCH_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+        # What the fetch managed to say before it was killed is kept, though a
+        # stalled fetch has usually said nothing.
+        stdout = _read_fetch_output(out_path)
+        stderr = _read_fetch_output(err_path)
+    if timed_out:
+        return _FetchOutcome(stdout=stdout, stderr=stderr, timed_out=True)
+    return _FetchOutcome(
+        returncode=process.returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def _read_fetch_output(path: Path) -> str:
+    """What a bounded fetch wrote to one of its output files.
+
+    A file that was never written, or that carries bytes this platform cannot
+    decode, reports nothing rather than raising: `_bounded_fetch` raises on
+    nothing, and what a fetch said is a detail in a sentence rather than
+    something anything decides from.
+    """
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return ""
+
 
 def refresh_base(target_root: Path, base: str) -> str:
     """Bring the base's remote-tracking ref up to date, reporting why not.
@@ -1370,11 +1520,22 @@ def refresh_base(target_root: Path, base: str) -> str:
     credentials reports a reason rather than hanging a pre-flight on a password
     prompt.
 
+    The fetch is also bounded at `FETCH_TIMEOUT_SECONDS`, and the process group
+    it leads is killed at that bound. Prompt suppression does not reach every
+    way a remote can decline to answer: a TCP connection to a host that drops
+    packets rather than refusing them simply waits, and an unknown ssh host key
+    or a passphrase with no agent asks on `/dev/tty`, which
+    `GIT_TERMINAL_PROMPT` does not govern. So the bound is what makes this
+    promise cover a remote that answers with *nothing* as well as one that
+    answers with an error.
+
     A refresh that cannot be made is reported and never refused. This is
     network work in a pre-flight, and this harness's standing bias is that
-    reporting may not become the failure: offline, an unreachable remote or
-    absent credentials leave the check exactly where it was, answering from
-    what is known and saying that is what it did.
+    reporting may not become the failure: offline, an unreachable remote,
+    absent credentials, and a remote that never comes back all leave the check
+    exactly where it was, answering from what is known and saying that is what
+    it did. A fetch killed at the bound is reported by the same one sentence a
+    fetch that failed is reported by, with the bound named in its detail.
     """
     tracking = _base_tracking_ref(target_root, base)
     if tracking is None or not tracking.startswith("refs/remotes/"):
@@ -1386,27 +1547,28 @@ def refresh_base(target_root: Path, base: str) -> str:
     remote_branch = merge.stdout.strip() if merge.returncode == 0 else ""
     if not remote_branch:
         remote_branch = f"refs/heads/{base}"
-    try:
-        fetched = subprocess.run(
-            [
-                *NO_TERMINAL_PROMPT,
-                "git",
-                "-C",
-                str(target_root),
-                "fetch",
-                "--quiet",
-                remote,
-                f"+{remote_branch}:{tracking}",
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except OSError as problem:
-        fetched = None
-        detail = " ".join(str(problem).split())
-    if fetched is not None and fetched.returncode == 0:
+    fetched = _bounded_fetch(
+        [
+            *NO_TERMINAL_PROMPT,
+            "git",
+            "-C",
+            str(target_root),
+            "fetch",
+            "--quiet",
+            remote,
+            f"+{remote_branch}:{tracking}",
+        ]
+    )
+    if fetched.succeeded:
         return ""
-    if fetched is not None:
+    if fetched.spawn_problem:
+        detail = fetched.spawn_problem
+    elif fetched.timed_out:
+        detail = (
+            f"the fetch did not answer within {FETCH_TIMEOUT_SECONDS}s and was "
+            "killed at that bound"
+        )
+    else:
         said = fetched.stderr.strip() or fetched.stdout.strip()
         detail = (" ".join(said.split()) if said
                   else f"git fetch exited {fetched.returncode}")
@@ -1672,7 +1834,11 @@ def fetch_story_branch(target_root: Path, config: dict, branch: str) -> bool:
 
     Reported as whether the branch resolves afterwards, never raised, and a
     repository with no remote simply answers whether it already had it — the
-    one-directional bias every other reader here takes.
+    one-directional bias every other reader here takes. The fetch is bounded by
+    `FETCH_TIMEOUT_SECONDS` with its process group killed at that bound, which
+    changes nothing about what this answers: a fetch killed at the bound leaves
+    the branch unfetched, and an unfetched branch is what this already answers
+    False for when a fetch fails.
     """
     if branch_exists(target_root, branch):
         return True
@@ -1681,7 +1847,19 @@ def fetch_story_branch(target_root: Path, config: dict, branch: str) -> bool:
     if not names:
         return False
     remote = "origin" if "origin" in names else names[0]
-    _git(target_root, "fetch", remote, f"{branch}:{branch}")
+    # What the fetch said is discarded, as it was when this spawned through
+    # `_git`: this function reports whether the branch resolves and nothing
+    # else, and adding reporting here would be widening its contract.
+    _bounded_fetch(
+        [
+            "git",
+            "-C",
+            str(target_root),
+            "fetch",
+            remote,
+            f"{branch}:{branch}",
+        ]
+    )
     return branch_exists(target_root, branch)
 
 
