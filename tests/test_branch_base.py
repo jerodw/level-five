@@ -70,6 +70,11 @@ check reporting the violation it exists to catch:
   * "no child of the killed fetch outlived it" sits beside the same child,
     backgrounded by a fetch that answers at once instead of stalling, which
     does write its marker;
+  * "a fetch whose descendant escaped into a session of its own still answers
+    with its own exit status" sits beside that identical subject waited on
+    through its *output* under the short bound, where the wait does expire --
+    so the outcome above is the doing of which event the helper waits on
+    rather than something that would hold of either wait;
   * "a stalled fetch of a story branch answers that the branch is not there"
     sits beside the same clone and the same branch with git answering, where
     the same call fetches it and answers it did resolve;
@@ -1038,6 +1043,17 @@ def test_that_same_repository_reports_it_when_the_branch_is_not_there_yet(
 #: How long the stub is asked to sit there rather than answering. Far longer
 #: than every bound and ceiling below, so a fetch observed coming back cannot
 #: have been waited out.
+#:
+#: It has to clear one bound that is *not* declared below it. The
+#: escaped-descendant case runs under the shipped
+#: `story_coordinator.FETCH_TIMEOUT_SECONDS` rather than under a substituted
+#: bound, and its subject holds the descriptors it inherited for
+#: `CHILD_SLEEP_SECONDS` plus this constant. That hold has to stay above the
+#: shipped bound: were it shorter, a helper that had gone back to waiting on
+#: pipes would reach end of file inside the bound, and the case would pass
+#: while establishing nothing about which event is waited on. So anyone
+#: lowering this number, or raising the shipped one, is trading away the
+#: case's ability to report that regression.
 LONGER_THAN_ANY_BOUND = 45
 
 #: The bound the stalled fetches are driven under, substituted for the shipped
@@ -1174,6 +1190,43 @@ def recorded_waits(patch) -> list[tuple[bool, float | None]]:
     return seen
 
 
+#: What the escaping subject below exits with. Distinct from every other exit
+#: status this module produces, so an outcome carrying it can only have carried
+#: the subject's own answer: `_FetchOutcome` defaults `returncode` to None and a
+#: fetch killed at the bound is constructed without one, so nothing but the
+#: subject exiting could have put this number there.
+ESCAPING_EXIT_CODE = 23
+
+
+def escapes_into_its_own_session(directory: Path, marker: Path) -> Path:
+    """A subject that backgrounds a descendant into a session of its own and
+    then exits at once with `ESCAPING_EXIT_CODE`.
+
+    Written once and driven by both cases below, so the control drives the
+    *same* subject rather than one that resembles it. `os.setsid()` is called
+    from Python rather than through a `setsid` binary, which macOS does not
+    ship.
+
+    The descendant inherits whatever stdout and stderr the subject was given --
+    files in a scratch directory under `_bounded_fetch`, pipes under the
+    control -- and holds them for `LONGER_THAN_ANY_BOUND` after writing its
+    marker. That is the whole point: which of the two events a waiter waits on
+    is what separates the two cases.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "escapes.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"{sys.executable} -c 'import os, time; os.setsid(); "
+        f"time.sleep({CHILD_SLEEP_SECONDS}); "
+        f'open("{marker}", "w").write("escaped"); '
+        f"time.sleep({LONGER_THAN_ANY_BOUND})' &\n"
+        f"exit {ESCAPING_EXIT_CODE}\n",
+        encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
 def waited_for(marker: Path, seconds: float) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -1293,7 +1346,7 @@ def test_that_same_child_writes_its_marker_when_its_fetch_is_not_killed(
 
 
 def test_a_descendant_that_escaped_the_group_does_not_extend_the_bound(
-    tmp_path, monkeypatch,
+    tmp_path,
 ):
     """A fetch answers, and something it spawned outlives it in a session of
     its own -- which is what a daemonizing child does, and what git's own
@@ -1303,26 +1356,76 @@ def test_a_descendant_that_escaped_the_group_does_not_extend_the_bound(
     it lives, so a wait on the fetch's *output* waits out the child rather than
     the fetch. The bound is on the fetch answering, so the helper comes back
     when the fetch does, however long its escaped descendant goes on running.
+
+    That claim is decided here by what the fetch did and not by how long the
+    call took. A fetch that answered carries its own exit status and a fetch
+    killed at the bound carries none, so the outcome tells the two apart with
+    no clock in it -- and the descendant is then observed still running, which
+    is what makes this a bound that followed the fetch rather than a subject
+    that had nothing to outlive it.
+
+    So this case runs under the shipped `FETCH_TIMEOUT_SECONDS` rather than
+    substituting a short bound for it. That is the stall cases' own argument
+    read in the other direction: there, a stub asked to sit far *longer* than
+    the bound makes a return inside it a kill, and here a bound sitting far
+    *above* a shell, a Python interpreter and a `setsid` makes exceeding it a
+    fetch that genuinely hung rather than a machine that was busy.
     """
-    escaped = (f'{sys.executable} -c "import os, time; os.setsid(); '
-               f'time.sleep({LONGER_THAN_ANY_BOUND})" &\nexit 0\n')
-    script = tmp_path / "escapes.sh"
-    script.write_text("#!/bin/sh\n" + escaped, encoding="utf-8")
-    script.chmod(0o755)
+    marker = tmp_path / "the-descendant-that-escaped-is-still-running"
+    script = escapes_into_its_own_session(tmp_path / "escaping", marker)
 
-    with monkeypatch.context() as bounded:
-        bounded.setattr(story_coordinator, "FETCH_TIMEOUT_SECONDS",
-                        STALL_BOUND_SECONDS)
-        started = time.monotonic()
-        outcome = story_coordinator._bounded_fetch([str(script)])
-        elapsed = time.monotonic() - started
+    outcome = story_coordinator._bounded_fetch([str(script)])
 
-    assert elapsed < KILL_CEILING_SECONDS, elapsed
-    assert elapsed < LONGER_THAN_ANY_BOUND
-    # And it answered by its exit code rather than being reported as a fetch
+    # It answered by its own exit status rather than being reported as a fetch
     # that never answered, which is what a wait on the output would have said.
-    assert outcome.timed_out is False
-    assert outcome.succeeded
+    # `returncode` is the field a fetch killed at the bound does not carry, so
+    # this number can only have come from the subject exiting.
+    assert outcome.spawn_problem == ""
+    assert outcome.returncode == ESCAPING_EXIT_CODE
+
+    # And the descendant that escaped is running still, now that the call has
+    # come back: it writes its marker a few seconds in and then sleeps far past
+    # any bound here, so a marker observed after the return is a descendant the
+    # fetch did not wait for.
+    assert waited_for(marker, PATIENCE_SECONDS), \
+        "the descendant never escaped, so the outcome above outlived nothing"
+
+
+def test_that_same_subject_waited_on_through_its_output_does_time_out(
+    tmp_path,
+):
+    """The control for the case above: the identical subject, waited on through
+    its *output* under the short bound, where the wait expires.
+
+    Without it the assertion above would hold just as happily of a helper that
+    waited on the output, and would be saying nothing about which event the
+    bound is placed on.
+
+    Its soundness does not depend on how fast this machine is. The escaped
+    descendant holds the inherited pipes for `LONGER_THAN_ANY_BOUND` -- far
+    above the bound this wait is given -- so end of file cannot arrive inside
+    that bound however the machine is loaded. A loaded machine holds those
+    descriptors open for longer, which makes the expiry more certain rather
+    than less.
+
+    `Popen` and `communicate` rather than `subprocess.run(..., timeout=)`, so
+    what is being waited on is stated at the call site rather than resting on
+    what `run` does internally once a wait expires.
+    """
+    marker = tmp_path / "the-descendant-that-escaped-is-still-running"
+    script = escapes_into_its_own_session(tmp_path / "escaping", marker)
+
+    process = subprocess.Popen([str(script)],
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(timeout=STALL_BOUND_SECONDS)
+    finally:
+        # The shell itself has long since exited; this reaps it so nothing is
+        # left behind, and it cannot block for that reason.
+        process.kill()
+        process.wait()
 
 
 def test_what_a_failing_remote_said_still_reaches_the_reported_sentence(
