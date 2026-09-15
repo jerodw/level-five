@@ -173,8 +173,10 @@ def max_files(config: dict):
 class Expansion:
     """The files one inspection covers, and what was left out of them.
 
-    `changed` is what the run's own stages recorded, in scope and still tracked.
-    `siblings` is what git tracks directly beside those files. They are kept
+    `changed` is what the run's own stages recorded, in scope and still held by
+    the target tree — a file the story created counts whether or not anything
+    has staged it, and a path the tree no longer holds does not.
+    `siblings` is what the tree holds directly beside those files. They are kept
     apart rather than merged because the cap trims the second before the first.
     `excluded` names every path that was dropped and why, so a scope that is
     smaller than a reader expects says so rather than reading as a repository
@@ -191,15 +193,34 @@ class Expansion:
         return self.changed + self.siblings
 
 
-def _tracked(target_root: Path) -> tuple[str, ...]:
-    """Every path git tracks, as repository-relative paths.
+def _held(target_root: Path) -> tuple[str, ...]:
+    """Every path the target tree holds, as repository-relative paths.
+
+    The listing is `--cached --others --exclude-standard`, which is the
+    tracked-plus-untracked set the coordinator's own tree comparison already
+    uses, filtered to the paths that are actually on disk. Asking the index
+    instead — `git ls-files` alone — answers correctly only for a caller that
+    runs below a commit of the work: `inspect_after_story` does, and
+    `inspect_before_stage` runs in the opposite condition, from the stage loop
+    with nothing having staged the tree, where every file the story created is
+    untracked. One listing serves both, because after the completion commit the
+    cached half already covers everything the post-story caller sees and the
+    others half adds nothing to it.
+
+    The existence filter is what keeps a deletion out of the scope: an index
+    entry whose file has been removed from the working tree is a path there is
+    nothing at to read, and it is excluded on exactly the terms a committed
+    deletion is.
 
     Run through a module-local subprocess call with a fixed argument list, the
     idiom `inspection._tracked` already uses. A repository git cannot answer
-    for tracks nothing here rather than raising: this module may not raise, and
+    for holds nothing here rather than raising: this module may not raise, and
     an inspection is not the place to discover a broken checkout.
     """
-    argv = ["git", "-C", str(target_root), "ls-files", "-z"]
+    argv = [
+        "git", "-C", str(target_root), "ls-files",
+        "--cached", "--others", "--exclude-standard", "-z",
+    ]
     try:
         completed = subprocess.run(  # noqa: S603 - a fixed argument list
             argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
@@ -208,14 +229,24 @@ def _tracked(target_root: Path) -> tuple[str, ...]:
         return ()
     if completed.returncode != 0:
         return ()
-    return tuple(one for one in completed.stdout.split("\0") if one)
+    root = Path(target_root)
+    held: list[str] = []
+    for one in completed.stdout.split("\0"):
+        if not one:
+            continue
+        try:
+            if (root / one).exists():
+                held.append(one)
+        except OSError:
+            continue
+    return tuple(held)
 
 
 def containing_directory(path: str) -> str:
     """The directory a repository-relative path sits directly in.
 
-    "" for a path at the repository root, which is the same value the tracked
-    listing gives such a path, so the two compare without a special case.
+    "" for a path at the repository root, which is the same value the listing
+    gives such a path, so the two compare without a special case.
     """
     head, separator, _ = path.rpartition("/")
     return head if separator else ""
@@ -225,7 +256,7 @@ def scope_prefixes(config: dict) -> tuple[str, ...]:
     """The parts of the tree a post-story inspection is bounded to.
 
     `source_dirs` plus `tests_dir`, which is the same pair broad mode covers.
-    A target that declares neither is bounded to its whole tracked tree rather
+    A target that declares neither is bounded to its whole working tree rather
     than to nothing — the reading `inspection.scopes` already takes, and the
     alternative would silently inspect nothing in every target that has not
     declared a source layout.
@@ -257,20 +288,30 @@ def expansion(target_root: Path, config: dict, harness_root: Path,
               changed) -> Expansion:
     """The files in scope for one post-story inspection.
 
-    The changed paths, plus for each of them the files git tracks *directly* in
-    its containing directory — one level and not recursively, so a populated
-    subdirectory beneath a changed file's directory is not pulled in. Bounded
-    to the scope keys and with the execution rules' blocked prefixes excluded.
+    The changed paths, plus for each of them the files the target tree holds
+    *directly* in its containing directory — one level and not recursively, so
+    a populated subdirectory beneath a changed file's directory is not pulled
+    in. Bounded to the scope keys and with the execution rules' blocked
+    prefixes excluded.
+
+    The scope is what the tree *holds* rather than what the index tracks, and
+    the difference is the whole of what makes this answer for both callers. A
+    file the story created during the stage loop has nothing in the index yet,
+    so an index listing would drop it from the scope of the very inspection
+    whose subject it is; the tree holds it either way, and after a completion
+    commit the tree and the index agree, so the post-story caller sees exactly
+    what it saw before.
 
     A changed path outside both scope keys is dropped and named, and its
     directory is not pulled in: what the harness will not inspect it should not
-    inspect the neighbours of either. A changed path git no longer tracks —
-    a deleted one — contributes its containing directory but not itself, which
-    falls out of taking the paths from the tracked listing rather than from the
-    record. No model is involved in any of this: it is two set operations over
-    one `git ls-files`.
+    inspect the neighbours of either. A changed path the tree does not hold —
+    deleted by the story, deleted in the working tree with its index entry
+    still standing, or never there at all — contributes its containing
+    directory but not itself, which falls out of taking the paths from the
+    listing rather than from the record. No model is involved in any of this:
+    it is two set operations over one `git ls-files`.
     """
-    tracked = frozenset(_tracked(target_root))
+    held = frozenset(_held(target_root))
     prefixes = scope_prefixes(config)
     blocked = tuple(
         _prefix(one) for one in inspection.blocked_prefixes(harness_root) if one
@@ -289,17 +330,23 @@ def expansion(target_root: Path, config: dict, harness_root: Path,
         directory = containing_directory(path)
         if directory not in directories:
             directories.append(directory)
-        if path in tracked:
+        if path in held:
             kept.append(path)
         else:
-            # Deleted by the story, or never tracked. Its directory is in scope
-            # because what sits beside a removal is exactly what a removal can
-            # have broken; the path itself is not, because there is nothing
-            # there to read.
-            excluded.append(f"{path}: the repository no longer tracks it")
+            # Deleted by the story, deleted in the working tree, ignored, or
+            # never there at all. Its directory is in scope because what sits
+            # beside a removal is exactly what a removal can have broken; the
+            # path itself is not, because there is nothing there to read.
+            # The wording says only that the listing does not hold the path,
+            # because asserting a removal would be false of a path that never
+            # existed and asserting that the repository stopped tracking it
+            # would be false of one git ignores — which is on disk.
+            excluded.append(
+                f"{path}: the tree listing this scope is taken from "
+                "does not hold it")
 
     beside = sorted(
-        path for path in tracked
+        path for path in held
         if containing_directory(path) in directories
         and path not in kept
         and in_scope(path)
