@@ -713,6 +713,44 @@ def test_every_ceiling_this_deployment_declares_is_recorded_that_way_too():
     assert ceilings_with_no_reason_stating_them(SHIPPED) == []
 
 
+def recorded_reason_keys(definition: dict) -> set[str]:
+    """Every key in a definition whose value is a recorded derivation.
+
+    Walked rather than read off the top level of the definition and its stages.
+    A reason is written beside the value it explains, and not every value a
+    definition declares is at the top level: `correction_pass` records its
+    budget's reason inside its own declaration, and story-147's `inspection`
+    records its artifact's the same way. A reading that stopped at the top
+    level would leave those two uncovered by the rule below — which is the one
+    place the rule matters most, because a nested reason is the easiest kind to
+    start reading by accident.
+    """
+    found: set[str] = set()
+    stack: list[object] = [definition]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            found |= {key for key in node if key.endswith(REASON_SUFFIX)}
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
+def test_the_reason_reading_finds_a_reason_nested_inside_a_declaration():
+    """The control the walk above needs: a reason recorded beside a value
+    inside a stage's own declaration is found, and a reading that stopped at
+    the top level would report neither of the two below."""
+    built = build_workflow(
+        workflow_stage(name=conftest.VERIFYING_STAGE,
+                       a_mechanism={"result": "r.json",
+                                    "result" + REASON_SUFFIX: "why"}),
+        name="a-nested-reason-workflow")
+
+    assert recorded_reason_keys(built) == {"result" + REASON_SUFFIX}
+    assert "result" + REASON_SUFFIX not in built["stages"][0]
+
+
 def test_nothing_in_the_harness_reads_a_recorded_reason():
     """The reason keys are for a reader of the definition, not for the
     coordinator: a ceiling whose behaviour depended on its own justification
@@ -723,8 +761,7 @@ def test_nothing_in_the_harness_reads_a_recorded_reason():
     that can see one. Prose may name what code may not, so docstrings and
     comment lines are stripped before the reading.
     """
-    reason_keys = sorted({key for declaring in (SHIPPED, *SHIPPED_STAGES)
-                          for key in declaring if key.endswith(REASON_SUFFIX)})
+    reason_keys = sorted(recorded_reason_keys(SHIPPED))
     assert reason_keys, "this deployment records no reason at all"
 
     source = "\n".join(
@@ -1202,6 +1239,96 @@ def test_this_deployment_declares_a_clean_clone_check_and_a_revert_check():
         declaration = stage.get("revert_check")
         if declaration is not None:
             assert declaration["baseline"], stage["name"]
+
+
+#: The key a stage declares a pre-stage inspection under, and the key inside it
+#: that names the run-directory artifact the inspection writes. Spelled once
+#: here and derived from by everything below, so this module carries no second
+#: spelling of either.
+INSPECTION_KEY = "inspection"
+INSPECTION_RESULT_KEY = "result"
+
+
+def inspecting_stages(definition: dict) -> list[str]:
+    """Every stage of a definition that declares an inspection before it."""
+    return [stage["name"] for stage in definition["stages"]
+            if stage.get(INSPECTION_KEY)]
+
+
+@pytest.mark.parametrize("name", sorted(shipped_definitions()))
+def test_every_shipped_definition_inspects_before_the_stage_that_judges(name):
+    """From tests/test_inspection_findings_reach_the_story.py, whose subject is
+    the mechanism: whether the coordinator inspects before a stage that declares
+    one, and where each kind of finding then goes. That both definitions this
+    repository ships declare it, and declare it on the stage that decides, is
+    the configuration half and is asked here.
+
+    On the judging stage specifically, because that is the whole of what the
+    declaration buys: a finding about the change is evidence only for a stage
+    still able to act on it, and one declared before the first stage would
+    inspect a tree the story had not touched yet.
+    """
+    definition = shipped_definitions()[name]
+    declaring = inspecting_stages(definition)
+    assert declaring == [conftest.VERIFYING_STAGE], (name, declaring)
+    assert definition["stages"][-1]["name"] == conftest.VERIFYING_STAGE, name
+
+    declaration = story_coordinator.inspection_declaration(
+        definition["stages"])
+    assert str(declaration.get(INSPECTION_RESULT_KEY, "")).strip(), name
+
+
+@pytest.mark.parametrize("name", sorted(shipped_definitions()))
+def test_the_shipped_inspection_declarations_name_one_artifact_between_them(
+        name):
+    """Both definitions write the record under one name.
+
+    Not a requirement of the mechanism — the coordinator reads whatever name
+    the declaring stage carries — but a deployment decision worth being told
+    about: a reader who has learned where one workflow's record lands has
+    learned where the other's does.
+    """
+    declared = {
+        story_coordinator.inspection_declaration(
+            definition["stages"]).get(INSPECTION_RESULT_KEY)
+        for definition in shipped_definitions().values()
+    }
+    assert len(declared) == 1, declared
+    assert shipped_definitions()[name]["stages"][-1][
+        INSPECTION_KEY][INSPECTION_RESULT_KEY] in declared
+
+
+#: The words a key that grants, widens or spends an allowance is spelled with
+#: in this repository's definitions. An inspection declaration carrying one
+#: would be spending something, and the inspection supplies evidence rather
+#: than deciding — so there is nothing here for it to spend.
+ALLOWANCE_WORDS = ("budget", "max", "retries", "retry", "cost", "ceiling",
+                   "limit", "routes")
+
+
+def allowance_keys(declaration: dict) -> list[str]:
+    return sorted(key for key in declaration
+                  if any(word in key.lower() for word in ALLOWANCE_WORDS))
+
+
+def test_no_shipped_inspection_declaration_grants_or_widens_an_allowance():
+    """No budget is added and none is widened.
+
+    The declaration names an artifact and explains itself and does nothing
+    else. The control beside it is the same reading over a copy of one of those
+    declarations with a budget planted in it, which reports it — so the empty
+    result is a reading that can see one rather than one that has stopped
+    looking.
+    """
+    declarations = [
+        story_coordinator.inspection_declaration(definition["stages"])
+        for definition in shipped_definitions().values()]
+    assert declarations, "no definition this repository ships declares one"
+    for declaration in declarations:
+        assert allowance_keys(declaration) == [], declaration
+
+    planted = {**declarations[0], "budget": 3, "max_retries": 1}
+    assert allowance_keys(planted) == ["budget", "max_retries"]
 
 
 def test_this_deployment_documents_before_it_verifies():

@@ -2224,13 +2224,39 @@ def retained_suite_artifacts(
     return names
 
 
+def inspection_artifacts(
+    run_dir: Path, stages: list[dict], attempt: int | str
+) -> list[str]:
+    """The pre-stage inspection records one attempt left behind.
+
+    Keyed by the attempt, because an attempt is inspected once and a retry —
+    which means the code changed — inspects again. A resume zeroes the retry
+    count, so the next entry's attempt 1 would land on the ending entry's
+    attempt 1 and, worse, would *find* it and skip inspecting: the once-per-
+    attempt rule is decided by the file being there, so leaving it behind would
+    hand a resumed run the previous entry's reading of a tree it no longer has.
+
+    The glob comes from `story_inspection.findings_artifact_file` — the same
+    function that writes the name — so what is found cannot drift from what was
+    written, and the artifact comes off the workflow's own inspection
+    declaration rather than from a literal. A workflow declaring none has no
+    such names and this reports none.
+    """
+    declared = inspection_declaration(stages).get("result")
+    if not declared:
+        return []
+    pattern = story_inspection.findings_artifact_file(declared, attempt)
+    return sorted(path.name for path in run_dir.glob(pattern))
+
+
 def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
     """The run-root names a reset of the counters would re-land on.
 
     Everything at the run root whose name is keyed by retry_count or by
     verification_iterations: the attempt-numbered prompts, the try-suffixed
     prompts and self-route records those attempts wrote, the retained suite-run
-    pairs those attempts wrote, the verification iteration files, and the
+    pairs those attempts wrote, the pre-stage inspection records those attempts
+    wrote, the verification iteration files, and the
     attempts/ directory. Zeroing the counters puts the next attempt back on
     attempt 1 and iteration 1, so these are exactly the names an entry has to
     take with it.
@@ -2260,6 +2286,7 @@ def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
         ):
             names.extend(path.name for path in run_dir.glob(pattern))
     names.extend(retained_suite_artifacts(run_dir, stages, "*"))
+    names.extend(inspection_artifacts(run_dir, stages, "*"))
     names.extend(
         str(path.relative_to(run_dir))
         for path in run_dir.glob("verification/iteration-*.json")
@@ -3472,6 +3499,29 @@ def suite_run_declaration(stages: list[dict]) -> dict:
     """
     for stage in stages:
         declaration = stage.get("suite_run")
+        if declaration:
+            return declaration
+    return {}
+
+
+def inspection_declaration(stages: list[dict]) -> dict:
+    """The workflow's pre-stage inspection declaration, wherever it is carried.
+
+    Read off the loaded definition in the shape `suite_run_declaration` and
+    `correction_pass_declaration` established, so the trigger for inspecting a
+    story's own change is a position in the *workflow* rather than a position
+    in the coordinator: a workflow that declares none behaves exactly as it did
+    before the key existed, and one that moves the declaration to another stage
+    inspects before that stage instead, with no edit here.
+
+    Its one reader outside the stage loop is `_complete`, which invokes the
+    post-story inspection **only** where this returns nothing — so the two call
+    sites cannot both fire and no run inspects the same diff twice. The stage
+    loop reads each stage's own declaration rather than this, because which
+    stage is about to be entered is exactly what it is deciding about.
+    """
+    for stage in stages:
+        declaration = stage.get("inspection")
         if declaration:
             return declaration
     return {}
@@ -7416,10 +7466,19 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     # It must not refuse, for the reason the sweep beside it must not. It
     # returns nothing, so there is no value to branch on here, and it raises on
     # no path, so nothing below it is conditional on it having worked.
-    story_inspection.inspect_after_story(
-        run_dir, target_root, config or {}, harness_root, state.story_id,
-        stages or [],
-    )
+    #
+    # Since story-147 it happens here **only where no stage of the loaded
+    # workflow declares an inspection of its own**. A workflow that declares one
+    # has already inspected this story's change before that stage was entered,
+    # and inspecting again from here would read the same diff a second time and
+    # file against the next story what the last one has already answered. A
+    # workflow declaring none is unchanged: same position, same scope, same
+    # filing, same record.
+    if not inspection_declaration(stages or []):
+        story_inspection.inspect_after_story(
+            run_dir, target_root, config or {}, harness_root, state.story_id,
+            stages or [],
+        )
     # The second opportunistic sweep, *after* the completion commit and not
     # before it. A sweep talks to a provider that may be slow or unreachable,
     # and nothing about the durability of the work may wait on that: the work
@@ -8347,6 +8406,40 @@ def run_story(
 
         attempt = state.retry_count + 1
 
+        # A stage that declares an inspection is preceded by one: the Inspector
+        # reads what this attempt has produced, and its findings about the files
+        # the story itself changed are handed to this stage as evidence while
+        # the change can still be answered, instead of being filed as briefs
+        # against whatever story comes next. Every other finding it makes is
+        # filed exactly as it was before this existed.
+        #
+        # Once per attempt, decided by whether the attempt has already written
+        # its artifact rather than by a counter: a self-route or a correction
+        # pass re-entering this stage within the attempt finds the file and
+        # renders it, and a retry — which means the code changed, and a stale
+        # reading is worse than none — writes its own under the next attempt's
+        # name. The declaration is read off the stage about to be entered, so no
+        # stage name and no artifact name is written here, and a workflow
+        # declaring none renders None and inspects from `_complete` as before.
+        #
+        # Nothing below branches on any of this. The inspection returns nothing,
+        # raises on no path, and what it wrote is read only to be rendered: the
+        # verifier decides and the inspection supplies.
+        inspection_findings = None
+        declared_inspection = (stage.get("inspection") or {}).get("result")
+        if declared_inspection:
+            record = run_dir / story_inspection.findings_artifact_file(
+                declared_inspection, attempt
+            )
+            if not record.is_file():
+                story_inspection.inspect_before_stage(
+                    run_dir, target_root, config or {}, harness_root,
+                    state.story_id, stages,
+                    artifact=declared_inspection, attempt=attempt,
+                )
+            if record.is_file():
+                inspection_findings = record.read_text(encoding="utf-8")
+
         # A stage running again after a mechanical failure carries the
         # coordinator's own statement of why. It is read back off the artifact
         # just written rather than passed along in memory, so what the prompt
@@ -8437,6 +8530,7 @@ def run_story(
             correction_pass_result=correction_pass_result,
             suite_run_result=suite_run_result,
             revert_check_result="\n".join(revert_records) or None,
+            inspection_findings=inspection_findings,
             stage=name,
         )
         template = context_assembler.load_template(harness_root, stage["prompt"])

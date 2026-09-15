@@ -258,6 +258,25 @@ the whole-suite verdict, and output_path names the file holding that run's
 whole combined output, where a failure early in a long run survives the tail:
 {{suite_run_result}}
 
+Inspection of this story's own change — the Inspector's reading of the diff
+this attempt produced, made before you were entered and supplied to you as
+evidence. What it is: an independent read of the changed files against the
+files beside them that the story did not change, looking for a defect the
+change left. What it is not: a verdict. It carries no authority to fail a run
+on its own, nothing in the coordinator reads it, and no budget of yours is
+spent by it — you triage each finding exactly as you triage any other, on the
+terms you already use, and a finding can be correct and still be too small to
+fail a run. Judge each against the tree as it now stands; the Inspector is not
+running the suite and may be wrong. `ran` false means no inspection was made
+and `reason` says why, which is a statement about the evidence you have rather
+than about the work; `ran` true with an empty `findings` list means the
+Inspector read this change and found nothing about it to report. A record that
+is absent entirely means the coordinator could not write one, which is the same
+statement about your evidence and not a statement about the work. Findings about
+files this story did not change are not here: those are filed as briefs, which
+is where a backlog item belongs:
+{{inspection_findings}}
+
 Repository standards:
 {{repository_standards}}
 

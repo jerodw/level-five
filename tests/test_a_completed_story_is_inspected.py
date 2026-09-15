@@ -50,6 +50,16 @@ Every absence asserted here carries a demonstration that it can fail:
   * "the framing does not render as None" sits beside the same extraction over
     a rendering with the value removed, which must report it.
 
+Since story-147 this is one of two positions the inspection can run in, and
+this module is the one that stays. A workflow whose stages declare an
+inspection is inspected *before* the declaring stage, so that a finding about
+the change reaches the stage that can still answer it; a workflow declaring
+none is inspected from `_complete` exactly as it always was, with the same
+scope, the same filing and the same record. The workflow this module builds
+declares none — asserted below rather than assumed — so everything here is the
+second case, and the first is
+`tests/test_inspection_findings_reach_the_story.py`'s subject.
+
 Nothing here reaches a model: `agent_runner.run_agent` is replaced for every
 test in this module by a fake that fails the test if it is called without
 having been installed deliberately. Nothing here resolves a baseline out of
@@ -853,8 +863,32 @@ COORDINATOR_SOURCE = (
     ORCHESTRATION / "story_coordinator.py").read_text(encoding="utf-8")
 
 
+def test_the_fixture_declares_no_inspection_so_this_module_is_the_second_case():
+    """The premise every run below rests on, since story-147 gave the harness a
+    second position to inspect in.
+
+    A workflow declaring an inspection is inspected before the declaring stage
+    and `_complete` does not inspect at all. This fixture declares none, so
+    every run here reaches the post-story position — and an assertion here
+    about what a completed run does is a statement about the workflows that
+    declare none rather than about a position the coordinator still holds for
+    everything. The control is the shipped definition, which does declare one,
+    read through the same reader.
+    """
+    assert story_coordinator.inspection_declaration(WORKFLOW["stages"]) == {}
+    assert story_coordinator.inspection_declaration(
+        conftest.shipped_workflow(REPO_ROOT, "story-workflow")["stages"])
+
+
 def test_the_coordinator_calls_the_inspection_once_and_reads_nothing_from_it():
-    """One call site, and it cannot turn an inspection into a decision."""
+    """One call site, and it cannot turn an inspection into a decision.
+
+    Still one since story-147, which made it conditional rather than moving it:
+    the post-story call happens where no stage of the loaded workflow declares
+    an inspection of its own, so the two positions cannot both fire and no run
+    inspects the same diff twice. A bare expression statement inside an `if` is
+    still a bare expression statement, which is what this reading is about.
+    """
     calls = inspection_calls_in(COORDINATOR_SOURCE)
     assert len(calls) == 1
     assert [node for node in calls if not isinstance(node, ast.Expr)] == []
