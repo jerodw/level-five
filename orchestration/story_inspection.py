@@ -62,6 +62,7 @@ module made.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -107,6 +108,20 @@ POST_STORY_FRAMING = (
 #: identity, so a finding this mode files and the same finding an l5-inspect
 #: run rediscovers land on one key.
 ORIGIN = "the change made by {story_id}"
+
+#: The question the pre-stage mode asks. It is the post-story question read
+#: forward rather than back: the change is committed to the working tree rather
+#: than to the branch, and the stage that reads the answer is still able to act
+#: on it.
+PRE_STAGE_FRAMING = (
+    "A story's work is in the working tree and is about to be judged. Ask "
+    "whether that change left a defect: whether what it added is wrong, "
+    "whether it agrees with the files beside it that it did not change, and "
+    "whether anything it touched now contradicts something it did not. The "
+    "files the story changed are listed first below and the files beside them "
+    "follow; the change is your subject and its neighbours are the evidence "
+    "you judge it against."
+)
 
 #: The subject the record commit carries. It leads with the harness rather
 #: than with the story id and carries no COMPLETION_COMMIT_MARKER, so it
@@ -539,6 +554,96 @@ def commit_record(target_root: Path, config: dict, story_id: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# The artifact the stage reads
+# --------------------------------------------------------------------------
+
+
+def findings_artifact_file(artifact: str, attempt: int) -> str:
+    """The declared artifact name keyed by the attempt that wrote it.
+
+    The idiom `correction_pass_result_file` and `self_route_result_file`
+    already establish, and it is keyed for their reason turned to this
+    mechanism's: an attempt is inspected once, and a retry means the code
+    changed, so the two readings must not land on one name. The presence of
+    this file is also the whole of the once-per-attempt rule — a re-entry into
+    the declaring stage within one attempt finds it and renders it rather than
+    inspecting again — so nothing counts invocations and no state field is
+    added for it.
+    """
+    stem, _, suffix = str(artifact).rpartition(".")
+    if not stem:
+        return f"{artifact}-{attempt}"
+    return f"{stem}-{attempt}.{suffix}"
+
+
+def write_findings(run_dir: Path, artifact: str, attempt: int, story_id: str,
+                   *, ran: bool, reason: str = "", findings=()) -> None:
+    """Write what the inspection found about the story's own change.
+
+    It is written on **every** path the pre-stage inspection takes, including
+    the paths on which no invocation was made, and that is the point: a stage
+    handed nothing cannot tell an inspection that found no defect in the change
+    from one that could not be made, and reading a silence as agreement is the
+    failure this record exists against. `ran` says which happened and `reason`
+    says why where it did not.
+
+    Guarded like everything else here. A record that cannot be written costs
+    the record: the stage is then rendered the absence, and its prompt says
+    what an absence means.
+    """
+    try:
+        path = Path(run_dir) / findings_artifact_file(artifact, attempt)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "story_id": story_id,
+                    "attempt": attempt,
+                    "ran": bool(ran),
+                    "reason": reason,
+                    "findings": list(findings),
+                },
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001 - the totality is the guarantee
+        pass
+
+
+def about_the_change(found, changed) -> tuple[list, list]:
+    """Split what an invocation found into the story's own and the backlog's.
+
+    Returns `(own, others)`. A finding is the story's own when any of its bare
+    paths names a file in the expansion's `changed` set — what the run's stages
+    recorded they touched — and the backlog's when none of them does. A finding
+    naming both a changed file and a file beside it is the story's own, because
+    a finding that touches the change at all is a review comment on it.
+
+    The attribution is **file-level**, deliberately: a finding about
+    long-standing code that happens to live in a file the story touched is
+    treated as the story's. That over-capture is the price of deciding from the
+    changed set the harness already records, and it is taken knowingly — the
+    alternative is line-level attribution, which nothing here has and which the
+    changed-files record cannot supply.
+
+    Bare paths, because a finding may cite a line and the changed set never
+    does; `inspection.bare_paths` is the same derivation a brief's identity is
+    built from, reached through there rather than respelled.
+    """
+    names = frozenset(changed)
+    own: list = []
+    others: list = []
+    for one in found:
+        try:
+            paths = frozenset(inspection.bare_paths(one.finding))
+        except Exception:  # noqa: BLE001 - a malformed finding is the backlog's
+            paths = frozenset()
+        (own if names & paths else others).append(one)
+    return own, others
+
+
+# --------------------------------------------------------------------------
 # The entry point
 # --------------------------------------------------------------------------
 
@@ -557,7 +662,8 @@ def _counts(report) -> tuple[int, int, int]:
     return findings, len(report.filed), dropped
 
 
-def _summary(story_id: str, report, excluded, trimmed, log: str) -> str:
+def _summary(label: str, report, excluded, trimmed, log: str, *,
+             to_the_story: int = 0) -> str:
     """One line saying what the inspection did, for the run's own events.log.
 
     Every way a finding was dropped is named with how many went that way, on
@@ -574,12 +680,22 @@ def _summary(story_id: str, report, excluded, trimmed, log: str) -> str:
     while a log being appended to as each fact becomes known is the shape a
     watcher reads. The events log stays what it is: a short account of what the
     run decided.
+
+    `to_the_story` is how many findings were about the files the story itself
+    changed and so were given to the stage rather than filed. It is counted as
+    a finding and reported on its own terms, because a reader comparing the
+    findings count against the filed count would otherwise read the difference
+    as a silent drop — which is the one thing every count on this line exists
+    to make impossible.
     """
     findings, filed, dropped = _counts(report)
+    findings += to_the_story
     line = (
-        f"post-story inspection of {story_id}: {findings} finding(s), "
+        f"{label}: {findings} finding(s), "
         f"{filed} filed, {dropped} dropped"
     )
+    if to_the_story:
+        line += f"; answered by the story: {to_the_story}"
     reasons = [
         inspection.ALREADY_FILED,
         inspection.ALREADY_FILED_LOCALLY,
@@ -605,6 +721,198 @@ def _summary(story_id: str, report, excluded, trimmed, log: str) -> str:
     return line
 
 
+# --------------------------------------------------------------------------
+# What both entry points share
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Preparation:
+    """Everything an inspection needs before an agent is invoked, or why not.
+
+    Both entry points reach an invocation through this, so the bound
+    resolution, the expansion, the cap and the exclusions are one derivation
+    rather than one per mode — which is what makes "the scope the pre-stage
+    inspection covers" and "the scope the post-story inspection covers" the
+    same sentence rather than two that agree today.
+
+    `problem` non-empty is a reason there will be no invocation, worded for the
+    record. `off` is the narrower case of the mechanism being switched off
+    entirely, which is not a problem and is reported nowhere.
+    """
+
+    paths: tuple = ()
+    trimmed: tuple = ()
+    excluded: tuple = ()
+    found: Expansion = Expansion()
+    bound: object = None
+    problem: str = ""
+    off: bool = False
+
+
+def _prepare(run_dir: Path, target_root: Path, config: dict,
+             harness_root: Path, story_id: str, stages) -> _Preparation:
+    """Resolve the bound, the scope and the cap, or say why there is none."""
+    cap, problem = max_files(config)
+    if cap is None:
+        return _Preparation(problem=problem, off=not problem)
+
+    from story_coordinator import recorded_by_all_stages
+
+    changed = recorded_by_all_stages(run_dir, stages)
+    found = expansion(target_root, config, harness_root, changed)
+    paths, trimmed = cap_paths(found, cap)
+    if not paths:
+        # The exclusions this path names are written to the log before its
+        # record, so no exclusion survives only in a line this path no longer
+        # carries. There is nothing trimmed here: the cap was never reached.
+        write_detail(target_root, config, story_id, (), found.excluded)
+        return _Preparation(
+            excluded=found.excluded,
+            found=found,
+            problem=("nothing the story changed is in an inspected scope, so "
+                     "no inspection was made"),
+        )
+
+    bound, bound_problem = inspection.bounds(config)
+    if bound is None:
+        return _Preparation(
+            paths=tuple(paths), trimmed=tuple(trimmed),
+            excluded=found.excluded, found=found, problem=bound_problem,
+        )
+    return _Preparation(
+        paths=tuple(paths), trimmed=tuple(trimmed),
+        excluded=found.excluded, found=found, bound=bound,
+    )
+
+
+def _invoke(prepared: _Preparation, run_dir: Path, target_root: Path,
+            config: dict, harness_root: Path, story_id: str, framing: str,
+            runner):
+    """Make the one invocation, returning the scope and what it produced.
+
+    One invocation whatever mix of source and tests files the story changed:
+    the change is one subject, and splitting it by which half of the tree a
+    file sits in would ask two agents about one change.
+    """
+    scope = inspection.Scope(
+        path="",
+        kind=inspection.CHANGE,
+        paths=tuple(prepared.paths),
+        origin=ORIGIN.format(story_id=story_id),
+        framing=framing,
+    )
+    if runner is None:
+        import agent_runner
+
+        runner = agent_runner.run_agent
+    # The detail goes to the log at the point both facts are known — after the
+    # cap is applied and before the invocation — rather than at the end, so an
+    # inspection's progress is already in the shape a watcher reads.
+    write_detail(target_root, config, story_id, prepared.trimmed,
+                 prepared.excluded)
+    # The announcement is made here, after the scope is computed and the bound
+    # resolved and immediately before the invocation, so the gap between it and
+    # the summary is the invocation rather than the whole mechanism.
+    _announce(run_dir, story_id, len(prepared.paths))
+    result = inspection.inspect_scope(
+        scope, target_root, config, harness_root, prepared.bound, (), runner,
+        inspection.local_index(target_root, harness_root),
+    )
+    return scope, result
+
+
+def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
+            label: str, prepared: _Preparation, report, result,
+            to_the_story: int) -> None:
+    """Say what the inspection found, in the run's own record and the log.
+
+    Shared by both modes, so the notes a reader relies on — a dedupe that could
+    not answer, a tracker command that moved under the run, a filed brief that
+    named no area — are written on the same terms wherever the inspection ran.
+    """
+    findings, filed_count, dropped_count = _counts(report)
+    # A failed dedupe gets a line of its own, beside the summary rather than
+    # instead of it. As a trailing clause on one long line it stayed true for
+    # thirty stories without anybody reading it as the standing failure it was:
+    # an inspection that could not ask the tracker may have refiled what is
+    # already there, which is a different thing from an inspection that found
+    # nothing worth filing, and the two read alike at the end of a summary.
+    # Said first, because the summary below it reports what was filed and this
+    # is what a reader needs in order to know what that count is worth.
+    for one in report.dedupe:
+        if not one.ran:
+            _note(
+                run_dir,
+                f"{label}: dedupe did not run for {one.scope}: {one.reason}; "
+                f"what was filed may already be filed",
+            )
+    # Beside that note, and on the same terms: a run that holds a filed-query
+    # command the tree no longer names launched its dedupe as a command this
+    # tree does not have, so an empty answer means a stale path rather than an
+    # empty tracker. Said whether or not dedupe answered, because a query that
+    # ran against a stale-but-existing command answered for a tracker the tree
+    # no longer points at, which is the same doubt reached by a different road.
+    #
+    # The key is the query seam's own constant, reached through `inspection`
+    # rather than by importing the seam here: which modules reach that seam is
+    # a declared set, and noticing a moved command is not reaching it.
+    moved = harness_config.moved_command(
+        config, target_root, inspection.filed_query.COMMAND_KEY
+    )
+    if moved is not None:
+        _note(
+            run_dir,
+            f"{label}: {moved.describe()}, so the dedupe query answered for a "
+            f"tracker the tree no longer points at; what was filed may already "
+            f"be filed",
+        )
+    # A filed brief that named no area gets a line of its own, before the
+    # summary and never as a clause at the end of it. The clause is what a
+    # failing dedupe had, and it stayed true for thirty stories without being
+    # read as the standing failure it was; an area nobody named is the same
+    # shape of fact — the sorting axis a developer works the board by is
+    # missing for that brief, and the vocabulary may be missing a line. Said
+    # before the summary, because the summary reports what was filed and this
+    # says what one of those filings is missing. Where every filed brief named
+    # an area, and on every inspection of a target that declares no
+    # vocabulary, nothing is said at all.
+    for brief, suggestion in report.unnamed_areas:
+        line = f"{label}: no area was named for {brief.slug}"
+        if suggestion:
+            line += f"; the Inspector says it concerns: {suggestion}"
+        _note(run_dir, line)
+    _say(
+        run_dir,
+        _summary(
+            label, report, prepared.excluded, prepared.trimmed,
+            _relative(detail_log(target_root, config, story_id), target_root),
+            to_the_story=to_the_story,
+        ),
+        findings=findings + to_the_story, filed=filed_count,
+        dropped=dropped_count,
+        # A statement about the filed query alone, whatever the local index
+        # said: that tier holds only what this machine filed, so reading it does
+        # not make dedupe complete.
+        dedupe_ran=report.dedupe_ran,
+        # Carried from the invocation's own result through the scope result,
+        # never re-derived: nothing here reads an agent log back. None where the
+        # invocation reported nothing, which is how the record says it was told
+        # no figure rather than saying the inspection was free.
+        cost_usd=result.cost_usd, scope_files=result.scope_files,
+        invocations=1,
+    )
+    # Beside the stage invocations in that run's own cost.json, and never added
+    # to the allowance the ceiling reads. See `record_cost` for why the two are
+    # different jobs.
+    record_cost(run_dir, result.cost_usd)
+
+
+# --------------------------------------------------------------------------
+# The entry points
+# --------------------------------------------------------------------------
+
+
 # This entry point must not refuse, and restoring consistency with the
 # refusing pre-flights around it would defeat the mechanism. It returns
 # nothing, raises on no path, and declares no parameter by which a caller could
@@ -619,7 +927,10 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     Called from `_complete`, after the completion commit — so a slow inspection
     cannot delay the durability of the work — and above the completion sweep,
     so briefs it enqueues are filed by that same sweep rather than waiting for
-    the next run.
+    the next run. Since story-147 it is called there **only where no stage of
+    the loaded workflow declares an inspection of its own**: a workflow that
+    declares one has already inspected this story's change before that stage
+    ran, and inspecting again from here would inspect the same diff twice.
 
     Every way this can go wrong ends here: the key unset, the key unusable, no
     changed path in scope, an agent that cannot be reached, a filed query that
@@ -627,6 +938,7 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     and a commit that cannot be made. None of them has a way to tell the caller
     anything, because there is no value to tell it with.
     """
+    label = f"post-story inspection of {story_id}"
     try:
         _inspect_after_story(
             run_dir, target_root, config, harness_root, story_id, stages,
@@ -648,8 +960,7 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         try:
             _say(
                 run_dir,
-                f"post-story inspection of {story_id}: it could not run: "
-                f"{error}",
+                f"{label}: it could not run: {error}",
                 findings=0, filed=0, dropped=0,
                 scope_files=0, invocations=0,
                 # No invocation was made, so no filed query answered for this
@@ -666,75 +977,27 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
                          harness_root: Path, story_id: str, stages,
                          *, runner) -> None:
     """The body of the above, so the guard has one thing to guard."""
-    cap, problem = max_files(config)
-    if cap is None:
-        if problem:
-            # Named in the record rather than refused. The run completes with
-            # the status it would have had with the key unset, which is what a
-            # total function's answer to a bad bound has to be.
-            _say(run_dir, f"post-story inspection of {story_id}: {problem}",
-                 findings=0, filed=0, dropped=0,
-                 scope_files=0, invocations=0, dedupe_ran=False)
-            commit_record(target_root, config, story_id)
-        # An absent key is the mechanism switched off: no invocation, no event,
-        # no commit, and an events.log byte-for-byte what it was.
-        return
-
-    from story_coordinator import recorded_by_all_stages
-
-    changed = recorded_by_all_stages(run_dir, stages)
-    found = expansion(target_root, config, harness_root, changed)
-    paths, trimmed = cap_paths(found, cap)
-    excluded = found.excluded
-
-    if not paths:
-        # The exclusions this path names are written to the log before its
-        # record, so no exclusion survives only in a line this path no longer
-        # carries. There is nothing trimmed here: the cap was never reached.
-        write_detail(target_root, config, story_id, (), excluded)
-        _say(
-            run_dir,
-            f"post-story inspection of {story_id}: nothing the story changed "
-            f"is in an inspected scope, so no inspection was made",
-            findings=0, filed=0, dropped=0,
-            scope_files=0, invocations=0, dedupe_ran=False,
-        )
-        commit_record(target_root, config, story_id)
-        return
-
-    bound, bound_problem = inspection.bounds(config)
-    if bound is None:
-        _say(run_dir, f"post-story inspection of {story_id}: {bound_problem}",
+    label = f"post-story inspection of {story_id}"
+    prepared = _prepare(
+        run_dir, target_root, config, harness_root, story_id, stages
+    )
+    if prepared.bound is None:
+        if prepared.off:
+            # An absent key is the mechanism switched off: no invocation, no
+            # event, no commit, and an events.log byte-for-byte what it was.
+            return
+        # Named in the record rather than refused. The run completes with the
+        # status it would have had with the key unset, which is what a total
+        # function's answer to a bad bound has to be.
+        _say(run_dir, f"{label}: {prepared.problem}",
              findings=0, filed=0, dropped=0,
              scope_files=0, invocations=0, dedupe_ran=False)
         commit_record(target_root, config, story_id)
         return
 
-    # One invocation whatever mix of source and tests files the story changed:
-    # the change is one subject, and splitting it by which half of the tree a
-    # file sits in would ask two agents about one change.
-    scope = inspection.Scope(
-        path="",
-        kind=inspection.CHANGE,
-        paths=tuple(paths),
-        origin=ORIGIN.format(story_id=story_id),
-        framing=POST_STORY_FRAMING,
-    )
-    if runner is None:
-        import agent_runner
-
-        runner = agent_runner.run_agent
-    # The detail goes to the log at the point both facts are known — after the
-    # cap is applied and before the invocation — rather than at the end, so an
-    # inspection's progress is already in the shape a watcher reads.
-    write_detail(target_root, config, story_id, trimmed, excluded)
-    # The announcement is made here, after the scope is computed and the bound
-    # resolved and immediately before the invocation, so the gap between it and
-    # the summary is the invocation rather than the whole mechanism.
-    _announce(run_dir, story_id, len(paths))
-    result = inspection.inspect_scope(
-        scope, target_root, config, harness_root, bound, (), runner,
-        inspection.local_index(target_root, harness_root),
+    scope, result = _invoke(
+        prepared, run_dir, target_root, config, harness_root, story_id,
+        POST_STORY_FRAMING, runner,
     )
 
     # The cap on briefs, the enqueue and the ways a finding can be dropped on
@@ -743,13 +1006,13 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     # cap, one queue call, one set of named reasons — rather than under a
     # second copy of them. It is also why nothing here names the queue.
     filed, over = inspection.file_findings(
-        target_root, result.found, bound.max_findings,
+        target_root, result.found, prepared.bound.max_findings,
         # The same floor, resolved from the same key by the same `bounds` call
         # the broad mode makes. Passed rather than defaulted, because
         # `file_findings` defaults it to no floor so that every construction
         # that predates it is unchanged — a producer with a resolved bound in
         # its hand has to hand it over.
-        min_severity=bound.min_severity,
+        min_severity=prepared.bound.min_severity,
     )
     report = inspection.Report(
         scopes=(scope,),
@@ -759,82 +1022,138 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         dedupe=(result.dedupe,) if result.dedupe is not None else (),
         cost_usd=result.cost_usd,
         scope_files=result.scope_files,
-        min_severity=bound.min_severity,
+        min_severity=prepared.bound.min_severity,
         area_suggestions=tuple(result.area_suggestions),
     )
-    findings, filed_count, dropped_count = _counts(report)
-    # A failed dedupe gets a line of its own, beside the summary rather than
-    # instead of it. As a trailing clause on one long line it stayed true for
-    # thirty stories without anybody reading it as the standing failure it was:
-    # an inspection that could not ask the tracker may have refiled what is
-    # already there, which is a different thing from an inspection that found
-    # nothing worth filing, and the two read alike at the end of a summary.
-    # Said first, because the summary below it reports what was filed and this
-    # is what a reader needs in order to know what that count is worth.
-    for one in report.dedupe:
-        if not one.ran:
-            _note(
-                run_dir,
-                f"post-story inspection of {story_id}: dedupe did not run for "
-                f"{one.scope}: {one.reason}; what was filed may already be "
-                f"filed",
-            )
-    # Beside that note, and on the same terms: a run that holds a filed-query
-    # command the tree no longer names launched its dedupe as a command this
-    # tree does not have, so an empty answer means a stale path rather than an
-    # empty tracker. Said whether or not dedupe answered, because a query that
-    # ran against a stale-but-existing command answered for a tracker the tree
-    # no longer points at, which is the same doubt reached by a different road.
-    #
-    # The key is the query seam's own constant, reached through `inspection`
-    # rather than by importing the seam here: which modules reach that seam is
-    # a declared set, and noticing a moved command is not reaching it.
-    moved = harness_config.moved_command(
-        config, target_root, inspection.filed_query.COMMAND_KEY
-    )
-    if moved is not None:
-        _note(
-            run_dir,
-            f"post-story inspection of {story_id}: {moved.describe()}, so the "
-            f"dedupe query answered for a tracker the tree no longer points "
-            f"at; what was filed may already be filed",
-        )
-    # A filed brief that named no area gets a line of its own, before the
-    # summary and never as a clause at the end of it. The clause is what a
-    # failing dedupe had, and it stayed true for thirty stories without being
-    # read as the standing failure it was; an area nobody named is the same
-    # shape of fact — the sorting axis a developer works the board by is
-    # missing for that brief, and the vocabulary may be missing a line. Said
-    # before the summary, because the summary reports what was filed and this
-    # says what one of those filings is missing. Where every filed brief named
-    # an area, and on every inspection of a target that declares no
-    # vocabulary, nothing is said at all.
-    for brief, suggestion in report.unnamed_areas:
-        line = (f"post-story inspection of {story_id}: no area was named for "
-                f"{brief.slug}")
-        if suggestion:
-            line += f"; the Inspector says it concerns: {suggestion}"
-        _note(run_dir, line)
-    _say(
-        run_dir,
-        _summary(
-            story_id, report, excluded, trimmed,
-            _relative(detail_log(target_root, config, story_id), target_root),
-        ),
-        findings=findings, filed=filed_count, dropped=dropped_count,
-        # A statement about the filed query alone, whatever the local index
-        # said: that tier holds only what this machine filed, so reading it does
-        # not make dedupe complete.
-        dedupe_ran=report.dedupe_ran,
-        # Carried from the invocation's own result through the scope result,
-        # never re-derived: nothing here reads an agent log back for it. None
-        # where the invocation reported nothing, which is how the record says
-        # it was told no figure rather than saying the inspection was free.
-        cost_usd=result.cost_usd, scope_files=result.scope_files,
-        invocations=1,
-    )
-    # Beside the stage invocations in that run's own cost.json, and never added
-    # to the allowance the ceiling reads. See `record_cost` for why the two are
-    # different jobs.
-    record_cost(run_dir, result.cost_usd)
+    _report(run_dir, target_root, config, story_id, label, prepared, report,
+            result, 0)
     commit_record(target_root, config, story_id)
+
+
+# The same guarantee, made again for the caller that runs inside the stage
+# loop rather than after it. It returns nothing, raises on no path, and
+# declares no parameter by which a caller could be told to stop — and moving
+# the inspection inside the loop a retry re-enters does not weaken that: no
+# stage outcome is conditional on it having worked, and there is no value here
+# for a coordinator branch to read.
+def inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
+                         harness_root: Path, story_id: str, stages,
+                         *, artifact: str, attempt: int,
+                         runner=None) -> None:
+    """Inspect this attempt's change, ahead of the stage that judges it.
+
+    Called from the stage loop, immediately before a stage that declares an
+    inspection is entered, and once per attempt — the artifact this writes is
+    what says the attempt has been inspected, so a self-route or a correction
+    pass re-entering that stage within the attempt renders what is already
+    there and a retry, which means the code changed, inspects again.
+
+    What it does with what it finds is the whole of the difference from the
+    post-story mode. A finding whose subject is among the files the story
+    changed is written to `artifact` for the stage to read: a review comment on
+    a change belongs to the change that produced it, and the stage about to
+    judge that change is the only one still able to act on it. Every other
+    finding is filed as a brief exactly as it is filed from anywhere else,
+    through the same floor, the same brief cap, the same dedupe and the same
+    queue.
+
+    **It supplies and does not decide.** Nothing here fails a run, forces a
+    retry, spends a correction pass or is read by any coordinator branch; the
+    stage that reads the artifact triages it on the terms it already triages
+    findings on.
+
+    It makes **no commit of its own**. The record it writes is carried by the
+    run's completion, escalation or pause commit, and an inspection commit at
+    HEAD here would sit where `_complete` reads HEAD to recognise a resumed
+    escalation.
+    """
+    label = f"inspection of the change made by {story_id}"
+    try:
+        _inspect_before_stage(
+            run_dir, target_root, config, harness_root, story_id, stages,
+            artifact=artifact, attempt=attempt, runner=runner,
+        )
+    except Exception as error:  # noqa: BLE001 - the totality is the guarantee
+        print(
+            f"the pre-stage inspection could not run: {error}", file=sys.stderr
+        )
+        try:
+            _say(
+                run_dir, f"{label}: it could not run: {error}",
+                findings=0, filed=0, dropped=0,
+                scope_files=0, invocations=0, dedupe_ran=False,
+            )
+            # The stage is told the inspection could not be made rather than
+            # being handed nothing: an absence a reader takes for agreement is
+            # the failure this record exists against.
+            write_findings(
+                run_dir, artifact, attempt, story_id, ran=False,
+                reason=f"the inspection could not run: {error}",
+            )
+        except Exception:  # noqa: BLE001 - reporting may not become the failure
+            pass
+
+
+def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
+                          harness_root: Path, story_id: str, stages,
+                          *, artifact: str, attempt: int, runner) -> None:
+    """The body of the above, so the guard has one thing to guard."""
+    label = f"inspection of the change made by {story_id}"
+    prepared = _prepare(
+        run_dir, target_root, config, harness_root, story_id, stages
+    )
+    if prepared.bound is None:
+        reason = prepared.problem or (
+            f"{MAX_FILES_KEY} is not set, so no inspection was made"
+        )
+        if not prepared.off:
+            _say(run_dir, f"{label}: {prepared.problem}",
+                 findings=0, filed=0, dropped=0,
+                 scope_files=0, invocations=0, dedupe_ran=False)
+        # Written on this path too, and on the switched-off path as well: the
+        # stage reads a statement of why there is nothing rather than an
+        # absence it would have to interpret, and the presence of the file is
+        # what keeps the once-per-attempt rule one rule rather than two.
+        write_findings(run_dir, artifact, attempt, story_id, ran=False,
+                       reason=reason)
+        return
+
+    scope, result = _invoke(
+        prepared, run_dir, target_root, config, harness_root, story_id,
+        PRE_STAGE_FRAMING, runner,
+    )
+
+    own, others = about_the_change(result.found, prepared.found.changed)
+
+    # Only the findings that are not about this story's own change are filed,
+    # and they are filed through exactly the call every other producer files
+    # through — the same floor, the same brief cap, the same named drop reasons
+    # and the same queue — so a backlog item reaching the tracker from here is
+    # indistinguishable from one reaching it from anywhere else.
+    filed, over = inspection.file_findings(
+        target_root, others, prepared.bound.max_findings,
+        min_severity=prepared.bound.min_severity,
+    )
+    report = inspection.Report(
+        scopes=(scope,),
+        invocations=1,
+        filed=filed,
+        dropped=tuple(result.dropped) + tuple(over),
+        dedupe=(result.dedupe,) if result.dedupe is not None else (),
+        cost_usd=result.cost_usd,
+        scope_files=result.scope_files,
+        min_severity=prepared.bound.min_severity,
+        area_suggestions=tuple(result.area_suggestions),
+    )
+    _report(run_dir, target_root, config, story_id, label, prepared, report,
+            result, len(own))
+    # Last, so a failure to write the record cannot cost the filing above it.
+    # The findings are written as the Inspector wrote them: nothing here
+    # rewrites, rates or summarises one, because what the stage is being given
+    # is the Inspector's reading rather than the coordinator's.
+    write_findings(
+        run_dir, artifact, attempt, story_id, ran=True,
+        findings=[one.finding for one in own],
+    )
+
+

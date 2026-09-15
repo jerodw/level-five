@@ -769,41 +769,94 @@ def test_the_floor_builds_its_drop_in_one_place_and_both_producers_reach_it():
         {"files_them", "files_them_again"}
 
 
-def test_the_post_story_producer_hands_the_resolved_floor_to_that_one_place():
-    """It passes the floor it resolved rather than applying one of its own.
+FLOOR_NAME = "min_severity"
 
-    Read at the call: every mention of the floor in the post-story producer is
-    an argument to the shared filing call, so there is no second partition
-    there to diverge. The behavioural half of this is the run above, where the
-    key configured on the target decides what that producer files.
+
+def filing_calls(tree: ast.AST) -> list[ast.Call]:
+    """Every call to the shared filing function in the tree."""
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", "") ==
+            inspection.file_findings.__name__]
+
+
+def producers_not_handing_on_the_floor(source: str) -> set[str]:
+    """Every function in the source that does something with the floor other
+    than hand it on, by name.
+
+    Two ways a producer can diverge, both reported here: it reaches the shared
+    filing call without giving it the floor it resolved, or it mentions the
+    floor somewhere that is not an argument to the filing call or to the report
+    that states the floor the run used — which is what a partition of its own
+    would look like.
+    """
+    offenders: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        carriers = [inner for inner in ast.walk(node)
+                    if isinstance(inner, ast.Call)
+                    and getattr(inner.func, "attr", "")
+                    in (inspection.file_findings.__name__,
+                        inspection.Report.__name__)]
+        if any(FLOOR_NAME not in {keyword.arg for keyword in call.keywords}
+               for call in filing_calls(node)):
+            offenders.add(node.name)
+        carried = {id(inner) for carrier in carriers
+                   for inner in ast.walk(carrier)
+                   if isinstance(inner, ast.Attribute)
+                   and inner.attr == FLOOR_NAME}
+        if any(id(inner) not in carried for inner in ast.walk(node)
+               if isinstance(inner, ast.Attribute)
+               and inner.attr == FLOOR_NAME):
+            offenders.add(node.name)
+    return offenders
+
+
+def test_every_producer_hands_the_resolved_floor_to_that_one_place():
+    """Each producer passes the floor it resolved rather than applying one of
+    its own.
+
+    The module holds two producers by design — the one that inspects after a
+    completed story and the one that inspects before a stage — and both file
+    what is not about the story's own change through the shared filing call.
+    The invariant is about all of them and not about how many there are, so it
+    is read over every filing call the module makes: each is given the floor,
+    and every mention of the floor in the function making it is an argument it
+    hands on, to that call or to the report that states the floor the run ran
+    under. The behavioural half of this is the run above, where the key
+    configured on the target decides what a producer files.
+
+    The control is a planted source carrying both divergences — a producer that
+    files without the floor, and one that partitions on the floor itself —
+    which the same reading reports.
     """
     source = (REPO_ROOT / "orchestration" / "story_inspection.py").read_text(
         encoding="utf-8")
     tree = ast.parse(source)
 
-    calls = [node for node in ast.walk(tree)
-             if isinstance(node, ast.Call)
-             and getattr(node.func, "attr", "") ==
-             inspection.file_findings.__name__]
-    assert len(calls) == 1
-    passed = {keyword.arg for keyword in calls[0].keywords}
-    assert "min_severity" in passed
+    # The reading sees something: there are filing calls to hold, and mentions
+    # of the floor to place. Without this an empty module would pass.
+    calls = filing_calls(tree)
+    assert calls
+    assert [node for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+            and node.attr == FLOOR_NAME]
 
-    # Every mention of the floor in this producer is an argument it hands on —
-    # to the shared filing call, or to the report that states the floor it ran
-    # under. None of them is a partition of its own, so there is nothing here
-    # to diverge from the call above.
-    carriers = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-                and (getattr(node.func, "attr", "")
-                     in (inspection.file_findings.__name__,
-                         inspection.Report.__name__))]
-    inside = {id(node) for carrier in carriers for node in ast.walk(carrier)
-              if isinstance(node, ast.Attribute) and node.attr == "min_severity"}
-    mentions = [node for node in ast.walk(tree)
-                if isinstance(node, ast.Attribute)
-                and node.attr == "min_severity"]
-    assert mentions
-    assert {id(node) for node in mentions} == inside
+    assert producers_not_handing_on_the_floor(source) == set()
+
+    planted = (
+        "def files_without_the_floor(prepared, found):\n"
+        f"    return inspection.{inspection.file_findings.__name__}("
+        "root, found, prepared.bound.max_findings)\n\n\n"
+        "def partitions_on_the_floor(prepared, found):\n"
+        "    kept = [one for one in found"
+        f" if one.severity >= prepared.bound.{FLOOR_NAME}]\n"
+        f"    return inspection.{inspection.file_findings.__name__}("
+        f"root, kept, prepared.bound.max_findings,"
+        f" {FLOOR_NAME}=prepared.bound.{FLOOR_NAME})\n"
+    )
+    assert producers_not_handing_on_the_floor(planted) == \
+        {"files_without_the_floor", "partitions_on_the_floor"}
 
 
 # ==========================================================================

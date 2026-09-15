@@ -252,6 +252,7 @@ def build_context(
     correction_pass_result: str | None = None,
     suite_run_result: str | None = None,
     revert_check_result: str | None = None,
+    inspection_findings: str | None = None,
     stage: str | None = None,
 ) -> dict[str, str | None]:
     standards_dir = target_root / config.get("standards_dir", ".harness/standards")
@@ -323,6 +324,18 @@ def build_context(
         # for the reason the self-route record beside it is: a call that omits
         # it renders exactly what it rendered before the argument existed.
         "revert_check_result": revert_check_result,
+        # The Inspector's reading of this story's own diff, made before this
+        # stage was entered. Passed in for the reason the records beside it
+        # are: the artifact's name is declared on a workflow stage and keyed by
+        # the attempt that wrote it, which is the coordinator's to compose, and
+        # this module names no workflow-declared artifact. Optional and
+        # keyword-only, so a call that omits it renders exactly what it rendered
+        # before the argument existed, which is every stage of every workflow
+        # that declares no inspection. It is evidence rather than a verdict:
+        # nothing in the coordinator reads it back to decide anything, and the
+        # stage it is rendered into triages it on the terms it already triages
+        # findings on.
+        "inspection_findings": inspection_findings,
         # A self-routed stage has no agent-authored guidance behind it — the
         # stage failed mechanically and no verifier saw the work — so the
         # coordinator's own statement of why it is running again is passed in

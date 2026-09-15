@@ -80,6 +80,10 @@
         "result": "clean-clone-result.json",
         "retry_stage": "implementer"
       },
+      "inspection": {
+        "result": "story-inspection-findings.json",
+        "result_reason": "The run-directory artifact the pre-stage inspection writes for this stage to read: the Inspector's findings about the files this story itself changed. Shaped like the clean_clone, correction_pass and suite_run declarations beside it -- the key's absence disables the mechanism for the workflow with no code change, and the artifact name lives here rather than in orchestration. A finding about a file the story did not touch is filed as a brief exactly as it was before this key existed; only a finding about the change itself is written here, because a review comment on a change belongs to the change that produced it. It is evidence and not a verdict: no coordinator branch reads it, and the verifier's existing triage decides what it is worth."
+      },
       "correction_pass": {
         "result": "correction-pass.json",
         "budget": 2,

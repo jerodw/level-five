@@ -56,6 +56,10 @@
         "result": "clean-clone-result.json",
         "retry_stage": "implementer"
       },
+      "inspection": {
+        "result": "story-inspection-findings.json",
+        "result_reason": "The run-directory artifact the pre-stage inspection writes for this stage to read: the Inspector's findings about the files this refactor itself changed. Shaped like the clean_clone and correction_pass declarations beside it -- the key's absence disables the mechanism for the workflow with no code change, and the artifact name lives here rather than in orchestration. A refactor answers its own review for the reason a story does: a review comment on a change belongs to the change that produced it, and only a finding about a file the change did not touch is a backlog item. It is evidence and not a verdict: no coordinator branch reads it, and the verifier's existing triage decides what it is worth."
+      },
       "correction_pass": {
         "result": "correction-pass.json",
         "budget": 1,
