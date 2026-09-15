@@ -1,0 +1,115 @@
+story:
+  id: story-149
+  title: The escaped-descendant case is decided by what the fetch did, not by how fast the machine ran it
+  description: |
+    Planned from the brief filed under 293.
+
+    `tests/test_branch_base.py::test_a_descendant_that_escaped_the_group_does_not_extend_the_bound`
+    establishes that the fetch bound follows the fetch rather than a descendant
+    that escaped into a session of its own. It establishes it by monkeypatching
+    a one-second bound over `FETCH_TIMEOUT_SECONDS` and asserting
+    `outcome.timed_out is False` -- so the case passes only if the machine gets
+    a shell, a Python interpreter and a `setsid` through to an exit inside one
+    second. Under the configured `pytest tests/ -q -n auto` over six thousand
+    tests it sometimes does not, the bound fires, and `timed_out` comes back
+    True: a true report about what happened and a false one about what the test
+    is trying to show. On story-148 it failed inside the clean-clone check, the
+    run rerouted to the implementer, no stage edited the module, and the clean
+    clone passed on the re-run -- a retry and about thirty-two minutes spent on
+    a test that was never repaired because there was nothing to repair.
+
+    An assertion that requires the machine to be fast is the thing
+    `tests/test_no_test_bounds_the_machine.py` exists to forbid. Its siblings in
+    the same module are sound under that rule and were argued so when
+    `test_branch_base.py` was classified BOUNDS_ONLY_SLOWNESS: a stalled fetch's
+    stub is told to sit far longer than the ceiling, so a call that returned
+    inside the bound can only have been killed, and load makes that more true
+    rather than less. This case inverts the direction -- it needs the subject to
+    finish *within* the bound -- so the classification covers it without the
+    argument applying to it.
+
+    This story decides the case on what the fetch did rather than on how long it
+    took. `_FetchOutcome` already carries the distinction: a fetch that answered
+    carries the fetch's own exit status, and one killed at the bound carries
+    none. The case rests on that and on the escaped descendant being observed
+    still running after the call returned, which is the actual claim. The
+    one-second patch is dropped from it so the call runs under the shipped
+    twenty-second bound, far enough above any plausible spawn chain that
+    exceeding it means the fetch genuinely hung -- the same reasoning the stall
+    cases use in the other direction. A control beside it drives the identical
+    subject through a wait on the fetch's *output* under the short bound and
+    observes that one timing out, so the case still fails when the bound is made
+    to follow the descendant and the distinction the assertion rests on is shown
+    to be real rather than asserted. The classification comment is extended so
+    its argument covers this case too.
+
+    Nothing about `FETCH_TIMEOUT_SECONDS` or the shipped twenty-second bound
+    changes: what is wrong is the one-second bound a single test substitutes for
+    it, not the value the harness ships.
+  workflow: story-workflow
+
+tasks:
+  - Replace the elapsed-time and timed_out assertions in test_a_descendant_that_escaped_the_group_does_not_extend_the_bound with assertions on what the outcome carries - the fetch's own exit status, which a killed fetch has none of - and on the escaped descendant still running after the call returned.
+  - Stop substituting STALL_BOUND_SECONDS for FETCH_TIMEOUT_SECONDS in that case, so the call runs under the shipped bound, and say in the docstring why a bound that generous is what this case may run under.
+  - Add a control beside it driving the identical subject through a wait on the fetch's output under the short bound, observing that wait timing out, so the case is shown still failing when the bound is made to follow the descendant.
+  - Extend the BOUNDS_ONLY_SLOWNESS comment for test_branch_base.py in tests/test_no_test_bounds_the_machine.py so its argument covers the escaped-descendant case, which rests on what the outcome carries rather than on elapsed time.
+
+acceptance_criteria:
+  - test_a_descendant_that_escaped_the_group_does_not_extend_the_bound contains no assertion comparing a measured elapsed interval against a ceiling, and no assertion that passes only if the subject reached its exit inside a substituted bound.
+  - That case asserts the outcome carries the subject's own exit status - the field a fetch killed at the bound does not carry - so a killed fetch and an answering one are told apart by the outcome rather than by the clock.
+  - That case observes the escaped descendant still running after the call returned, so the claim that the bound followed the fetch and not its descendant is established rather than inferred.
+  - That case no longer sets FETCH_TIMEOUT_SECONDS to STALL_BOUND_SECONDS; the call runs under the shipped bound, and the docstring says why a bound that far above any plausible spawn chain is what this case may run under.
+  - A control case in the same module drives the same subject through a wait on the fetch's output rather than on the fetch, under the short bound, and observes that wait reporting a timeout - so the assertion above is shown to distinguish the two waits rather than to hold vacuously.
+  - The control's soundness does not depend on machine speed - the escaped descendant holds the inherited descriptors for far longer than the short bound, so a wait on output cannot come back inside it however loaded the machine is - and the case says so where a reader meets it.
+  - tests/test_no_test_bounds_the_machine.py still classifies test_branch_base.py as BOUNDS_ONLY_SLOWNESS, and the comment recording that classification argues the escaped-descendant case as well as the kill cases.
+  - The other timing cases in tests/test_branch_base.py are unchanged - the stall, group-kill and marker cases keep their substituted bound, their ceiling and their argument.
+  - FETCH_TIMEOUT_SECONDS and its shipped value are unchanged, and orchestration/story_coordinator.py is not modified by this story.
+
+technical_plan:
+  implementation_steps:
+    - Read the escaped-descendant case at tests/test_branch_base.py:1295 and _FetchOutcome and _bounded_fetch at orchestration/story_coordinator.py:1399-1481, so the field that separates an answering fetch from a killed one is taken from the shape rather than guessed.
+    - Rewrite the case - keep the subject script that spawns a detached child with setsid and exits at once, drop the monkeypatch of FETCH_TIMEOUT_SECONDS and the two elapsed assertions, and assert instead that the outcome carries the subject's own exit status and that the descendant is still running once the call has returned. Use the module's existing marker-and-patience idiom for the descendant rather than a new timing construct.
+    - Rewrite the docstring so it states the claim - the bound is on the fetch answering, so the helper comes back when the fetch does however long its escaped descendant runs - and states why the shipped bound is the right one to run under here, on the same reasoning the stall cases use in the other direction.
+    - Add the control case beside it - the same subject, waited on through its output under STALL_BOUND_SECONDS, observed reporting a timeout - with a docstring saying that the descendant holds the inherited descriptors for far longer than that bound, so the timeout is a fact about which event is waited on rather than about how fast the machine is.
+    - Extend the CLASSIFICATION comment for test_branch_base.py in tests/test_no_test_bounds_the_machine.py to cover the escaped-descendant pair, so the argument recorded there is true of every timing case in the module.
+  likely_file_changes:
+    - file: tests/test_branch_base.py
+      stage: tester
+      reason: Holds the escaped-descendant case being rewritten and the control being added beside it.
+    - file: tests/test_no_test_bounds_the_machine.py
+      stage: tester
+      reason: Holds the classification comment for test_branch_base.py, whose argument must cover the rewritten case.
+
+scope:
+  modify:
+    - tests/test_branch_base.py
+    - tests/test_no_test_bounds_the_machine.py
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - The stall, group-kill and marker cases in tests/test_branch_base.py, which bound only slowness and are correct as written
+    - The CLASSIFICATION kind recorded for test_branch_base.py, which stays BOUNDS_ONLY_SLOWNESS
+    - workflows/
+
+verification_requirements:
+  - Confirm the rewritten case contains no elapsed-versus-ceiling comparison and does not substitute a bound for FETCH_TIMEOUT_SECONDS, by reading the case rather than by observing it pass.
+  - Confirm the rewritten case would fail if the helper waited on the fetch's output instead of on the fetch - the control is what establishes this, so confirm the control is present, drives the same subject, and observes a timeout.
+  - Confirm the escaped descendant is observed still running after the call returned, so the case establishes the bound followed the fetch rather than merely that the call was quick.
+  - Confirm FETCH_TIMEOUT_SECONDS and its value are unchanged and that orchestration/story_coordinator.py carries no change from this story.
+  - Confirm the other timing cases in tests/test_branch_base.py are unchanged.
+  - Confirm tests/test_no_test_bounds_the_machine.py still classifies test_branch_base.py as BOUNDS_ONLY_SLOWNESS and that its comment now argues the escaped-descendant case too.
+  - Confirm the suite passes, including tests/test_no_test_bounds_the_machine.py's enumeration and classification checks.
+
+constraints:
+  - No test added or rewritten by this story may bound how slow the machine is allowed to be; a bound it places on an operation must be one that slowness makes more true rather than less.
+  - The shipped fetch bound and the production behaviour of _bounded_fetch are unchanged - this story changes what a test asserts, not what the harness does.
+  - The module's existing constants and idioms are reused where they fit; a new timing constant is added only if no existing one expresses the bound being placed.
+  - The docstrings carry the argument for why each case is sound, in the voice the surrounding cases already use, so a later reader can weigh the claim without reconstructing it.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-15 08:36:13
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 293
