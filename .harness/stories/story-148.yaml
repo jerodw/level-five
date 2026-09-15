@@ -1,0 +1,203 @@
+story:
+  id: story-148
+  title: The inspection of a story's change reads the files that story created
+  description: |
+    The pre-stage inspection cannot see a single file the story created, and
+    says so nowhere. `expansion` in orchestration/story_inspection.py keeps a
+    changed path only where it appears in `_tracked(target_root)`, which is
+    `git ls-files -z` — the index and nothing else. That test answers correctly
+    for the one caller it was written for: `inspect_after_story` runs inside
+    `_complete` below the completion commit, so by then every created file is in
+    the index. `inspect_before_stage` runs in the opposite condition — from the
+    stage loop, before the judging stage is entered and before any commit of the
+    work, with nothing staging the tree in between — so every file the story
+    created is untracked, is dropped from the scope, and is named in the run's
+    detail log as "the repository no longer tracks it", a sentence false in both
+    directions for a file that was just written. The created file therefore never
+    reaches `Expansion.changed`, never reaches `Scope.paths`, and is never read
+    by the Inspector; and because `about_the_change` partitions on that same
+    changed set, a finding that does name a created file — reached through a
+    sibling in the same directory — is classified as the backlog's and filed as
+    a brief against the next story, which is the precise outcome the pre-stage
+    inspection exists to stop. The verifier is told none of it: `write_findings`
+    records `ran: true`, which prompts/story-verifier.md reads as "the Inspector
+    read this change and found nothing about it to report".
+
+    This story stops asking git what it tracks and asks what the tree holds:
+    `git ls-files --cached --others --exclude-standard`, the listing the
+    coordinator's own tree comparison already uses for this reason, filtered to
+    the paths that exist on disk. One listing serves both callers rather than a
+    per-caller flag — after the completion commit the cached half already covers
+    everything the post-story caller sees and the others half adds nothing —
+    which removes the index from the question instead of making `expansion`
+    answer for two relations to it. The exclusion wording stops asserting a
+    deletion when the truth may be a creation, and the validation the correctness
+    claim needs — an inspection driven against a real tree holding an untracked
+    created file — is written, because no test drives `expansion` that way today.
+
+    Planned from the brief filed under the key 289.
+  workflow: story-workflow
+
+tasks:
+  - Replace the index listing `expansion` takes its scope from with a listing of
+    what the target tree holds, so a file the story created during the stage
+    loop is in scope for the inspection of that change.
+  - Keep a listed path only where the working tree actually holds it, so an
+    index entry for a file deleted in the working tree — the mid-loop deletion
+    the current listing would hand to the Inspector as a file to read — is
+    excluded on the same terms as a committed deletion.
+  - Reword the exclusion this produces so it names what is true of both a
+    deleted path and a path that was never there, rather than asserting that the
+    repository no longer tracks a file the story has just written.
+  - Carry the change through the names and the prose around it — the listing
+    helper's name, `Expansion.changed`'s docstring and `expansion`'s docstring —
+    so nothing in the module still explains the scope as the index.
+  - Write the validation that drives `expansion` and the pre-stage inspection
+    against a real tree holding an untracked created file, and keep the existing
+    deleted-path and never-existed-path assertions as the control.
+  - Update the ARCHITECTURE.md prose that describes the expansion's scope as
+    what `git ls-files` tracks.
+
+acceptance_criteria:
+  - The listing `expansion` builds its scope from includes files the target tree
+    holds but the index does not — untracked and unignored — and excludes files
+    git ignores.
+  - A changed path recorded by a stage, under an inspected scope prefix, present
+    in the working tree and absent from the index appears in `Expansion.changed`
+    and in `Expansion.paths`, and appears in `Expansion.excluded` under no
+    reason at all.
+  - A changed path the working tree does not hold is still absent from
+    `Expansion.changed` and still contributes its containing directory to the
+    siblings, whether the path was committed as a deletion, deleted in the
+    working tree with its index entry still present, or never existed.
+  - The text `expansion` writes into `Expansion.excluded` for a path the tree
+    does not hold no longer asserts that the repository stopped tracking it, and
+    reads true of a path that was never there as well as of one that was
+    removed.
+  - Nothing in orchestration/story_inspection.py describes the inspection scope
+    as what git tracks or as the index, in the listing helper's name, in
+    `Expansion.changed`'s docstring or in `expansion`'s docstring.
+  - A pre-stage inspection run against a tree holding an untracked created file
+    gives the Inspector a scope containing that file, and a finding naming that
+    file is written to the stage's findings artifact as the story's own rather
+    than filed as a brief.
+  - Both entry points reach the scope through the same `expansion` call with the
+    same arguments: no parameter, flag or caller-supplied listing distinguishes
+    the pre-stage scope from the post-story one.
+  - A post-story inspection over a committed change covers the same files it
+    covered before this story, so the change to the listing is visible to the
+    pre-stage caller and invisible to the post-story one.
+  - Every existing assertion in tests/test_a_completed_story_is_inspected.py and
+    tests/test_inspection_findings_reach_the_story.py still stands, and the full
+    suite passes under `test_command`.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_inspection.py, change the listing subprocess from
+      `git ls-files -z` to `git ls-files --cached --others --exclude-standard
+      -z`, keeping the module-local fixed-argument idiom and the two total
+      failure paths that answer with an empty listing rather than raising.
+    - Filter that listing to the paths the working tree holds, so an index entry
+      whose file has been deleted from the tree is not offered as a file to
+      read. Both the changed paths and the siblings are taken from the filtered
+      listing, so the two halves of the scope answer the same question.
+    - Rename the helper away from `_tracked` — nothing outside the module reads
+      it — and rewrite its docstring, `Expansion.changed`'s docstring and
+      `expansion`'s docstring so they describe the scope as what the target tree
+      holds and explain why the index is the wrong question for a caller that
+      runs before the work is committed.
+    - Reword the excluded entry from "the repository no longer tracks it" to a
+      sentence true of both a removal and a path that was never there, and keep
+      the comment beside it explaining why such a path contributes its directory
+      and not itself.
+    - In tests, drive `expansion` against a target whose tree holds a file that
+      has been written but not added, and assert it is in `changed`, in `paths`
+      and in no exclusion; assert the same file is in the scope the pre-stage
+      inspection hands the runner and that a finding naming it is answered by
+      the story rather than filed. Keep the existing deleted-file and
+      never-existed-file cases as the control that the new listing did not
+      simply admit everything, and add the working-tree-deletion case beside
+      them.
+    - In .harness/docs/ARCHITECTURE.md, update the expansion paragraphs and the
+      `story_inspection.py` module entry so the scope is described as what the
+      tree holds, recording why one listing serves a caller that runs after the
+      completion commit and one that runs before any commit of the work.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The listing, the existence filter, the exclusion wording and the
+        prose that explains the scope all live in this module.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: Holds the expansion suite and its fixture tree; the created-file,
+        working-tree-deletion and control cases are assertions there.
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: tester
+      reason: Holds the pre-stage behaviour; the end-to-end case that a created
+        file reaches the inspection scope and that a finding about it is
+        answered by the story belongs here.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Two paragraphs and the module entry describe the expansion's scope
+        as what `git ls-files` tracks, which this story makes false.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - tests/test_a_completed_story_is_inspected.py
+    - tests/test_inspection_findings_reach_the_story.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - orchestration/inspection.py
+    - prompts/
+    - schemas/
+    - workflows/
+
+verification_requirements:
+  - Confirm the listing `expansion` uses admits a path present in the working
+    tree and absent from the index, and still excludes an ignored path.
+  - Confirm a created-but-unstaged changed path reaches `Expansion.changed` and
+    `Expansion.paths` and produces no entry in `Expansion.excluded`.
+  - Confirm a path the tree does not hold is excluded in all three of its forms
+    — a committed deletion, a working-tree deletion whose index entry remains,
+    and a path that never existed — and that each still contributes its
+    containing directory.
+  - Confirm no exclusion text in the module asserts that the repository stopped
+    tracking a path, and that the module's names and docstrings no longer
+    describe the scope as the index.
+  - Confirm the pre-stage inspection hands the Inspector a scope containing an
+    untracked created file, and that a finding naming that file is written to
+    the stage's findings artifact rather than enqueued as a brief.
+  - Confirm both entry points reach `expansion` through the same call with the
+    same arguments, with no parameter distinguishing the two modes.
+  - Confirm the new tests fail against the pre-story implementation of the
+    listing and pass against the new one.
+  - Confirm the full suite passes under `test_command`, with no existing
+    assertion weakened, skipped or deleted.
+
+constraints:
+  - Both inspection entry points remain total: no new return value, no new
+    parameter by which a caller could be told to stop, and no path out of this
+    module that raises. A git call that cannot answer still yields an empty
+    listing rather than an exception.
+  - The expansion stays a computation over one git call and set operations, with
+    no model involved and no runner parameter, so its cost stays known before
+    any invocation is made.
+  - The cap, the scope prefixes, the blocked prefixes, the one-level sibling
+    rule and the ordering of changed files before siblings are unchanged.
+  - Every path left out of the scope is still named with its reason, and nothing
+    bounds how many names are written to the run's own log.
+  - The post-story inspection's scope over a committed change is unchanged, and
+    the pre-stage inspection still makes no commit of its own.
+  - No new configuration key is introduced; the mechanism is still switched on
+    and off by `inspect_after_story_max_files` alone.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-14 20:41:55
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 289
