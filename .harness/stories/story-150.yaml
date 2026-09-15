@@ -1,0 +1,137 @@
+story:
+  id: story-150
+  title: An interrupted planning session is judged on what it committed, whatever order its prompts were answered in
+  description: |
+    Planned from the brief filed under 298.
+
+    `tests/test_plan_commit.py::test_an_interrupt_still_commits_what_was_written_and_exits_130`
+    fails under load and passes on a quiet machine. It failed in a full
+    `-n auto` run of the suite at `tests/test_plan_commit.py:996` --
+    `assert status == 130` -- and the same suite passes that case when it is
+    not competing for a machine. It is 31.05 s, the fourth most expensive test
+    in the suite. This is the third timing-dependent failure this week, after
+    the escaped-descendant case story-149 repaired and the family that waits
+    out a killed child; each one costs a retry when it lands in a clean-clone
+    check, which is where the first of them cost story-148 an attempt and about
+    thirty minutes.
+
+    What the case exists to establish is in its title and is not in doubt: an
+    interrupted session still commits what it had written. That half is
+    asserted at `:997` and is not what failed.
+
+    The case drives a sequence and then trusts the order it happened in. It
+    starts a planning session on a pty with a stub told to sleep thirty
+    seconds, waits for the artifact to appear, sends `SIGINT` to the process
+    group at `:985`, and only then writes two answers into the pty behind it at
+    `:992` -- the approval, and an `n` declining the run offer. Nothing makes
+    those two writes land before the session needs them, so the status the case
+    asserts rests on an interleaving the scheduler chooses.
+
+    Two facts sharpen where the repair has to go. First, the answers cannot be
+    what produces the 130: `scripts/l5-plan` ends with
+    `sys.exit(status or committing)` and an interrupted session sets
+    `status = 130`, so the approval and the declined offer decide whether the
+    artifact is committed and whether the process finishes at all, never the
+    status. Second, the brief's other route -- establish that the session
+    reached the approval prompt before the signal was sent -- is not available
+    here, because that prompt is only reached once the interrupt has ended the
+    session. It is downstream of the signal, not upstream of it. What is left
+    is to give the session every answer it needs before the signal exists as a
+    possibility, which is what `tests/conftest.py`'s `a_terminal_for_stdin`
+    already does for every other module that drives this script through a
+    terminal.
+
+    The mechanism is established before it is repaired rather than assumed. The
+    brief's confidence is medium: the failing run captured the assertion and
+    not the pty transcript, so which write lost the race is inferred. Reading
+    the case raises a second doubt beside it -- the stub sleeps thirty seconds
+    and the case costs 31.05 s, which says the sleep runs close to completion
+    even when the case passes, and that is not what the comment at `:986`
+    describes. So the first work is to watch it: the pty transcript, the stub's
+    own fate, the status `l5-plan` exits with and where the wall-clock goes,
+    on a quiet machine and under a loaded one.
+
+    The developer has asked that whatever that observation finds be repaired in
+    one pass. If the non-determinism is in the test's ordering, the ordering is
+    what changes. If it is in `scripts/l5-plan` -- an interrupt landing
+    somewhere the script does not handle, so the status a developer's own
+    terminal would see genuinely varies -- then the script is repaired too, and
+    the case is left resting on a determinism that is now real rather than
+    arranged around one that is not. The behaviour the case asserts is correct
+    either way and is not what changes: an interrupted session commits what it
+    wrote and exits 130.
+
+  workflow: story-workflow
+
+tasks:
+  - Establish what actually happens when the process group is interrupted - capture the pty transcript, the stub's own exit, the status l5-plan exits with, and where the case's wall-clock goes - on an unloaded machine and with the machine loaded, so the interleaving is observed rather than inferred from the assertion that failed.
+  - Give run_plan_on_a_pty an optional reply that is written into the master before the child is started, on the reasoning tests/conftest.py's a_terminal_for_stdin already records, leaving the default behaviour of the helper exactly as it is.
+  - Rewrite test_an_interrupt_still_commits_what_was_written_and_exits_130 so every answer the session needs is in the pty before the interrupt is sent and nothing is written after it, keeping both of its assertions - the 130 and the commit holding exactly the artifact.
+  - Rewrite that case's comments to say what the investigation observed rather than what the previous comment assumed, including where the case's cost goes, so the next reader has the transcript's account and does not reach for the stub's sleep.
+  - If and only if the investigation shows the varying status comes from scripts/l5-plan rather than from the order the test wrote in, repair it there so an interrupt reaching the script during any part of its post-session work ends in the same status, and cover that repair with a case that drives the newly handled point.
+
+acceptance_criteria:
+  - test_an_interrupt_still_commits_what_was_written_and_exits_130 writes nothing into the pty after the signal is sent; every input the session and the script need is in the terminal before the process is started.
+  - That case still asserts both halves - the exit status is 130, and the plan commit holds exactly the one artifact the session wrote - and neither assertion is weakened, made conditional, or replaced by a looser one.
+  - That case's comments state what was observed of the interrupt - the stub's fate, the status the script exits with, and where the case's wall-clock goes - rather than restating the account the previous comment gave.
+  - run_plan_on_a_pty called as its existing callers call it behaves exactly as it does today; the case at tests/test_plan_commit.py:965 and the caller in tests/test_the_approval_is_observed.py, which writes its answers late on purpose because it is measuring a hold, are unchanged in behaviour.
+  - No assertion in the rewritten case passes only when one event beats another on a busy machine, and no precondition the case cannot control is reported as a failure - an unmet one reports through machine_load.inconclusive, which is the only route tests/test_no_test_bounds_the_machine.py permits.
+  - tests/test_no_test_bounds_the_machine.py still classifies test_plan_commit.py as CARRIES_PRECONDITIONS and the module still satisfies that classification.
+  - The stub's thirty-second sleep is unchanged, and no assertion in the case depends on the session being interrupted within any wall-clock window.
+  - If scripts/l5-plan is changed, an interrupt arriving at the point the investigation found is covered by a test that drives that point, and the status such an interrupt ends in is the same 130 the case asserts.
+  - If scripts/l5-plan is not changed, the story says in the case's comments what the investigation established about the script, so the reader can see the question was asked and answered rather than passed over.
+  - The behaviour under test is unchanged - an interrupted planning session still commits what it had written, still pushes it, and still exits 130 - and no test asserting that is deleted or relaxed.
+
+technical_plan:
+  implementation_steps:
+    - Read the case at tests/test_plan_commit.py:972-997, the helper at :819, drain at :840, and scripts/l5-plan:310-345 where the session's status is decided, so what the answers actually decide is taken from the source rather than from the case's comment.
+    - Run the case with the pty transcript kept and with the stub's exit observable - what the stub did with the SIGINT, whether subprocess.run's own interrupt handling waited out the sleep, and what l5-plan printed before exiting - and repeat it with the machine loaded. Write down the status seen in each case. This is what decides whether the following steps touch the script.
+    - Add an optional pre-loaded reply to run_plan_on_a_pty, written to the master between pty.openpty and Popen, defaulting to writing nothing so existing callers are untouched, with a docstring saying why a reply that must be waiting cannot be written behind the child.
+    - Rewrite the interrupt case to pass the approval and the declined offer through that parameter, drop the os.write at :992, and leave the killpg where it is. Rewrite the comments around it to the investigation's account.
+    - If the investigation put the varying status in scripts/l5-plan, repair it there - the try that catches KeyboardInterrupt covers only the session subprocess, so an interrupt arriving while the script is committing, stamping, validating or prompting is not handled by it - and add a case covering the point that was found, in the module that already covers this script's interrupt behaviour.
+    - Re-run the case repeatedly alongside a loaded machine to confirm the status no longer varies, and record in the module what was run to confirm it.
+  likely_file_changes:
+    - file: tests/test_plan_commit.py
+      stage: tester
+      reason: Holds the interrupt case being rewritten, the pty helper gaining the optional pre-loaded reply, and the comments recording what the investigation observed.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Changed only if the investigation shows the varying exit status comes from the script's own handling of an interrupt rather than from the order the test wrote its answers in. Left untouched otherwise.
+
+scope:
+  modify:
+    - tests/test_plan_commit.py
+    - scripts/l5-plan
+  do_not_modify:
+    - tests/test_the_approval_is_observed.py
+    - tests/test_no_test_bounds_the_machine.py
+    - orchestration/plan_mandate.py
+    - orchestration/plan_commit.py
+    - prompts/
+    - schemas/
+    - workflows/
+
+verification_requirements:
+  - Confirm no input the session or the script needs is written into the pty after the signal is sent, so the case's result does not depend on a write winning a race.
+  - Confirm both assertions the case exists for are still present and unweakened - the 130 and the commit holding exactly the one artifact.
+  - Confirm the case's comments record what was observed of the interrupt rather than what was assumed of it, and that they account for the case's cost so a later reader does not reach for the stub's sleep.
+  - Confirm existing callers of run_plan_on_a_pty are unaffected, including the one in tests/test_the_approval_is_observed.py that writes its answers late deliberately.
+  - Confirm the module is still classified CARRIES_PRECONDITIONS in tests/test_no_test_bounds_the_machine.py and still satisfies that classification, with any unmet precondition reported through machine_load.inconclusive.
+  - Confirm that where scripts/l5-plan was changed there is a test driving the point that was repaired, and that where it was not changed the case's comments say what the investigation established about it.
+  - Confirm the full suite passes under the configured test command.
+
+constraints:
+  - The behaviour under test is correct and is not in question - an interrupted session commits what it wrote and exits 130 - so no change may alter it.
+  - The stub's thirty-second sleep stays as it is; it is what keeps the session alive to be interrupted, and shortening it would tighten the race rather than remove it.
+  - No assertion may be deleted, skipped or weakened to make the case pass, and no bound may be placed on how fast the machine has to be.
+  - A precondition the test cannot control is reported through machine_load.inconclusive and by no other route.
+  - Any change to scripts/l5-plan is confined to how an interrupt is handled; nothing about what the script commits, stamps, validates or pushes changes.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-15 12:12:00
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 298
