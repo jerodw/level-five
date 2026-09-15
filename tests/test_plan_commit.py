@@ -816,9 +816,27 @@ def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning
 # --------------------------------------------------------------------------
 
 
-def run_plan_on_a_pty(planning: Planning, **stub):
-    """Run l5-plan with a pty for stdin, stdout and stderr."""
+def run_plan_on_a_pty(planning: Planning, *, reply: str = "", **stub):
+    """Run l5-plan with a pty for stdin, stdout and stderr.
+
+    `reply` is written into the master *before* the child is started, which is
+    the arrangement `tests/conftest.py`'s `a_terminal_for_stdin` already makes
+    for every module that drives this script through a terminal, and for its
+    reason: an answer written behind a running child arrives when the
+    scheduler lets it, so a test whose outcome depends on the child having the
+    answer depends on winning a race it does not run. An answer already in the
+    terminal is there whenever the child looks, and nothing about when it
+    looks can change what it finds.
+
+    It defaults to writing nothing, so a caller that says nothing about it
+    starts a child with an empty terminal exactly as before -- including the
+    caller in `tests/test_the_approval_is_observed.py`, which writes its
+    answers behind the child on purpose because the gap it opens by doing so
+    is what that test measures.
+    """
     master, slave = pty.openpty()
+    if reply:
+        os.write(master, reply.encode())
     process = subprocess.Popen(
         [sys.executable, str(L5_PLAN), "--workflow", PLANNED_WORKFLOW,
          "add a thing"],
@@ -961,6 +979,49 @@ def wait_for_the_planning_session_to_write(
         time.sleep(0.05)
 
 
+def wait_for_the_pty_to_say(master: int, said: str,
+                            deadline: float = SESSION_WRITE_DEADLINE) -> str:
+    """Read the pty until the child has printed `said`, and return all of it.
+
+    Waiting on what the script printed is how a caller reaches a point inside
+    the script's own post-session work without timing its way there: a line
+    the script prints on its way into a question is the script saying it is at
+    that question, and a machine that ran it slowly changes when that line
+    arrives rather than whether it does.
+
+    A machine that did not let the child get there inside `deadline` left the
+    caller's question unasked, which is `machine_load.inconclusive`'s case. A
+    child that reached end of output without ever saying it is a different
+    thing -- it ended instead of asking -- and that is reported as a failure,
+    because no amount of load makes a script skip a question.
+    """
+    heard, selector = "", selectors.DefaultSelector()
+    selector.register(master, selectors.EVENT_READ)
+    expires = time.monotonic() + deadline
+    try:
+        while said not in heard:
+            remaining = expires - time.monotonic()
+            if remaining <= 0:
+                machine_load.inconclusive(
+                    f"the child under the pty never printed {said!r} within "
+                    f"{deadline:g}s, so it never reached the point this test "
+                    f"interrupts it at; it had said: {heard!r}")
+            if not selector.select(timeout=remaining):
+                continue
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:              # EIO: the child closed its side
+                chunk = b""
+            if not chunk:
+                raise AssertionError(
+                    f"the child under the pty ended without printing {said!r}; "
+                    f"it said: {heard!r}")
+            heard += chunk.decode(errors="replace")
+    finally:
+        selector.close()
+    return heard
+
+
 def test_the_developers_terminal_is_the_sessions_terminal(planning: Planning):
     process, master = run_plan_on_a_pty(planning, L5_STUB_EXIT=7)
     status, _ = drain(process, master)
@@ -971,8 +1032,49 @@ def test_the_developers_terminal_is_the_sessions_terminal(planning: Planning):
 
 def test_an_interrupt_still_commits_what_was_written_and_exits_130(
         planning: Planning):
+    """An interrupted session commits what it wrote, and the script exits 130.
+
+    Both answers are in the terminal before the child is started, and nothing
+    is written into it after the signal. What story-150 observed of this case,
+    in the transcript rather than from the assertion that failed:
+
+      * The stub does not sleep its thirty seconds out. The signal goes to the
+        process group, so it reaches the stub too, and the stub dies of it
+        immediately -- its own `KeyboardInterrupt` out of `time.sleep` is in
+        the transcript. The sleep is here to keep the session alive long
+        enough to be interrupted, and that is all it does.
+      * Essentially the whole of this case's cost is spent *before* the signal,
+        getting the session to the point where there is something to interrupt:
+        the base refresh, the id reservation pushed to the remote, the
+        worktree, the build-state link, the workflow load, the prompt render
+        and the stub's own start. Measured at the signal, everything after it
+        was a fraction of a second on every machine story-150 ran it on, quiet
+        and loaded. A reader wondering where thirty seconds went should look
+        above this line rather than at the sleep.
+      * The answers never decide the status. `l5-plan` ends with
+        `sys.exit(status or committing)`, and an interrupt sets that status to
+        130 whatever the answers did. What they decide is whether there is a
+        commit to assert about and whether the process finishes at all: with
+        nothing in the terminal this invocation blocks at the approval question
+        and never ends, which is a hang rather than a failure.
+      * The status this asserts was once the script's alone to get wrong, and
+        story-150 found it doing so: an interrupt arriving after the session
+        had ended left `main` uncaught and the process died *by* the signal,
+        which a shell also shows as 130 but which anything reading the return
+        code sees as -SIGINT. That is repaired in the script, and the case
+        below this one drives the repaired point.
+    """
     process, master = run_plan_on_a_pty(
         planning,
+        # The interrupted session's artifact is still committed and pushed, and
+        # since story-059 a successful push on a terminal ends by offering to
+        # run what was committed. This pty is a terminal, so both questions are
+        # asked and both have to be answered: since story-088 the plan is
+        # approved first, which is what lets an interrupted session's artifact
+        # be committed at all, and then the offer is declined so no run starts.
+        # They wait in the terminal from before the child exists, so no answer
+        # this invocation needs is racing the signal that follows.
+        reply=conftest.APPROVES + conftest.DECLINES,
         L5_STUB_WRITE=writes((".harness/stories/story-900.yaml", artifact())),
         L5_STUB_SLEEP=30,
     )
@@ -982,19 +1084,63 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
     # before the session had written anything to commit.
     wait_for_the_planning_session_to_write(
         planning, ".harness/stories/story-900.yaml")
-    os.killpg(os.getpgid(process.pid), signal.SIGINT)
-    # The interrupted session's artifact is still committed and pushed, and
-    # since story-059 a successful push on a terminal ends by offering to run
-    # what was committed. This pty is a terminal, so both questions are asked
-    # and both have to be answered: since story-088 the plan is approved first,
-    # which is what lets an interrupted session's artifact be committed at all,
-    # and then the offer is declined so the interrupt's own status wins.
-    os.write(master, conftest.APPROVES.encode() + b"n\n")
+    # The one precondition this case cannot control: the interrupt has to reach
+    # an invocation that is still running. It is asked of the invocation rather
+    # than of a clock -- a machine that starved this process past the stub's
+    # own sleep and past everything the script does afterwards leaves nothing
+    # to interrupt, and that is a run that never reached this question rather
+    # than an answer to it.
+    if process.poll() is not None:
+        machine_load.inconclusive(
+            "the invocation had already finished by the time the signal was "
+            "to be sent, so the interrupt this case is about never happened")
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGINT)
+    except ProcessLookupError:
+        machine_load.inconclusive(
+            "the invocation's process group was gone by the time the signal "
+            "was sent, so the interrupt this case is about never happened")
 
-    status, _ = drain(process, master)
+    status, output = drain(process, master)
 
-    assert status == 130
+    assert status == 130, output
     assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
+
+
+def test_an_interrupt_after_the_session_ends_exits_130_rather_than_dying_of_it(
+        planning: Planning):
+    """The same end reached at a different moment, and the same status.
+
+    The case above interrupts a live session. This one interrupts the script's
+    own post-session work, which story-150 found to be the moment the script
+    did not handle: the `try` around the session covered the session alone, so
+    an interrupt arriving while `l5-plan` was committing, stamping, validating,
+    publishing or waiting at one of its own questions left `main` through an
+    uncaught `KeyboardInterrupt`, and the process died by the signal instead of
+    exiting. `Popen.wait` reports that as -SIGINT, not as 130. A shell shows
+    130 for both ends, which is why it stood so long.
+
+    The point is reached by what the script says rather than by waiting a
+    chosen number of seconds: the stub writes and exits at once, nothing is
+    put in the terminal, and the script therefore stops at the approval
+    question and stays there. The question being printed is the script saying
+    it is past the session and inside the work this case is about, so the
+    signal lands where it is meant to on a machine of any speed.
+    """
+    process, master = run_plan_on_a_pty(
+        planning,
+        L5_STUB_WRITE=writes((".harness/stories/story-900.yaml", artifact())),
+    )
+    heard = wait_for_the_pty_to_say(master, "approve this plan?")
+    os.killpg(os.getpgid(process.pid), signal.SIGINT)
+
+    status, output = drain(process, master)
+
+    assert status == 130, heard + output
+    # The script exited rather than died, and said so: the line is what tells
+    # a developer that what had already been committed and pushed stands and
+    # that nothing below the interrupt was done.
+    assert "l5-plan: interrupted." in heard + output
 
 
 # --------------------------------------------------------------------------

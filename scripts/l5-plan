@@ -112,6 +112,18 @@ import story_ids  # noqa: E402
 import workflow_selection  # noqa: E402
 import worktrees  # noqa: E402
 
+#: What an invocation interrupted in the session, or in the post-session work
+#: below it, exits with. Everything `main` does above the session — the base
+#: refresh, the id reservation, the worktree, the build-state link, and the
+#: script's own workflow-confirmation prompt — is outside both guards and still
+#: dies by the signal.
+#: A shell reports a process killed by SIGINT as 128 + the signal, so this is
+#: the status a developer's own terminal shows either way; what naming it once
+#: buys is that the script *exits* with it rather than dying by the signal, so
+#: a caller reading the return code of the process — a test, a script, anything
+#: that is not a shell — is told the same thing the shell is told.
+INTERRUPTED_EXIT_CODE = 130
+
 
 def main() -> None:
     argv = sys.argv[1:]
@@ -323,29 +335,49 @@ def main() -> None:
     except KeyboardInterrupt:
         # An interrupted session ends like any other end: whatever it already
         # wrote is committed, and the exit status is the shell's own 130.
-        status = 130
-    if status < 0:
-        # A session killed by a signal reports it as a negative return code;
-        # a shell reports the same end as 128 + the signal, and an interrupt
-        # is 130 either way.
-        status = 128 - status
-    # Committing happens whatever the session's status was, so it is done
-    # before the status is consulted at all. The session's own status then
-    # wins; the commit's is what is left to say when the session ended
-    # cleanly and the push did not.
-    committing = report(
-        worktree,
-        stories_dir,
-        before,
-        workflow["stages"],
-        config,
-        base,
-        workflow_name,
-        reservation=reservation,
-        invoked_root=target_root,
-        remote=remote,
-        brief_key=brief_key,
-    )
+        status = INTERRUPTED_EXIT_CODE
+    try:
+        if status < 0:
+            # A session killed by a signal reports it as a negative return
+            # code; a shell reports the same end as 128 + the signal, and an
+            # interrupt is 130 either way.
+            status = 128 - status
+        # Committing happens whatever the session's status was, so it is done
+        # before the status is consulted at all. The session's own status then
+        # wins; the commit's is what is left to say when the session ended
+        # cleanly and the push did not.
+        committing = report(
+            worktree,
+            stories_dir,
+            before,
+            workflow["stages"],
+            config,
+            base,
+            workflow_name,
+            reservation=reservation,
+            invoked_root=target_root,
+            remote=remote,
+            brief_key=brief_key,
+        )
+    except KeyboardInterrupt:
+        # An interrupt that lands *after* the session is the same end reached
+        # at a different moment, and until this guard it was the one moment the
+        # script did not handle: the try above covers the session alone, so an
+        # interrupt arriving while this script was committing, stamping,
+        # validating, publishing or waiting at one of its own prompts left main
+        # through an uncaught KeyboardInterrupt and the process died by the
+        # signal rather than exiting. A shell shows 130 for both, which is why
+        # it went unnoticed; anything reading the process's return code sees
+        # -SIGINT for one and 130 for the other.
+        #
+        # Nothing is undone, retried or completed here. Whatever the steps
+        # above had already committed, stamped, pushed or published stands
+        # exactly as they left it, and the steps below the interrupt did not
+        # happen — which is what the process dying by the signal already meant.
+        # All that changes is that the script says so in its exit status.
+        print("l5-plan: interrupted. Whatever had already been committed and "
+              "pushed stands; nothing after the interrupt was done.")
+        sys.exit(INTERRUPTED_EXIT_CODE)
     sys.exit(status or committing)
 
 
