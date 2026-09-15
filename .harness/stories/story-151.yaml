@@ -1,0 +1,96 @@
+story:
+  id: story-151
+  title: A copy of this repository made for a test carries what the test needs and not what the runs left behind
+  description: |
+    Planned from the brief filed under 296.
+
+    The `repo_copy` fixture in `tests/test_git_history_loading_retired.py`
+    copies this whole repository with `shutil.copytree`, excluding only
+    `.venv`, `__pycache__` and `.pytest_cache`. A copytree is a copy of what
+    is on disk, and git ignoring a path means the path is untracked rather
+    than absent, so the copy carries `.harness/logs` and `.harness/runs` —
+    measured in the brief at 915 MB and 797 MB — and `.venv310`, which the
+    pattern misses because it names `.venv` alone. About 1.75 GB is copied to
+    run tests whose subject is source, tests and a bounded range of history.
+    It was the most expensive fixture in a `--durations=40` run of the whole
+    suite, at 19.48 s of module setup.
+
+    The direction is what makes it worth fixing rather than tolerating: both
+    of those directories grow with every story that runs, so the fixture gets
+    slower without a line of test code changing.
+
+    This story makes the copy exclude what the repository already excludes,
+    and derives that exclusion from git rather than from a hand-maintained
+    pattern list, so a path added to `.gitignore` later is excluded here with
+    nobody remembering to do it. The exclusions are obtained by asking git for
+    the ignored paths at the repository root, not by pattern-matching the text
+    of `.gitignore`: `shutil.ignore_patterns` matches bare filenames with
+    fnmatch, so a pattern carrying a slash — `.harness/runs/` — would match
+    nothing and the fix would look derived while excluding nothing.
+
+    Alongside it the story leaves a standing assertion that a freshly-made
+    copy holds no path the repository ignores. It fails against today's
+    fixture, and it goes on holding for whatever `.gitignore` gains later.
+
+    The whole change is under `tests/`, so the tester stage owns all of it.
+  workflow: story-workflow
+
+tasks:
+  - Factor the copying in tests/test_git_history_loading_retired.py into a helper that both the repo_copy fixture and the new assertion call, so the copy each makes is the same copy.
+  - Give that helper its exclusion list by asking git for the paths it ignores at the repository root, resolved once, rather than by naming patterns or parsing .gitignore text.
+  - Update the docstring on the fixture and helper to state what is excluded and why - that the history is what the copy exists for, and that the run and log directories are not part of the repository the copy reproduces.
+  - Add an assertion that a freshly-made copy contains no path the repository ignores, making its own copy through the helper rather than sharing the module-scoped repo_copy fixture.
+
+acceptance_criteria:
+  - The copy the fixture produces contains no `.harness/logs` directory, no `.harness/runs` directory and no `.venv310` directory, none of which today's ignore patterns exclude.
+  - The list of paths excluded from the copy is obtained from git at run time, so a directory newly added to `.gitignore` is excluded from the copy without any edit to tests/test_git_history_loading_retired.py.
+  - A test in tests/test_git_history_loading_retired.py asserts that a freshly-made copy holds no path the repository ignores, read as git reporting no ignored entry inside the copy.
+  - That test builds its own copy through the shared helper and does not take the module-scoped repo_copy fixture, so the `__pycache__` written into that fixture's copy by the in-copy pytest subprocesses cannot decide whether it passes.
+  - The copy still contains `.git`, which is what the module's bounded history reads depend on.
+  - Every test already in tests/test_git_history_loading_retired.py still passes, including the parametrized cases that run a test green in the unmutated copy and red in the mutated one.
+
+technical_plan:
+  implementation_steps:
+    - Read the repo_copy fixture at tests/test_git_history_loading_retired.py:876-889 and the tests that consume it, so the helper preserves the destination layout the consumers expect.
+    - Write a helper in the module that resolves the ignored paths once by asking git at REPO_ROOT - `git ls-files --others --ignored --directory --exclude-standard` collapses ignored directories to a single entry - and copies REPO_ROOT to a destination with those paths excluded, keeping `.git`.
+    - Have repo_copy call the helper, so the module has one copying implementation rather than two that can drift.
+    - Rewrite the docstrings so a reader learns what the copy carries, what it leaves behind and why the exclusion list is asked of git rather than written down.
+    - Add the standing assertion - a fresh copy through the helper, then git reporting no ignored entry inside it.
+  likely_file_changes:
+    - file: tests/test_git_history_loading_retired.py
+      stage: tester
+      reason: The fixture, the helper it is factored into, the docstrings and the new assertion all live in this module, and the tester stage may change files under tests/.
+
+scope:
+  modify:
+    - tests/test_git_history_loading_retired.py
+  do_not_modify:
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_contract_assertions_bite.py
+    - tests/test_forced_adaptation_declaration.py
+    - .gitignore
+    - .harness/logs
+    - .harness/runs
+
+verification_requirements:
+  - Confirm the full suite passes under the configured test command.
+  - Confirm the new assertion is a real check rather than a tautology - that it fails when the copy is made with the pre-change exclusions, and passes with the derived ones.
+  - Confirm the copy still contains `.git`, and that the parametrized restated-assertion cases still run green in the unmutated copy and red in the mutated one.
+  - Confirm the exclusion list is obtained from git rather than from a list of paths written into the module, so a new `.gitignore` entry needs no edit here.
+  - Confirm no other copy site in tests/ was changed.
+
+constraints:
+  - The module continues to reach this repository's history only through the shared reader in tests/conftest.py, which is the rule it states about itself in its own docstring.
+  - No existing assertion in the module is weakened, skipped or removed.
+  - No wall-clock bound is added. The subject is what gets copied, not how fast the machine that copies it is.
+  - The question of whether this module needs git history at all is settled and not reopened - it does, and 11 MB of `.git` is not what makes the copy expensive.
+  - Pruning or retention of `.harness/logs` and `.harness/runs` themselves is out of scope; this story only stops a test copy from carrying them.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-15 14:59:07
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 296
