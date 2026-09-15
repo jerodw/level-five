@@ -174,12 +174,27 @@ CHANGED_TEST = f"{TESTS_DIR}t_a.py"
 SIBLING_TEST = f"{TESTS_DIR}t_b.py"
 OUT_OF_SCOPE_FILE = "docs/x.md"
 
-#: A path under a scope key that the repository does not track, for a run whose
+#: A path under a scope key that the tree does not hold, for a run whose
 #: writing stage records a file that is not there to read. It is deliberately
-#: not in `TRACKED`: the expansion takes its paths from the tracked listing
-#: rather than from the record, which is how a deleted file and a
+#: not in `TRACKED`: the expansion takes its paths from the listing of what the
+#: tree holds rather than from the record, which is how a deleted file and a
 #: never-existed one come out the same way.
-UNTRACKED_CHANGE = f"{SOURCE_DIR}removed.py"
+MISSING_CHANGE = f"{SOURCE_DIR}removed.py"
+
+#: A file a stage writes into the tree and nothing stages, which is the
+#: condition every file a story creates is in while the stage loop is still
+#: running: on disk, under a scope key, and in no index. It is not in `TRACKED`
+#: and the fixture never writes it — the cases that want it write it themselves,
+#: so every other expansion here is computed over a tree without it.
+CREATED_FILE = f"{SOURCE_DIR}created.py"
+
+#: A path under the same scope key that the fixture's own .gitignore matches, so
+#: "the listing admits what the tree holds" can be told from "the listing admits
+#: everything". Written by the cases that want it, on the same terms as above.
+IGNORED_FILE = f"{SOURCE_DIR}ignored.py"
+
+#: A path under a scope key that has never existed in this fixture in any form.
+NEVER_EXISTED = f"{SOURCE_DIR}never-existed.py"
 
 TRACKED = {
     CHANGED_SOURCE: "def a():\n    return 1\n",
@@ -299,7 +314,8 @@ def build_target(root: Path, journal: Path, *, ignore_history: bool = False,
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    ignored = [".harness/runs/", ".harness/logs/", "/".join(outbox.QUEUE_DIR)]
+    ignored = [".harness/runs/", ".harness/logs/", "/".join(outbox.QUEUE_DIR),
+               IGNORED_FILE]
     if ignore_history:
         ignored.append(
             harness_config.history_dir(root, {}).relative_to(root).as_posix())
@@ -1110,13 +1126,18 @@ def changed_set(tmp_path: Path, records: dict) -> set[str]:
     return story_coordinator.recorded_by_all_stages(run_dir, WORKFLOW["stages"])
 
 
-def expanded(tmp_path: Path, harness: Path, records: dict,
-             name: str = "expanded"):
-    """The expansion over a known collection of records, with no model.
+def expanded_against(tmp_path: Path, harness: Path, records: dict,
+                     name: str = "expanded", prepare=None):
+    """The target the expansion was computed over, and the expansion.
 
-    Nothing here invokes anything: the whole computation is `git ls-files` and
-    two set operations, which is what makes its cost known before an invocation
-    is made.
+    Nothing here invokes anything: the whole computation is one `git ls-files`
+    and two set operations, which is what makes its cost known before an
+    invocation is made.
+
+    `prepare` is called with the target *after* the commit that removes a file,
+    so whatever it does to the tree is uncommitted and unstaged — which is the
+    condition the stage loop leaves a tree in, and the only one in which a file
+    the story created can be told from a file the index already knew about.
     """
     journal = tmp_path / f"{name}-journal.txt"
     target = build_target(tmp_path / name, journal)
@@ -1124,8 +1145,16 @@ def expanded(tmp_path: Path, harness: Path, records: dict,
     (target / DELETED_FILE).unlink()
     _git(target, "add", "-A")
     _git(target, "commit", "-q", "-m", "the story removed a file")
-    return story_inspection.expansion(
+    if prepare is not None:
+        prepare(target)
+    return target, story_inspection.expansion(
         target, config, harness, changed_set(tmp_path, records))
+
+
+def expanded(tmp_path: Path, harness: Path, records: dict,
+             name: str = "expanded", prepare=None):
+    """The expansion alone, for a case with nothing to ask of the target."""
+    return expanded_against(tmp_path, harness, records, name, prepare)[1]
 
 
 RECORDS_NAMING_EVERY_CASE = {
@@ -1203,7 +1232,7 @@ def test_a_deleted_file_contributes_its_directory_and_not_itself(
     assert any(DELETED_FILE in one for one in found.excluded), found.excluded
 
 
-def test_only_the_files_git_tracks_directly_beside_a_change_are_in_scope(
+def test_only_the_files_held_directly_beside_a_change_are_in_scope(
         tmp_path, harness):
     """One level and not recursively.
 
@@ -1219,17 +1248,311 @@ def test_only_the_files_git_tracks_directly_beside_a_change_are_in_scope(
     assert SUBDIRECTORY_FILE in TRACKED
 
 
-def test_an_untracked_path_the_records_name_contributes_nothing_but_its_directory(
+def test_a_path_the_tree_does_not_hold_contributes_nothing_but_its_directory(
         tmp_path, harness):
-    """The same derivation seen from the other side: the paths come from what
-    git tracks rather than from the record, so a record naming a file that is
-    not there cannot put it in a scope."""
+    """The same derivation seen from the other side: the paths come from the
+    listing of what the tree holds rather than from the record, so a record
+    naming a path that is not there cannot put it in a scope."""
     found = expanded(tmp_path, harness, {
         WRITING: {"modified": [f"{SOURCE_DIR}never-existed.py"],
                   "created": [], "deleted": []}})
 
     assert f"{SOURCE_DIR}never-existed.py" not in found.paths
     assert SIBLING_SOURCE in found.paths
+
+
+# ==========================================================================
+# story-148: the scope is what the tree holds, not what the index tracks
+#
+# The expansion above is computed over a tree whose every file is committed, so
+# the index and the tree agree and nothing there can tell which of the two the
+# scope came from. Each case below departs from that tree in exactly one way and
+# asks the same expansion the same question.
+# ==========================================================================
+
+
+def wrote(root: Path, relative: str, text: str = "def written():\n    pass\n"):
+    """One file written into the target tree and staged by nothing.
+
+    The condition a stage leaves a file it created in: on disk, and in no index
+    until something commits it. Returns the path so a caller can write two.
+    """
+    path = Path(root) / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def tracked_paths(target: Path) -> list[str]:
+    """What the index holds, which is what the scope used to be taken from."""
+    return _git(target, "ls-files").stdout.splitlines()
+
+
+def excluding(found, path: str) -> list[str]:
+    """Every entry in the expansion's exclusions that names one path."""
+    return [one for one in found.excluded if one.startswith(f"{path}:")]
+
+
+def test_a_file_a_stage_created_and_nothing_staged_is_in_the_scope(
+        tmp_path, harness):
+    """The case this story exists for.
+
+    A file the story wrote during the stage loop is on disk and in no index, and
+    the inspection whose subject it is has to read it. The premise is asserted
+    rather than assumed: the index really does not hold it, so what puts it in
+    the scope is the tree.
+    """
+    target, found = expanded_against(
+        tmp_path, harness,
+        {WRITING: {"modified": [], "created": [CREATED_FILE], "deleted": []}},
+        name="created-unstaged",
+        prepare=lambda root: wrote(root, CREATED_FILE))
+
+    assert CREATED_FILE not in tracked_paths(target), "the premise is gone"
+    assert CREATED_FILE in found.changed
+    assert CREATED_FILE in found.paths
+    assert excluding(found, CREATED_FILE) == [], found.excluded
+
+
+def test_a_file_git_ignores_is_left_out_beside_the_created_file_that_is_not(
+        tmp_path, harness):
+    """The control the case above needs.
+
+    Both files are written into the tree the same way and recorded the same
+    way, and only the one the fixture's .gitignore matches is left out — so the
+    listing admits what the tree holds rather than admitting everything. The
+    premise is read off git itself: it reports the one as untracked and says
+    nothing about the other.
+    """
+    def prepare(root: Path) -> None:
+        wrote(root, CREATED_FILE)
+        wrote(root, IGNORED_FILE)
+
+    target, found = expanded_against(
+        tmp_path, harness,
+        {WRITING: {"modified": [], "created": [CREATED_FILE, IGNORED_FILE],
+                   "deleted": []}},
+        name="created-and-ignored", prepare=prepare)
+
+    untracked = _git(target, "status", "--porcelain",
+                     "--untracked-files=all").stdout
+    assert CREATED_FILE in untracked and IGNORED_FILE not in untracked
+
+    assert CREATED_FILE in found.paths
+    assert IGNORED_FILE not in found.paths
+    assert IGNORED_FILE not in found.changed
+    assert excluding(found, IGNORED_FILE), found.excluded
+
+
+def test_a_file_the_working_tree_lost_is_left_out_though_the_index_holds_it(
+        tmp_path, harness):
+    """The deletion the new listing would otherwise hand the Inspector to read.
+
+    The file is removed from the working tree with its index entry untouched, so
+    a listing of the index alone would offer a path there is nothing at. It is
+    excluded on exactly the terms a committed deletion is, and contributes its
+    containing directory just the same.
+    """
+    target, found = expanded_against(
+        tmp_path, harness,
+        {WRITING: {"modified": [], "created": [], "deleted": [CHANGED_SOURCE]}},
+        name="deleted-in-the-tree",
+        prepare=lambda root: (Path(root) / CHANGED_SOURCE).unlink())
+
+    assert CHANGED_SOURCE in tracked_paths(target), "the premise is gone"
+    assert CHANGED_SOURCE not in found.paths
+    assert excluding(found, CHANGED_SOURCE), found.excluded
+    # Its directory is in scope, which is the whole of what a removal
+    # contributes: what sits beside it is what it can have broken.
+    assert SIBLING_SOURCE in found.paths
+
+
+def asserts_the_repository_stopped_tracking(text: str) -> bool:
+    """Whether one exclusion says the repository no longer tracks a path.
+
+    The claim the wording may not make: it is false of a file the story has just
+    written, and false of a path that was never there at all.
+    """
+    return "track" in text.lower()
+
+
+def test_no_exclusion_for_a_path_the_tree_does_not_hold_asserts_a_removal(
+        tmp_path, harness):
+    """One sentence for all three forms, and it claims nothing of the index.
+
+    A committed deletion, a working-tree deletion whose index entry remains and
+    a path that never existed are excluded in one expansion, and the text after
+    the path is the same for all three — which is what makes it read true of a
+    path that was never there as well as of one that was removed.
+    """
+    target, found = expanded_against(
+        tmp_path, harness,
+        {WRITING: {"modified": [NEVER_EXISTED], "created": [],
+                   "deleted": [DELETED_FILE, CHANGED_SOURCE]}},
+        name="every-form-of-absence",
+        prepare=lambda root: (Path(root) / CHANGED_SOURCE).unlink())
+
+    wordings = {}
+    for path in (DELETED_FILE, CHANGED_SOURCE, NEVER_EXISTED):
+        entries = excluding(found, path)
+        assert len(entries) == 1, (path, found.excluded)
+        wordings[path] = entries[0].split(": ", 1)[1]
+        assert not asserts_the_repository_stopped_tracking(wordings[path]), \
+            entries[0]
+    assert len(set(wordings.values())) == 1, wordings
+
+    # The control for all three absences: the wording this replaced is reported
+    # by the same reading, so it is a check that can see the claim rather than
+    # one that has stopped looking.
+    assert asserts_the_repository_stopped_tracking(
+        "the repository no longer tracks it")
+
+
+def asserts_the_tree_holds_no_file_there(text: str) -> bool:
+    """Whether one exclusion claims the working tree has no file at the path.
+
+    A sentence that names the *listing* the scope was taken from claims only
+    that the listing left the path out, which stays true of a file git ignores
+    while that file sits on disk. A sentence that names the tree itself makes
+    the stronger claim, and of an ignored path that claim is false: it reports
+    a file the reader of the run's detail log can open as one that is not
+    there.
+    """
+    lowered = text.lower()
+    return "tree" in lowered and "listing" not in lowered
+
+
+def test_the_exclusion_for_an_ignored_file_claims_nothing_the_file_disproves(
+        tmp_path, harness):
+    """The form of absence the other exclusion case cannot reach.
+
+    An ignored path is the one excluded path that is on disk: the listing
+    leaves it out, so the expansion drops it, but a reader who follows the run's
+    detail log to it finds the file. So the sentence has to be true of a path
+    that is there as well as of one that is not, and here the same sentence is
+    written for an ignored file and for a path that never existed — which is
+    only possible while it claims no more than that the listing left the path
+    out.
+    """
+    target, found = expanded_against(
+        tmp_path, harness,
+        {WRITING: {"modified": [NEVER_EXISTED], "created": [IGNORED_FILE],
+                   "deleted": []}},
+        name="ignored-and-never-existed",
+        prepare=lambda root: wrote(root, IGNORED_FILE))
+
+    assert (target / IGNORED_FILE).exists(), "the premise is gone"
+
+    wordings = {}
+    for path in (IGNORED_FILE, NEVER_EXISTED):
+        entries = excluding(found, path)
+        assert len(entries) == 1, (path, found.excluded)
+        wordings[path] = entries[0].split(": ", 1)[1]
+        assert not asserts_the_repository_stopped_tracking(wordings[path]), \
+            entries[0]
+        assert not asserts_the_tree_holds_no_file_there(wordings[path]), \
+            entries[0]
+    assert len(set(wordings.values())) == 1, wordings
+
+    # The control for the absence above: each reading reports the wording it
+    # exists to keep out, so neither is a check that has stopped looking. The
+    # first of these is what the module said before this story, and the second
+    # is what it said between this story's implementation and the correction
+    # that followed it — each true of one form of absence and false of another.
+    assert asserts_the_repository_stopped_tracking(
+        "the repository no longer tracks it")
+    assert asserts_the_tree_holds_no_file_there(
+        "the working tree holds no such file")
+
+
+def test_an_expansion_over_a_committed_tree_reaches_nothing_the_index_lacks(
+        tmp_path, harness):
+    """The other half: the change is invisible to the caller that runs after the
+    completion commit.
+
+    Over a tree where every file is committed, the scope is inside what the
+    index holds — so the post-story inspection covers what it covered before
+    this story, which the exact-tuple assertion above states file by file.
+    """
+    target, found = expanded_against(tmp_path, harness,
+                                     RECORDS_NAMING_EVERY_CASE,
+                                     name="committed-tree")
+
+    assert found.paths, "an empty scope would satisfy any containment"
+    assert set(found.paths) <= set(tracked_paths(target))
+
+
+# ==========================================================================
+# story-148: nothing in the module explains the scope as the index
+# ==========================================================================
+
+
+def module_tree(module) -> ast.Module:
+    return ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+
+
+def listing_helper(module) -> ast.FunctionDef:
+    """The function in a module that runs the listing, found by the git
+    subcommand it spells rather than by a name written here — so this keeps
+    finding it after the rename the story makes."""
+    found = []
+    for node in ast.walk(module_tree(module)):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = node.body[1:] if ast.get_docstring(node) else node.body
+        if any(isinstance(one, ast.Constant) and isinstance(one.value, str)
+               and "ls-files" in one.value
+               for statement in body for one in ast.walk(statement)):
+            found.append(node)
+    assert len(found) == 1, [node.name for node in found]
+    return found[0]
+
+
+def names_the_index(name: str) -> bool:
+    """Whether an identifier explains itself as the index rather than the tree."""
+    return "track" in name.lower() or "index" in name.lower()
+
+
+def test_the_listing_helpers_name_no_longer_explains_the_scope_as_the_index():
+    """The helper answers what the tree holds, and a reader meeting its name
+    has to be told that rather than told it is the index."""
+    assert not names_the_index(listing_helper(story_inspection).name)
+
+    # The control: the same reading over the helper in `inspection`, whose
+    # listing really is of what git tracks, reports it — so the absence above
+    # is a reading that can see the claim.
+    assert names_the_index(listing_helper(inspection).name)
+
+
+def sentences(text: str) -> list[str]:
+    return [one.strip() for one in (text or "").split(".") if one.strip()]
+
+
+def unqualified_claims(text: str) -> list[str]:
+    """Every sentence that reaches for the index without saying the scope is
+    the tree.
+
+    A sentence may name the index — the whole of why one listing serves both
+    callers is a statement about it — as long as it is the contrast being drawn
+    rather than the description being given.
+    """
+    return [one for one in sentences(text)
+            if names_the_index(one)
+            and "tree" not in one.lower() and "hold" not in one.lower()]
+
+
+def test_neither_docstring_describes_the_inspection_scope_as_the_index():
+    """`Expansion.changed`'s docstring and `expansion`'s, which are where a
+    reader goes to find out what a scope contains."""
+    for subject in (story_inspection.Expansion, story_inspection.expansion):
+        text = subject.__doc__
+        assert "tree" in text.lower(), subject
+        assert unqualified_claims(text) == [], subject
+
+    # The control: the wording these replaced is reported by the same reading.
+    assert unqualified_claims(
+        "The files git tracks, as repository-relative paths") == [
+            "The files git tracks, as repository-relative paths"]
 
 
 # ==========================================================================
@@ -1352,8 +1675,8 @@ def test_what_the_cap_excluded_reaches_the_runs_own_log(
 def test_the_paths_the_expansion_left_out_are_named_in_the_runs_own_log(
         tmp_path, harness, monkeypatch):
     """A run whose writing stage records a path outside both scope keys and one
-    the repository does not track names both in that same log, with the reason
-    each was left out.
+    the tree does not hold names both in that same log, with the reason each was
+    left out.
 
     The control is the change the same record names that *is* in scope: it is
     handed to the invocation and is named nowhere under this label, so what is
@@ -1361,13 +1684,13 @@ def test_the_paths_the_expansion_left_out_are_named_in_the_runs_own_log(
     """
     target, _journal, code, inspector, _runner = completing_run(
         tmp_path, harness, monkeypatch, name="left-out", findings=[finding()],
-        extra_changed=(OUT_OF_SCOPE_FILE, UNTRACKED_CHANGE))
+        extra_changed=(OUT_OF_SCOPE_FILE, MISSING_CHANGE))
 
     assert code == 0
     left_out = "\n".join(
         detail_under(in_the_runs_tree(target), LEFT_OUT_LABEL))
     assert OUT_OF_SCOPE_FILE in left_out, left_out
-    assert UNTRACKED_CHANGE in left_out, left_out
+    assert MISSING_CHANGE in left_out, left_out
     assert CHANGED_SOURCE not in left_out, left_out
     assert CHANGED_SOURCE in rendered_paths(inspector.prompt)
 
@@ -1383,7 +1706,7 @@ def test_the_summary_counts_what_it_no_longer_names_and_names_the_log(
     """
     target, _journal, code, _inspector, _runner = completing_run(
         tmp_path, harness, monkeypatch, name="counted", findings=[finding()],
-        extra_changed=(OUT_OF_SCOPE_FILE, UNTRACKED_CHANGE),
+        extra_changed=(OUT_OF_SCOPE_FILE, MISSING_CHANGE),
         **{story_inspection.MAX_FILES_KEY: CAP_THE_RUN_EXCEEDS})
 
     assert code == 0
@@ -1438,7 +1761,7 @@ def test_an_inspection_whose_log_cannot_be_written_still_announces_and_reports(
     reason: they say the occupied run still knew what it could not write down.
     """
     capped = {story_inspection.MAX_FILES_KEY: CAP_THE_RUN_EXCEEDS}
-    left_out = (OUT_OF_SCOPE_FILE, UNTRACKED_CHANGE)
+    left_out = (OUT_OF_SCOPE_FILE, MISSING_CHANGE)
 
     control, _control_journal, control_code, _ci, _cr = completing_run(
         tmp_path, harness, monkeypatch, name="log-writable",

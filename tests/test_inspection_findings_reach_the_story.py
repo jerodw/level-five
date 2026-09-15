@@ -187,6 +187,13 @@ CHANGED_FILE = f"{SOURCE_DIR}changed.py"
 SIBLING_FILE = f"{SOURCE_DIR}beside.py"
 CHANGED_TEST = "tests/t_changed.py"
 
+#: A file the writing stage creates during the run, which no `TRACKED` entry
+#: puts in the target and nothing stages before the inspection runs. It is the
+#: condition every file a story creates is in at the moment this inspection is
+#: made — on disk, under an inspected scope key, and in no index — and only the
+#: runs that ask for it have it.
+CREATED_FILE = f"{SOURCE_DIR}created.py"
+
 TRACKED = {
     CHANGED_FILE: "def changed():\n    return 1\n",
     SIBLING_FILE: "def beside():\n    return 2\n",
@@ -299,6 +306,8 @@ def finding(slug: str, paths: list[str], marker: str) -> dict:
 
 OWN_FINDING = finding("zzz-about-the-change", [CHANGED_FILE],
                       "MARKER-OWN the change itself is wrong")
+CREATED_FINDING = finding("zzz-about-the-created-file", [CREATED_FILE],
+                          "MARKER-CREATED the file the story wrote is wrong")
 SIBLING_FINDING = finding("zzz-beside-the-change", [SIBLING_FILE],
                           "MARKER-SIBLING the file beside it was always wrong")
 BOTH_FINDING = finding("zzz-both", [CHANGED_FILE, SIBLING_FILE],
@@ -324,8 +333,14 @@ class Inspector:
 
     def __call__(self, prompt, *, stage, cwd, log_path=None,
                  permission_mode=None, model=None, **declared):
-        self.invocations.append({"prompt": prompt, "stage": stage,
-                                 "cwd": Path(cwd)})
+        self.invocations.append({
+            "prompt": prompt, "stage": stage, "cwd": Path(cwd),
+            # What the index held at the instant this ran, recorded here
+            # because it is only answerable here: the run commits its work
+            # afterwards, so a listing taken once the run has returned says
+            # nothing about the tree the inspection was made against.
+            "tracked": _git(Path(cwd), "ls-files").stdout.splitlines(),
+        })
         self.tree = Path(cwd)
         with self.journal.open("a", encoding="utf-8") as handle:
             handle.write("inspected\n")
@@ -408,11 +423,16 @@ class Runner:
     inspection ran are read off one file.
     """
 
-    def __init__(self, target_root: Path, journal: Path, verdicts: list[dict]):
+    def __init__(self, target_root: Path, journal: Path, verdicts: list[dict],
+                 creates=()):
         self.target_root = Path(target_root)
         self.run_dir = conftest.run_dir_for(self.target_root, STORY_ID)
         self.journal = Path(journal)
         self.verdicts = list(verdicts)
+        # Paths the writing stage creates and records as created. Nothing
+        # stages them, so they are in the tree and in no index when the
+        # inspection is made — which is the whole of what a created file is.
+        self.creates = tuple(creates)
         self.calls: list[str] = []
         # Recorded per invocation, because two entries to one stage inside one
         # attempt write the same prompt file and the second overwrites the
@@ -429,11 +449,17 @@ class Runner:
         tree = Path(cwd) if cwd else self.target_root
         if stage == WRITING:
             _write(self.run_dir / conftest.CHANGED_FILES,
-                   {"modified": [CHANGED_FILE], "created": [], "deleted": []})
+                   {"modified": [CHANGED_FILE],
+                    "created": list(self.creates), "deleted": []})
             (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
             (tree / CHANGED_FILE).write_text(
                 "def changed():\n    return 11\n", encoding="utf-8")
+            for relative in self.creates:
+                path = tree / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("def created():\n    return 3\n",
+                                encoding="utf-8")
         elif stage == VALIDATING:
             _write(self.run_dir / conftest.TEST_RESULTS, {"tests_written": 1})
             _write(self.run_dir / conftest.TESTER_CHANGED_FILES,
@@ -554,7 +580,7 @@ class Run:
 
 def drive(target: Path, harness: Path, tmp_path: Path, *,
           findings=(), verdicts=(PASS,), raises: str = "",
-          name: str = "journal") -> Run:
+          creates=(), name: str = "journal") -> Run:
     """One run of the fixture with the Inspector installed, ready to read.
 
     The Inspector is put in place of the guard the autouse fixture installed.
@@ -566,7 +592,7 @@ def drive(target: Path, harness: Path, tmp_path: Path, *,
     journal = tmp_path / f"{name}.txt"
     inspector = Inspector(target, journal, findings=findings, raises=raises)
     agent_runner.run_agent = inspector
-    stage_runner = Runner(target, journal, list(verdicts))
+    stage_runner = Runner(target, journal, list(verdicts), creates=creates)
     code = story_coordinator.run_story(
         STORY_ID, harness, target, stage_runner, sleep=lambda _seconds: None)
     return Run(code, target, journal, inspector, stage_runner)
@@ -808,6 +834,67 @@ def test_a_workflow_declaring_no_inspection_inspects_after_the_run_as_before(
 
 
 # ==========================================================================
+# story-148: one scope, reached the same way from both positions
+# ==========================================================================
+
+
+def calls_to(tree: ast.AST, name: str) -> list[ast.Call]:
+    return [node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == name]
+
+
+def argument_shape(call: ast.Call) -> tuple:
+    """What one call site passes, as something two sites can be compared by."""
+    return (
+        tuple(arg.id if isinstance(arg, ast.Name) else ast.dump(arg)
+              for arg in call.args),
+        tuple(sorted((keyword.arg or "**", ast.dump(keyword.value))
+                     for keyword in call.keywords)),
+    )
+
+
+def enclosing_function(tree: ast.AST, call: ast.Call) -> ast.FunctionDef:
+    """The function a call sits in — the innermost, since a nested definition
+    is inside its parent's walk as well as its own."""
+    holders = [node for node in ast.walk(tree)
+               if isinstance(node, ast.FunctionDef)
+               and any(one is call for one in ast.walk(node))]
+    assert holders, "the call is not inside a function"
+    return max(holders, key=lambda node: node.lineno)
+
+
+def test_both_positions_reach_the_scope_through_one_call_with_one_shape():
+    """Nothing tells the expansion which position it is answering for.
+
+    The scope is built at exactly one call site, with bare arguments and no
+    keyword a caller could switch a mode with; and every call to the function
+    holding that site — which is how both positions reach it — passes the same
+    arguments in the same order. A per-position listing would have to appear as
+    a second call site or as a shape that differs between them, and neither can
+    hide from this reading.
+    """
+    tree = ast.parse(
+        Path(story_inspection.__file__).read_text(encoding="utf-8"))
+    sites = calls_to(tree, "expansion")
+    assert len(sites) == 1, [site.lineno for site in sites]
+    assert argument_shape(sites[0])[1] == ()
+
+    holder = enclosing_function(tree, sites[0])
+    reaching = calls_to(tree, holder.name)
+    assert len(reaching) > 1, "only one position reaches the scope"
+    assert len({argument_shape(one) for one in reaching}) == 1, holder.name
+
+    # The control for both absences: the same reading over a source where the
+    # two positions do differ reports two shapes, so what it found above is
+    # agreement rather than a reading that has stopped looking.
+    planted = ast.parse("def before(r):\n    return prepare(r, staged=False)\n"
+                        "def after(r):\n    return prepare(r, staged=True)\n")
+    assert len({argument_shape(one)
+                for one in calls_to(planted, "prepare")}) == 2
+
+
+# ==========================================================================
 # Where each kind of finding goes
 # ==========================================================================
 
@@ -823,7 +910,7 @@ def filed_markers(run: Run) -> list[str]:
     entries = [json.dumps(entry) for entry in run.queue]
     return sorted(
         marker for marker in (OWN_FINDING["body"], SIBLING_FINDING["body"],
-                              BOTH_FINDING["body"])
+                              BOTH_FINDING["body"], CREATED_FINDING["body"])
         if any(marker in entry for entry in entries))
 
 
@@ -839,6 +926,54 @@ def test_a_finding_about_the_change_reaches_the_artifact_and_no_queue_entry(
     assert record["findings"] == [OWN_FINDING]
     assert record["attempt"] == 1
     assert record["story_id"] == STORY_ID
+    assert run.queue == []
+
+
+def scope_lines(run: Run) -> list[str]:
+    """The paths the inspection's own invocation was given.
+
+    The fixture's Inspector template renders `scope_paths` as the whole of a
+    block of its own, one path per line, so a bare path on a line of the prompt
+    is a path the scope carried — and a path merely mentioned in the framing is
+    not one.
+    """
+    assert run.inspector.invocations, "no inspection invocation was made"
+    prompt = run.inspector.invocations[0]["prompt"]
+    return [line.strip() for line in prompt.splitlines() if line.strip()]
+
+
+def test_a_file_the_story_created_reaches_the_scope_the_inspector_is_given(
+        driven):
+    """The pre-stage inspection runs before anything has committed or staged
+    the run's work, so every file the story created is in the tree and in no
+    index at that moment — which the invocation's own record of the index says
+    here rather than this test assuming it. The scope carries it anyway, beside
+    the modified file that was tracked all along.
+    """
+    run = driven(findings=[CREATED_FINDING], creates=[CREATED_FILE])
+
+    assert run.code == 0
+    tracked = run.inspector.invocations[0]["tracked"]
+    assert CREATED_FILE not in tracked, "the premise is gone"
+    assert CHANGED_FILE in tracked
+
+    assert CREATED_FILE in scope_lines(run)
+    assert CHANGED_FILE in scope_lines(run)
+
+
+def test_a_finding_about_a_file_the_story_created_is_answered_by_the_story(
+        driven):
+    """The outcome the scope above exists for.
+
+    A review comment on a file this story wrote reaches the stage that can still
+    answer it and is filed against no later story. The control is the sibling
+    case below: under the same run, the same floor and the same queue, a finding
+    naming a file the story did not touch is filed and reaches no artifact.
+    """
+    run = driven(findings=[CREATED_FINDING], creates=[CREATED_FILE])
+
+    assert run.findings_record()["findings"] == [CREATED_FINDING]
+    assert filed_markers(run) == []
     assert run.queue == []
 
 
