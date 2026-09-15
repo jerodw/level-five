@@ -124,6 +124,13 @@ CLASSIFICATION = {
     # Elapsed after a kill, and a generous poll for a marker to appear: the
     # stalled fetch's git stub was asked to sit for far longer than the
     # ceiling, so a refresh that came back inside it can only have been killed.
+    # The escaped-descendant pair asks nothing of the machine either, and asks
+    # it in the other direction: the case rests on the outcome carrying the
+    # subject's own exit status -- the field a fetch killed at the bound does
+    # not carry -- and on that descendant being seen still running, with no
+    # elapsed interval compared against anything; and its control waits on that
+    # same subject's output under the short bound, which the descendant holds
+    # far past. Load makes both more true rather than less.
     "test_branch_base.py": BOUNDS_ONLY_SLOWNESS,
     # Elapsed after a kill, and a generous poll for a marker to appear.
     "test_filed_query.py": BOUNDS_ONLY_SLOWNESS,
