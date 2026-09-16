@@ -1098,11 +1098,47 @@ def test_a_directory_newly_ignored_is_excluded_with_no_edit_to_this_module(
 # --------------------------------------------------------------------------
 
 
-def git_in(root: Path, *args: str) -> subprocess.CompletedProcess:
+def git_in(root: Path, *args: str,
+           env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """One git reading inside `root`, output captured, nothing raised: the
-    tests below read exit codes as answers as often as they read stdout."""
+    tests below read exit codes as answers as often as they read stdout.
+    `env`, when given, replaces the inherited environment wholesale."""
     return subprocess.run(["git", "-C", str(root), *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
+
+
+#: The variables git reads an author or committer identity from when no
+#: config supplies one, taken out of the environment below so that what a
+#: commit stands on is what the test handed it.
+IDENTITY_VARIABLES = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                      "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL")
+
+
+def environment_with_no_identity() -> dict[str, str]:
+    """The current environment with every route to a git identity closed:
+    the global and system config files pointed at the null device, the
+    identity variables absent, and git's guess from the account name and
+    hostname switched off.
+
+    A clone carries none of its source's local config, so a commit made in a
+    copy finds an identity only where the machine supplies one — the
+    developer's `~/.gitconfig`, a runner's environment. Closing those is not
+    enough on its own: with nothing configured git invents an identity from
+    the password database and the hostname, and accepts it whenever the
+    hostname carries a dot, which a laptop's `.local` name does. So
+    `user.useConfigOnly` is set as well, through the environment's config
+    slots rather than on any one command line, and under this environment
+    the copy has no identity unless the test supplies it — which is what lets
+    the test show that the supply is load-bearing rather than the machine.
+    """
+    env = {name: value for name, value in os.environ.items()
+           if name not in IDENTITY_VARIABLES}
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "user.useConfigOnly"
+    env["GIT_CONFIG_VALUE_0"] = "true"
+    return env
 
 
 def git_dir_resolved(root: Path, option: str) -> Path:
@@ -1121,9 +1157,10 @@ def git_dir_resolved(root: Path, option: str) -> Path:
 
 
 def worktree_and_copy(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """A repository built for the test, a worktree cut from it, an uncommitted
-    edit made in that worktree, and a copy of the worktree — the origin, the
-    worktree and the copy, in that order.
+    """A repository built for the test, a worktree cut from it, a commit made
+    on the worktree's branch, an uncommitted edit made in that worktree, and a
+    copy of the worktree — the origin, the worktree and the copy, in that
+    order.
 
     Built rather than borrowed because the subject is what the copying does to
     a source whose `.git` is a `gitdir:` file, and that is only guaranteed by
@@ -1133,6 +1170,14 @@ def worktree_and_copy(tmp_path: Path) -> tuple[Path, Path, Path]:
     green on one machine and red on another with nothing changed. The
     worktree is cut through the harness's own `worktrees.add`, so it is the
     shape of worktree the harness works in.
+
+    The commit on the worktree's branch is what lets a test tell the
+    worktree's HEAD from the origin's: cut fresh, a worktree stands on the
+    same commit as the branch it was cut from, and a copy that had cloned the
+    origin's base branch instead of the worktree would answer a HEAD reading
+    identically. After the commit the two differ, so only a copy standing
+    where the worktree stood passes. The commit uses the identity the
+    worktree shares with the origin through their common config.
     """
     origin = tmp_path / "origin"
     origin.mkdir()
@@ -1146,6 +1191,12 @@ def worktree_and_copy(tmp_path: Path) -> tuple[Path, Path, Path]:
     assert made.created, made.problems
     assert (worktree / ".git").is_file(), (
         "the source this test needs is one whose .git is a pointer file")
+
+    (worktree / "kept.txt").write_text("as committed on the branch\n",
+                                       encoding="utf-8")
+    advanced = git_in(worktree, "commit", "--quiet", "--all",
+                      "--message", "made on the worktree's branch")
+    assert advanced.returncode == 0, advanced.stderr
 
     (worktree / "kept.txt").write_text("edited and not committed\n",
                                        encoding="utf-8")
@@ -1196,22 +1247,38 @@ def test_the_copy_is_isolated_from_its_source_and_starts_where_it_stood(
     isolation worth having, on the same worktree-and-copy pair.
 
     Sameness first, because it is positive and fails on its own: the copy's
-    HEAD is the commit the worktree stands on, and the edit made in the
-    worktree without committing is in the copy — as text, and as what git in
-    the copy reports as modified, which is the index having been rebuilt
-    around the overlaid tree rather than left empty by the checkout-less
-    clone.
+    HEAD is the commit the worktree stands on — which is not the commit the
+    origin's base branch stands on, so a copy of the origin rather than of the
+    worktree would fail it — on the worktree's own branch, and the edit made
+    in the worktree without committing is in the copy — as text, and as what
+    git in the copy reports as modified, which is the index having been
+    rebuilt around the overlaid tree rather than left empty by the
+    checkout-less clone.
 
     Then the absence: a commit made in the copy is reachable from nothing in
     the origin and is not even an object the origin holds. Its control is the
     same two readings made in the copy, which report the commit, so a reading
     that reported nothing anywhere would fail here rather than pass as
     isolation.
+
+    The commit is made under `environment_with_no_identity`, where the only
+    route to a git identity is the one on its command line, and the same
+    commit without that identity is shown to fail first. A clone carries no
+    local config, so without this the commit would stand on whatever
+    `~/.gitconfig` or hostname the machine running the suite happens to have
+    — green on a developer's laptop and red on a runner with nothing changed.
     """
     origin, worktree, copy = worktree_and_copy(tmp_path)
 
     source_head = git_in(worktree, "rev-parse", "HEAD").stdout.strip()
+    source_branch = git_in(worktree, "symbolic-ref", "--short", "HEAD") \
+        .stdout.strip()
+    assert git_in(origin, "rev-parse", BASE_BRANCH_FALLBACK).stdout.strip() \
+        != source_head, "the worktree stands where the origin's base does, " \
+        "so a HEAD reading could not tell a copy of one from the other"
     assert git_in(copy, "rev-parse", "HEAD").stdout.strip() == source_head
+    assert git_in(copy, "symbolic-ref", "--short", "HEAD").stdout.strip() \
+        == source_branch
     assert (copy / "kept.txt").read_text(encoding="utf-8") == \
         "edited and not committed\n"
     assert git_in(copy, "status", "--porcelain").stdout.splitlines() == [
@@ -1219,8 +1286,20 @@ def test_the_copy_is_isolated_from_its_source_and_starts_where_it_stood(
     assert not (copy / "left-behind").exists(), (
         "a path the source's git ignores was copied")
 
-    committed = git_in(copy, "commit", "--quiet", "--all",
-                       "--message", "made inside the copy")
+    no_identity = environment_with_no_identity()
+    # The control on the identity: with nothing supplied, the commit cannot
+    # be made, so the one below stands on what the test hands it.
+    refused = git_in(copy, "commit", "--quiet", "--all",
+                     "--message", "made inside the copy", env=no_identity)
+    assert refused.returncode != 0, (
+        "a commit with no identity supplied was made anyway, so the machine "
+        "is supplying one and the environment has not closed it off")
+    assert git_in(copy, "rev-parse", "HEAD").stdout.strip() == source_head
+
+    committed = git_in(copy, "-c", "user.email=copy@example.com",
+                       "-c", "user.name=Copy",
+                       "commit", "--quiet", "--all",
+                       "--message", "made inside the copy", env=no_identity)
     assert committed.returncode == 0, committed.stderr
     made_in_copy = git_in(copy, "rev-parse", "HEAD").stdout.strip()
     assert made_in_copy != source_head
