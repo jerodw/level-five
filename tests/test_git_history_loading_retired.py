@@ -40,6 +40,7 @@ is a limit that scan states about itself.
 """
 import ast
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, ENDPOINT, function_source,
+from conftest import (BASELINE, ENDPOINT, function_source, init_repository,
                       repository_file_at, story_commit_range)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -873,6 +874,62 @@ RESTATED = [
 ]
 
 
+def ignored_paths(repo: Path) -> frozenset[str]:
+    """Every path `repo`'s git reports as ignored, relative to its root.
+
+    Asked of git rather than read out of `.gitignore`, so that a directory
+    added to that file later is known here with nobody editing this module.
+    `--directory` collapses a wholly-ignored directory to one entry, which is
+    what keeps this from listing every file under `.harness/runs`; `-z` asks
+    for NUL-separated paths, which is the form git does not quote, so a path
+    carrying an unusual byte arrives as itself.
+
+    Entries come back with a trailing slash on directories and that slash is
+    stripped here, because the caller below compares these against bare
+    directory entry names rather than against git's spelling of them.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "--others", "--ignored", "--directory",
+         "--exclude-standard", "-z"],
+        cwd=repo, capture_output=True, text=True, check=True).stdout
+    return frozenset(entry.rstrip("/") for entry in listed.split("\0") if entry)
+
+
+def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
+    """Copy `source` to `destination`, carrying what the repository is and
+    leaving behind what the runs left in it.
+
+    What the copy exists for is the history and the working tree: `.git` comes
+    along, because every assertion the copy is made for bounds itself at its
+    own story's commit range and cannot resolve one without it, and so do the
+    tracked source and tests a subprocess pytest run in the copy imports.
+
+    What it leaves behind is everything git ignores. `.harness/runs` and
+    `.harness/logs` are the reason that matters: they are where this harness's
+    own runs accumulate, they are not part of the repository this copy
+    reproduces, and they grow with every story that runs — so a copy that
+    carried them would get slower without a line here changing. The venvs go
+    for the same reason, and so does any directory `.gitignore` gains later,
+    because the exclusion list is `ignored_paths` above and not a list of
+    patterns written down here.
+
+    A list of patterns is also the wrong instrument, which is why none is
+    used: `shutil.ignore_patterns` fnmatches bare entry names, so `.harness/runs/`
+    would match nothing and an exclusion that looked derived would exclude
+    nothing. The callable below compares the repository-relative path of each
+    entry instead, which is the form git reports.
+    """
+    excluded = ignored_paths(source)
+
+    def leave_behind(directory, names):
+        relative = os.path.relpath(directory, source)
+        prefix = "" if relative == os.curdir else f"{Path(relative).as_posix()}/"
+        return {name for name in names if f"{prefix}{name}" in excluded}
+
+    shutil.copytree(source, destination, ignore=leave_behind)
+    return destination
+
+
 @pytest.fixture(scope="module")
 def repo_copy(tmp_path_factory) -> Path:
     """A copy of this repository, history included, that a test may mutate.
@@ -880,13 +937,111 @@ def repo_copy(tmp_path_factory) -> Path:
     Copied rather than mutated in place because the subject of every case
     below is a coordinator edit, and the repository this suite is running from
     is the one being validated. The history comes along because the assertions
-    under test bound themselves at their own story's commit range.
+    under test bound themselves at their own story's commit range; the run and
+    log directories do not, because they are not part of the repository being
+    validated. `copy_repository` above decides that, and it is the only copying
+    in this module, so what this fixture carries and what the assertion below
+    inspects cannot drift apart.
     """
-    destination = tmp_path_factory.mktemp("repo") / "level-five"
-    shutil.copytree(REPO_ROOT, destination,
-                    ignore=shutil.ignore_patterns(".venv", "__pycache__",
-                                                  ".pytest_cache"))
-    return destination
+    return copy_repository(tmp_path_factory.mktemp("repo") / "level-five")
+
+
+@pytest.fixture(scope="module")
+def pristine_copy(tmp_path_factory) -> Path:
+    """A copy made the same way and left alone.
+
+    Deliberately not `repo_copy`: the subprocess pytest runs above write
+    `__pycache__` and mutate the coordinator inside that one, and `__pycache__`
+    is a path the repository ignores — so an assertion about what the copying
+    put there would be answered by what the tests did to it afterwards.
+    """
+    return copy_repository(tmp_path_factory.mktemp("pristine") / "level-five")
+
+
+def test_a_freshly_made_copy_holds_no_path_the_repository_ignores(pristine_copy):
+    """The standing assertion: whatever this repository ignores, a copy of it
+    does not contain — read as git, inside the copy, reporting no ignored entry.
+
+    Stated against git rather than against a list of directory names so that it
+    goes on holding for whatever `.gitignore` gains later.
+
+    This is an absence, so it is not left to speak for itself. The control
+    plants into the copy exactly what the assertion exists to catch — a file
+    under one of the directories the copying is supposed to have left behind —
+    and requires the same reading to report it. Without that, a copy git could
+    not read at all, or one whose ignore rules had stopped matching anything,
+    would pass here looking identical to a correct one.
+    """
+    assert ignored_paths(pristine_copy) == frozenset()
+
+    planted = pristine_copy / ".harness" / "runs" / "planted-control.txt"
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_text("what the copying is supposed to leave behind\n",
+                       encoding="utf-8")
+    try:
+        assert ".harness/runs" in ignored_paths(pristine_copy), (
+            "the reading reports nothing even with an ignored path planted")
+    finally:
+        shutil.rmtree(pristine_copy / ".harness" / "runs")
+
+
+def test_the_copy_carries_the_history_and_not_what_the_runs_left(pristine_copy):
+    """The two halves named as paths, because they are what a reader checks
+    first and neither is implied by the other.
+
+    `.git` is what the module's bounded history reads depend on, so its
+    presence is the positive half and fails loudly on its own. The three
+    absences beside it are the ones this story is about, and they are
+    controlled by the test above: the same reading that finds them missing here
+    is shown there to report an ignored path when one is present.
+    """
+    assert (pristine_copy / ".git").exists(), "the copy lost its history"
+    for left_behind in (".harness/logs", ".harness/runs", ".venv310"):
+        assert not (pristine_copy / left_behind).exists(), left_behind
+
+
+def test_a_directory_newly_ignored_is_excluded_with_no_edit_to_this_module(
+    tmp_path,
+):
+    """That the exclusion list is git's answer at run time and not a list of
+    paths written here, shown on a repository built for it.
+
+    Built rather than borrowed: the subject is that the *same* copying, with
+    *this module unchanged*, excludes a directory once `.gitignore` names it,
+    and the only way to vary a `.gitignore` is to own the repository it belongs
+    to. Doing it against this one would mean editing the repository the suite
+    is running in.
+
+    The before-copy is the control, and it is what makes the after-copy mean
+    something: the directory is present when nothing ignores it, and absent
+    when something does, with no other difference between the two runs.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    (origin / "kept.txt").write_text("tracked\n", encoding="utf-8")
+    (origin / ".gitignore").write_text("nothing-yet/\n", encoding="utf-8")
+    init_repository(origin)
+
+    # Written after the commit, so it is untracked. A committed directory is
+    # not reported as ignored however `.gitignore` is later worded, and the
+    # subject here is what the copying leaves behind rather than what git
+    # tracks.
+    (origin / "later-ignored").mkdir()
+    (origin / "later-ignored" / "bulk.txt").write_text("bulk\n",
+                                                       encoding="utf-8")
+
+    before = copy_repository(tmp_path / "before", source=origin)
+    assert (before / "later-ignored" / "bulk.txt").exists(), (
+        "excluded before anything ignored it")
+
+    (origin / ".gitignore").write_text("nothing-yet/\nlater-ignored/\n",
+                                       encoding="utf-8")
+
+    after = copy_repository(tmp_path / "after", source=origin)
+    assert not (after / "later-ignored").exists(), (
+        "a directory .gitignore names was still copied")
+    assert (after / "kept.txt").exists(), "the tracked file went with it"
+    assert (after / ".git").exists(), "the history went with it"
 
 
 def run_one_test(repo: Path, rel: str, test: str) -> subprocess.CompletedProcess:
