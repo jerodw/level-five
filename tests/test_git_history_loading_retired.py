@@ -48,8 +48,10 @@ from pathlib import Path
 
 import pytest
 
-from conftest import (BASELINE, ENDPOINT, function_source, init_repository,
-                      repository_file_at, story_commit_range)
+import worktrees
+from conftest import (BASE_BRANCH_FALLBACK, BASELINE, ENDPOINT,
+                      function_source, init_repository, repository_file_at,
+                      story_commit_range)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -899,15 +901,40 @@ def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
     """Copy `source` to `destination`, carrying what the repository is and
     leaving behind what the runs left in it.
 
-    What the copy exists for is the history and the working tree: `.git` comes
-    along, because every assertion the copy is made for bounds itself at its
-    own story's commit range and cannot resolve one without it, and so do the
-    tracked source and tests a subprocess pytest run in the copy imports.
+    What the copy exists for is the history and the working tree: every
+    assertion the copy is made for bounds itself at its own story's commit
+    range and cannot resolve one without the history, and a subprocess pytest
+    run in the copy imports the tracked source and tests as they stand.
 
-    What it leaves behind is everything git ignores. `.harness/runs` and
-    `.harness/logs` are the reason that matters: they are where this harness's
-    own runs accumulate, they are not part of the repository this copy
-    reproduces, and they grow with every story that runs — so a copy that
+    The copy's `.git` is a git directory of its own, made by cloning `source`
+    into `destination` before anything else is put there. It is not the
+    source's `.git` entry copied across, because that entry is not always a
+    directory: in a worktree `.git` is a one-line file, `gitdir: <path>`,
+    naming the real repository's git directory. A copy that carried that file
+    would look like a repository and be a pointer into the one it was copied
+    from — every read of git in the copy would read the source's refs and
+    objects, and every write would write them — which is exactly what copying
+    rather than mutating in place exists to prevent. Every harness run of this
+    suite happens in a worktree, so that is the case the copy meets on every
+    run the harness makes of it. A clone resolves the pointer itself, so
+    nothing here spells git's worktree layout, and the remote the clone
+    records is removed afterwards so the copy holds no reference back to the
+    source at all.
+
+    The working tree is then laid over the clone rather than taken from it.
+    A clone checks out HEAD's tree, and what the nested pytest runs must see
+    is the tree under test: on every harness run the story's own uncommitted
+    edits are what is being validated, and a checkout would hand the copy the
+    last commit instead. So the clone is made without a checkout, the source's
+    working tree is copied over it with `.git` left behind at the root, and
+    the copy's index is rebuilt from its HEAD so git in the copy reports the
+    overlaid tree as the source would — the same edits, as modifications
+    against the same commit.
+
+    What the overlay leaves behind is everything git ignores. `.harness/runs`
+    and `.harness/logs` are the reason that matters: they are where this
+    harness's own runs accumulate, they are not part of the repository this
+    copy reproduces, and they grow with every story that runs — so a copy that
     carried them would get slower without a line here changing. The venvs go
     for the same reason, and so does any directory `.gitignore` gains later,
     because the exclusion list is `ignored_paths` above and not a list of
@@ -923,10 +950,21 @@ def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
 
     def leave_behind(directory, names):
         relative = os.path.relpath(directory, source)
-        prefix = "" if relative == os.curdir else f"{Path(relative).as_posix()}/"
+        if relative == os.curdir:
+            return {name for name in names
+                    if name == ".git" or name in excluded}
+        prefix = f"{Path(relative).as_posix()}/"
         return {name for name in names if f"{prefix}{name}" in excluded}
 
-    shutil.copytree(source, destination, ignore=leave_behind)
+    subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(source),
+                    str(destination)], cwd=source, capture_output=True,
+                   text=True, check=True)
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=destination,
+                   capture_output=True, text=True, check=True)
+    shutil.copytree(source, destination, ignore=leave_behind,
+                    dirs_exist_ok=True)
+    subprocess.run(["git", "reset", "--quiet"], cwd=destination,
+                   capture_output=True, text=True, check=True)
     return destination
 
 
@@ -936,12 +974,17 @@ def repo_copy(tmp_path_factory) -> Path:
 
     Copied rather than mutated in place because the subject of every case
     below is a coordinator edit, and the repository this suite is running from
-    is the one being validated. The history comes along because the assertions
-    under test bound themselves at their own story's commit range; the run and
-    log directories do not, because they are not part of the repository being
-    validated. `copy_repository` above decides that, and it is the only copying
-    in this module, so what this fixture carries and what the assertion below
-    inspects cannot drift apart.
+    is the one being validated. That argument only holds if the copy's `.git`
+    is its own: a copied `gitdir:` pointer — which is what `.git` is in the
+    worktree every harness run works in — would make the copy's git *be* the
+    source's, so a mutation committed or reset in the copy would land in the
+    repository being validated. `copy_repository` above clones the history
+    into a git directory of the copy's own and lays this working tree over it,
+    uncommitted edits included, so the copy is a repository and not a name for
+    this one. The run and log directories do not come along, because they are
+    not part of the repository being validated. That helper is the only
+    copying in this module, so what this fixture carries and what the
+    assertions below inspect cannot drift apart.
     """
     return copy_repository(tmp_path_factory.mktemp("repo") / "level-five")
 
@@ -954,6 +997,12 @@ def pristine_copy(tmp_path_factory) -> Path:
     `__pycache__` and mutate the coordinator inside that one, and `__pycache__`
     is a path the repository ignores — so an assertion about what the copying
     put there would be answered by what the tests did to it afterwards.
+
+    Made the same way means its `.git` is a git directory of its own, cloned
+    rather than copied as a tree entry, with the working tree laid over the
+    clone: the assertions on it read git *inside* the copy, and a copy whose
+    `.git` pointed back at the source would answer those reads out of the
+    repository the suite is running from.
     """
     return copy_repository(tmp_path_factory.mktemp("pristine") / "level-five")
 
@@ -1042,6 +1091,195 @@ def test_a_directory_newly_ignored_is_excluded_with_no_edit_to_this_module(
         "a directory .gitignore names was still copied")
     assert (after / "kept.txt").exists(), "the tracked file went with it"
     assert (after / ".git").exists(), "the history went with it"
+
+
+# --------------------------------------------------------------------------
+# What the copy's `.git` is
+# --------------------------------------------------------------------------
+
+
+def git_in(root: Path, *args: str) -> subprocess.CompletedProcess:
+    """One git reading inside `root`, output captured, nothing raised: the
+    tests below read exit codes as answers as often as they read stdout."""
+    return subprocess.run(["git", "-C", str(root), *args],
+                          capture_output=True, text=True)
+
+
+def git_dir_resolved(root: Path, option: str) -> Path:
+    """Where `git rev-parse <option>` run in `root` points, as an absolute
+    path.
+
+    Git answers relative to the working directory when the directory is under
+    it and absolute when it is not — `.git` inside a main checkout, a full path
+    from a worktree — so the answer is joined to `root` before resolving, which
+    leaves an absolute answer as itself and anchors a relative one where git
+    meant it.
+    """
+    answer = git_in(root, "rev-parse", option)
+    assert answer.returncode == 0, answer.stderr
+    return (root / answer.stdout.strip()).resolve()
+
+
+def worktree_and_copy(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A repository built for the test, a worktree cut from it, an uncommitted
+    edit made in that worktree, and a copy of the worktree — the origin, the
+    worktree and the copy, in that order.
+
+    Built rather than borrowed because the subject is what the copying does to
+    a source whose `.git` is a `gitdir:` file, and that is only guaranteed by
+    owning the source: this suite meets that case on every harness run, which
+    works in a worktree, and never on a developer's main checkout, and an
+    assertion that depended on where the suite happened to be running would be
+    green on one machine and red on another with nothing changed. The
+    worktree is cut through the harness's own `worktrees.add`, so it is the
+    shape of worktree the harness works in.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    (origin / "kept.txt").write_text("as committed\n", encoding="utf-8")
+    (origin / ".gitignore").write_text("left-behind/\n", encoding="utf-8")
+    init_repository(origin)
+
+    worktree = tmp_path / "trees" / "probe"
+    made = worktrees.add(origin, worktree, "probe/story",
+                         start_point=BASE_BRANCH_FALLBACK)
+    assert made.created, made.problems
+    assert (worktree / ".git").is_file(), (
+        "the source this test needs is one whose .git is a pointer file")
+
+    (worktree / "kept.txt").write_text("edited and not committed\n",
+                                       encoding="utf-8")
+    (worktree / "left-behind").mkdir()
+    (worktree / "left-behind" / "bulk.txt").write_text("bulk\n",
+                                                       encoding="utf-8")
+
+    copy = copy_repository(tmp_path / "copy", source=worktree)
+    return origin, worktree, copy
+
+
+def test_a_copy_of_a_worktree_has_a_git_directory_of_its_own(tmp_path):
+    """The standing assertion, driven from a worktree so that it bites: the
+    copy's `.git` is a directory, and git run inside the copy resolves both
+    its git directory and its common directory to paths beneath the copy.
+
+    Against a helper that copies the source's `.git` entry as it finds it,
+    this fails from a worktree: the copied entry is a `gitdir:` file naming
+    the origin's git directory, and both readings resolve there — outside the
+    copy, inside the repository it was copied from.
+
+    "Beneath the copy" is an absence of any path outside it, so the control
+    is the same two readings made in the worktree itself, which resolve
+    outside the worktree — beneath the origin — for exactly the reason the
+    copy's must not. A reading that had stopped seeing, or a resolution that
+    made every answer fall under its root, would fail the control as itself.
+    """
+    origin, worktree, copy = worktree_and_copy(tmp_path)
+
+    assert (copy / ".git").is_dir(), "the copy's .git is not a directory"
+    for option in ("--git-dir", "--git-common-dir"):
+        inside = git_dir_resolved(copy, option)
+        assert inside.is_relative_to(copy.resolve()), (
+            f"{option} in the copy resolves to {inside}, outside the copy")
+
+        # The control: the worktree's own git directory lies outside it.
+        control = git_dir_resolved(worktree, option)
+        assert not control.is_relative_to(worktree.resolve()), (
+            f"{option} in the worktree resolves inside it, so the reading "
+            f"cannot tell a pointer from a directory")
+        assert control.is_relative_to(origin.resolve()), control
+
+
+def test_the_copy_is_isolated_from_its_source_and_starts_where_it_stood(
+    tmp_path,
+):
+    """The isolation the copy exists for, and the sameness that makes the
+    isolation worth having, on the same worktree-and-copy pair.
+
+    Sameness first, because it is positive and fails on its own: the copy's
+    HEAD is the commit the worktree stands on, and the edit made in the
+    worktree without committing is in the copy — as text, and as what git in
+    the copy reports as modified, which is the index having been rebuilt
+    around the overlaid tree rather than left empty by the checkout-less
+    clone.
+
+    Then the absence: a commit made in the copy is reachable from nothing in
+    the origin and is not even an object the origin holds. Its control is the
+    same two readings made in the copy, which report the commit, so a reading
+    that reported nothing anywhere would fail here rather than pass as
+    isolation.
+    """
+    origin, worktree, copy = worktree_and_copy(tmp_path)
+
+    source_head = git_in(worktree, "rev-parse", "HEAD").stdout.strip()
+    assert git_in(copy, "rev-parse", "HEAD").stdout.strip() == source_head
+    assert (copy / "kept.txt").read_text(encoding="utf-8") == \
+        "edited and not committed\n"
+    assert git_in(copy, "status", "--porcelain").stdout.splitlines() == [
+        " M kept.txt"]
+    assert not (copy / "left-behind").exists(), (
+        "a path the source's git ignores was copied")
+
+    committed = git_in(copy, "commit", "--quiet", "--all",
+                       "--message", "made inside the copy")
+    assert committed.returncode == 0, committed.stderr
+    made_in_copy = git_in(copy, "rev-parse", "HEAD").stdout.strip()
+    assert made_in_copy != source_head
+
+    # The control: the copy's own history and object store carry the commit.
+    assert made_in_copy in git_in(copy, "rev-list", "--all").stdout.split()
+    assert git_in(copy, "rev-parse", "--verify", "--quiet",
+                  f"{made_in_copy}^{{commit}}").returncode == 0
+
+    assert made_in_copy not in git_in(origin, "rev-list", "--all").stdout.split(), (
+        "a commit made in the copy is reachable in the source")
+    assert git_in(origin, "rev-parse", "--verify", "--quiet",
+                  f"{made_in_copy}^{{commit}}").returncode != 0, (
+        "a commit made in the copy is an object the source holds")
+    assert git_in(worktree, "rev-parse", "HEAD").stdout.strip() == source_head, (
+        "the worktree moved when the copy committed")
+
+
+def test_a_copy_of_a_main_checkout_carries_what_it_carried_before(tmp_path):
+    """The case that was always right, held so that the clone-and-overlay
+    keeps it: from a source whose `.git` is a real directory, the copy has the
+    history reachable from HEAD, HEAD at the source's commit, the working tree
+    as it stood — a committed file edited, a file added and not committed —
+    and no path the source's git ignores.
+
+    The ignored path's absence is controlled by the standing assertion on the
+    pristine copy above, where the same reading is shown to report a planted
+    ignored path; here the untracked file beside it is what shows the overlay
+    carried the tree rather than the commit.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    (origin / "kept.txt").write_text("first\n", encoding="utf-8")
+    (origin / ".gitignore").write_text("left-behind/\n", encoding="utf-8")
+    init_repository(origin, message="first")
+    (origin / "kept.txt").write_text("second\n", encoding="utf-8")
+    git_in(origin, "commit", "--quiet", "--all", "--message", "second")
+    assert (origin / ".git").is_dir()
+
+    (origin / "kept.txt").write_text("edited and not committed\n",
+                                     encoding="utf-8")
+    (origin / "added.txt").write_text("added and not committed\n",
+                                      encoding="utf-8")
+    (origin / "left-behind").mkdir()
+    (origin / "left-behind" / "bulk.txt").write_text("bulk\n", encoding="utf-8")
+
+    copy = copy_repository(tmp_path / "copy", source=origin)
+
+    history = git_in(origin, "log", "--format=%H").stdout.split()
+    assert len(history) > 1, "the source needs more than one commit to reach"
+    assert git_in(copy, "log", "--format=%H").stdout.split() == history
+    assert (copy / "kept.txt").read_text(encoding="utf-8") == \
+        "edited and not committed\n"
+    assert (copy / "added.txt").read_text(encoding="utf-8") == \
+        "added and not committed\n"
+    assert sorted(git_in(copy, "status", "--porcelain").stdout.splitlines()) \
+        == [" M kept.txt", "?? added.txt"]
+    assert ignored_paths(copy) == frozenset()
+    assert not (copy / "left-behind").exists()
 
 
 def run_one_test(repo: Path, rel: str, test: str) -> subprocess.CompletedProcess:
