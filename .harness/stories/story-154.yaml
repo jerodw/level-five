@@ -1,0 +1,202 @@
+story:
+  id: story-154
+  title: Every stage that may write outside its own subject is governed by a check that records what it wrote
+  description: |
+    Planned from the brief filed under 294.
+
+    The documenter can write implementation code and the run records nothing
+    about it. On story-148 its changed-files record for the first attempt
+    named `.harness/docs/ARCHITECTURE.md` and `orchestration/story_inspection.py`,
+    and that module gained 75 lines across the run; on the second attempt it
+    edited a test module. Neither is reported anywhere: not in events.log, not
+    in the completion report, and to the verifier only as a changed-files list
+    its prompt describes as "documentation files". The documenter sits after
+    the tester, so its edits are not covered by the suite the coordinator ran,
+    and before the verifier, so what it wrote is in the tree the verifier
+    judges without being attributable to the stage that should have written
+    it. Nothing governs it because nothing was ever declared: the documenter
+    carries neither `may_only_change` nor `revert_check`, so there is no path
+    on which the coordinator asks what it wrote.
+
+    This story gives the documenter the declaration and the check the tester
+    already carries, in both shipped workflows. The shape is a confinement,
+    because the documenter's subject is a set of documents rather than a
+    directory, and the prefix comes from configuration: the workflow declares
+    `"may_only_change": ["{{architecture_docs}}"]`, and the token resolver
+    that today answers only `{{tests_dir}}` learns that second key and splices
+    a list-valued one into the declaration. A literal path in a shipped
+    workflow is refused by a standing test and would be wrong for every other
+    target; an unset `architecture_docs` resolves the restriction out, as an
+    unset `tests_dir` does for the implementer.
+
+    The confinement collides with the correction pass, and the collision is
+    settled here rather than left to fail quietly. Since story-063 and
+    story-067 the documenter, entered on a correction pass, corrects words
+    wherever the verifier's finding names them, a docstring in orchestration
+    source included, and `tests/test_correction_pass.py` pins that. The
+    revert check permits an edit outside a stage's subject only when undoing
+    it turns the suite red, and an edit to prose never does, so a documenter
+    governed on the tester's terms would have every pass edit outside the
+    architecture documents undone. The resolution is that the verifier grants
+    the pass its scope: a correctable finding gains a required `path`, the
+    repository-relative file its words are in, and naming it is the grant.
+    The coordinator already copies findings verbatim into the pass record, so
+    what was granted is recorded by the act that granted it. At the
+    documenter's post-stage checks the exempt list is the story's own grants
+    plus the path of every finding in the current pass record, when that
+    record names this stage and this attempt, and each granted path is an
+    event beside `stage exception applied`. A finding grants one file, never
+    a directory, for one pass; an edit to any file no finding named stays
+    governed, and a documenter re-entered by a later retry in the same run
+    does not inherit the grant. Nothing checks that the edit to a granted
+    file was prose, which this repository already states is not tractable;
+    the trust is the one a story grant extends, bounded by one file and one
+    pass and judged by the verifier that runs again after it.
+
+    Two consequences follow and are accepted. A documenter that creates a
+    file outside the configured documents escalates on the ownership check,
+    as a tester creating outside `tests/` does, and a story that needs it
+    declares a `stage_exceptions` grant. A verifier that omits `path` fails
+    schema validation and self-routes on the bookkeeping cause, so a pass can
+    never quietly lose its grant.
+
+    Deliberately left alone: #247, which asks that an out-of-confinement edit
+    the revert check finds necessary be routed rather than permitted, and
+    which presumes a check exists to find one; whether story-148's documenter
+    edits were right, which is settled by the shipped change and the green
+    suite; and the claim-support check, which reads what the documenter wrote
+    into a configured document and is unrelated to which files it may touch.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/harness_config.py, make `{{architecture_docs}}` a workflow token beside `{{tests_dir}}`. A token whose configured value is a list splices that list's entries into the declaration in place of the token entry; an unset or empty value resolves the entry out of the list exactly as an unset `tests_dir` does; a declared key outside the set, `branch_prefix` among them, stays unreferable so the set remains narrow rather than general.
+  - In workflows/story-workflow.json and workflows/refactor-workflow.json, give the documenter stage `"may_only_change": ["{{architecture_docs}}"]` and a `revert_check` declaration naming `documenter-revert-check-result.json` as its result, `stage-baseline` as its baseline directory and `documenter-discarded-edits` as its discarded directory, on the terms the story-workflow tester declares its own.
+  - In orchestration/story_coordinator.py, make StageRestriction.governs read a confinement prefix not ending in a slash as exactly that file - the meaning grant_covers already gives a slash-less value and the meaning the `:(exclude,top)` pathspec the baseline capture builds already has - so a path that merely shares the file's name as a prefix is governed rather than read as inside the confinement. A prefix ending in a slash keeps its directory meaning for both senses.
+  - In schemas/verification-result.schema.json, add `path` to a correctable finding's required fields: the repository-relative file the words to correct are in, and the grant the pass will run under. Say in its description that naming it is what lets the stage the pass enters at change that file. Make the same addition to the inline copy of the finding shape in schemas/correction-pass.schema.json, which that schema says is edited together with the verdict's.
+  - In orchestration/story_coordinator.py, at the post-stage ownership and revert checks, extend the exempt list a stage's checks read with the `path` of every finding in the current correction-pass record when that record's `stage` is the stage being checked and its `attempt` is the attempt now running. Append one event per granted path, of kind `correction-pass-grant-applied`, worded beside the existing `stage exception applied` event so the two read alike in events.log. Read the record off the run directory rather than passing it in memory, as the prompt injection of the same record does.
+  - In prompts/story-verifier.md and prompts/refactor-verifier.md, have the correctable-findings paragraph ask for `path` on each finding and say what naming it does - the stage the pass enters at may change that one file for that pass, and a finding that names no path is refused by the schema. Reword the documenter changed-files slot so it describes the record as every repository file the documenter touched rather than as documentation files.
+  - In prompts/documenter.md, have the correction paragraph say that the files the findings name are the documenter's to change for this pass, that the architecture documents always are, and that an edit to any other file is put to the revert check after the turn and undone if the suite is green without it - so a correction the pass cannot land is reported in documentation-report.md rather than attempted elsewhere.
+  - Tester: add a standing test module under tests/ holding the brief's assertion and its controls - a documenter whose record names a module outside the configured architecture documents has that edit decided by the revert check, undone and recorded when the suite is green without it and permitted and recorded when it is not; a documenter whose record names only the configured documents is unaffected and the run carries no revert event for it; a documenter creating a file outside the documents escalates on the ownership check; a file a correctable finding names by `path` is exempt from the revert check on the pass and the grant is in events.log; a documenter re-entered on a later attempt of the same run does not inherit that grant; and the token resolves the shipped declaration to the configured documents, to nothing when the key is unset, and to a several-entry list when several are configured.
+  - Tester: adapt the tests the change forces - the story-063 tests in tests/test_correction_pass.py, which asserted the entered stage carried no restriction and now assert the edit is permitted by the pass's grant; every correctable-finding fixture in the suite, which gains `path`; and the token-set tests in tests/test_configured_test_location.py, which state the referable set.
+  - Documenter: record in .harness/docs/ARCHITECTURE.md that the documenter is confined to the configured architecture documents under the same revert check as the tester, that the prefix is a workflow token resolved from `architecture_docs`, and that a correction pass is granted the files its findings name by the verifier's own verdict, with the bounds above.
+
+acceptance_criteria:
+  - Loading either shipped workflow against a configuration whose `architecture_docs` lists one document yields a documenter stage whose `may_only_change` is exactly that document's path; against a configuration listing two, both paths in configured order; against a configuration with the key unset or empty, no `may_only_change` entries at all and no restriction reported for the documenter by stage_restrictions.
+  - A workflow declaration referencing `{{branch_prefix}}` is still refused with UnresolvedWorkflowToken, and the refusal lists both `{{tests_dir}}` and `{{architecture_docs}}` as the referable set.
+  - A confinement restriction whose prefix is `.harness/docs/ARCHITECTURE.md` reports `.harness/docs/ARCHITECTURE.md.bak` as governed and `.harness/docs/ARCHITECTURE.md` as not governed; a confinement whose prefix is `tests/` still reports every path beneath it as not governed and every path outside it as governed.
+  - In a run under the story workflow whose documenter record names a module outside the configured documents, the coordinator runs the revert check on that path after the documenter's turn, writes documenter-revert-check-result.json, and appends the revert-check events for the documenter stage; when the suite passes with the edit reverted the working tree holds the baseline content, the stage's version is under documenter-discarded-edits, and the run continues; when the suite fails with it reverted the edit is kept and recorded as permitted.
+  - In a run whose documenter record names only paths in the configured documents, no revert check runs for the documenter, no documenter revert-check artifact is written, and the tree is as the documenter left it.
+  - In a run whose documenter record names a created file outside the configured documents and no grant covers it, the run escalates naming the documenter, the path and the confinement in the workflow's own wording.
+  - A verification-result.json carrying a correctable finding without `path` fails validation against schemas/verification-result.schema.json, and a correction-pass record carrying such a finding fails validation against schemas/correction-pass.schema.json; each schema's `path` description says what naming it grants.
+  - In a run that takes a correction pass whose finding names `path` orchestration/example.py, the documenter's edit to that file on the pass is not put to the revert check, an event of kind `correction-pass-grant-applied` naming the documenter and that path is appended before the checks run, and an edit the same documenter made to a second file no finding named is put to the revert check.
+  - In a run where the verifier, after a correction pass, fails the verdict and routes a retry that re-enters the documenter on the next attempt, that documenter invocation is granted nothing from the earlier pass record, and an edit it makes to the file that record named is put to the revert check.
+  - The rendered documenter prompt for a correction pass states that the files the findings name are the documenter's to change for that pass and that other edits outside the architecture documents are undone when the suite is green without them; both rendered verifier prompts ask for `path` on each correctable finding and describe the documenter changed-files record without the word "documentation" qualifying the files.
+  - tests/test_correction_pass.py's story-063 tests pass against the shipped workflows by establishing that the pass's grant permits the docstring edit in orchestration source, and no assertion in that module is weakened to do it.
+  - The planner-injection rendering of the story workflow lists the documenter's confinement in the workflow's own wording beside the implementer's and tester's restrictions.
+  - .harness/docs/ARCHITECTURE.md describes the documenter's confinement, the `{{architecture_docs}}` token, and the correction-pass grant, naming the event kind and the bounds on the grant.
+
+technical_plan:
+  implementation_steps:
+    - Read StageRestriction, restrictions_on, granted_paths and grant_covers at orchestration/story_coordinator.py:396-826, baseline_pathspecs and stage_baseline_requests around line 5081, the post-stage checks around line 9007, and the correction-pass routing around line 9389, so the grant is read where the story grants are read and nothing about the checks themselves changes.
+    - Extend workflow_token_values in orchestration/harness_config.py to return `architecture_docs` beside `tests_dir`, and teach _resolve_tokens that a list-valued token replaces its entry with the list's entries; keep the unset case resolving the entry out, and update the docstrings that say the mapping has one entry.
+    - Add the confinement and the revert_check declaration to the documenter stage of both workflow definitions, keyed as the tester's are so archivable_artifacts and the archived check results pick the new artifact up with no code change.
+    - Change StageRestriction.governs so a confinement prefix without a trailing slash matches only the identical path, and update its docstring; confirm baseline_pathspecs needs no change because a git pathspec already reads a slash-less value that way.
+    - Add `path` to the finding shape in both schemas, required, with a description that says it is the grant; check the schema inventory test still holds.
+    - Write a reader of the current pass record - the declared artifact keyed by state.correction_pass_count, read off the run directory - that returns the finding paths when the record's stage and attempt match the stage being checked and the running attempt, and join its result to the exempt list at the ownership and revert checks with one event per path.
+    - Edit the three prompts as the tasks describe, keeping the correction paragraph's existing sentence about the approved story artifact never being edited by a pass.
+    - Run the existing confinement, revert-check and correction-pass modules under the configured test command before handing over; the tester writes the new module and adapts the fixtures.
+  likely_file_changes:
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: The workflow token resolver learns a second key and how to splice a list-valued one.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: The documenter declares the confinement and the revert check.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: The refactor workflow's documenter is in the same position and gets the same declaration.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: A slash-less confinement prefix is read as one file, and the correction-pass grant joins the exempt list at the post-stage checks with an event per path.
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: A correctable finding requires `path`, the file its words are in and the grant the pass runs under.
+    - file: schemas/correction-pass.schema.json
+      stage: implementer
+      reason: The inline copy of the finding shape is edited together with the verdict's.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The correctable-findings paragraph asks for `path` and the documenter changed-files slot stops calling the record documentation files.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same two edits for the refactor workflow's verifier.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: The correction paragraph says which files the pass may change and what happens to an edit elsewhere.
+    - file: tests/test_documenter_is_governed.py
+      stage: tester
+      reason: The standing module holding the brief's assertion and its controls.
+    - file: tests/test_correction_pass.py
+      stage: tester
+      reason: The story-063 tests assert the grant rather than the absence of a restriction, and its correctable-finding fixtures gain `path`.
+    - file: tests/test_configured_test_location.py
+      stage: tester
+      reason: The tests stating the referable token set now name two keys.
+    - file: tests/test_archived_check_results.py
+      stage: tester
+      reason: Its correctable-finding fixtures gain `path`.
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: tester
+      reason: Its correctable-finding fixtures gain `path`.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the documenter's confinement, the token and the correction-pass grant.
+
+scope:
+  modify:
+    - orchestration/harness_config.py
+    - orchestration/story_coordinator.py
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - schemas/verification-result.schema.json
+    - schemas/correction-pass.schema.json
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - prompts/documenter.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/plan_validation.py
+    - orchestration/context_assembler.py
+    - orchestration/verification_runner.py
+    - hooks/
+    - .harness/config.yaml
+    - schemas/story.schema.json
+    - schemas/changed-files.schema.json
+
+verification_requirements:
+  - Confirm the full suite passes under the configured test command.
+  - Confirm the new test module is a real check - that its documenter-edits-a-module case fails against the shipped workflows with the documenter's `may_only_change` and `revert_check` removed, and that its grant case fails with the coordinator's correction-pass grant removed.
+  - Confirm both shipped workflows load against .harness/config.yaml with the documenter's confinement resolved to `.harness/docs/ARCHITECTURE.md`, and that no shipped workflow carries a literal repository path.
+  - Confirm the correction-pass grant is bounded as the story says - one file per finding, in force only for the stage and attempt the pass record names, recorded as an event per path - and that an edit to a file no finding named is still put to the revert check on the pass.
+  - Confirm no existing assertion in tests/test_correction_pass.py, tests/test_confined_stage_edits.py, tests/test_revert_check.py or tests/test_stage_output_ownership.py was weakened, skipped or removed, and that the story-063 tests still establish that the pass's docstring edit in orchestration source lands.
+  - Confirm the ownership check, the revert check and its two dispositions run for the documenter off the declaration alone, with no documenter-specific branch in orchestration/story_coordinator.py.
+  - Confirm the claim-support check is unchanged and #247's routing question is not decided by anything this story changed.
+
+constraints:
+  - No stage name, artifact name or repository path is written into the coordinator's enforcement path for this; the documenter is governed because its declaration says so, and removing the declaration disables the check with no code change, as it does for the tester.
+  - The revert check's verdicts and dispositions are not changed. A refused documenter edit is undone and recorded rather than escalated, exactly as a refused tester edit is, and a check that could not run escalates as it does today.
+  - The correction-pass grant is conferred by the verifier's verdict alone. No agent writes a grant separately from a finding, and the coordinator does not parse `location` or any other prose to derive a path.
+  - A story-level stage_exceptions grant keeps its meaning and its plan-time cross-check; the pass grant is added beside it in the exempt list and does not replace or widen it.
+  - The token set stays narrow: two keys, each named as a literal read in workflow_token_values, and any other `{{key}}` is still refused.
+  - No existing test is weakened, skipped or removed to pass; fixtures gain the required field and nothing else.
+  - No wall-clock bound is added to any test.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-16 14:56:07
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 294
