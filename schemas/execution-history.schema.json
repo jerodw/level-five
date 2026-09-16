@@ -43,6 +43,7 @@
           "escalated",
           "story-completed",
           "inspection-completed",
+          "inspection-accounted",
           "note"
         ]
       },
@@ -117,6 +118,14 @@
       "dedupe_ran": {
         "type": "boolean",
         "description": "Whether the inspection's filed query answered for every scope it covered. False is an inspection made without dedupe: the findings were filed anyway, because a query that could not answer costs dedupe and costs nothing else, so what this records is that the inspection may have refiled what is already in the tracker. It is a statement about the filed query alone and not about the local queue read beside it, which knows only what this machine filed and cannot see a duplicate filed from another checkout. Present on every entry that is an inspection, including one where the query did answer, because a boolean has a false to say and absence would otherwise mean either that or an entry written before this field existed. An inspection that made no invocation at all records false, because no query answered for it. Absent on every entry that is not an inspection, including the note a run appends beside an inspection's own entry naming the scope whose dedupe failed."
+      },
+      "routed": {
+        "type": "integer",
+        "description": "How many findings the pre-stage inspection routed to the story on the attempt this entry accounts for — the findings about the story's own change, handed to the stage that judges it. Present on an accounting entry only, the one written after that attempt's verdict, and absent on every other entry including the inspection's own, whose message says the same count in words true when it was written. On an accounting entry `filed` and `dropped` are what became of the routed findings the verdict did not act on: the accounting files those as briefs from the artifact the inspection wrote, with no invocation of its own, which is why an accounting entry carries no cost_usd, no invocations and no dedupe_ran."
+      },
+      "acted_on": {
+        "type": "integer",
+        "description": "How many of the routed findings the verdict acted on, decided by one rule: the verdict named the finding's slug in the location of a blocking issue or a correctable finding. A finding named by file alone is not acted on and is filed. Present on an accounting entry even where it is zero, because none acted on is an answer, and absent on every other entry."
       }
     }
   }

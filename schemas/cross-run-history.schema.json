@@ -55,15 +55,15 @@
     },
     "inspection-log.jsonl": {
       "type": "array",
-      "description": "One record per inspection, in either mode: the narrow one a completed run makes of what its story changed, and the broad one an l5-inspect invocation makes of a part of the tree. Written to .harness/history/inspection-log.jsonl, one JSON object per line, appended as the inspection ends. It exists because the run directory is gitignored and reaches no clone: an inspection reporting only into that run's events.log would leave no evidence in the repository that any inspection had ever run, and a broad-mode inspection has no run directory to report into at all. A record is a summary and never a copy — what was found, filed and dropped is here as three counts, and which finding went which way is in the run's own events.log and in the outbox entries the inspection wrote. Both modes carry the same fields, so one read of one file answers what inspection has cost across both without walking any run directory. The inspection is a total function that may not block, delay or refuse a run, so a record here is also what a configuration it could not obey is named in: an inspection that was not made because the file cap was unusable leaves a line saying so with its counts at zero, because naming the problem is the only thing a function that cannot refuse can do about it.",
+      "description": "One record per inspection, in either mode: the narrow one a run makes of what its story changed, and the broad one an l5-inspect invocation makes of a part of the tree. Written to .harness/history/inspection-log.jsonl, one JSON object per line, appended as the inspection ends. It exists because the run directory is gitignored and reaches no clone: an inspection reporting only into that run's events.log would leave no evidence in the repository that any inspection had ever run, and a broad-mode inspection has no run directory to report into at all. A record is a summary and never a copy — what was found, filed and dropped is here as three counts, and which finding went which way is in the run's own events.log and in the outbox entries the inspection wrote. Both modes carry the same fields, so one read of one file answers what inspection has cost across both without walking any run directory. The inspection is a total function that may not block, delay or refuse a run, so a record here is also what a configuration it could not obey is named in: an inspection that was not made because the file cap was unusable leaves a line saying so with its counts at zero, because naming the problem is the only thing a function that cannot refuse can do about it. Beside the inspection records sits a second kind of record about one of them: the accounting a run writes after the verdict, once per attempt that routed findings to the story. An inspection made ahead of the judging stage routes its findings about the story's own change to that stage rather than filing them, and the inspection's own record says how many were routed; the accounting record says what became of them — how many the verdict acted on, and how many of the rest were filed as briefs or dropped. It carries no cost_usd and no invocations, because it made no invocation: what it files comes from the artifact the inspection already wrote. It is what lets a reader of this log tell a finding the story answered from one the verifier passed over, which the inspection record alone cannot say because it is written before the verdict exists.",
       "items": {
         "type": "object",
         "required": ["timestamp"],
         "properties": {
           "event": {
             "type": "string",
-            "description": "The execution-history event kinds routed to this log, on the terms the execution log's own event property states: this enum is the selection, and the property is not projected into a record. It names this kind alone, which is what keeps an inspection out of execution-log.jsonl, mandate-log.jsonl and retry-log.jsonl: none of their enums names it.",
-            "enum": ["inspection-completed"]
+            "description": "The execution-history event kinds routed to this log, on the terms the execution log's own event property states: this enum is the selection, and the property is not projected into a record. It names the inspection's own kind and the accounting's, and no other log's enum names either, which is what keeps both out of execution-log.jsonl, mandate-log.jsonl and retry-log.jsonl. Because the kind is not projected, which of the two a line is has to be read off its fields: an accounting record carries `routed` and `acted_on`, and an inspection record carries `mode`, `invocations` and `dedupe_ran`.",
+            "enum": ["inspection-completed", "inspection-accounted"]
           },
           "story_id": {
             "type": "string",
@@ -100,7 +100,15 @@
           },
           "dropped": {
             "type": "integer",
-            "description": "How many were dropped, for every reason together. Which way each went is not summarised here: it is in the run's own events.log, where each reason is named with how many went that way."
+            "description": "How many were dropped, for every reason together. Which way each went is not summarised here: it is in the run's own events.log, where each reason is named with how many went that way. On an accounting record, `filed` and `dropped` are what became of the routed findings the verdict did not act on."
+          },
+          "routed": {
+            "type": "integer",
+            "description": "On an accounting record: how many findings the pre-stage inspection routed to the story on the attempt being accounted — the findings about the story's own change, handed to the stage that judges it rather than filed. Absent on an inspection record, whose `findings` count includes them. Carried here because the inspection record is written before the verdict exists and can say only that they were routed; this record is written after it and says what became of them."
+          },
+          "acted_on": {
+            "type": "integer",
+            "description": "On an accounting record: how many of the routed findings the verdict acted on, decided by the verdict naming the finding's slug in the location of a blocking issue or a correctable finding — never by file. The routed findings not counted here were filed as briefs or dropped, and `filed` and `dropped` say which. Present even where it is zero, because none acted on is an answer, and absent on an inspection record. An accounting record carries no cost_usd, no invocations and no dedupe_ran: it made no invocation and asked no query."
           },
           "dedupe_ran": {
             "type": "boolean",

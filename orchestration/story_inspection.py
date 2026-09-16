@@ -59,10 +59,19 @@ inspection had ever run. The commit stages the record paths *by name* and never
 with `git add -A`, so a file the inspection agent changed elsewhere in the
 repository is left in the working tree rather than folded into a commit this
 module made.
+
+**A finding routed to the story is accounted for after the verdict.** The
+pre-stage inspection hands the findings about the story's own change to the
+stage that judges it, and the verdict names what it acted on by slug. Every
+routed finding the verdict did not name is filed as a brief from the artifact
+already in the run directory — through the same filing call, with no second
+invocation — once per attempt, and an event says how many were acted on, filed
+and dropped. Declining a finding stays correct; declining no longer deletes it.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -84,6 +93,13 @@ MAX_FILES_KEY = "inspect_after_story_max_files"
 #: for either is querying for the value both producers write.
 INSPECTION_EVENT = inspection.INSPECTION_EVENT
 MODE = inspection.MODE_NARROW
+
+#: The kind the accounting after a verdict is appended under. It is a second
+#: record about one attempt's inspection rather than a second inspection, so it
+#: has a kind of its own: a reader counting `INSPECTION_EVENT` lines counts
+#: inspections, and this line says what became of what one of them routed.
+#: Which cross-run log it reaches is the declaration's to say, as above.
+ACCOUNTING_EVENT = "inspection-accounted"
 
 #: What a post-story inspection's cost is recorded as in that run's cost.json.
 #: It is not an attempt at a stage, so it carries no attempt number of its own
@@ -380,7 +396,10 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
          filed: int | None = None, dropped: int | None = None,
          cost_usd: float | None = None, scope_files: int | None = None,
          invocations: int | None = None,
-         dedupe_ran: bool | None = None) -> None:
+         dedupe_ran: bool | None = None,
+         kind: str = INSPECTION_EVENT,
+         routed: int | None = None,
+         acted_on: int | None = None) -> None:
     """Append the inspection's record through the coordinator's shared append.
 
     Every value goes through that one call, so events.log, the run's structured
@@ -390,10 +409,15 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
     which is how an invocation that reported no cost records that it reported
     none rather than recording a zero.
 
-    `dedupe_ran` is not on those terms and is passed by every call: it is a
-    boolean, so absence would mean either false or a record written before the
-    field existed, and a record that cannot say which is a record nobody can
-    query for the runs that inspected without dedupe.
+    `dedupe_ran` is not on those terms and is passed by every inspection call:
+    it is a boolean, so absence would mean either false or a record written
+    before the field existed, and a record that cannot say which is a record
+    nobody can query for the runs that inspected without dedupe.
+
+    `kind` defaults to the inspection's own event and is overridden by the one
+    other record this module writes, the accounting after the verdict, which
+    carries `routed` and `acted_on` and no cost, no invocation count and no
+    dedupe verdict — it made no invocation and asked no query.
 
     Imported inside the body, the idiom the queue module already uses for its
     own coordinator import: the coordinator imports this module, and a
@@ -405,10 +429,12 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
         from story_coordinator import append_event
 
         append_event(
-            Path(run_dir), message, kind=INSPECTION_EVENT,
+            Path(run_dir), message, kind=kind,
             findings=findings, filed=filed, dropped=dropped,
-            mode=MODE, cost_usd=cost_usd, scope_files=scope_files,
+            mode=MODE if kind == INSPECTION_EVENT else None,
+            cost_usd=cost_usd, scope_files=scope_files,
             invocations=invocations, dedupe_ran=dedupe_ran,
+            routed=routed, acted_on=acted_on,
         )
     except Exception:  # noqa: BLE001 - reporting may not become the failure
         pass
@@ -623,6 +649,23 @@ def findings_artifact_file(artifact: str, attempt: int) -> str:
     return f"{stem}-{attempt}.{suffix}"
 
 
+def accounting_artifact_file(artifact: str, attempt: int) -> str:
+    """The name the accounting of one attempt's routed findings is written under.
+
+    Keyed by the attempt for the reason the findings artifact is, and the
+    presence of this file is the whole of the accounted-once rule: the second
+    verdict of one attempt — the one a correction pass returns to — finds it
+    and accounts nothing, and a retry, whose findings artifact is its own,
+    accounts under the next attempt's name.
+
+    The declared name is *prefixed* rather than suffixed, so this file is not
+    matched by the findings artifact's own attempt-wildcarded glob and a reader
+    listing an attempt's findings records does not count its accounting among
+    them.
+    """
+    return f"accounting-of-{findings_artifact_file(artifact, attempt)}"
+
+
 def write_findings(run_dir: Path, artifact: str, attempt: int, story_id: str,
                    *, ran: bool, reason: str = "", findings=()) -> None:
     """Write what the inspection found about the story's own change.
@@ -729,11 +772,14 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
     run decided.
 
     `to_the_story` is how many findings were about the files the story itself
-    changed and so were given to the stage rather than filed. It is counted as
+    changed and so were routed to the stage rather than filed. It is counted as
     a finding and reported on its own terms, because a reader comparing the
     findings count against the filed count would otherwise read the difference
     as a silent drop — which is the one thing every count on this line exists
-    to make impossible.
+    to make impossible. The line says they were *routed* and nothing more,
+    because at the moment it is written nothing has been decided about them;
+    what the verdict acted on, and what was filed because it did not, is said
+    after the verdict by `account_after_verdict`.
     """
     findings, filed, dropped = _counts(report)
     findings += to_the_story
@@ -742,7 +788,10 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
         f"{filed} filed, {dropped} dropped"
     )
     if to_the_story:
-        line += f"; answered by the story: {to_the_story}"
+        # Worded for the moment it is written: the findings have been handed
+        # to the stage and nothing has yet been decided about them. What the
+        # verdict does with them is said afterwards, by the accounting.
+        line += f"; routed to this story: {to_the_story}"
     reasons = [
         inspection.ALREADY_FILED,
         inspection.ALREADY_FILED_LOCALLY,
@@ -1202,5 +1251,299 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
         run_dir, artifact, attempt, story_id, ran=True,
         findings=[one.finding for one in own],
     )
+
+
+# --------------------------------------------------------------------------
+# Accounting for what was routed, after the verdict
+# --------------------------------------------------------------------------
+#
+# A finding routed to the story is written to the artifact above and read by
+# the stage that judges the change — and by nothing after the verdict. A
+# finding the verifier declines to act on, which its prompt permits because a
+# finding can be correct and still be too small to fail a run, was therefore
+# neither fixed nor filed. What follows sends a declined finding where a
+# declined finding went before the inspection was moved ahead of the verifier:
+# to the backlog, as a brief, through the same call every other producer files
+# through. The verifier's judgement is not touched; what changes is that
+# declining no longer deletes.
+
+
+#: What a location must name for a routed finding to count as acted on: the
+#: finding's slug, as one whole token. Slug matching rather than file matching
+#: is deliberate — a correctable finding about a docstring in a file must not
+#: count as acting on a defect the Inspector found in the same file, which
+#: would be the silent loss this accounting exists to close, one layer down.
+_TOKEN_BOUNDARY = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _tokens(location) -> frozenset:
+    """The slug-shaped tokens a verdict entry's location carries."""
+    if not isinstance(location, str):
+        return frozenset()
+    return frozenset(one for one in _TOKEN_BOUNDARY.split(location) if one)
+
+
+def _slug_of(finding) -> str:
+    try:
+        slug = finding.get("slug")
+    except AttributeError:
+        return ""
+    return slug if isinstance(slug, str) else ""
+
+
+def verdict_locations(verdict) -> tuple:
+    """Every location the verdict names, on a blocking issue or a correctable
+    finding, as the verdict wrote it.
+    """
+    if not isinstance(verdict, dict):
+        return ()
+    named: list = []
+    for key in ("blocking_issues", "correctable_findings"):
+        for entry in verdict.get(key) or ():
+            if isinstance(entry, dict):
+                named.append(entry.get("location"))
+    return tuple(named)
+
+
+def names_a_slug(location, slugs) -> bool:
+    """Whether one verdict entry's location names any of `slugs`.
+
+    The one rule that decides a finding was acted on, shared by the accounting
+    and by the wording of the re-entry events so the two cannot count
+    differently. A slug is matched as a whole token of the location — a slug
+    that is a prefix of another is not the other — and by nothing else: not the
+    file, not the line, not the finding's title.
+    """
+    return bool(_tokens(location) & frozenset(slugs))
+
+
+def acted_on_by(findings, verdict) -> tuple[list, list]:
+    """Split routed findings into what the verdict acted on and the rest.
+
+    Returns `(acted_on, remainder)`, in the order given. A finding is acted on
+    when the verdict names its slug in the location of a blocking issue or a
+    correctable finding; every other finding is the remainder, including one
+    the verdict named by file alone and one carrying no slug at all — a
+    finding nothing can name is a finding nothing acted on, and filing it is
+    the loss-free reading.
+
+    Pure over its inputs, so it can be held directly the way the partition
+    tests hold `about_the_change`.
+    """
+    locations = verdict_locations(verdict)
+    acted: list = []
+    remainder: list = []
+    for one in findings:
+        slug = _slug_of(one)
+        if slug and any(names_a_slug(location, (slug,)) for location in locations):
+            acted.append(one)
+        else:
+            remainder.append(one)
+    return acted, remainder
+
+
+def entries_among_the_routed(locations, routed_slugs) -> int:
+    """How many verdict entries name one of the routed findings' slugs.
+
+    The re-entry events' number: of the findings an event carries, how many are
+    among the ones routed to this story. Counted over the entries and decided
+    by `names_a_slug`, so it is the accounting's own rule read from the other
+    side rather than a second one.
+    """
+    slugs = frozenset(one for one in routed_slugs if isinstance(one, str))
+    if not slugs:
+        return 0
+    return sum(1 for location in locations if names_a_slug(location, slugs))
+
+
+@dataclass(frozen=True)
+class _Routed:
+    """One routed finding on its way to the queue, in the shape
+    `inspection.file_findings` files: the finding, and where it came from.
+    """
+
+    finding: dict
+    scope: object
+
+
+def _read_findings_record(run_dir: Path, artifact: str, attempt: int):
+    """The attempt's findings artifact, or None where there is none to read."""
+    path = Path(run_dir) / findings_artifact_file(artifact, attempt)
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def write_accounting(run_dir: Path, artifact: str, attempt: int,
+                     story_id: str, *, routed, acted_on, filed: int,
+                     dropped: int, reason: str = "") -> None:
+    """Write the accounting artifact for one attempt.
+
+    It carries the slugs and not only the counts, because the re-entry events
+    are worded from it: a correction pass or a retry says how many of the
+    findings it carries are among the ones routed, and that is decidable only
+    from the slugs. Nothing routes on any of it.
+    """
+    try:
+        path = Path(run_dir) / accounting_artifact_file(artifact, attempt)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "story_id": story_id,
+                    "attempt": attempt,
+                    "routed": len(routed),
+                    "routed_slugs": [_slug_of(one) for one in routed],
+                    "acted_on": len(acted_on),
+                    "acted_on_slugs": [_slug_of(one) for one in acted_on],
+                    "filed": filed,
+                    "dropped": dropped,
+                    "reason": reason,
+                },
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001 - the totality is the guarantee
+        pass
+
+
+def routed_slugs(run_dir: Path, artifact: str, attempt: int) -> tuple:
+    """The slugs the accounting artifact records as routed on one attempt.
+
+    Read back off the artifact rather than carried in memory, so what an
+    event says about the routed findings and what the run directory records
+    are one thing. Empty where no attempt was accounted, and read by nothing
+    that routes: the coordinator words two events from it and decides nothing.
+    """
+    try:
+        path = Path(run_dir) / accounting_artifact_file(artifact, attempt)
+        if not path.is_file():
+            return ()
+        record = json.loads(path.read_text(encoding="utf-8"))
+        return tuple(
+            one for one in record.get("routed_slugs", ())
+            if isinstance(one, str) and one
+        )
+    except Exception:  # noqa: BLE001 - reading a record may not become a failure
+        return ()
+
+
+# The same guarantee a third time, for the caller that runs after the verdict
+# and before any routing. It returns nothing, raises on no path, and declares
+# no parameter by which a caller could be told to stop: a failure inside it —
+# an unreadable artifact, a queue that cannot be reached — is printed and
+# recorded and changes neither the verdict's routing, the run's status nor its
+# exit code.
+def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
+                          harness_root: Path, story_id: str, *,
+                          artifact: str, attempt: int, verdict) -> None:
+    """Account for every finding routed to this story, once per attempt.
+
+    Called from the verifier branch after the verdict is archived and before
+    the passed/failed routing, only where the stage declares an inspection. It
+    reads the attempt's findings artifact, splits the routed findings into the
+    ones the verdict acted on — named by slug in the location of a blocking
+    issue or a correctable finding — and the remainder, files the remainder
+    through `inspection.file_findings` with the resolved floor and cap, writes
+    the accounting artifact, and says the split in the run's own record.
+
+    Once per attempt, decided by the presence of the accounting artifact: the
+    second verdict of one attempt — the one a correction pass returns to —
+    finds it and files nothing twice, and a retry, whose findings artifact is
+    its own, is accounted under the next attempt's number.
+
+    An attempt that routed nothing is not accounted: a findings artifact that
+    is absent, that records `ran` false, or that carries no findings leaves
+    nothing to act on, nothing to file and nothing to say, so no artifact and
+    no event are written for it. That is what keeps the events.log of a run
+    whose inspection was switched off byte-for-byte what it was.
+
+    No Inspector is invoked: the findings it files come from the artifact the
+    pre-stage inspection already wrote, and the agent runner is not on this
+    path at all.
+    """
+    label = f"accounting for the findings routed to {story_id}"
+    try:
+        _account_after_verdict(
+            run_dir, target_root, config, harness_root, story_id,
+            artifact=artifact, attempt=attempt, verdict=verdict,
+        )
+    except Exception as error:  # noqa: BLE001 - the totality is the guarantee
+        print(f"the accounting after the verdict could not run: {error}",
+              file=sys.stderr)
+        try:
+            _say(run_dir, f"{label}: it could not run: {error}",
+                 kind=ACCOUNTING_EVENT, routed=0, acted_on=0,
+                 filed=0, dropped=0)
+        except Exception:  # noqa: BLE001 - reporting may not become the failure
+            pass
+
+
+def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
+                           harness_root: Path, story_id: str, *,
+                           artifact: str, attempt: int, verdict) -> None:
+    """The body of the above, so the guard has one thing to guard."""
+    label = f"accounting for the findings routed to {story_id}"
+    if (Path(run_dir) / accounting_artifact_file(artifact, attempt)).is_file():
+        # This attempt is accounted. A second verdict within it — the one a
+        # correction pass returns to — changes nothing about what was routed.
+        return
+    record = _read_findings_record(run_dir, artifact, attempt)
+    if record is None or not record.get("ran"):
+        return
+    routed = [one for one in record.get("findings") or () if isinstance(one, dict)]
+    if not routed:
+        return
+
+    acted, remainder = acted_on_by(routed, verdict)
+
+    bound, problem = inspection.bounds(config)
+    if bound is None:
+        # Unreachable while the inspection that wrote the artifact resolved the
+        # same bound, and handled anyway: nothing is filed on a bound the target
+        # got wrong, and the record says so rather than obeying a default.
+        write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
+                         acted_on=acted, filed=0, dropped=len(remainder),
+                         reason=problem)
+        _say(run_dir,
+             f"{label}: {len(routed)} routed on attempt {attempt}; "
+             f"{len(acted)} acted on by the verdict, 0 filed, "
+             f"{len(remainder)} dropped: {problem}",
+             kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
+             filed=0, dropped=len(remainder))
+        return
+
+    scope = inspection.Scope(
+        path="", kind=inspection.CHANGE,
+        origin=ORIGIN.format(story_id=story_id), framing=PRE_STAGE_FRAMING,
+    )
+    # The remainder is filed through exactly the call every other producer
+    # files through — the same floor, the same cap, the same named drop
+    # reasons, the same dedupe and the same queue — from the artifact the run
+    # directory already holds, with no second invocation of the Inspector.
+    filed, dropped = inspection.file_findings(
+        target_root, [_Routed(one, scope) for one in remainder],
+        bound.max_findings, min_severity=bound.min_severity,
+    )
+    write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
+                     acted_on=acted, filed=len(filed), dropped=len(dropped))
+
+    line = (
+        f"{label}: {len(routed)} routed on attempt {attempt}; "
+        f"{len(acted)} acted on by the verdict, {len(filed)} filed as briefs, "
+        f"{len(dropped)} dropped"
+    )
+    reasons: dict = {}
+    for one in dropped:
+        reasons[one.reason] = reasons.get(one.reason, 0) + 1
+    for reason, count in reasons.items():
+        line += f"; {reason}: {count}"
+    _say(run_dir, line, kind=ACCOUNTING_EVENT, routed=len(routed),
+         acted_on=len(acted), filed=len(filed), dropped=len(dropped))
 
 
