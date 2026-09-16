@@ -1,0 +1,147 @@
+story:
+  id: story-152
+  title: Every finding routed to the story is fixed, filed or reported, and the run says which
+  description: |
+    Planned from the brief filed under 302.
+
+    Since story-147 the pre-stage inspection splits what it finds at
+    `orchestration/story_inspection.py` `about_the_change`: findings about
+    files the story did not change are filed as briefs, and findings about the
+    story's own change are written to the run-directory artifact the verifier
+    reads. That artifact is read by nothing after the verdict. A finding the
+    verifier declines to act on -- which its prompt permits, because a finding
+    can be correct and still be too small to fail a run -- is therefore neither
+    fixed nor filed, and the inspection's summary line has already reported it
+    as "answered by the story" before the verifier read it at all. story-151
+    lost two findings this way, one of them a defect worth a brief on its own
+    merits, and `inspection-log.jsonl` records nothing that would let a reader
+    tell a finding the story answered from one the verifier passed over.
+
+    This story accounts for every routed finding after the verdict. A finding
+    is acted on when the verifier names its slug in the location of a blocking
+    issue or a correctable finding it raised from it; the verifier prompts are
+    asked to name the slug, and the coordinator matches it deterministically.
+    Every routed finding the verdict does not act on is filed as a brief
+    through the same `inspection.file_findings` call every other producer files
+    through -- the same floor, the same cap, the same dedupe and the same
+    queue -- from the artifact that already holds it, with no second invocation
+    of the Inspector. The split is reported in terms true at the moment they
+    are written: the inspection-time line says how many were routed, an event
+    after the verdict says how many of those were acted on, filed and dropped,
+    and the re-entry events -- a correction pass, a retry -- say how many of
+    the findings they carry are among the ones routed to this story.
+
+    The accounting is done at every verdict and once per attempt, so a finding
+    passed over on attempt 1 is filed then rather than waiting on a retry that
+    may never re-find it, and the second verdict of one attempt -- the one a
+    correction pass returns to -- files nothing twice. The verifier's judgement
+    is not touched: declining a finding stays correct, and what changes is that
+    declining sends it where a declined finding went before story-147 rather
+    than deleting it. Slug matching rather than file matching is deliberate: a
+    correctable finding about a docstring in a file must not count as acting on
+    a defect the Inspector found in the same file, because that would be the
+    silent loss this story exists to close, one layer down. A verifier that
+    acts on a finding without naming its slug gets that finding filed as a
+    brief anyway -- a duplicate a human closes rather than a loss.
+  workflow: story-workflow
+
+tasks:
+  - Add to orchestration/story_inspection.py an accounting entry point that, given the run directory, the attempt's findings artifact name, the attempt number and the verdict, reads the routed findings, splits them into acted-on and remainder by slug match against the verdict's blocking_issues and correctable_findings locations, files the remainder through inspection.file_findings with the resolved floor and cap, writes an accounting artifact to the run directory keyed by attempt, and reports the split through _say. It is total in the way inspect_before_stage is - returns nothing a caller can branch on for routing, raises on no path, has its whole body under a guard - and it accounts an attempt once, decided by the presence of the accounting artifact.
+  - Call that entry point from the verifier branch of orchestration/story_coordinator.py after the verdict is archived and before any routing, only where the stage declares an inspection; the counts it records are read back off the accounting artifact for wording the events below and by no routing decision.
+  - Word the correction-pass-routed event and the verification-failed retry event with how many of the findings they carry are among the ones routed to this story, when any were routed, so a reader of events.log can tell a re-entry spent on the Inspector's reading from one spent on the verifier's own.
+  - Change _summary in orchestration/story_inspection.py so the inspection-time line says how many findings were routed to the story rather than that the story answered them, and add a post-verdict event that says, of the findings routed, how many were acted on, filed and dropped.
+  - Declare the accounting record in schemas/cross-run-history.schema.json so it is projected into inspection-log.jsonl beside the inspection's own record, carrying the routed, acted-on, filed and dropped counts, and carrying no cost and no invocation count because it made no invocation.
+  - Ask the verifier, in prompts/story-verifier.md and prompts/refactor-verifier.md where the inspection findings are rendered, to name the routed finding's slug in the location of any blocking issue or correctable finding it raises from one, and say why - a finding it acts on without naming is filed as a brief.
+  - Extend tests/test_inspection_findings_reach_the_story.py with the assertions listed under acceptance criteria, driving a run through the module's existing scripted-verdict fixture with no model invoked.
+  - Document the accounting in .harness/docs/ARCHITECTURE.md as a section after "A finding about the story's own change is answered by that story", and correct that section's sentence about the summary line carrying "answered by the story", which is no longer what the line says.
+
+acceptance_criteria:
+  - A run whose verifier passes and acts on none of the findings routed to it files every one of them as a brief through inspection.file_findings, and its events.log carries a line saying how many were routed, that none were acted on and how many were filed - the assertion attempt 1 of story-151 would have failed.
+  - A routed finding whose slug the verdict names in the location of a blocking issue or a correctable finding is counted as acted on and is not filed; a routed finding the verdict names by file alone, with no slug, is filed.
+  - The inspection-time summary line no longer says "answered by the story" and instead reports the routed count in words true when written, and the post-verdict line reports the split; the three figures on the two lines - routed, acted on, filed - agree with what the run directory's findings artifact and the outbox hold.
+  - An attempt is accounted once: a run whose first verdict routes a correction pass and whose second verdict, within the same attempt, passes clean files the remainder exactly once and writes one accounting artifact for that attempt, and a retry that inspects again is accounted again under the next attempt number.
+  - The correction-pass-routed event says how many of the correctable findings it carries are among the findings routed to this story, and the verification-failed retry event says the same of its blocking issues, in each case only when the attempt routed any findings; a run whose workflow declares no inspection writes those events exactly as before.
+  - inspection-log.jsonl receives one accounting record per accounted attempt, declared in schemas/cross-run-history.schema.json, carrying the routed, acted-on, filed and dropped counts and no cost_usd and no invocations, so a reader of that log can tell a finding the story answered from one the verifier passed over.
+  - The accounting makes no invocation of the Inspector: the findings it files come from the run directory artifact the pre-stage inspection wrote, and the agent runner is not called on its path.
+  - The accounting is total. It returns nothing a coordinator branch routes on, and a failure inside it - an unreadable artifact, a queue that cannot be reached - is printed and recorded and does not change the verdict's routing, the run's status or its exit code.
+  - about_the_change and the verifier's triage terms are unchanged: the file-level attribution still decides whose a finding is, and a verifier that declines a finding too small to fail the run still passes the run.
+  - The verifier prompts ask for the slug in the location of a verdict entry raised from a routed finding, and the inspection-findings section of both prompts says a routed finding the verdict does not name is filed as a brief.
+  - All existing tests pass unchanged, and the new tests invoke no model.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_inspection.py, add accounting_artifact_file(artifact, attempt) in the findings_artifact_file idiom, and account_after_verdict(run_dir, target_root, config, harness_root, story_id, *, artifact, attempt, verdict) -> None, guarded like inspect_before_stage. Its body reads the attempt's findings artifact (an artifact with ran false or no findings writes an accounting record saying nothing was routed and files nothing), collects the slugs the verdict's blocking_issues and correctable_findings name in their location fields, partitions the routed findings into acted-on and remainder by slug, resolves the bound through inspection.bounds(config), files the remainder through inspection.file_findings with the resolved floor and cap, writes the accounting artifact with routed, acted_on, filed and dropped, and reports through _say with a new event kind. Return before doing any of that where the accounting artifact already exists for this attempt.
+    - Add a small pure function that does the slug partition, so the tests can hold it directly the way partition tests hold about_the_change.
+    - In _summary, replace the "answered by the story" clause with one that says how many findings were routed to the story; keep the findings count including them so the no-silent-drop property of that line holds.
+    - In orchestration/story_coordinator.py's verifier branch, after the verdict is archived and before the passed/failed routing, when the stage declares an inspection, call account_after_verdict with the declared artifact name and the attempt; read the accounting artifact back to obtain the routed slugs and count for wording only.
+    - Extend _correction_pass_routed and the verification-failed append_event message with "K of the M findings routed to this story" when M is non-zero, computed by the same slug rule from the routed slugs; no routing input changes.
+    - In schemas/cross-run-history.schema.json, add the accounting event kind to inspection-log.jsonl's event enum and declare routed and acted_on as fields beside findings, filed and dropped; extend append_event's optional fields for them on the same omitted-when-None terms the three counts use.
+    - In prompts/story-verifier.md and prompts/refactor-verifier.md, in the paragraph introducing the inspection findings, ask that any blocking issue or correctable finding raised from a routed finding name that finding's slug in its location, and say that a routed finding the verdict does not name is filed as a brief after the verdict.
+    - In tests/test_inspection_findings_reach_the_story.py, add the assertions listed under acceptance criteria using the module's Runner and verdict helpers; a verdict helper that names a slug in a location and one that names a file alone.
+    - In .harness/docs/ARCHITECTURE.md, add the section and correct the sentence at the "The summary line carries answered by the story" paragraph; update the run directory anatomy for the accounting artifact.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The accounting entry point, the slug partition, the accounting artifact, and the corrected summary wording.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Calling the accounting from the verifier branch, wording the re-entry events with the routed count, and carrying the new counts through append_event.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declaring the accounting record's kind and fields so it is projected into inspection-log.jsonl.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: Asking the verifier to name a routed finding's slug in the location of a verdict entry raised from it.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same request, where that prompt renders the inspection findings.
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: tester
+      reason: The assertions under acceptance criteria, driven through the module's existing fixture.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A section on the accounting and the correction of the sentence that says the summary line reports the story answered the findings.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - schemas/cross-run-history.schema.json
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - tests/test_inspection_findings_reach_the_story.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/inspection.py
+    - prompts/inspector.md
+    - schemas/verification-result.schema.json
+    - schemas/inspection-findings.schema.json
+    - schemas/story-brief.schema.json
+    - workflows/
+    - about_the_change in orchestration/story_inspection.py and the file-level attribution it makes
+
+verification_requirements:
+  - Confirm a run whose verifier passes without naming any routed finding files each of them as a brief and records the split in events.log and inspection-log.jsonl, with no Inspector invocation on the accounting path.
+  - Confirm a routed finding whose slug a verdict entry names is not filed, and one named by file alone is.
+  - Confirm one attempt is accounted once across a correction pass and a retried attempt is accounted under its own number.
+  - Confirm the correction-pass and retry events carry the routed count only when findings were routed, and are unchanged for a workflow declaring no inspection.
+  - Confirm the inspection-time summary line no longer claims the story answered anything, and that the cross-run schema declares the accounting record.
+  - Confirm about_the_change and the verifier's triage terms are unchanged and all existing tests pass.
+
+constraints:
+  - The coordinator stays deterministic: the accounting reads artifacts and a verdict and calls no model.
+  - The accounting is total in the way both existing inspection entry points are: no routing decision, run status or exit code depends on it, and its whole body is guarded.
+  - Filing goes through inspection.file_findings and nowhere else, so the floor, the cap, the dedupe and the queue are the ones every other producer uses.
+  - The Inspector is not re-invoked to recover a finding; the remainder is filed from the artifact the run directory already holds.
+  - Every count reported is true at the moment it is written; no line asserts an outcome that has not yet happened.
+  - No stage name and no artifact name is written into orchestration for this mechanism; the artifact name comes off the stage's inspection declaration as it does today.
+  - Slug matching against the verdict's location fields is the only rule that decides a finding was acted on; file-level matching is not used for that decision.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-16 09:53:13
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 302
