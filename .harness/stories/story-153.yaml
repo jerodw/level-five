@@ -1,0 +1,113 @@
+story:
+  id: story-153
+  title: A copy of this repository made for a test carries a git directory of its own
+  description: |
+    Planned from the brief filed under 304.
+
+    `copy_repository` in `tests/test_git_history_loading_retired.py` copies
+    this repository so that the module can mutate the coordinator in the copy
+    and run pytest there, establishing that each restated assertion goes red
+    when its subject is violated. The copy is the module's whole safety
+    argument: its own docstring says the repository is copied rather than
+    mutated in place because the one this suite runs from is the one being
+    validated.
+
+    In a worktree `.git` is not a directory. It is a file holding one line —
+    `gitdir: <path>` — naming the real repository's git directory. The helper
+    copies the tree with that file in it, so the copy's `.git` is a pointer
+    into the repository it was copied from: anything in the copy that reads
+    git reads the original's refs and objects, and anything that writes git
+    writes them. In the developer's main checkout `.git` is a real directory
+    and the copy is genuine, which is why this passes there and has not been
+    noticed. Every story run works in a worktree, so the suite meets the
+    pointer case on every run the harness makes of it.
+
+    This story gives the copy a git directory of its own. The copy is made by
+    cloning the source into the destination — which is the form that does not
+    depend on this test knowing how git spells a worktree — and then laying
+    the source's working tree over it the way the helper already copies, with
+    the same exclusions and `.git` no longer carried as a tree entry. The
+    overlay is not optional: on every harness run the story's own uncommitted
+    edits are what the nested pytest runs must see, and a clone alone would
+    give the copy HEAD's tree rather than the tree under test.
+
+    Alongside it the story leaves a standing assertion, driven from a
+    worktree so that it bites, that the copy's git directory resolves inside
+    the copy. It fails against today's helper when the suite runs from a
+    worktree and passes when it runs from the main checkout, which is why the
+    test builds its own repository and cuts a worktree from it rather than
+    relying on where the suite happens to be running.
+
+    Cutting a worktree from the source with git's own machinery was
+    considered and is not the fix: it produces another pointer into the same
+    real repository, which is the defect. Resolving the pointer by hand would
+    work but bakes git's worktree layout into the test.
+
+    The whole change is under `tests/`, so the tester stage owns all of it,
+    as it did in story-151.
+
+    This was found by the Inspector on story-151, routed to that story as a
+    finding about its own change, passed over by the verifier and lost; it
+    was filed by hand.
+  workflow: story-workflow
+
+tasks:
+  - Change copy_repository in tests/test_git_history_loading_retired.py so the copy's `.git` is a git directory of its own rather than whatever the source's `.git` entry is - obtained by cloning the source into the destination, with the source's working tree then copied over it the way the helper already copies, keeping the exclusions story-151 derived from git and no longer copying `.git` as a tree entry.
+  - Keep the copy's working tree and history what they were - HEAD at the source's commit, the history reachable from it, the source's uncommitted edits present - so the module's bounded history reads and the nested pytest runs see what they saw before.
+  - Add a standing assertion, driven from a worktree, that the copy's git directory resolves inside the copy - build a repository with init_repository from tests/conftest.py, cut a worktree from it with the harness's own orchestration/worktrees.py helper, copy the worktree through copy_repository, and assert that `git rev-parse --git-common-dir` and `git rev-parse --git-dir` run in the copy resolve to paths beneath the copy. Its control is the same reading on the worktree itself, which resolves outside it, so a reading that stopped seeing would fail as itself.
+  - Beside it, assert the isolation the copy exists for - a commit made inside the copy does not appear in the source repository's history, the copy's HEAD names the same commit as the source's, and an uncommitted edit made in the source worktree before copying is present in the copy.
+  - Rewrite the docstrings on copy_repository, repo_copy and pristine_copy so they say what the copy's `.git` is, why a copied pointer is not a copy, and why the working tree is laid over the clone rather than taken from it.
+
+acceptance_criteria:
+  - Given a source whose `.git` is a `gitdir:` file, copy_repository produces a copy whose `.git` is a directory and in which `git rev-parse --git-common-dir` resolves to a path inside the copy.
+  - Given a source whose `.git` is a real directory, the copy carries what it carried before this story - the history reachable from HEAD, HEAD at the source's commit, the working tree as it stood including uncommitted edits, and no path the source's git ignores.
+  - A test in tests/test_git_history_loading_retired.py drives the worktree case on a repository it builds and cuts a worktree from, and that test fails when the helper copies the pointer as it does today.
+  - A commit made inside the copy is not reachable in the source repository afterwards.
+  - The existing assertions that a fresh copy holds no ignored path, that it carries `.git`, and that a directory newly ignored is excluded with no edit to the module all still pass.
+  - Every parametrized case in tests/test_git_history_loading_retired.py that runs one test green in the unmutated copy and red in the mutated one still passes.
+
+technical_plan:
+  implementation_steps:
+    - Read copy_repository, repo_copy, pristine_copy and the three tests about the copy at tests/test_git_history_loading_retired.py:877-1044, and run_one_test below them, so the change keeps the destination layout every consumer expects.
+    - Make copy_repository clone the source into the destination first - `git clone` with checkout suppressed is enough, since the working tree comes from the overlay - then copy the source's working tree over it with the existing leave_behind callable, extended to leave `.git` behind at the root, and rebuild the copy's index from its HEAD so git in the copy reports the overlaid tree as the source would.
+    - Confirm on a worktree with a detached HEAD that the clone's HEAD resolves to the same commit as the source's, whether or not a branch points at it, and that `git log` inside the copy reaches the history the module's bounded reads depend on.
+    - Write the worktree-driven assertion - init_repository for the origin, orchestration/worktrees.py to cut a worktree from it, an uncommitted edit in the worktree, copy_repository on the worktree - and read `git rev-parse --git-common-dir` and `--git-dir` in the copy and in the worktree, requiring the copy's to lie beneath the copy and the worktree's to lie outside it.
+    - Beside it, commit inside the copy and assert the origin's history does not carry that commit; assert the copy's HEAD equals the worktree's; assert the uncommitted edit is present in the copy.
+    - Rewrite the docstrings, and re-run the module's existing copy tests and the restated-assertion cases before handing over.
+  likely_file_changes:
+    - file: tests/test_git_history_loading_retired.py
+      stage: tester
+      reason: The helper, the fixtures, the docstrings and the new assertions all live in this module, and the tester stage may change files under tests/.
+
+scope:
+  modify:
+    - tests/test_git_history_loading_retired.py
+  do_not_modify:
+    - tests/conftest.py
+    - orchestration/worktrees.py
+    - orchestration/story_coordinator.py
+    - .gitignore
+
+verification_requirements:
+  - Confirm the full suite passes under the configured test command.
+  - Confirm the new worktree-driven assertion is a real check rather than a tautology - that it fails against the pre-change helper, which copies the `gitdir:` file, and passes with the changed one.
+  - Confirm the copy's `.git` resolves inside the copy when the source is a worktree, and that a commit made in the copy does not reach the source.
+  - Confirm the copy still carries the history and the working tree the module depends on - the existing copy assertions pass and the parametrized restated-assertion cases still run green in the unmutated copy and red in the mutated one.
+  - Confirm the exclusion list is still derived from git as story-151 left it, and that no file outside tests/test_git_history_loading_retired.py changed.
+
+constraints:
+  - The module continues to reach this repository's history only through the shared reader in tests/conftest.py, which is the rule it states about itself in its own docstring; a clone made to build a copy is not a read of a file's text out of git.
+  - No existing assertion in the module is weakened, skipped or removed.
+  - No wall-clock bound is added. The subject is what the copy's `.git` is, not how fast the machine that makes it is.
+  - What the copy excludes is settled by story-151 and not reopened - the exclusion list stays derived from what git reports as ignored.
+  - The nested pytest runs themselves, and what they cost, are out of scope; this story changes what the copy includes and nothing about what runs inside it.
+  - Cutting a worktree from the source is not an acceptable form of the fix, because it produces another pointer into the repository being copied.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-16 12:03:52
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 304
