@@ -22,8 +22,12 @@
       "description": "The correctable findings the verdict carried, copied verbatim. The item shape is declared inline rather than referenced, because this validator subset has no cross-file reference and a finding recorded here must validate identically to one in verification-result.schema.json's correctable_findings — the duplication is stated here so the two are edited together rather than drifting.",
       "items": {
         "type": "object",
-        "required": ["location", "finding", "correction", "category"],
+        "required": ["path", "location", "finding", "correction", "category"],
         "properties": {
+          "path": {
+            "type": "string",
+            "description": "The repository-relative file the words to correct are in, as the verifier recorded it. Naming it is what lets the stage this pass enters at change that file: the coordinator adds the path of every finding in this record to that stage's exempt list, so the finding grants its stage the one file it names for this pass, while an edit to any file no finding named stays governed by the revert check."
+          },
           "location": {
             "type": "string",
             "description": "Where the wording is, as the verifier recorded it."

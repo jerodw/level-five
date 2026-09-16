@@ -445,9 +445,9 @@ TESTS_DIR_TOKEN = "{{tests_dir}}"
 
 
 def test_the_implementer_may_not_create_the_configured_tests_directory():
-    """The separation the two-stage split exists for, and the one configuration
-    reference in this workflow: the restriction is written as `{{tests_dir}}`
-    and resolves to what this repository configures."""
+    """The separation the two-stage split exists for: the restriction is
+    written as `{{tests_dir}}` and resolves to what this repository
+    configures."""
     restrictions = story_coordinator.stage_restrictions(SHIPPED_STAGES)
     tests_dir = conftest.repository_config()["tests_dir"]
     creation = [restriction for restriction in restrictions
@@ -462,13 +462,18 @@ def test_the_implementer_may_not_create_the_configured_tests_directory():
 def confined_stage_declaration(definition: dict) -> dict:
     """The stage that writes the validation, out of a definition.
 
-    Found by the restriction that confines it rather than by its name, so this
-    names no stage of its own; the assertions below then read that stage's
-    other declarations.
+    Found by the restriction that confines it to the configured test location
+    rather than by its name, so this names no stage of its own; the assertions
+    below then read that stage's other declarations. Since story-154 the
+    definition carries a second confinement, the documenter's to the
+    configured architecture documents, which is why the confinement is picked
+    by its prefix rather than being the only one.
     """
+    tests_dir = conftest.repository_config()["tests_dir"]
     confinements = [restriction for restriction
                     in story_coordinator.stage_restrictions(SHIPPED_STAGES)
-                    if restriction.sense == story_coordinator.CONFINEMENT]
+                    if restriction.sense == story_coordinator.CONFINEMENT
+                    and restriction.prefix == tests_dir]
     (confinement,) = confinements
     return next(stage for stage in definition["stages"]
                 if stage["name"] == confinement.stage)
@@ -481,10 +486,12 @@ def test_the_stage_that_writes_the_validation_is_confined_to_that_location():
     exactly as the create restriction does — a target keeping its tests
     elsewhere is governed there under both with no workflow edit.
     """
+    confined = confined_stage_declaration(raw_definition())
     confinement = next(
         restriction for restriction
         in story_coordinator.stage_restrictions(SHIPPED_STAGES)
-        if restriction.sense == story_coordinator.CONFINEMENT)
+        if restriction.sense == story_coordinator.CONFINEMENT
+        and restriction.stage == confined["name"])
 
     assert confinement.prefix == conftest.repository_config()["tests_dir"]
     assert confinement.stage != SHIPPED_NAMES[0]

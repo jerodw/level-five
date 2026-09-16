@@ -317,18 +317,44 @@ def test_a_grant_on_another_stage_does_not_suppress_it():
     assert len(plan_validation.assignment_problems(other, STAGES, ABSENT_ROOT)) == 1
 
 
+def restrictions_of(stage: str) -> list:
+    return story_coordinator.restrictions_on(
+        next(declared for declared in STAGES if declared["name"] == stage))
+
+
+def candidate_paths_for(stage: str) -> list[str]:
+    """The paths a stage is asked about, on both sides of its own prefixes.
+
+    The two fixed candidates sit outside and beneath the create restriction's
+    prefix. A confinement governs the outside, so a stage confined somewhere
+    neither candidate reaches — the documenter, since story-154, confined to
+    one configured document — would have nothing ungoverned to be assigned.
+    So each confinement the stage carries contributes the path inside it, read
+    off the loaded restriction rather than spelled: the prefix itself when it
+    names one file, and a file beneath it when it names a directory.
+    """
+    inside = []
+    for restriction in restrictions_of(stage):
+        if restriction.sense != story_coordinator.CONFINEMENT:
+            continue
+        prefix = restriction.prefix
+        inside.append(prefix if not prefix.endswith("/")
+                      else f"{prefix}a_file_no_story_owns.py")
+    return [OUTSIDE_EVERY_PREFIX, STORY_031_FILE, *inside]
+
+
 def ungoverned_by(stage: str) -> str:
     """A path in this repository no restriction on `stage` governs.
 
     Chosen rather than written: "outside every prefix" used to be the same
     answer for every stage, and a confinement makes it the opposite answer —
     outside is exactly what a confinement governs. So each stage is asked which
-    of two candidate paths its own restrictions leave alone, and the pair is on
-    opposite sides of the declared prefixes so that one of them always is.
+    of the candidate paths its own restrictions leave alone, and the candidates
+    are on opposite sides of the declared prefixes so that one of them always
+    is.
     """
-    restrictions = story_coordinator.restrictions_on(
-        next(declared for declared in STAGES if declared["name"] == stage))
-    for candidate in (OUTSIDE_EVERY_PREFIX, STORY_031_FILE):
+    restrictions = restrictions_of(stage)
+    for candidate in candidate_paths_for(stage):
         if not any(restriction.governs(candidate)
                    for restriction in restrictions):
             return candidate
@@ -352,10 +378,9 @@ def test_a_file_a_restriction_on_that_stage_governs_is_reported(stage):
     """The control for the row above, over the stages that carry a
     restriction: the same two candidate paths, and the one its own restriction
     governs is the one that offends."""
-    restrictions = story_coordinator.restrictions_on(
-        next(declared for declared in STAGES if declared["name"] == stage))
+    restrictions = restrictions_of(stage)
     governed = next(
-        candidate for candidate in (OUTSIDE_EVERY_PREFIX, STORY_031_FILE)
+        candidate for candidate in candidate_paths_for(stage)
         if any(restriction.governs(candidate) for restriction in restrictions))
     problems = plan_validation.assignment_problems(
         plan(entry(governed, stage)), STAGES, ABSENT_ROOT)

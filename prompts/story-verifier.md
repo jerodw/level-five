@@ -87,6 +87,12 @@ can fix mechanically, and whose repair is to the words alone — a comment, a
 docstring, a schema description, a document. Name the retry category that owns
 that prose, spelled exactly as the categories above are: a category this
 workflow does not define escalates the run rather than being routed somewhere.
+Give each finding a `path`, the repository-relative file the words to correct
+are in. Naming it is what lets the stage the pass enters at change that one
+file for that pass: the coordinator grants that stage the files the findings
+name, and an edit to any other file is put to the revert check after the turn.
+A finding that names no path is refused by the schema, because the pass would
+have no scope to change the words in.
 
 What stays in unverified is what you could not check: evidence that was
 missing, a claim you had no way to settle, a question the artifacts available
@@ -219,8 +225,8 @@ the tester stage; treat them as expected additions of a later stage, not
 implementation scope violations):
 {{tester_changed_files}}
 
-Documenter changed files (documenter's record — documentation files created
-or modified by the documenter stage):
+Documenter changed files (documenter's record — every repository file the
+documenter stage touched):
 {{documenter_changed_files}}
 
 Documentation report (the documenter's account of what it wrote and why):

@@ -37,6 +37,7 @@
           "claim-support-checked",
           "correction-pass-routed",
           "correction-pass-recorded",
+          "correction-pass-grant-applied",
           "self-routed",
           "budget-stopped",
           "capacity-paused",

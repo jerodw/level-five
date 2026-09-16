@@ -53,6 +53,12 @@
       "prompt": "documenter.md",
       "outputs": ["documentation-report.md", "documenter-changed-files.json"],
       "changed_files": "documenter-changed-files.json",
+      "may_only_change": ["{{architecture_docs}}"],
+      "revert_check": {
+        "result": "documenter-revert-check-result.json",
+        "baseline": "stage-baseline",
+        "discarded": "documenter-discarded-edits"
+      },
       "may_not_run_suite": true,
       "max_self_routes": 1,
       "max_execution_cost_usd": 10,

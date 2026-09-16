@@ -55,7 +55,11 @@ Every absence asserted here carries a demonstration that it can fail:
     with the declaration repaired, which creates all of it;
   * "the statement no longer tells the stage to establish the suite" sits
     beside the clause it used to carry, constructed here in the test, which the
-    same check reports.
+    same check reports;
+  * "story-063's edit in orchestration source is exempt from both checks
+    under the pass's grant" sits beside the same record with nothing granted,
+    which the shipped stage's confinement governs — so the permission is the
+    grant rather than a confinement that stopped governing anything.
 """
 import json
 import shutil
@@ -185,24 +189,28 @@ def destination_of(category: str) -> str:
 #: matched by its own words, which is what "the finding reached the stage"
 #: means.
 CHECKS_FINDING = {
+    "path": "tests/test_sample.py",
     "location": "tests/test_sample.py::test_the_sample - the module docstring",
     "finding": "MARKER-CHECKS the docstring says three assertions and four follow",
     "correction": "MARKER-CHECKS-FIX delete the count and say 'the assertions below'",
     "category": CHECKS_CATEGORY,
 }
 BEHAVIOUR_FINDING = {
+    "path": "src/app.py",
     "location": "src/app.py - the docstring of the sample function",
     "finding": "MARKER-BEHAVIOUR the docstring wraps mid-word",
     "correction": "MARKER-BEHAVIOUR-FIX rewrap the line",
     "category": BEHAVIOUR_CATEGORY,
 }
 RECORD_FINDING = {
+    "path": ".harness/docs/ARCHITECTURE.md",
     "location": ".harness/docs/ARCHITECTURE.md - the routing section",
     "finding": "MARKER-RECORD the paragraph names a stage that was renamed",
     "correction": "MARKER-RECORD-FIX name the stage the workflow declares today",
     "category": RECORD_CATEGORY,
 }
 UNKNOWN_FINDING = {
+    "path": "src/app.py",
     "location": "src/app.py - the module comment",
     "finding": "MARKER-UNKNOWN the comment describes behaviour the code lost",
     "correction": "MARKER-UNKNOWN-FIX describe what the code does now",
@@ -1489,8 +1497,8 @@ def test_the_verification_result_schema_declares_the_field_as_optional():
     assert field in VERDICT_SCHEMA["properties"]
     assert field not in VERDICT_SCHEMA.get("required", [])
     item = VERDICT_SCHEMA["properties"][field]["items"]
-    assert set(item["required"]) == {"location", "finding", "correction",
-                                     "category"}
+    assert set(item["required"]) == {"path", "location", "finding",
+                                     "correction", "category"}
     assert schema_validator.validate(passing_with(CHECKS_FINDING),
                                      VERDICT_SCHEMA) == []
     assert schema_validator.validate(PASS, VERDICT_SCHEMA) == []
@@ -1510,8 +1518,12 @@ def test_a_verdict_whose_finding_omits_a_required_field_is_reported():
 # the files the entered stage ordinarily writes, which is why the run that met
 # it categorised it elsewhere and re-entered elsewhere. Under the declared
 # entry it goes to the shipped stage regardless, so what has to hold is that
-# the edit is one that stage is both permitted and instructed to make. The
-# subject here is what this repository ships, which is why these read it.
+# the edit is one that stage is both permitted and instructed to make. Since
+# story-154 that stage is confined to the configured architecture documents,
+# so "permitted" is no longer the absence of a restriction: it is the grant
+# the pass carries, the `path` each finding names, read by the coordinator
+# into the exempt list the ownership and revert checks share. The subject
+# here is what this repository ships, which is why these read it.
 # --------------------------------------------------------------------------
 
 BLOCKED_PATHS = json.loads(
@@ -1539,9 +1551,9 @@ def test_the_edit_falls_under_no_blocked_path():
 
 
 def test_the_stage_the_pass_enters_at_is_governed_by_no_create_restriction():
-    """The second half. `may_not_create` is what stops a stage writing under a
-    prefix, and the stage the shipped declaration enters at declares none —
-    which is what makes the correction its own work rather than a compromise.
+    """The second half, part one. `may_not_create` is what stops a stage
+    writing under a prefix outright, and the stage the shipped declaration
+    enters at declares none.
 
     The control is the shipped stages that do declare one: without it, a
     coordinator that had renamed the key would read as unrestricted here.
@@ -1552,6 +1564,84 @@ def test_the_stage_the_pass_enters_at_is_governed_by_no_create_restriction():
     assert shipped_correction_stage().get("may_not_create") is None
     assert restricted
     assert shipped_correction_stage()["name"] not in restricted
+
+
+def story_063_finding() -> dict:
+    """A finding shaped as story-063's was, naming the file its words are in."""
+    return {**BEHAVIOUR_FINDING, "path": STORY_063_PATH}
+
+
+def test_the_stage_the_pass_enters_at_is_confined_and_the_pass_grants_the_edit(
+    tmp_path,
+):
+    """The second half, part two. Since story-154 the entered stage *is*
+    confined, to the configured architecture documents, so story-063's
+    docstring edit in orchestration source is one its confinement governs —
+    and the edit still lands because the pass's grant permits it: the finding
+    names the file, and the coordinator adds every path the current pass
+    record names to the exempt list the ownership and revert checks read.
+
+    Driven through the coordinator's own reader of the record rather than
+    argued from the prompt, against a record written the way the coordinator
+    writes one, keyed by the shipped declaration's artifact and pass count.
+    The control is the same record read for a later attempt, which grants
+    nothing, and the same path with no record at all, which the confinement
+    governs — so the permission is the grant rather than a confinement that
+    stopped governing anything.
+    """
+    stage = shipped_correction_stage()
+    (confinement,) = [restriction for restriction
+                      in story_coordinator.restrictions_on(stage)]
+    assert confinement.sense == story_coordinator.CONFINEMENT
+    assert confinement.governs(STORY_063_PATH)
+
+    shipped = conftest.shipped_workflow()
+    declared = story_coordinator.correction_pass_declaration(shipped["stages"])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    write_json(run_dir / story_coordinator.correction_pass_result_file(
+        declared["result"], 1), {
+            "pass": 1, "attempt": 1, "stage": stage["name"],
+            "findings": [story_063_finding()],
+            "statement": story_coordinator.correction_pass_statement(
+                stage["name"]),
+        })
+    state = story_coordinator.RunState(story_id="story-001", branch="story/story-001")
+    state.correction_pass_count = 1
+
+    granted = story_coordinator.correction_pass_grants(
+        run_dir, shipped["stages"], state, stage["name"], 1)
+    assert granted == [STORY_063_PATH]
+    assert story_coordinator.grant_covers(granted, STORY_063_PATH)
+    # And nothing beside it: the grant is the one file, not its directory.
+    assert not story_coordinator.grant_covers(
+        granted, f"orchestration/not-{STORY_063_LOCATION}")
+    # A later attempt of the same run inherits nothing from the record.
+    assert story_coordinator.correction_pass_grants(
+        run_dir, shipped["stages"], state, stage["name"], 2) == []
+
+
+def test_the_pass_grant_exempts_the_edit_from_both_checks(tmp_path):
+    """The two checks the grant is read by, asked directly with the entered
+    stage's own restrictions: with the grant the docstring edit is neither an
+    ownership violation nor a governed edit, and without it the revert check
+    would have decided it."""
+    stage = shipped_correction_stage()
+    restrictions = story_coordinator.restrictions_on(stage)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    write_json(run_dir / stage["changed_files"],
+               {"modified": [STORY_063_PATH], "created": [], "deleted": []})
+
+    granted = [story_063_finding()["path"]]
+    assert story_coordinator.governed_edits(
+        run_dir, stage["changed_files"], restrictions, granted).paths == ()
+    assert story_coordinator._ownership_violation(
+        run_dir, stage["changed_files"], restrictions, granted) is None
+    # The control: the identical record with nothing granted is governed.
+    assert story_coordinator.governed_edits(
+        run_dir, stage["changed_files"], restrictions, []).paths \
+        == (STORY_063_PATH,)
 
 
 def test_that_stage_is_instructed_to_correct_whatever_the_finding_names():

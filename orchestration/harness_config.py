@@ -263,9 +263,17 @@ def workflow_token_values(config: dict) -> dict[str, str | None]:
     the definition happens to carry, so the keys this resolution reads are
     visible to a reader -- and to the scan that holds the declared set equal
     to the set the harness reads -- exactly like every other configured key.
-    That the mapping has one entry is the narrowness, stated in code.
+    That the mapping has two entries, each named as a literal read, is the
+    narrowness: a declared key outside this set -- `branch_prefix` among them
+    -- stays unreferable, so the set is narrow rather than general. `tests_dir`
+    resolves to a single string; `architecture_docs` resolves to a list, whose
+    entries `_resolve_tokens` splices into the declaration in place of the
+    token entry.
     """
-    return {"tests_dir": config.get("tests_dir")}
+    return {
+        "tests_dir": config.get("tests_dir"),
+        "architecture_docs": config.get("architecture_docs"),
+    }
 
 
 def workflow_names(harness_root: Path) -> tuple[str, ...]:
@@ -330,12 +338,16 @@ class UnresolvedWorkflowToken(ValueError):
 def _resolve_tokens(value, values: dict[str, str | None], unresolved: list[str]):
     """Substitute every `{{key}}` list entry, dropping the ones with no value.
 
-    An unset key resolves the entry *out of the list* rather than to an empty
-    string: a restriction whose prefix is "" is a prefix every path is under,
-    which is the opposite of the "this target declares none" the absence
-    means. Every other token-shaped string -- one naming a key outside the
-    narrow set, or a resolvable one somewhere a list entry cannot be dropped
-    from -- is collected as unresolved for the caller to refuse on.
+    A token whose configured value is a list splices that list's entries into
+    the declaration in place of the token entry; a token whose value is a
+    single string replaces the entry with that string. An unset or empty value
+    resolves the entry *out of the list* rather than to an empty string: a
+    restriction whose prefix is "" is a prefix every path is under, which is the
+    opposite of the "this target declares none" the absence means, and an empty
+    list splices in nothing for the same reason. Every other token-shaped string
+    -- one naming a key outside the narrow set, or a resolvable one somewhere a
+    list entry cannot be dropped from -- is collected as unresolved for the
+    caller to refuse on.
     """
     if isinstance(value, dict):
         return {key: _resolve_tokens(item, values, unresolved)
@@ -350,8 +362,12 @@ def _resolve_tokens(value, values: dict[str, str | None], unresolved: list[str])
             name = match.group(1)
             if name not in values:
                 unresolved.append(name)
-            elif values[name]:
-                resolved.append(values[name])
+                continue
+            configured = values[name]
+            if isinstance(configured, list):
+                resolved.extend(configured)
+            elif configured:
+                resolved.append(configured)
         return resolved
     if isinstance(value, str):
         unresolved.extend(_WORKFLOW_TOKEN.findall(value))
