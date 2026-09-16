@@ -1119,6 +1119,8 @@ def append_event(
     scope_files: int | None = None,
     invocations: int | None = None,
     dedupe_ran: bool | None = None,
+    routed: int | None = None,
+    acted_on: int | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -1182,6 +1184,13 @@ def append_event(
         # treatment `discarded_session_block` already gets one log over. The
         # `is not None` filter below is what lets a false through.
         "dedupe_ran": dedupe_ran,
+        # The accounting after a verdict: how many findings the pre-stage
+        # inspection routed to the story, and how many of those the verdict
+        # acted on. On the same omitted-when-None terms as the counts above;
+        # present on an accounting entry even where a count is zero, because
+        # none acted on is an answer.
+        "routed": routed,
+        "acted_on": acted_on,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)
@@ -2245,8 +2254,17 @@ def inspection_artifacts(
     declared = inspection_declaration(stages).get("result")
     if not declared:
         return []
-    pattern = story_inspection.findings_artifact_file(declared, attempt)
-    return sorted(path.name for path in run_dir.glob(pattern))
+    names: list[str] = []
+    # The accounting artifact travels with the findings record it accounts
+    # for, and for the same reason: its presence is what says an attempt was
+    # accounted, so one left behind would have the next entry's attempt 1
+    # file nothing for findings it routed.
+    for pattern in (
+        story_inspection.findings_artifact_file(declared, attempt),
+        story_inspection.accounting_artifact_file(declared, attempt),
+    ):
+        names.extend(path.name for path in run_dir.glob(pattern))
+    return sorted(names)
 
 
 def entry_artifacts(run_dir: Path, stages: list[dict]) -> list[str]:
@@ -6013,15 +6031,46 @@ def _correction_pass_routed(
     findings: list[dict],
     number: int,
     budget: int,
+    routed_slugs=(),
 ) -> None:
+    """Record a correction pass, and where its findings came from.
+
+    `routed_slugs` is what the pre-stage inspection routed to this story on
+    this attempt, read back off the accounting artifact. When any were, the
+    line says how many of the findings the pass carries are among them — by
+    the accounting's own slug rule — so a reader of events.log can tell a
+    re-entry spent on the Inspector's reading from one spent on the verifier's
+    own. A workflow declaring no inspection routes none and writes the line
+    exactly as before.
+    """
     append_event(
         run_dir,
         f"correction pass {number} of {budget}: verification passed carrying "
-        f"{len(findings)} correctable finding(s); re-entering at {destination}",
+        f"{len(findings)} correctable finding(s); re-entering at {destination}"
+        + routed_among(findings, routed_slugs),
         kind="correction-pass-routed",
         stage=stage_name,
         retry_stage=destination,
     )
+
+
+def routed_among(entries: list[dict], routed_slugs) -> str:
+    """The clause a re-entry event carries when findings were routed.
+
+    Empty when none were, so an event under a workflow declaring no inspection
+    is byte-for-byte what it was. Otherwise it says, of the entries the event
+    carries, how many name a routed finding's slug in their location — the
+    accounting's rule, reached through `story_inspection` rather than
+    respelled here, so the event and the accounting cannot count differently.
+    """
+    slugs = tuple(routed_slugs)
+    if not slugs:
+        return ""
+    locations = [entry.get("location") for entry in entries
+                 if isinstance(entry, dict)]
+    among = story_inspection.entries_among_the_routed(locations, slugs)
+    return (f"; {among} of them are among the {len(slugs)} findings "
+            f"routed to this story")
 
 
 def _correction_pass_recorded(
@@ -9232,6 +9281,26 @@ def run_story(
             state.verification_iterations += 1
             archive = run_dir / "verification" / f"iteration-{state.verification_iterations}.json"
             archive.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+            # Every finding the pre-stage inspection routed to this story is
+            # accounted for here, after the verdict is archived and before any
+            # routing: what the verdict acted on is named by slug, and the rest
+            # is filed as briefs from the artifact already in the run directory.
+            # Only where the stage declares an inspection, and read off that
+            # declaration, so no artifact name is written here. The call is a
+            # bare statement and returns nothing; what it recorded is read back
+            # off its artifact for wording the two re-entry events below and by
+            # no routing decision.
+            routed_slugs: tuple = ()
+            declared_inspection = (stage.get("inspection") or {}).get("result")
+            if declared_inspection:
+                story_inspection.account_after_verdict(
+                    run_dir, target_root, config or {}, harness_root,
+                    state.story_id, artifact=declared_inspection,
+                    attempt=attempt, verdict=verdict,
+                )
+                routed_slugs = story_inspection.routed_slugs(
+                    run_dir, declared_inspection, attempt
+                )
             # The artifacts an entry names come off the stage's declared
             # outputs in the loaded workflow, never a list written here.
             outputs = stage.get("outputs", [])
@@ -9352,6 +9421,7 @@ def run_story(
                             findings,
                             state.correction_pass_count,
                             budget,
+                            routed_slugs,
                         )
                         # Nothing a retry spends is spent: retry_count is
                         # untouched, archive_attempt is not reached, and no
@@ -9643,7 +9713,9 @@ def run_story(
                     run_dir,
                     f"verification failed; retry {state.retry_count} of "
                     f"{rules['max_retries']} rerouted to {destination} "
-                    f"for {target}",
+                    f"for {target}"
+                    + routed_among(verdict.get("blocking_issues") or [],
+                                   routed_slugs),
                     kind="verification-failed",
                     stage=name,
                     artifacts=outputs,

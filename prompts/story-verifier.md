@@ -274,7 +274,14 @@ Inspector read this change and found nothing about it to report. A record that
 is absent entirely means the coordinator could not write one, which is the same
 statement about your evidence and not a statement about the work. Findings about
 files this story did not change are not here: those are filed as briefs, which
-is where a backlog item belongs:
+is where a backlog item belongs. When you raise a blocking issue or a
+correctable finding from one of these findings, name that finding's `slug` in
+the entry's `location` beside the file. The slug is how the coordinator tells
+which of these you acted on: after your verdict, every finding here whose slug
+no entry names is filed as a brief, so declining one is still right and sends
+it to the backlog rather than losing it — and a finding you act on without
+naming its slug is filed too, as a duplicate a person closes rather than a
+loss:
 {{inspection_findings}}
 
 Repository standards:
