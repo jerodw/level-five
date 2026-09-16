@@ -290,6 +290,7 @@ def failing_verdict(attempt: int) -> dict:
 def finding(marker: str) -> dict:
     """A correctable finding whose words name the verdict that carried it."""
     return {
+        "path": ".harness/docs/ARCHITECTURE.md",
         "location": ".harness/docs/ARCHITECTURE.md - the routing section",
         "finding": f"MARKER-{marker} the paragraph names a stage that was renamed",
         "correction": f"MARKER-{marker}-FIX name the stage the workflow declares",

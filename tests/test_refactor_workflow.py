@@ -105,15 +105,21 @@ def test_it_declares_no_stage_that_authors_validation():
     assert "tester" not in REFACTOR_NAMES
 
 
-#: Every key that governs where a stage may write, together with the key that
-#: turns the check deciding an edit outside it on. Read off the coordinator's
+#: Every key that governs where a stage may write. Read off the coordinator's
 #: own vocabulary rather than spelled here, so a sense added to it is a sense
 #: the assertion below covers rather than one it silently stops watching.
 GOVERNING_KEYS = (story_coordinator.CREATE_RESTRICTION,
-                  story_coordinator.CONFINEMENT, "revert_check")
+                  story_coordinator.CONFINEMENT)
 
 
-def test_no_refactor_stage_declares_any_key_that_governs_where_it_writes():
+def keys_governing_the_tests_directory(stage: dict) -> list[str]:
+    """The governing keys on `stage` whose declaration names the configured
+    tests directory — the one location a refactor's implementer must be free
+    to edit, and so the one guard this workflow exists to drop."""
+    return [key for key in GOVERNING_KEYS if TESTS_DIR in stage.get(key, [])]
+
+
+def test_no_refactor_stage_declares_a_key_governing_the_tests_directory():
     """The declarations that rest on the assumption a refactor breaks.
 
     Over every stage rather than the implementer alone, and over every sense
@@ -122,26 +128,46 @@ def test_no_refactor_stage_declares_any_key_that_governs_where_it_writes():
     stage confined to the tests directory would be governed everywhere else,
     which is exactly the guard this workflow exists to drop.
 
-    The control is story-workflow, which declares each of them somewhere: if
-    the reading had stopped seeing a declaration at all, the two definitions
-    would look identical and the absence would mean nothing.
+    What this is not is a claim that no refactor stage is governed anywhere.
+    Since story-154 the documenter of both definitions is confined to the
+    configured architecture documents, under the revert check, because its
+    subject is those documents and a refactor changes nothing about that; the
+    guard a refactor drops is the one on the tests directory, and that is the
+    guard asserted absent here, on every stage and under every sense.
+
+    The control is story-workflow, which declares each sense on the tests
+    directory somewhere: if the reading had stopped seeing a declaration at
+    all, the two definitions would look identical and the absence would mean
+    nothing.
     """
     assert not [(stage["name"], key) for stage in REFACTOR_STAGES
-                for key in GOVERNING_KEYS if key in stage]
+                for key in keys_governing_the_tests_directory(stage)]
     for key in GOVERNING_KEYS:
         assert [stage["name"] for stage in STORY_WORKFLOW["stages"]
-                if key in stage], key
+                if key in keys_governing_the_tests_directory(stage)], key
+    # A refactor stage that does declare the revert check is one whose
+    # restriction names something other than the tests directory.
+    for stage in REFACTOR_STAGES:
+        if "revert_check" in stage:
+            assert keys_governing_the_tests_directory(stage) == []
+            assert any(stage.get(key) for key in GOVERNING_KEYS), stage["name"]
 
 
-def test_no_refactor_stage_is_governed_anywhere_by_the_shared_derivation():
+def test_no_refactor_stage_is_governed_on_the_tests_directory_by_the_shared_derivation():
     """The same absence asked of the derivation the coordinator enforces from.
 
     Reading the keys is a statement about the file; this is a statement about
     what a run would enforce, which is what the criterion is about. Its control
-    is the shipped story workflow, whose stages do derive restrictions.
+    is the shipped story workflow, whose stages do derive restrictions on the
+    tests directory. And what the refactor workflow does derive is a subset of
+    what the story workflow derives, so the refactor drops guards and adds
+    none.
     """
-    assert story_coordinator.stage_restrictions(REFACTOR_STAGES) == []
-    assert story_coordinator.stage_restrictions(STORY_WORKFLOW["stages"]) != []
+    refactor = story_coordinator.stage_restrictions(REFACTOR_STAGES)
+    story = story_coordinator.stage_restrictions(STORY_WORKFLOW["stages"])
+    assert [r for r in refactor if r.prefix == TESTS_DIR] == []
+    assert [r for r in story if r.prefix == TESTS_DIR] != []
+    assert set(refactor) <= set(story)
 
 
 def test_the_refactor_implementer_declares_the_census_and_the_suite_run():

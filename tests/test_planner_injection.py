@@ -650,9 +650,11 @@ def test_the_workflow_defines_the_four_expected_stages():
     The one this module *builds* is what the renders below inject, and what is
     anchored of it is that it declares four distinct stages and a create
     restriction on one of them. The one this repository *deploys* is what the
-    end-to-end `l5-plan` case injects, and its four stages and its one
-    restriction are named here as they always were — that half is a claim about
-    what is deployed, which is why this module stays a declared reader of it.
+    end-to-end `l5-plan` case injects, and its four stages and its
+    restrictions are named here as they always were — since story-154 the
+    documenter's confinement on the configured document beside the
+    implementer's and tester's. That half is a claim about what is deployed,
+    which is why this module stays a declared reader of it.
     """
     assert len(stage_names()) == 4
     assert len(set(stage_names())) == len(stage_names())
@@ -675,7 +677,9 @@ def test_the_workflow_defines_the_four_expected_stages():
             for restriction in story_coordinator.stage_restrictions(
                 deployed["stages"])] == [
         ("implementer", story_coordinator.CREATE_RESTRICTION, "tests/"),
-        ("tester", story_coordinator.CONFINEMENT, "tests/")]
+        ("tester", story_coordinator.CONFINEMENT, "tests/"),
+        ("documenter", story_coordinator.CONFINEMENT,
+         ".harness/docs/ARCHITECTURE.md")]
 
 
 def test_the_template_names_no_workflow_stage_of_its_own():
@@ -963,10 +967,14 @@ def test_l5_plan_injects_the_workflow_facts_into_the_session_prompt(
     assert argv is not None
     prompt = argv[argv.index("--append-system-prompt") + 1]
     # `l5-plan` resolves its own harness root, so the facts it injects are the
-    # ones this repository deploys rather than the ones built above. The
-    # expectation is read off that definition, so the assertion compares the
-    # render against what the run actually had to inject.
-    deployed = conftest.shipped_workflow(REPO_ROOT, "story-workflow")
+    # ones this repository deploys rather than the ones built above, resolved
+    # against the *project's* configuration — a restriction written as a token
+    # resolves to what that target configures, and one whose key the target
+    # leaves unset resolves out. The expectation is read off that same load,
+    # so the assertion compares the render against what the run actually had
+    # to inject.
+    deployed = harness_config.load_workflow(
+        REPO_ROOT, "story-workflow", harness_config.load_config(project))
     deployed_names = [stage["name"] for stage in deployed["stages"]]
     deployed_restrictions = story_coordinator.stage_restrictions(
         deployed["stages"])

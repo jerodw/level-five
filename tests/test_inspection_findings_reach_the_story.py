@@ -413,6 +413,7 @@ def passing_with(*findings: dict) -> dict:
 #: table declares, so a passing verdict carrying it spends a correction pass
 #: rather than escalating on a category the definition does not define.
 CORRECTABLE_FINDING = {
+    "path": CHANGED_FILE,
     "location": f"{CHANGED_FILE} - the docstring",
     "finding": "MARKER-CORRECTABLE the wording is stale",
     "correction": "MARKER-CORRECTABLE-FIX reword it",

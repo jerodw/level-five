@@ -147,11 +147,30 @@ def restrictions_under(tests_dir: str | None,
     return story_coordinator.stage_restrictions(workflow["stages"])
 
 
+def location_token_restrictions(tests_dir: str | None,
+                               harness_root: Path = REPO_ROOT) -> list:
+    """The restrictions the test-location token alone produces.
+
+    Since story-154 the shipped definition resolves a second token, from
+    another configuration key, and the restrictions it produces are in every
+    load whatever `tests_dir` says. What this module is about is the test
+    location, so what it reads is the difference the key makes: the load with
+    the key set, less everything the load with it unset reports. Nothing here
+    names the other token or the key it resolves from.
+    """
+    unaffected = restrictions_under(None, harness_root)
+    return [restriction for restriction in restrictions_under(tests_dir,
+                                                              harness_root)
+            if restriction not in unaffected]
+
+
 def prefixes_under(tests_dir: str | None,
                    harness_root: Path = REPO_ROOT) -> list[str]:
-    """Just the prefixes of the above, for an assertion about the value alone."""
+    """Just the prefixes the test location produces, for an assertion about
+    the value alone."""
     return [restriction.prefix
-            for restriction in restrictions_under(tests_dir, harness_root)]
+            for restriction in location_token_restrictions(tests_dir,
+                                                          harness_root)]
 
 
 DEFINITION_TEXT = (REPO_ROOT / "workflows" / f"{WORKFLOW_NAME}.json").read_text(
@@ -183,10 +202,11 @@ def test_every_declaration_naming_the_test_location_moves_with_the_config():
     are read off the load rather than named here.
     """
     for location in ("spec/", "__tests__/"):
-        restrictions = restrictions_under(location)
+        restrictions = location_token_restrictions(location)
         assert {restriction.prefix for restriction in restrictions} == {location}
         assert {restriction.sense for restriction in restrictions} == {
-            restriction.sense for restriction in restrictions_under(CONFIGURED)}
+            restriction.sense
+            for restriction in location_token_restrictions(CONFIGURED)}
 
 
 def test_a_different_configured_location_moves_the_restriction_with_it():
@@ -199,9 +219,20 @@ def test_a_different_configured_location_moves_the_restriction_with_it():
 def test_a_target_declaring_no_test_location_carries_no_create_restriction():
     """The absence, with its control in the same test: the identical load with
     the key set reports the pair, so "no pair" is the unset key and not a
-    `stage_restrictions` that stopped seeing anything."""
-    assert restrictions_under(None) == []
-    assert restrictions_under(CONFIGURED) != []
+    `stage_restrictions` that stopped seeing anything.
+
+    What the unset load still reports is what the other token resolves, and
+    it is asserted to be exactly what the set load reports beyond the test
+    location — so the key removes its own restrictions and touches nothing
+    else's.
+    """
+    unset = restrictions_under(None)
+    assert [r for r in unset if r.sense == story_coordinator.CREATE_RESTRICTION] == []
+    assert CONFIGURED not in {restriction.prefix for restriction in unset}
+    assert location_token_restrictions(CONFIGURED) != []
+    assert [r for r in restrictions_under(CONFIGURED) if r not in unset] \
+        == location_token_restrictions(CONFIGURED)
+    assert all(r in restrictions_under(CONFIGURED) for r in unset)
 
 
 def test_the_unset_key_removes_the_entry_rather_than_emptying_the_list_item():
@@ -232,8 +263,8 @@ def test_a_resolver_that_emptied_the_entry_is_reported_by_the_same_check(tmp_pat
     """
     mutant = load_mutant(
         REPO_ROOT / "orchestration" / "harness_config.py",
-        [("            elif values[name]:\n                resolved.append(values[name])",
-          "            else:\n                resolved.append(values[name] or \"\")")],
+        [("            elif configured:\n                resolved.append(configured)",
+          "            else:\n                resolved.append(configured or \"\")")],
         name="harness_config_emptying_the_entry", tmp_path=tmp_path)
 
     workflow = mutant.load_workflow(REPO_ROOT, WORKFLOW_NAME, config_with(None))
@@ -917,33 +948,45 @@ def restriction_problems(artifact: Path, stages: list[dict]) -> list[str]:
     )
 
 
-def literal_stages(prefix: str) -> list[dict]:
+def literal_stages(prefix: str, tmp_path: Path) -> list[dict]:
     """The definition as it read before this story: the prefix spelled out.
 
-    Built from today's shipped declaration with the token replaced by the
-    literal, so the comparison is against the pre-story shape reconstructed
-    from what ships rather than recovered from history — which keeps it honest
-    once this story commits.
+    Built from today's shipped declaration with the test-location token
+    replaced by the literal, so the comparison is against the pre-story shape
+    reconstructed from what ships rather than recovered from history — which
+    keeps it honest once this story commits. Only that token is replaced:
+    every other entry of every restriction, a later story's token among them,
+    is left as it ships and resolved through the same load the resolved side
+    goes through, so the two sides differ in the test location alone.
     """
     definition = raw_definition()
+    token = "{{tests_dir}}"
     for stage in definition["stages"]:
         for key in (story_coordinator.CREATE_RESTRICTION,
                     story_coordinator.CONFINEMENT):
             if key in stage:
-                stage[key] = [prefix]
-    return definition["stages"]
+                stage[key] = [prefix if entry == token else entry
+                              for entry in stage[key]]
+    assert token not in json.dumps(definition)
+    harness = mirror_harness(tmp_path / "literal-harness", definition)
+    return harness_config.load_workflow(
+        harness, WORKFLOW_NAME, conftest.repository_config())["stages"]
 
 
-def test_every_committed_story_artifact_validates_exactly_as_it_did_before():
-    """All 46 of them, not a sample — including every one whose scope,
+def test_every_committed_story_artifact_validates_exactly_as_it_did_before(
+    tmp_path,
+):
+    """All of them, not a sample — including every one whose scope,
     do_not_modify or stage_exceptions names `tests/`."""
     artifacts = committed_artifacts()
     assert len(artifacts) > 40, len(artifacts)
     location = conftest.repository_config()["tests_dir"]
 
+    literal_definition = literal_stages(location, tmp_path)
+
     resolved = {a: restriction_problems(a, stages_at(location))
                 for a in artifacts}
-    literal = {a: restriction_problems(a, literal_stages(location))
+    literal = {a: restriction_problems(a, literal_definition)
                for a in artifacts}
 
     assert resolved == literal
@@ -1036,9 +1079,11 @@ def test_this_repository_declares_the_directory_the_workflow_used_to_name():
     location = conftest.repository_config()["tests_dir"]
     assert location == ASSUMED
     assert (REPO_ROOT / location).is_dir()
-    assert {restriction.prefix for restriction
-            in story_coordinator.stage_restrictions(
-                conftest.shipped_workflow()["stages"])} == {location}
+    assert {restriction.prefix
+            for restriction in location_token_restrictions(location)} == {location}
+    assert location in {restriction.prefix for restriction
+                        in story_coordinator.stage_restrictions(
+                            conftest.shipped_workflow()["stages"])}
 
 
 def test_a_newly_initialized_target_declares_a_location_too():

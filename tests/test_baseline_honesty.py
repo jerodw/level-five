@@ -2449,6 +2449,20 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "destination_or_when, test_the_template_declares_both_placeholders "
         "and test_the_role_layer_says_the_documenters_output_is_part_of_the_"
         "subject read prompts/story-verifier.md, the template this repository ships",
+    "test_documenter_is_governed.py":
+        "the shipped workflows are the whole of its subject: story-154's claim "
+        "is that *this deployment's* documenter is confined to the configured "
+        "architecture documents under the revert check, in both definitions, "
+        "and that a correction pass under the shipped verifier's declaration "
+        "is granted the files its findings name. That cannot be asked of a "
+        "built workflow, which would only say back what the module declared. "
+        "Every run it drives goes through the shipped story workflow against "
+        "a target repository it builds, with a real suite the revert check's "
+        "verdict comes from; the documenter stage, the artifact names and the "
+        "correction-pass entry are derived from the definitions rather than "
+        "written. It resolves the two schemas the finding's required path is "
+        "declared in and the shipped verifier and documenter templates for "
+        "the same reason: what this repository ships is the claim",
     "test_escalation_summary.py":
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json, "

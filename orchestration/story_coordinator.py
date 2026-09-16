@@ -403,6 +403,19 @@ CREATE_RESTRICTION = "may_not_create"
 CONFINEMENT = "may_only_change"
 
 
+def _inside(prefix: str, path: str) -> bool:
+    """Whether `path` is at or beneath a confinement prefix.
+
+    A prefix ending in a slash is a directory and covers everything beneath it;
+    any other prefix is exactly one file and covers only the identical path.
+    The same slash convention `grant_covers` gives a granted value, so a
+    confinement and a grant agree about what a slash-less value means.
+    """
+    if prefix.endswith("/"):
+        return path.startswith(prefix)
+    return path == prefix
+
+
 @dataclass(frozen=True)
 class StageRestriction:
     """One declared restriction on where a stage may write, and what it means.
@@ -435,10 +448,20 @@ class StageRestriction:
         restriction claim a path only its sibling covers. A confinement is the
         opposite and has to read the group, because being confined to two
         directories means being governed only outside *both*.
+
+        A prefix not ending in a slash is exactly that file, not a directory
+        whose name it happens to be: `.harness/docs/ARCHITECTURE.md` confines a
+        stage to that one file, so `.harness/docs/ARCHITECTURE.md.bak` is
+        governed rather than read as inside it. That is the meaning `grant_covers`
+        already gives a slash-less value and the meaning the `:(exclude,top)`
+        pathspec the baseline capture builds already has; a prefix ending in a
+        slash keeps its directory meaning. A confinement decides `inside` per
+        prefix rather than by `startswith`, so a slash-less prefix admits only
+        the identical path.
         """
         if self.sense == CREATE_RESTRICTION:
             return path.startswith(self.prefix)
-        return not any(path.startswith(prefix) for prefix in self.prefixes)
+        return not any(_inside(prefix, path) for prefix in self.prefixes)
 
     @property
     def wording(self) -> str:
@@ -5933,6 +5956,48 @@ def correction_pass_result_file(artifact: str, number: int) -> str:
     return f"{stem}-{number}{dot}{extension}"
 
 
+def correction_pass_grants(
+    run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
+) -> list[str]:
+    """The files this pass's findings grant one stage to change for one attempt.
+
+    A correctable finding names a `path`, and naming it is the grant: at the
+    stage the pass enters, the exempt list the ownership and revert checks read
+    gains that path, so a finding grants its stage the one file it names for
+    this pass. The record is read off the run directory rather than passed in
+    memory, exactly as the prompt injection of the same record is, so what the
+    checks exempt and what the prompt reports are one thing.
+
+    The grant is bounded to the stage and the attempt the record names: a
+    documenter re-entered by a later retry in the same run runs at a later
+    attempt, so the attempt no longer matches and the grant is not inherited.
+    A record for another stage grants nothing here either. A run that has taken
+    no pass, a workflow that declares none, and a record that is absent or
+    unreadable each grant nothing.
+    """
+    if not state.correction_pass_count:
+        return []
+    declared = correction_pass_declaration(stages).get("result")
+    if not declared:
+        return []
+    record = run_dir / correction_pass_result_file(
+        declared, state.correction_pass_count
+    )
+    if not record.is_file():
+        return []
+    try:
+        parsed = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if parsed.get("stage") != stage_name or parsed.get("attempt") != attempt:
+        return []
+    return [
+        finding["path"]
+        for finding in parsed.get("findings", [])
+        if finding.get("path")
+    ]
+
+
 def correction_pass_statement(stage_name: str) -> str:
     """What the coordinator tells the stage a correction pass routes to.
 
@@ -9013,6 +9078,25 @@ def run_story(
                     kind="stage-exception-applied",
                     stage=name,
                 )
+            # A correction pass grants the stage it enters the files its
+            # findings name, for that pass alone. The verifier's verdict copied
+            # verbatim into the pass record is the grant, so what was granted is
+            # recorded by the act that granted it; the exempt list here is the
+            # story's own grants plus the path of every finding in the current
+            # pass record, when that record names this stage and this attempt.
+            # Each granted path is an event beside `stage exception applied` so
+            # the two read alike in events.log.
+            pass_grants = correction_pass_grants(
+                run_dir, stages, state, name, attempt
+            )
+            for granted in pass_grants:
+                append_event(
+                    run_dir,
+                    f"correction-pass grant applied: {name} may change {granted}",
+                    kind="correction-pass-grant-applied",
+                    stage=name,
+                )
+            exempt = exempt + pass_grants
             ownership = _ownership_violation(run_dir, record_name, enforced, exempt)
             if ownership:
                 return _escalate(

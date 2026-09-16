@@ -1483,7 +1483,7 @@ def test_the_scan_does_not_count_a_subscript_through_a_variable(tmp_path):
     # reads keys by name: exactly the named reads are counted, and neither of
     # the two variables the mapping is built through joins them.
     read = keys_read_in(REPO_ROOT / "orchestration" / "harness_config.py")
-    assert read == {"tests_dir", "history_dir", "logs_dir"}
+    assert read == {"tests_dir", "architecture_docs", "history_dir", "logs_dir"}
     assert not read & {"key", "current_list"}
 
 
@@ -2704,8 +2704,13 @@ def test_tests_dir_is_the_location_the_workflow_and_the_prompt_are_governed_at(
                                             run.config)
     restrictions = story_coordinator.stage_restrictions(workflow["stages"])
     assert restrictions
+    # Every prefix the run enforces is a configured value: the test location
+    # under the stages that declare it, and — since story-154 — the configured
+    # architecture documents under the stage confined to them. Nothing here
+    # is the directory the harness used to assume.
     assert {restriction.prefix for restriction in restrictions} == {
-        "xyzzy-checks/"}
+        "xyzzy-checks/", *run.config["architecture_docs"]}
+    assert "tests/" not in {restriction.prefix for restriction in restrictions}
     assert "xyzzy-checks/" in run.prompt_for("tester")
     # The definition itself names no directory: what the restriction resolves
     # to is the configuration's answer and nothing else.

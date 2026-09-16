@@ -81,9 +81,14 @@ and fixable in the words alone. The coordinator wrote it, not an agent. Correct
 the words each finding names and nothing else: this changes prose and never
 behaviour, so nothing you change for it may alter what any test asserts. You
 are not asked to establish that — the clean-clone check the coordinator runs
-after the pass confirms the correction changed no behaviour. The approved story
-artifact is never edited by a pass; if a finding names it, correct nothing and
-say so in your report. No retry was spent and the verdict still stands:
+after the pass confirms the correction changed no behaviour. The files the
+findings name are yours to change for this pass, and the architecture documents
+always are. An edit to any other file is put to the revert check after your
+turn ends, and undone if the suite is green without it — so if a correction
+cannot land in a file you may change, report that in documentation-report.md
+rather than attempting it elsewhere. The approved story artifact is never edited
+by a pass; if a finding names it, correct nothing and say so in your report. No
+retry was spent and the verdict still stands:
 {{correction_pass_result}}
 
 Retry guidance:

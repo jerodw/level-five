@@ -73,8 +73,12 @@
       "description": "Findings you judge correct but too small to fail the run, that one stage can fix mechanically. Its presence is the signal that a correction pass should run: there is no separate key saying whether this field means anything, for the same limitation retry_target, unfinishable_by_retry and guidance_outcomes.unmet already record above — this validator subset has no if/then and no dependentRequired, so a flag with a sibling payload has a state where the flag is set and the payload is missing, while presence-as-signal has none. A correctable finding is a correction to words alone — a comment, a docstring, a schema description, a document — and never to behaviour: nothing a correction pass changes may alter what any test asserts about the system, and the suite must pass unchanged across a pass. A finding whose repair would change behaviour is a blocking issue or belongs in unverified, not here. It is read only on a passing verdict, because a failed verdict already routes and the correction travels in the retry guidance it already writes. It is optional because almost every verdict has no such finding.",
       "items": {
         "type": "object",
-        "required": ["location", "finding", "correction", "category"],
+        "required": ["path", "location", "finding", "correction", "category"],
         "properties": {
+          "path": {
+            "type": "string",
+            "description": "The repository-relative file the words to correct are in. Naming it is what lets the stage the pass enters at change that file: at the documenter's post-stage checks the exempt list is the story's own grants plus the path of every finding in the current pass record, so a finding grants its stage the one file it names, for that pass alone. An edit to any file no finding named stays governed by the revert check. This is why a correctable finding without a path fails schema validation — the pass would run with no scope to change the words in."
+          },
           "location": {
             "type": "string",
             "description": "Where the wording is: the file, and the symbol, section or line within it that carries the words to correct."
