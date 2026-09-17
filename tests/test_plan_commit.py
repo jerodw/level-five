@@ -152,7 +152,16 @@ for relative, body in json.loads(os.environ.get("L5_STUB_WRITE", "[]")):
     path.write_text(body, encoding="utf-8")
 sys.stdout.write("stub session\\n")
 sys.stdout.flush()
-time.sleep(float(os.environ.get("L5_STUB_SLEEP", "0")))
+_sleep = float(os.environ.get("L5_STUB_SLEEP", "0"))
+if _sleep:
+    # Said immediately before the sleep, and flushed, so a caller waiting on
+    # it knows the session is *inside* the sleep rather than approaching it.
+    # A caller that waits on the artifact instead is waiting on something
+    # written before this line, and the runway it thinks it has is whatever
+    # is left of the sleep by the time it is scheduled again.
+    sys.stdout.write("stub sleeping\\n")
+    sys.stdout.flush()
+time.sleep(_sleep)
 sys.exit(int(os.environ.get("L5_STUB_EXIT", "0")))
 '''
 
@@ -1076,34 +1085,27 @@ def test_an_interrupt_still_commits_what_was_written_and_exits_130(
         # this invocation needs is racing the signal that follows.
         reply=conftest.APPROVES + conftest.DECLINES,
         L5_STUB_WRITE=writes((".harness/stories/story-900.yaml", artifact())),
-        L5_STUB_SLEEP=30,
+        # Longer than `drain`'s own deadline on purpose. The sleep is the
+        # window the signal has to land in, and a window shorter than the
+        # deadline lets a signal that never arrived look like a session that
+        # finished its work: the script exits 0 and the case reports `0 == 130`
+        # against a complete, untroubled log. Longer, a signal that does not
+        # arrive is drained to its deadline and reported as the hang it is.
+        L5_STUB_SLEEP=600,
     )
-    # Waited on in the worktree the session runs in, which since story-117 is
-    # where it writes: waiting on the invoked checkout's stories directory is
-    # waiting on a file that never appears, so the interrupt would be sent
-    # before the session had written anything to commit.
-    wait_for_the_planning_session_to_write(
-        planning, ".harness/stories/story-900.yaml")
-    # The one precondition this case cannot control: the interrupt has to reach
-    # an invocation that is still running. It is asked of the invocation rather
-    # than of a clock -- a machine that starved this process past the stub's
-    # own sleep and past everything the script does afterwards leaves nothing
-    # to interrupt, and that is a run that never reached this question rather
-    # than an answer to it.
-    if process.poll() is not None:
-        machine_load.inconclusive(
-            "the invocation had already finished by the time the signal was "
-            "to be sent, so the interrupt this case is about never happened")
-    try:
-        os.killpg(os.getpgid(process.pid), signal.SIGINT)
-    except ProcessLookupError:
-        machine_load.inconclusive(
-            "the invocation's process group was gone by the time the signal "
-            "was sent, so the interrupt this case is about never happened")
+    # Reached by what the session said rather than by what it wrote, on the
+    # idiom the case below already uses. The artifact is written *before* the
+    # stub prints and sleeps, so a caller waiting on it is told the session
+    # exists and nothing about whether it is still inside the sleep -- and a
+    # machine that deschedules this process between the two spends the runway
+    # the case depends on. This line is printed immediately before the sleep,
+    # so hearing it is the session saying it is in the window.
+    heard = wait_for_the_pty_to_say(master, "stub sleeping")
+    os.killpg(os.getpgid(process.pid), signal.SIGINT)
 
     status, output = drain(process, master)
 
-    assert status == 130, output
+    assert status == 130, heard + output
     assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
 
