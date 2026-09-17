@@ -1926,7 +1926,15 @@ def test_a_passing_verdict_acting_on_nothing_files_every_routed_finding(
     line = events[0]["message"]
     assert "2 routed" in line
     assert "0 acted on" in line
-    assert "2 held for the run's completion" in line
+    assert "2 left by it for the run's completion" in line
+    # `held` is this module's word for the findings about files *beside* the
+    # change, which the inspection summary and the filing at completion both
+    # count under that name. The accounting line is about the other set — what
+    # the verdict left of the findings routed to the story — and must not reach
+    # for the same word: a reader meets both lines together, and "1 held"
+    # followed by "0 held and 1 left by the verdict" gives them no way to tell
+    # that the word changed what it was about.
+    assert "held" not in line, line
     assert line in run.messages
     filed = filed_events(run)
     assert len(filed) == 1
@@ -1977,7 +1985,7 @@ def test_the_accounting_called_alone_reaches_no_model(
         (1, 0, 0)
     assert recorded["remainder_slugs"] == [OWN_FINDING["slug"]]
     events = (run_dir / "events.log").read_text(encoding="utf-8").splitlines()
-    assert any("1 held for the run's completion" in line for line in events)
+    assert any("1 left by it for the run's completion" in line for line in events)
 
     filed = story_inspection.file_at_completion(
         run_dir, target, config, harness, STORY_ID, WORKFLOW["stages"])
@@ -2119,7 +2127,7 @@ def test_the_inspection_line_and_the_accounting_line_agree_with_the_run(
     assert events[0]["acted_on"] == 0
     assert events[0]["filed"] == events[0]["dropped"] == 0
     assert f"{routed} routed" in events[0]["message"]
-    assert "2 held for the run's completion" in events[0]["message"]
+    assert "2 left by it for the run's completion" in events[0]["message"]
     # The filing at completion says what reached the queue: one held and two
     # left by the verdict, three filed.
     filed = filed_events(run)

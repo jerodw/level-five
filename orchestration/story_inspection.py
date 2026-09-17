@@ -1646,10 +1646,17 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     # finding declined on every attempt reaches the queue once.
     write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
                      acted_on=acted, remainder=remainder)
+    # "left by the verdict" rather than "held", because `held` is already this
+    # module's word for the *other* set — the findings about files beside the
+    # change, which `_summary` and the filing at completion both count under
+    # that name. A reader meets the two lines together, and one saying "1 held"
+    # where the next says "0 held and 1 left by the verdict" cannot tell that
+    # the word changed what it was about. Both sets are held for the
+    # completion; only one of them is what `held` counts.
     _say(run_dir,
          f"{label}: {len(routed)} routed on attempt {attempt}; "
-         f"{len(acted)} acted on by the verdict, {len(remainder)} held for "
-         f"the run's completion; 0 filed, 0 dropped",
+         f"{len(acted)} acted on by the verdict, {len(remainder)} left by it "
+         f"for the run's completion; 0 filed, 0 dropped",
          kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
          filed=0, dropped=0)
 
