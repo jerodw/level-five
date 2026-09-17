@@ -2327,10 +2327,14 @@ def inspection_artifacts(
     # The accounting artifact travels with the findings record it accounts
     # for, and for the same reason: its presence is what says an attempt was
     # accounted, so one left behind would have the next entry's attempt 1
-    # file nothing for findings it routed.
+    # account nothing for findings it routed. The held artifact travels with
+    # both, because the filing at completion files the highest attempt that
+    # holds one, and one left behind would have a resumed run file the
+    # previous entry's reading of a tree it no longer has.
     for pattern in (
         story_inspection.findings_artifact_file(declared, attempt),
         story_inspection.accounting_artifact_file(declared, attempt),
+        story_inspection.held_artifact_file(declared, attempt),
     ):
         names.extend(path.name for path in run_dir.glob(pattern))
     return sorted(names)
@@ -7877,6 +7881,20 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
             run_dir, target_root, config or {}, harness_root, state.story_id,
             stages or [],
         )
+    else:
+        # A workflow declaring an inspection inspected each attempt's change
+        # before its declaring stage and filed none of it: what those
+        # inspections held, and what the final verdict left unanswered, is
+        # filed here, once, from the final attempt — in the same position and
+        # for the same two reasons, below the commit so the durability of the
+        # work never waits on a queue and above the sweep so the same sweep
+        # drains what this filed. It must not refuse, for the reason its
+        # neighbour must not: it returns nothing and raises on no path, so
+        # nothing below it is conditional on it having worked.
+        story_inspection.file_at_completion(
+            run_dir, target_root, config or {}, harness_root, state.story_id,
+            stages or [],
+        )
     # The second opportunistic sweep, *after* the completion commit and not
     # before it. A sweep talks to a provider that may be slow or unreachable,
     # and nothing about the durability of the work may wait on that: the work
@@ -8817,7 +8835,8 @@ def run_story(
         # the story itself changed are handed to this stage as evidence while
         # the change can still be answered, instead of being filed as briefs
         # against whatever story comes next. Every other finding it makes is
-        # filed exactly as it was before this existed.
+        # held beside the findings record for the run's completion, where
+        # _complete files the final attempt's once through file_at_completion.
         #
         # Once per attempt, decided by whether the attempt has already written
         # its artifact rather than by a counter: a self-route or a correction
@@ -9690,7 +9709,8 @@ def run_story(
             # Every finding the pre-stage inspection routed to this story is
             # accounted for here, after the verdict is archived and before any
             # routing: what the verdict acted on is named by slug, and the rest
-            # is filed as briefs from the artifact already in the run directory.
+            # is recorded as the remainder in the accounting artifact and filed
+            # at the run's completion, not here.
             # Only where the stage declares an inspection, and read off that
             # declaration, so no artifact name is written here. The call is a
             # bare statement and returns nothing; what it recorded is read back

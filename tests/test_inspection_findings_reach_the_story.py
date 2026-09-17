@@ -75,6 +75,19 @@ true when written. Its absences carry their controls too:
   * "the coordinator branches on nothing the accounting wrote" sits beside a
     planted branch on the same name, which the same reading reports.
 
+story-156 moves every filing to the run's completion. A finding beside the
+change is *held* beside the attempt's findings record, the accounting after
+the verdict records the remainder and files nothing, and `file_at_completion`
+files the final attempt's held findings and remainder once, after the
+completion commit. The cases below that read the queue therefore read it at
+two instants — as the judging stage saw it, which is empty of everything the
+run's inspections found, and as the run left it, which holds what the final
+attempt held and its verdict left — and the case that pinned a retry's
+re-found finding being dropped as already queued now pins the reverse: it is
+routed to the verifier again. What the split, the once-per-attempt rule and
+the resume hold is unchanged. `tests/test_one_defect_found_on_several_
+attempts_is_filed_once.py` holds the criterion itself.
+
 Nothing here reaches a model. `agent_runner.run_agent` is replaced for every
 test in this module by a fake that fails the test if it is called without
 having been installed deliberately, and the stages run through a fake runner
@@ -93,6 +106,7 @@ from __future__ import annotations
 import ast
 import inspect as inspect_module
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -272,6 +286,13 @@ def build_target(root: Path, *, workflow: str = WORKFLOW["name"],
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+    # What a deployed target ignores, so a record written after the completion
+    # commit — which since story-156 the filing at completion writes into the
+    # run's own events.log — reads as it reads in a real target rather than as
+    # a tracked run directory dirtying the tree.
+    (root / ".gitignore").write_text(
+        f".harness/runs/\n.harness/logs/\n{'/'.join(outbox.QUEUE_DIR)}\n",
+        encoding="utf-8")
 
     conftest.init_repository(root, SETUP_SUBJECT)
     return root
@@ -284,8 +305,14 @@ def harness(tmp_path) -> Path:
     return materialize(WORKFLOW, tmp_path / "pre-stage-inspection-harness")
 
 
-def materialize(workflow: dict, root: Path) -> Path:
-    built = conftest.materialize_workflow(workflow, root, prompts=PROMPTS)
+def materialize(workflow: dict, root: Path, *, rules: dict | None = None) -> Path:
+    """The built workflow and this module's Inspector template, written where
+    a run finds them. `rules` is the harness's execution rules, linked at the
+    shipped ones unless a caller owns its own — a module whose runs must reach
+    a particular attempt names its own ceiling rather than reading the shipped
+    allowance."""
+    built = conftest.materialize_workflow(workflow, root, prompts=PROMPTS,
+                                          rules=rules)
     (built / "prompts" / inspection.INSPECTOR_PROMPT).write_text(
         "# an Inspector template this module wrote\n\n"
         "{{framing}}\n\n{{scope_paths}}\n\n{{findings_path}}\n",
@@ -950,9 +977,9 @@ def filed_markers(run: Run, *, at_judging: bool = False) -> list[str]:
     for.
 
     `at_judging` reads the queue as the judging stage first saw it rather than
-    as the run left it: since story-152 a routed finding the verdict does not
-    act on is filed after the verdict, so a case about where a finding goes
-    *before* the verdict has to read the earlier instant.
+    as the run left it: since story-156 nothing an inspection finds reaches
+    the queue until the run completes, so the earlier instant holds none of it
+    and the later one holds what the final attempt held and its verdict left.
     """
     held = run.runner.queue_at_judging[0] if at_judging else run.queue
     entries = [json.dumps(entry) for entry in held]
@@ -1026,15 +1053,26 @@ def test_a_finding_about_a_file_the_story_created_is_answered_by_the_story(
     assert run.runner.queue_at_judging == [[]]
 
 
+def held_record(run: Run, attempt: int = 1) -> dict:
+    """What this attempt's inspection held for the run's completion, through
+    the function that writes the name."""
+    return json.loads((run.run_dir / story_inspection.held_artifact_file(
+        FINDINGS_ARTIFACT, attempt)).read_text(encoding="utf-8"))
+
+
 def test_a_finding_beside_the_change_is_filed_and_is_not_in_the_artifact(
         driven):
     """The control the absence above needs: under the same run, with the same
     floor, the same cap and the same queue, a finding whose paths name nothing
-    the story changed reaches the queue and reaches the artifact not at all."""
+    the story changed reaches the artifact not at all — it is held beside it,
+    the judge sees no queue entry for it, and once the run completes it is in
+    the queue."""
     run = driven(findings=[SIBLING_FINDING])
 
     assert run.findings_record()["findings"] == []
-    assert filed_markers(run, at_judging=True) == [SIBLING_FINDING["body"]]
+    assert held_record(run)["findings"] == [SIBLING_FINDING]
+    assert filed_markers(run, at_judging=True) == []
+    assert filed_markers(run) == [SIBLING_FINDING["body"]]
 
 
 def test_a_finding_naming_a_changed_file_and_one_beside_it_reaches_the_stage(
@@ -1054,7 +1092,8 @@ def test_the_two_kinds_are_separated_within_one_invocation(driven):
 
     record = run.findings_record()
     assert record["findings"] == [OWN_FINDING, BOTH_FINDING]
-    assert filed_markers(run, at_judging=True) == [SIBLING_FINDING["body"]]
+    assert held_record(run)["findings"] == [SIBLING_FINDING]
+    assert filed_markers(run, at_judging=True) == []
 
 
 def test_the_summary_says_how_many_were_routed_to_the_story(driven):
@@ -1068,7 +1107,10 @@ def test_the_summary_says_how_many_were_routed_to_the_story(driven):
     summaries = [line for line in run.messages if "finding(s)" in line]
     assert len(summaries) == 1, run.messages
     assert "2 finding(s)" in summaries[0]
-    assert "1 filed" in summaries[0]
+    # Nothing is filed until the run completes, and the line says so in words
+    # true when it is written: the sibling finding is held, not filed.
+    assert "0 filed" in summaries[0]
+    assert "held for the run's completion: 1" in summaries[0]
     assert "routed to this story: 1" in summaries[0]
     assert "answered by the story" not in summaries[0]
 
@@ -1518,14 +1560,30 @@ def test_the_pre_stage_inspection_makes_no_commit_of_its_own(driven):
 
 def test_the_record_it_wrote_is_carried_by_the_runs_completion_commit(driven):
     """What the absence above costs nothing: the record is durable anyway,
-    because the completion commit stages the tree the inspection wrote into."""
+    because the completion commit stages the tree the inspection wrote into.
+
+    The completion commit is resolved by its shape, through the same
+    recognition the pre-flight uses, rather than read at HEAD: since
+    story-156 a run with a remainder makes a filing commit on top of the
+    completion commit, and that commit stages the record path by name, so an
+    assertion over HEAD would hold for the filing commit's reason and not for
+    the one this test claims.
+    """
     run = driven(findings=[OWN_FINDING])
 
     assert len(run.history_records) == 1
     recorded = story_inspection.record_paths(run.tree, {})
     assert recorded, "this target routes the kind to no log at all"
+    completions = story_coordinator.completion_commits(
+        run.tree, "HEAD", STORY_ID)
+    assert len(completions) == 1, completions
+    completion = completions[0].split(" ", 1)[0]
+    subject = _git(run.tree, "log", "-1", "--format=%s", completion
+                   ).stdout.strip()
+    assert subject != story_inspection.FILED_COMMIT_SUBJECT.format(
+        story_id=STORY_ID)
     committed = _git(run.tree, "show", "--name-only", "--format=",
-                     "HEAD").stdout.split()
+                     completion).stdout.split()
     assert set(recorded) <= set(committed), (recorded, committed)
     assert _git(run.tree, "status", "--porcelain").stdout.strip() == ""
 
@@ -1647,6 +1705,11 @@ def events_of_kind(run: Run, kind: str) -> list[dict]:
 
 def accounting_events(run: Run) -> list[dict]:
     return events_of_kind(run, story_inspection.ACCOUNTING_EVENT)
+
+
+def filed_events(run: Run) -> list[dict]:
+    """The run's records of the filing made at completion."""
+    return events_of_kind(run, story_inspection.FILED_EVENT)
 
 
 def accounting_records(run: Run) -> list[dict]:
@@ -1846,19 +1909,29 @@ def test_a_passing_verdict_acting_on_nothing_files_every_routed_finding(
     assert recorded["attempt"] == 1
     assert recorded["routed"] == 2
     assert recorded["acted_on"] == 0
-    assert recorded["filed"] == 2
+    # The accounting records the remainder and files nothing: since story-156
+    # the filing happens once, at completion, from the final attempt.
+    assert recorded["remainder"] == 2
+    assert sorted(recorded["remainder_slugs"]) == sorted(
+        [OWN_FINDING["slug"], BOTH_FINDING["slug"]])
+    assert recorded["filed"] == 0
     assert recorded["dropped"] == 0
 
     events = accounting_events(run)
     assert len(events) == 1
     assert events[0]["routed"] == 2
     assert events[0]["acted_on"] == 0
-    assert events[0]["filed"] == 2
+    assert events[0]["filed"] == 0
+    assert events[0]["dropped"] == 0
     line = events[0]["message"]
     assert "2 routed" in line
     assert "0 acted on" in line
-    assert "2 filed" in line
+    assert "2 held for the run's completion" in line
     assert line in run.messages
+    filed = filed_events(run)
+    assert len(filed) == 1
+    assert filed[0]["filed"] == 2
+    assert "2 filed" in filed[0]["message"]
     # Filed through the one call every producer files through, with both
     # findings in one filing.
     assert filings_of(filings, OWN_FINDING) == 1
@@ -1880,9 +1953,11 @@ def test_the_accounting_files_from_the_artifact_and_invokes_no_inspector(
 
 def test_the_accounting_called_alone_reaches_no_model(
         target, harness, tmp_path, no_model):
-    """The same, asked of the entry point directly with the guard the autouse
-    fixture installed still in place: being called at all is the failure, and
-    the finding reaches the queue anyway from the artifact alone."""
+    """The same, asked of the two entry points directly with the guard the
+    autouse fixture installed still in place: being called at all is the
+    failure. The accounting records the remainder and reaches no queue, and
+    the filing at completion then reaches the queue from the artifacts
+    alone."""
     run_dir = tmp_path / "accounted-run"
     run_dir.mkdir()
     story_inspection.write_findings(run_dir, FINDINGS_ARTIFACT, 1, STORY_ID,
@@ -1895,15 +1970,25 @@ def test_the_accounting_called_alone_reaches_no_model(
 
     assert answered is None
     assert no_model.calls == 0
-    entries = [json.dumps(json.loads(path.read_text(encoding="utf-8")))
-               for path in outbox.entry_files(outbox.queue_dir(target))]
-    assert any(OWN_FINDING["body"] in entry for entry in entries), entries
+    assert outbox.entry_files(outbox.queue_dir(target)) == []
     recorded = json.loads((run_dir / story_inspection.accounting_artifact_file(
         FINDINGS_ARTIFACT, 1)).read_text(encoding="utf-8"))
     assert (recorded["routed"], recorded["acted_on"], recorded["filed"]) == \
-        (1, 0, 1)
-    assert any("1 filed" in line for line in
-               (run_dir / "events.log").read_text(encoding="utf-8").splitlines())
+        (1, 0, 0)
+    assert recorded["remainder_slugs"] == [OWN_FINDING["slug"]]
+    events = (run_dir / "events.log").read_text(encoding="utf-8").splitlines()
+    assert any("1 held for the run's completion" in line for line in events)
+
+    filed = story_inspection.file_at_completion(
+        run_dir, target, config, harness, STORY_ID, WORKFLOW["stages"])
+
+    assert filed is None
+    assert no_model.calls == 0
+    entries = [json.dumps(json.loads(path.read_text(encoding="utf-8")))
+               for path in outbox.entry_files(outbox.queue_dir(target))]
+    assert any(OWN_FINDING["body"] in entry for entry in entries), entries
+    events = (run_dir / "events.log").read_text(encoding="utf-8").splitlines()
+    assert any("1 filed" in line for line in events)
 
 
 # --------------------------------------------------------------------------
@@ -1933,19 +2018,19 @@ def test_a_routed_finding_the_verdict_names_by_file_alone_is_filed(
         driven, filings):
     """The control the absence above needs: the same run with the correctable
     finding naming the file and no slug — the fixture's own — and the routed
-    finding is filed after the first verdict, so the judge's second entry
-    already sees it in the queue."""
+    finding is the remainder, held after the first verdict and filed once the
+    run completes; the judge's second entry still sees an empty queue."""
     run = driven(findings=[OWN_FINDING],
                  verdicts=[passing_with(CORRECTABLE_FINDING), PASS])
 
     assert run.code == 0
     recorded = accounting(run)
     assert (recorded["routed"], recorded["acted_on"], recorded["filed"]) == \
-        (1, 0, 1)
+        (1, 0, 0)
+    assert recorded["remainder_slugs"] == [OWN_FINDING["slug"]]
     assert routed_markers(run) == [OWN_FINDING["body"]]
     assert filings_of(filings, OWN_FINDING) == 1
-    seen = [json.dumps(entry) for entry in run.runner.queue_at_judging[1]]
-    assert any(OWN_FINDING["body"] in entry for entry in seen)
+    assert run.runner.queue_at_judging == [[], []]
 
 
 def test_a_repairable_finding_naming_the_slug_is_acting_on_the_finding(
@@ -1978,8 +2063,8 @@ def test_a_repairable_finding_naming_the_file_alone_leaves_it_filed(
 
     assert run.code == 0
     recorded = accounting(run)
-    assert (recorded["routed"], recorded["acted_on"], recorded["filed"]) == \
-        (1, 0, 1)
+    assert (recorded["routed"], recorded["acted_on"], recorded["remainder"]) \
+        == (1, 0, 1)
     assert routed_markers(run) == [OWN_FINDING["body"]]
     assert filings_of(filings, OWN_FINDING) == 1
 
@@ -1987,16 +2072,18 @@ def test_a_repairable_finding_naming_the_file_alone_leaves_it_filed(
 def test_a_blocking_issue_naming_the_slug_is_acting_on_the_finding(driven):
     """The other kind of entry the rule reads. A failed verdict whose blocking
     issue names the routed finding's slug acts on it on attempt 1, so nothing
-    is filed then; attempt 2 inspects again and its passing verdict names
-    nothing, so the finding is filed under attempt 2's accounting."""
+    is held then; attempt 2 inspects again and its passing verdict names
+    nothing, so the finding is attempt 2's remainder and is filed at the run's
+    completion."""
     run = driven(findings=[OWN_FINDING],
                  verdicts=[failing_naming(OWN_FINDING), PASS])
 
     assert run.code == 0
     assert run.state["retry_count"] == 1
     first, second = accounting(run, 1), accounting(run, 2)
-    assert (first["routed"], first["acted_on"], first["filed"]) == (1, 1, 0)
-    assert (second["routed"], second["acted_on"], second["filed"]) == (1, 0, 1)
+    assert (first["routed"], first["acted_on"], first["remainder"]) == (1, 1, 0)
+    assert (second["routed"], second["acted_on"], second["remainder"]) == \
+        (1, 0, 1)
     # The judge's second entry, on attempt 2, saw the queue still empty.
     assert run.runner.queue_at_judging == [[], []]
     assert routed_markers(run) == [OWN_FINDING["body"]]
@@ -2021,7 +2108,8 @@ def test_the_inspection_line_and_the_accounting_line_agree_with_the_run(
     assert routed == 2
     assert f"routed to this story: {routed}" in inspected
     assert "3 finding(s)" in inspected
-    assert "1 filed" in inspected
+    assert "0 filed" in inspected
+    assert "held for the run's completion: 1" in inspected
     assert "answered by the story" not in inspected
     assert not any("answered by the story" in line for line in run.messages)
 
@@ -2029,14 +2117,27 @@ def test_the_inspection_line_and_the_accounting_line_agree_with_the_run(
     assert len(events) == 1
     assert events[0]["routed"] == routed
     assert events[0]["acted_on"] == 0
-    assert events[0]["filed"] == len(routed_markers(run)) == 2
+    assert events[0]["filed"] == events[0]["dropped"] == 0
     assert f"{routed} routed" in events[0]["message"]
-    assert "2 filed" in events[0]["message"]
-    # The outbox holds every finding the inspection made: one filed at
-    # inspection time and two after the verdict, with no third place.
+    assert "2 held for the run's completion" in events[0]["message"]
+    # The filing at completion says what reached the queue: one held and two
+    # left by the verdict, three filed.
+    filed = filed_events(run)
+    assert len(filed) == 1
+    assert filed[0]["filed"] == 3
+    assert "1 held and 2 left by the verdict" in filed[0]["message"]
+    assert "3 filed" in filed[0]["message"]
+    assert len(routed_markers(run)) == 2
+    # The outbox holds every finding the inspection made, all of them filed
+    # at completion and none before it, with no third place.
     assert filed_markers(run) == sorted(
         [OWN_FINDING["body"], BOTH_FINDING["body"], SIBLING_FINDING["body"]])
-    assert filed_markers(run, at_judging=True) == [SIBLING_FINDING["body"]]
+    assert filed_markers(run, at_judging=True) == []
+    # No line written before the run completed says a finding was filed:
+    # every "filed" a line before the completion filing carries is a zero.
+    before = run.messages[:run.messages.index(filed[0]["message"])]
+    assert not any(re.search(r"\b[1-9]\d* filed", line) for line in before), \
+        before
 
 
 def test_a_run_that_routed_nothing_accounts_nothing(harness, tmp_path):
@@ -2069,9 +2170,10 @@ def test_one_attempt_is_accounted_once_across_a_correction_pass(
         driven, filings):
     """The judging stage is entered twice inside attempt 1 — once with a
     verdict that routes a correction pass and once with the clean verdict it
-    returns to — and the routed finding is filed exactly once, at the first
-    verdict rather than waiting on the second, with one accounting artifact,
-    one event and one cross-run record for the attempt."""
+    returns to — and the attempt is accounted exactly once, at the first
+    verdict rather than again on the second, with one accounting artifact,
+    one event and one cross-run record for the attempt; the routed finding is
+    then filed exactly once, at completion."""
     run = driven(findings=[OWN_FINDING],
                  verdicts=[passing_with(CORRECTABLE_FINDING), PASS])
 
@@ -2083,9 +2185,10 @@ def test_one_attempt_is_accounted_once_across_a_correction_pass(
     assert len(accounting_events(run)) == 1
     assert accounting(run, 1)["attempt"] == 1
     assert len(accounting_records(run)) == 1
-    # Filed at the first verdict: the judge's second entry saw it queued.
-    seen = [json.dumps(entry) for entry in run.runner.queue_at_judging[1]]
-    assert any(OWN_FINDING["body"] in entry for entry in seen)
+    # Held at the first verdict: the judge's second entry saw an empty queue,
+    # and the run left the finding in it.
+    assert run.runner.queue_at_judging == [[], []]
+    assert routed_markers(run) == [OWN_FINDING["body"]]
 
 
 def test_a_retry_is_accounted_again_under_the_next_attempts_number(
@@ -2094,10 +2197,9 @@ def test_a_retry_is_accounted_again_under_the_next_attempts_number(
     accounted again, under a name of its own — two artifacts, two events and
     two records, one per attempt.
 
-    The first verdict acts on the finding by slug, so attempt 1 files nothing
-    and attempt 2 re-finds the same finding rather than seeing it already
-    queued; attempt 2's clean verdict then files it, so the one filing is
-    attempt 2's.
+    The first verdict acts on the finding by slug, so attempt 1 holds nothing
+    and attempt 2 re-finds the same finding; attempt 2's clean verdict leaves
+    it as the remainder, and the one filing — at completion — is attempt 2's.
     """
     run = driven(findings=[OWN_FINDING],
                  verdicts=[failing_naming(OWN_FINDING), PASS])
@@ -2109,30 +2211,37 @@ def test_a_retry_is_accounted_again_under_the_next_attempts_number(
         [accounting_path(run, 1).name, accounting_path(run, 2).name])
     assert accounting(run, 1)["attempt"] == 1
     assert accounting(run, 2)["attempt"] == 2
-    assert [one["filed"] for one in (accounting(run, 1), accounting(run, 2))] \
+    assert [one["remainder"] for one in (accounting(run, 1), accounting(run, 2))] \
         == [0, 1]
+    assert [one["filed"] for one in (accounting(run, 1), accounting(run, 2))] \
+        == [0, 0]
     assert filings_of(filings, OWN_FINDING) == 1
+    assert "attempt 2" in the_one(run, story_inspection.FILED_EVENT)
     assert len(accounting_events(run)) == 2
     assert len(accounting_records(run)) == 2
 
 
-def test_a_retry_re_finding_a_finding_the_last_attempt_filed_files_it_once(
+def test_a_retry_re_finding_a_finding_the_last_attempt_left_files_it_once(
         driven, filings):
-    """What a retry after a filing looks like: attempt 1's verdict names the
-    file alone, so the finding is filed then; attempt 2's inspection re-finds
-    it, drops it as already queued before the partition — the dedupe every
-    producer files through — and routes nothing, so attempt 2 is not
-    accounted and the queue holds the finding once."""
+    """What a retry after a declined finding looks like — the property
+    story-156 reverses. Attempt 1's verdict names the file alone, so the
+    finding is the remainder and nothing is queued; attempt 2's inspection
+    re-finds it and, with nothing in the queue to drop it against, routes it
+    to the verifier again, so attempt 2 is accounted for it too. The one
+    filing is at completion, and the queue holds the finding once."""
     run = driven(findings=[OWN_FINDING],
                  verdicts=[failing_into(RETRY_CATEGORY), PASS])
 
     assert run.code == 0
     assert run.state["retry_count"] == 1
-    assert accounting(run, 1)["filed"] == 1
-    assert run.findings_record(2)["findings"] == []
-    assert any(inspection.ALREADY_QUEUED in line for line in run.messages), \
+    assert accounting(run, 1)["remainder"] == 1
+    assert accounting(run, 1)["filed"] == 0
+    assert run.findings_record(2)["findings"] == [OWN_FINDING]
+    assert not any(inspection.ALREADY_QUEUED in line for line in run.messages), \
         run.messages
-    assert accounting_files(run) == [accounting_path(run, 1).name]
+    assert accounting_files(run) == sorted(
+        [accounting_path(run, 1).name, accounting_path(run, 2).name])
+    assert accounting(run, 2)["remainder"] == 1
     assert filings_of(filings, OWN_FINDING) == 1
     assert routed_markers(run) == [OWN_FINDING["body"]]
     assert sum(1 for entry in run.queue
@@ -2168,12 +2277,15 @@ def test_a_resume_carries_the_accounting_with_the_findings_record():
         run_dir = Path(temporary)
         for name in (story_inspection.findings_artifact_file(FINDINGS_ARTIFACT, 1),
                      story_inspection.accounting_artifact_file(
-                         FINDINGS_ARTIFACT, 1)):
+                         FINDINGS_ARTIFACT, 1),
+                     story_inspection.held_artifact_file(FINDINGS_ARTIFACT, 1)):
             (run_dir / name).write_text("{}", encoding="utf-8")
 
         carried = story_coordinator.inspection_artifacts(
             run_dir, WORKFLOW["stages"], "*")
         assert story_inspection.accounting_artifact_file(
+            FINDINGS_ARTIFACT, 1) in carried
+        assert story_inspection.held_artifact_file(
             FINDINGS_ARTIFACT, 1) in carried
         assert set(carried) <= set(
             story_coordinator.entry_artifacts(run_dir, WORKFLOW["stages"]))
@@ -2307,10 +2419,14 @@ def test_the_log_receives_one_accounting_record_per_accounted_attempt(driven):
         assert record["dropped"] == 0
         for absent in ("cost_usd", "invocations", "mode", "dedupe_ran"):
             assert absent not in record, record
-    # Attempt 1's verdict acted on it; attempt 2's did not, so it was filed —
-    # which is what a reader of this log can now tell apart.
+    # Attempt 1's verdict acted on it; attempt 2's did not, so it was held —
+    # which is what a reader of this log can now tell apart — and the run's
+    # one filing record says it was filed at completion.
     assert [(one["acted_on"], one["filed"]) for one in records] == \
-        [(1, 0), (0, 1)]
+        [(1, 0), (0, 0)]
+    filed = [one for one in run.log_records
+             if "routed" not in one and "invocations" not in one]
+    assert [one["filed"] for one in filed] == [1]
     assert schema_validator.validate(
         records, CROSS_RUN_SCHEMA["properties"][INSPECTION_LOG]) == []
     # And the inspection's own records carry what the accounting's do not,

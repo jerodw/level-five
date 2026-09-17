@@ -48,6 +48,7 @@
           "story-completed",
           "inspection-completed",
           "inspection-accounted",
+          "inspection-filed",
           "note"
         ]
       },
@@ -96,11 +97,11 @@
       },
       "filed": {
         "type": "integer",
-        "description": "How many of those findings reached the outbox as briefs. Absent on every entry that is not an inspection."
+        "description": "How many of those findings reached the outbox as briefs. Absent on every entry that is not an inspection, an accounting or the filing a run makes at completion. On an inspection made ahead of the judging stage, and on the accounting written after its verdict, it is zero because nothing an inspection finds during a run reaches the queue until the run completes; the inspection-filed entry is where a count above zero is written."
       },
       "dropped": {
         "type": "integer",
-        "description": "How many were dropped, for every reason together: already filed by either dedupe source, already queued, malformed, naming a workflow the harness does not define, past the brief cap, or lost by the queue. Which way each went is in the entry's own message, where each reason is named with how many went that way. Absent on every entry that is not an inspection."
+        "description": "How many were dropped, for every reason together: already filed by either dedupe source, already queued, malformed, naming a workflow the harness does not define, beneath the severity floor, past the brief cap, or lost by the queue. Which way each went is in the entry's own message, where each reason is named with how many went that way. Absent on every entry that is not an inspection, an accounting or the filing at completion; zero on an accounting entry, which files and so drops nothing."
       },
       "mode": {
         "type": "string",
@@ -125,11 +126,11 @@
       },
       "routed": {
         "type": "integer",
-        "description": "How many findings the pre-stage inspection routed to the story on the attempt this entry accounts for — the findings about the story's own change, handed to the stage that judges it. Present on an accounting entry only, the one written after that attempt's verdict, and absent on every other entry including the inspection's own, whose message says the same count in words true when it was written. On an accounting entry `filed` and `dropped` are what became of the routed findings the verdict did not act on: the accounting files those as briefs from the artifact the inspection wrote, with no invocation of its own, which is why an accounting entry carries no cost_usd, no invocations and no dedupe_ran."
+        "description": "How many findings the pre-stage inspection routed to the story on the attempt this entry accounts for — the findings about the story's own change, handed to the stage that judges it. Present on an accounting entry only, the one written after that attempt's verdict, and absent on every other entry including the inspection's own, whose message says the same count in words true when it was written. The routed findings the verdict did not act on are the remainder, held for the run's completion: the accounting files nothing and carries `filed` and `dropped` at zero, its message says how many were held, and the inspection-filed entry written at completion says what became of the final attempt's. An accounting entry carries no cost_usd, no invocations and no dedupe_ran, because it made no invocation."
       },
       "acted_on": {
         "type": "integer",
-        "description": "How many of the routed findings the verdict acted on, decided by one rule: the verdict named the finding's slug in the location of a blocking issue or a correctable finding. A finding named by file alone is not acted on and is filed. Present on an accounting entry even where it is zero, because none acted on is an answer, and absent on every other entry."
+        "description": "How many of the routed findings the verdict acted on, decided by one rule: the verdict named the finding's slug in the location of a blocking issue or a correctable finding. A finding named by file alone is not acted on and is held. Present on an accounting entry even where it is zero, because none acted on is an answer, and absent on every other entry. The inspection-filed entry is the record of the filing a run makes at completion: the final attempt's held findings and the remainder its verdict left, filed once through the same call every other producer files through, with each drop reason named with its count in the message. It carries `filed` and `dropped` and nothing else an inspection carries. It is written where there was something to file, and also where the filing could not run, in which case it carries `filed` and `dropped` at zero and its message says it could not run."
       }
     }
   }

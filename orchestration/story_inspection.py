@@ -63,10 +63,28 @@ module made.
 **A finding routed to the story is accounted for after the verdict.** The
 pre-stage inspection hands the findings about the story's own change to the
 stage that judges it, and the verdict names what it acted on by slug. Every
-routed finding the verdict did not name is filed as a brief from the artifact
-already in the run directory — through the same filing call, with no second
-invocation — once per attempt, and an event says how many were acted on, filed
-and dropped. Declining a finding stays correct; declining no longer deletes it.
+routed finding the verdict did not name is the remainder, recorded once per
+attempt beside the routed and acted-on slugs, and an event says how many were
+acted on and how many were held. Declining a finding stays correct; declining
+no longer deletes it.
+
+**Nothing an inspection finds during a run reaches the queue until the run
+completes.** A run of several attempts inspects once per attempt, and a
+defect re-found on a later attempt is the Inspector's second reading of it —
+under a slug, a category and a path set rephrased the way a title is — so a
+brief filed per attempt was filed once per attempt under keys nothing could
+match. The pre-stage inspection therefore writes the findings that are not
+about the change to a held artifact beside its findings record instead of
+filing them, the accounting after the verdict files nothing and records the
+remainder, and when the run completes `file_at_completion` files the final
+attempt's held findings and its remainder through the one filing call, between
+the completion commit and the sweep so the same sweep drains them. The final
+attempt's inspection read the code that shipped, so a run of three attempts
+files exactly what a run of one attempt over that same code would have filed.
+Two consequences are accepted: a run that escalates and is abandoned files
+none of what it held, and the verifier is handed a re-found finding on every
+attempt rather than once, because nothing is queued mid-run for the retry's
+inspection to drop it against.
 """
 from __future__ import annotations
 
@@ -100,6 +118,13 @@ MODE = inspection.MODE_NARROW
 #: inspections, and this line says what became of what one of them routed.
 #: Which cross-run log it reaches is the declaration's to say, as above.
 ACCOUNTING_EVENT = "inspection-accounted"
+
+#: The kind the filing a run makes at completion is appended under: the one
+#: moment anything an inspection found during the run reaches the queue. It is
+#: neither an inspection nor an accounting of one, so a reader counting either
+#: does not count it; which cross-run log it reaches is the declaration's to
+#: say, as above.
+FILED_EVENT = "inspection-filed"
 
 #: What a post-story inspection's cost is recorded as in that run's cost.json.
 #: It is not an attempt at a stage, so it carries no attempt number of its own
@@ -144,6 +169,14 @@ PRE_STAGE_FRAMING = (
 #: matches neither the completion shape `completion_commits` reads nor the
 #: escalation shape `_head_escalated` reads nor the pause shape beside it.
 COMMIT_SUBJECT = "l5 recorded a post-story inspection of {story_id}"
+
+#: The subject the commit of the completion filing's record carries, on the
+#: same terms: it is not the post-story inspection's subject, because a run
+#: under a workflow declaring an inspection makes no post-story inspection and
+#: a reader searching a branch for one must not find this instead.
+FILED_COMMIT_SUBJECT = (
+    "l5 recorded the briefs filed at the completion of {story_id}"
+)
 
 #: The drop reasons that name something other than a finding the invocation
 #: produced, so a count of findings does not count them.
@@ -414,10 +447,12 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
     before the field existed, and a record that cannot say which is a record
     nobody can query for the runs that inspected without dedupe.
 
-    `kind` defaults to the inspection's own event and is overridden by the one
-    other record this module writes, the accounting after the verdict, which
+    `kind` defaults to the inspection's own event and is overridden by the two
+    other records this module writes: the accounting after the verdict, which
     carries `routed` and `acted_on` and no cost, no invocation count and no
-    dedupe verdict — it made no invocation and asked no query.
+    dedupe verdict — it made no invocation and asked no query — and the filing
+    at completion under FILED_EVENT, which carries `filed` and `dropped` and
+    nothing else.
 
     Imported inside the body, the idiom the queue module already uses for its
     own coordinator import: the coordinator imports this module, and a
@@ -591,7 +626,8 @@ def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
         return ()
 
 
-def commit_record(target_root: Path, config: dict, story_id: str) -> None:
+def commit_record(target_root: Path, config: dict, story_id: str,
+                  subject: str = COMMIT_SUBJECT) -> None:
     """Commit the record this inspection wrote, and only the record.
 
     The paths are staged **by name** and never with `git add -A`, so an edit
@@ -601,6 +637,10 @@ def commit_record(target_root: Path, config: dict, story_id: str) -> None:
     path gains no commit — and the subject carries no completion marker and
     matches neither the completion, escalation nor pause shape, so nothing
     that reads a branch for one of those reads this.
+
+    `subject` is the post-story inspection's by default; the completion
+    filing passes its own, so the two records a branch can carry are told
+    apart by what each commit says about itself.
     """
     paths = record_paths(target_root, config)
     if not paths:
@@ -620,7 +660,7 @@ def commit_record(target_root: Path, config: dict, story_id: str) -> None:
         # commit here would be a commit about a record that does not exist.
         return
     subprocess.run(  # noqa: S603 - a fixed argument list
-        [*argv, "commit", "-m", COMMIT_SUBJECT.format(story_id=story_id),
+        [*argv, "commit", "-m", subject.format(story_id=story_id),
          "--", *paths],
         capture_output=True, text=True,
     )
@@ -664,6 +704,59 @@ def accounting_artifact_file(artifact: str, attempt: int) -> str:
     them.
     """
     return f"accounting-of-{findings_artifact_file(artifact, attempt)}"
+
+
+def held_artifact_file(artifact: str, attempt: int) -> str:
+    """The name one attempt's held findings are written under.
+
+    The findings that are *not* about the story's own change — what the
+    post-story mode filed as briefs — held beside the attempt's findings
+    record rather than filed, because nothing an inspection finds during a run
+    reaches the queue until the run completes. Keyed by the attempt for the
+    reason the findings artifact is, and prefixed the way the accounting's
+    name is, so the findings artifact's own attempt-wildcarded glob does not
+    match it.
+    """
+    return f"held-from-{findings_artifact_file(artifact, attempt)}"
+
+
+def write_held(run_dir: Path, artifact: str, attempt: int, story_id: str,
+               findings=(), area_suggestions=()) -> None:
+    """Write the findings the inspection held for the run's completion.
+
+    As the Inspector wrote them, under the findings record's shape, so the
+    filing at completion files exactly what a filing at inspection time would
+    have filed from the same reading. Written on every path on which the
+    inspection ran, empty or not: the highest attempt holding one is the
+    final attempt whose inspection read the tree, and an empty one on attempt
+    two is what supersedes a full one on attempt one.
+
+    The Inspector's area suggestions travel with the findings, because the
+    line saying a filed brief named no area is written where the brief is
+    filed, and that is now the run's completion.
+
+    Guarded like everything else here.
+    """
+    try:
+        path = Path(run_dir) / held_artifact_file(artifact, attempt)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "story_id": story_id,
+                    "attempt": attempt,
+                    "findings": list(findings),
+                    "area_suggestions": [
+                        {"slug": one.slug, "concerns": one.concerns}
+                        for one in area_suggestions
+                    ],
+                },
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001 - the totality is the guarantee
+        pass
 
 
 def write_findings(run_dir: Path, artifact: str, attempt: int, story_id: str,
@@ -753,7 +846,7 @@ def _counts(report) -> tuple[int, int, int]:
 
 
 def _summary(label: str, report, excluded, trimmed, log: str, *,
-             to_the_story: int = 0) -> str:
+             to_the_story: int = 0, held: int = 0) -> str:
     """One line saying what the inspection did, for the run's own events.log.
 
     Every way a finding was dropped is named with how many went that way, on
@@ -778,11 +871,17 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
     as a silent drop — which is the one thing every count on this line exists
     to make impossible. The line says they were *routed* and nothing more,
     because at the moment it is written nothing has been decided about them;
-    what the verdict acted on, and what was filed because it did not, is said
+    what the verdict acted on, and what was held because it did not, is said
     after the verdict by `account_after_verdict`.
+
+    `held` is how many findings were about files beside the change and so
+    were held for the run's completion rather than filed, on the same terms:
+    counted as findings, and said in words true when the line is written —
+    nothing is filed until the run completes, and what was filed is said then
+    by `file_at_completion`.
     """
     findings, filed, dropped = _counts(report)
-    findings += to_the_story
+    findings += to_the_story + held
     line = (
         f"{label}: {findings} finding(s), "
         f"{filed} filed, {dropped} dropped"
@@ -792,6 +891,8 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
         # to the stage and nothing has yet been decided about them. What the
         # verdict does with them is said afterwards, by the accounting.
         line += f"; routed to this story: {to_the_story}"
+    if held:
+        line += f"; held for the run's completion: {held}"
     reasons = [
         inspection.ALREADY_FILED,
         inspection.ALREADY_FILED_LOCALLY,
@@ -920,12 +1021,14 @@ def _invoke(prepared: _Preparation, run_dir: Path, target_root: Path,
 
 def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
             label: str, prepared: _Preparation, report, result,
-            to_the_story: int) -> None:
+            to_the_story: int, held: int = 0) -> None:
     """Say what the inspection found, in the run's own record and the log.
 
     Shared by both modes, so the notes a reader relies on — a dedupe that could
     not answer, a tracker command that moved under the run, a filed brief that
     named no area — are written on the same terms wherever the inspection ran.
+    `held` is the pre-stage mode's count of what it held for the run's
+    completion; the post-story mode holds nothing and passes none.
     """
     findings, filed_count, dropped_count = _counts(report)
     # A failed dedupe gets a line of its own, beside the summary rather than
@@ -983,9 +1086,9 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
         _summary(
             label, report, prepared.excluded, prepared.trimmed,
             _relative(detail_log(target_root, config, story_id), target_root),
-            to_the_story=to_the_story,
+            to_the_story=to_the_story, held=held,
         ),
-        findings=findings + to_the_story, filed=filed_count,
+        findings=findings + to_the_story + held, filed=filed_count,
         dropped=dropped_count,
         # A statement about the filed query alone, whatever the local index
         # said: that tier holds only what this machine filed, so reading it does
@@ -1149,9 +1252,10 @@ def inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
     changed is written to `artifact` for the stage to read: a review comment on
     a change belongs to the change that produced it, and the stage about to
     judge that change is the only one still able to act on it. Every other
-    finding is filed as a brief exactly as it is filed from anywhere else,
-    through the same floor, the same brief cap, the same dedupe and the same
-    queue.
+    finding is written to the held artifact beside the findings record and
+    filed once, from the final attempt, by `file_at_completion` when the run
+    completes — through the same floor, the same brief cap, the same dedupe
+    and the same queue a filing from anywhere else goes through.
 
     **It supplies and does not decide.** Nothing here fails a run, forces a
     retry, spends a correction pass or is read by any coordinator branch; the
@@ -1186,6 +1290,12 @@ def inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
                 run_dir, artifact, attempt, story_id, ran=False,
                 reason=f"the inspection could not run: {error}",
             )
+            # An empty held artifact, so this attempt supersedes the earlier
+            # attempt's reading rather than leaving it to be filed at
+            # completion against a tree this attempt replaced: an inspection
+            # that was attempted and could not run has nothing to file, and
+            # the line above already says why.
+            write_held(run_dir, artifact, attempt, story_id)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
             pass
 
@@ -1221,20 +1331,23 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
 
     own, others = about_the_change(result.found, prepared.found.changed)
 
-    # Only the findings that are not about this story's own change are filed,
-    # and they are filed through exactly the call every other producer files
-    # through — the same floor, the same brief cap, the same named drop reasons
-    # and the same queue — so a backlog item reaching the tracker from here is
-    # indistinguishable from one reaching it from anywhere else.
-    filed, over = inspection.file_findings(
-        target_root, others, prepared.bound.max_findings,
-        min_severity=prepared.bound.min_severity,
-    )
+    # The findings that are not about this story's own change are *held* for
+    # the run's completion rather than filed: nothing an inspection finds
+    # during a run reaches the queue until the run completes, because a retry's
+    # inspection re-finds a defect under a rephrased key and a brief filed per
+    # attempt was one defect filed once per attempt. They are written as the
+    # Inspector wrote them, so `file_at_completion` files exactly what a filing
+    # here would have filed — through the same call, the same floor, the same
+    # cap, the same named drop reasons and the same queue — once, from the
+    # final attempt.
+    write_held(run_dir, artifact, attempt, story_id,
+               findings=[one.finding for one in others],
+               area_suggestions=tuple(result.area_suggestions))
     report = inspection.Report(
         scopes=(scope,),
         invocations=1,
-        filed=filed,
-        dropped=tuple(result.dropped) + tuple(over),
+        filed=(),
+        dropped=tuple(result.dropped),
         dedupe=(result.dedupe,) if result.dedupe is not None else (),
         cost_usd=result.cost_usd,
         scope_files=result.scope_files,
@@ -1242,8 +1355,8 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
         area_suggestions=tuple(result.area_suggestions),
     )
     _report(run_dir, target_root, config, story_id, label, prepared, report,
-            result, len(own))
-    # Last, so a failure to write the record cannot cost the filing above it.
+            result, len(own), len(others))
+    # Last, so a failure to write the record cannot cost the holding above it.
     # The findings are written as the Inspector wrote them: nothing here
     # rewrites, rates or summarises one, because what the stage is being given
     # is the Inspector's reading rather than the coordinator's.
@@ -1261,11 +1374,14 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
 # the stage that judges the change — and by nothing after the verdict. A
 # finding the verifier declines to act on, which its prompt permits because a
 # finding can be correct and still be too small to fail a run, was therefore
-# neither fixed nor filed. What follows sends a declined finding where a
-# declined finding went before the inspection was moved ahead of the verifier:
-# to the backlog, as a brief, through the same call every other producer files
-# through. The verifier's judgement is not touched; what changes is that
-# declining no longer deletes.
+# neither fixed nor filed. What follows records a declined finding as the
+# remainder, and the filing at the run's completion sends the final attempt's
+# remainder where a declined finding went before the inspection was moved
+# ahead of the verifier: to the backlog, as a brief, through the same call
+# every other producer files through. The verifier's judgement is not touched;
+# what changes is that declining no longer deletes — and that nothing is filed
+# until the run completes, so a defect declined on three attempts is filed
+# once rather than three times under three rephrased keys.
 
 
 #: What a location must name for a routed finding to count as acted on: the
@@ -1384,14 +1500,19 @@ def _read_findings_record(run_dir: Path, artifact: str, attempt: int):
 
 
 def write_accounting(run_dir: Path, artifact: str, attempt: int,
-                     story_id: str, *, routed, acted_on, filed: int,
-                     dropped: int, reason: str = "") -> None:
+                     story_id: str, *, routed, acted_on, remainder,
+                     filed: int = 0, dropped: int = 0,
+                     reason: str = "") -> None:
     """Write the accounting artifact for one attempt.
 
     It carries the slugs and not only the counts, because the re-entry events
     are worded from it: a correction pass or a retry says how many of the
     findings it carries are among the ones routed, and that is decidable only
-    from the slugs. Nothing routes on any of it.
+    from the slugs. The remainder's slugs are what `file_at_completion` reads
+    back to know which of the attempt's routed findings the verdict left
+    unanswered. `filed` and `dropped` are zero when this is written, because
+    the accounting files nothing: they are here so the record and the event
+    say the same thing. Nothing routes on any of it.
     """
     try:
         path = Path(run_dir) / accounting_artifact_file(artifact, attempt)
@@ -1405,6 +1526,8 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
                     "routed_slugs": [_slug_of(one) for one in routed],
                     "acted_on": len(acted_on),
                     "acted_on_slugs": [_slug_of(one) for one in acted_on],
+                    "remainder": len(remainder),
+                    "remainder_slugs": [_slug_of(one) for one in remainder],
                     "filed": filed,
                     "dropped": dropped,
                     "reason": reason,
@@ -1453,24 +1576,26 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     the passed/failed routing, only where the stage declares an inspection. It
     reads the attempt's findings artifact, splits the routed findings into the
     ones the verdict acted on — named by slug in the location of a blocking
-    issue or a correctable finding — and the remainder, files the remainder
-    through `inspection.file_findings` with the resolved floor and cap, writes
-    the accounting artifact, and says the split in the run's own record.
+    issue or a correctable finding — and the remainder, writes the accounting
+    artifact carrying both, and says the split in the run's own record. It
+    **files nothing**: the remainder is held for the run's completion, where
+    `file_at_completion` files the final attempt's through
+    `inspection.file_findings`, so its event carries `filed` and `dropped` at
+    zero because that is true when it is written.
 
     Once per attempt, decided by the presence of the accounting artifact: the
     second verdict of one attempt — the one a correction pass returns to —
-    finds it and files nothing twice, and a retry, whose findings artifact is
-    its own, is accounted under the next attempt's number.
+    finds it and accounts nothing twice, and a retry, whose findings artifact
+    is its own, is accounted under the next attempt's number.
 
     An attempt that routed nothing is not accounted: a findings artifact that
     is absent, that records `ran` false, or that carries no findings leaves
-    nothing to act on, nothing to file and nothing to say, so no artifact and
+    nothing to act on, nothing to hold and nothing to say, so no artifact and
     no event are written for it. That is what keeps the events.log of a run
     whose inspection was switched off byte-for-byte what it was.
 
-    No Inspector is invoked: the findings it files come from the artifact the
-    pre-stage inspection already wrote, and the agent runner is not on this
-    path at all.
+    No Inspector is invoked and nothing reaches the queue from here: the agent
+    runner is not on this path at all.
     """
     label = f"accounting for the findings routed to {story_id}"
     try:
@@ -1507,40 +1632,230 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
 
     acted, remainder = acted_on_by(routed, verdict)
 
+    # The remainder is recorded and not filed. What is filed, and when, is
+    # `file_at_completion`'s: it reads these slugs back off this artifact for
+    # the final attempt and files them through the one filing call, so a
+    # finding declined on every attempt reaches the queue once.
+    write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
+                     acted_on=acted, remainder=remainder)
+    _say(run_dir,
+         f"{label}: {len(routed)} routed on attempt {attempt}; "
+         f"{len(acted)} acted on by the verdict, {len(remainder)} held for "
+         f"the run's completion; 0 filed, 0 dropped",
+         kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
+         filed=0, dropped=0)
+
+
+# --------------------------------------------------------------------------
+# Filing at completion
+# --------------------------------------------------------------------------
+#
+# The one moment anything an inspection found during the run reaches the
+# queue. The final attempt's inspection read the code that shipped, so what it
+# held and what its verdict left unanswered is what a single-attempt run over
+# that same code would have filed — and filing that once is exact where any
+# comparison between two attempts' findings would be a similarity threshold,
+# a number nothing checks.
+
+
+def _attempts_holding(run_dir: Path, artifact: str) -> list[int]:
+    """Every attempt the run directory holds a held artifact or an accounting
+    artifact for, in ascending order.
+
+    Read by globbing the two names with the attempt wildcarded, through the
+    same functions that write them, and taking the attempt back out of each
+    match against the name the function composes for a placeholder — so
+    discovery cannot drift from writing, and no artifact name is spelled.
+    """
+    found: set[int] = set()
+    for compose in (held_artifact_file, accounting_artifact_file):
+        placeholder = "\0"
+        head, _, tail = compose(artifact, placeholder).partition(placeholder)
+        pattern = re.compile(
+            "^" + re.escape(head) + r"(\d+)" + re.escape(tail) + "$"
+        )
+        for path in Path(run_dir).glob(compose(artifact, "*")):
+            matched = pattern.match(path.name)
+            if matched:
+                found.add(int(matched.group(1)))
+    return sorted(found)
+
+
+def _read_record(path: Path):
+    """A JSON object at `path`, or None where there is none to read."""
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _findings_in(record) -> list:
+    if record is None:
+        return []
+    return [one for one in record.get("findings") or ()
+            if isinstance(one, dict)]
+
+
+def held_findings(run_dir: Path, artifact: str, attempt: int) -> list:
+    """The findings one attempt's inspection held for the run's completion.
+
+    As the Inspector wrote them, and none where the attempt held nothing.
+    """
+    return _findings_in(
+        _read_record(Path(run_dir) / held_artifact_file(artifact, attempt)))
+
+
+def held_area_suggestions(run_dir: Path, artifact: str, attempt: int) -> tuple:
+    """The Inspector's area suggestions the held artifact carried."""
+    record = _read_record(Path(run_dir) / held_artifact_file(artifact, attempt))
+    if record is None:
+        return ()
+    found = []
+    for one in record.get("area_suggestions") or ():
+        if not isinstance(one, dict):
+            continue
+        slug, concerns = one.get("slug"), one.get("concerns")
+        if isinstance(slug, str) and isinstance(concerns, str):
+            found.append(inspection.AreaSuggestion(slug, concerns))
+    return tuple(found)
+
+
+def remainder_findings(run_dir: Path, artifact: str, attempt: int) -> list:
+    """The routed findings one attempt's verdict left unanswered.
+
+    Read back off the attempt's findings record by the slugs its accounting
+    recorded as the remainder, so what is filed is the finding as the
+    Inspector wrote it and what decides which are filed is the record the
+    verdict was accounted in. An accounting that records no remainder — or no
+    accounting at all — leaves nothing.
+    """
+    accounting = _read_record(
+        Path(run_dir) / accounting_artifact_file(artifact, attempt))
+    if accounting is None:
+        return []
+    slugs = accounting.get("remainder_slugs")
+    if not isinstance(slugs, list):
+        return []
+    wanted = frozenset(one for one in slugs if isinstance(one, str))
+    routed = _findings_in(_read_findings_record(run_dir, artifact, attempt))
+    return [one for one in routed if _slug_of(one) in wanted]
+
+
+# The same guarantee a fourth time, for the caller that runs after the
+# completion commit and before the sweep. It returns nothing, raises on no
+# path, and declares no parameter by which a caller could be told to stop: a
+# failure inside it — an unreadable artifact, a queue that cannot be reached —
+# is printed and recorded and changes neither the run's status nor its exit
+# code, which are settled by the commit above it.
+def file_at_completion(run_dir: Path, target_root: Path, config: dict,
+                       harness_root: Path, story_id: str, stages) -> None:
+    """File what the final attempt's inspection held and its verdict left.
+
+    Called from `_complete` in the position the post-story inspection
+    occupies, after the completion commit and before the sweep, only where a
+    stage of the loaded workflow declares an inspection. It reads the artifact
+    name off that declaration, finds the highest attempt in the run directory
+    holding a held artifact or an accounting artifact — the final attempt whose
+    inspection read the tree — and files that attempt's held findings and the
+    remainder its accounting recorded through `inspection.file_findings` with
+    the floor and the cap `inspection.bounds` resolves. An event of kind
+    `inspection-filed` says how many were filed and dropped, each drop reason
+    named with its count, and the same record reaches the cross-run
+    inspection log.
+
+    Where no attempt holds either artifact, or the one that does has nothing
+    to file, it files nothing and writes no event, so a run under a workflow
+    declaring no inspection, or one whose file cap is unset, leaves events.log
+    byte-for-byte what it was.
+
+    No Inspector is invoked and no model is reached: everything filed comes
+    from the artifacts the run directory already holds.
+    """
+    label = f"filing at the completion of {story_id}"
+    try:
+        _file_at_completion(
+            run_dir, target_root, config, harness_root, story_id, stages
+        )
+    except Exception as error:  # noqa: BLE001 - the totality is the guarantee
+        print(f"the filing at completion could not run: {error}",
+              file=sys.stderr)
+        try:
+            _say(run_dir, f"{label}: it could not run: {error}",
+                 kind=FILED_EVENT, filed=0, dropped=0)
+            # The record above went into the tracked cross-run log after the
+            # completion commit, so it is committed here on the terms the
+            # post-story inspection's failure path commits its own: a commit
+            # that cannot be made costs the commit and not the run, and a
+            # record left uncommitted is what the next run's clean-tree
+            # pre-flight refuses on.
+            commit_record(target_root, config, story_id, FILED_COMMIT_SUBJECT)
+        except Exception:  # noqa: BLE001 - reporting may not become the failure
+            pass
+
+
+def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
+                        harness_root: Path, story_id: str, stages) -> None:
+    """The body of the above, so the guard has one thing to guard."""
+    label = f"filing at the completion of {story_id}"
+    from story_coordinator import inspection_declaration
+
+    artifact = inspection_declaration(stages or []).get("result")
+    if not artifact:
+        return
+    attempts = _attempts_holding(run_dir, artifact)
+    if not attempts:
+        return
+    attempt = attempts[-1]
+    held = held_findings(run_dir, artifact, attempt)
+    remainder = remainder_findings(run_dir, artifact, attempt)
+    if not held and not remainder:
+        return
+
     bound, problem = inspection.bounds(config)
     if bound is None:
-        # Unreachable while the inspection that wrote the artifact resolved the
-        # same bound, and handled anyway: nothing is filed on a bound the target
-        # got wrong, and the record says so rather than obeying a default.
-        write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
-                         acted_on=acted, filed=0, dropped=len(remainder),
-                         reason=problem)
+        # Unreachable while the inspection that held these resolved the same
+        # bound, and handled anyway: nothing is filed on a bound the target got
+        # wrong, and the record says so rather than obeying a default.
         _say(run_dir,
-             f"{label}: {len(routed)} routed on attempt {attempt}; "
-             f"{len(acted)} acted on by the verdict, 0 filed, "
-             f"{len(remainder)} dropped: {problem}",
-             kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
-             filed=0, dropped=len(remainder))
+             f"{label}: {len(held)} held and {len(remainder)} left by the "
+             f"verdict on attempt {attempt}; 0 filed, "
+             f"{len(held) + len(remainder)} dropped: {problem}",
+             kind=FILED_EVENT, filed=0, dropped=len(held) + len(remainder))
+        commit_record(target_root, config, story_id, FILED_COMMIT_SUBJECT)
         return
 
     scope = inspection.Scope(
         path="", kind=inspection.CHANGE,
         origin=ORIGIN.format(story_id=story_id), framing=PRE_STAGE_FRAMING,
     )
-    # The remainder is filed through exactly the call every other producer
-    # files through — the same floor, the same cap, the same named drop
-    # reasons, the same dedupe and the same queue — from the artifact the run
-    # directory already holds, with no second invocation of the Inspector.
+    # Through exactly the call every other producer files through — the same
+    # floor, the same cap, the same named drop reasons, the same dedupe and
+    # the same queue — with the held findings first, since they were found
+    # first, and the remainder after them.
     filed, dropped = inspection.file_findings(
-        target_root, [_Routed(one, scope) for one in remainder],
+        target_root, [_Routed(one, scope) for one in held + remainder],
         bound.max_findings, min_severity=bound.min_severity,
     )
-    write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
-                     acted_on=acted, filed=len(filed), dropped=len(dropped))
+    # A filed brief that named no area is said here, where the brief reached
+    # the queue, on the terms `_report` says it: the suggestions travelled with
+    # the held findings for exactly this line.
+    report = inspection.Report(
+        filed=tuple(filed), dropped=tuple(dropped),
+        min_severity=bound.min_severity,
+        area_suggestions=held_area_suggestions(run_dir, artifact, attempt),
+    )
+    for brief, suggestion in report.unnamed_areas:
+        line = f"{label}: no area was named for {brief.slug}"
+        if suggestion:
+            line += f"; the Inspector says it concerns: {suggestion}"
+        _note(run_dir, line)
 
     line = (
-        f"{label}: {len(routed)} routed on attempt {attempt}; "
-        f"{len(acted)} acted on by the verdict, {len(filed)} filed as briefs, "
+        f"{label}: {len(held)} held and {len(remainder)} left by the verdict "
+        f"on attempt {attempt}; {len(filed)} filed as briefs, "
         f"{len(dropped)} dropped"
     )
     reasons: dict = {}
@@ -1548,7 +1863,11 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
         reasons[one.reason] = reasons.get(one.reason, 0) + 1
     for reason, count in reasons.items():
         line += f"; {reason}: {count}"
-    _say(run_dir, line, kind=ACCOUNTING_EVENT, routed=len(routed),
-         acted_on=len(acted), filed=len(filed), dropped=len(dropped))
+    _say(run_dir, line, kind=FILED_EVENT, filed=len(filed),
+         dropped=len(dropped))
+    # The record reaches the tracked cross-run log after the completion
+    # commit, so it is committed the way the post-story inspection commits
+    # its own: by name, and under a subject of its own.
+    commit_record(target_root, config, story_id, FILED_COMMIT_SUBJECT)
 
 
