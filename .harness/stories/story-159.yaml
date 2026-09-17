@@ -1,0 +1,122 @@
+story:
+  id: story-159
+  title: A clean-clone suite that ran at least as much as an outstanding failure shadows it
+  description: |
+    Planned from the brief filed under 194.
+
+    A run resumed at a stage after the tester can pass every check it has
+    and still be refused, and resuming it again reproduces the refusal
+    exactly. story-158 is the case: on its first entry the tester's suite
+    exited 1, which recorded an outstanding failure with an empty scope —
+    the whole suite — and the run escalated. Resumed at the verifier,
+    verification passed and the clean-clone check ran the whole suite in a
+    fresh clone with the story committed and exited 0, at that same empty
+    scope. The run then escalated at the end of the workflow with the suite
+    failure still outstanding.
+
+    Only one place clears that flag: the declared suite run's block in
+    run_story compares the run's recorded scope against the outstanding
+    failure's through suite_run_shadows and clears it where the later run
+    covered at least as much. The clean-clone block never reads the flag,
+    so its result cannot shadow anything, and a resume that enters at the
+    verifier or later never reaches the declared-run block at all. The cost
+    is a run that cannot finish by any route the harness offers: every
+    stage has passed, the tree is green, and the only ways out are
+    resuming at or before the tester so the suite re-runs for no reason but
+    to clear a flag, or editing state.json by hand.
+
+    This story puts the clean-clone check's own result to suite_run_shadows
+    the way a declared run's is, inline in the clean-clone block of
+    run_story, so a clean-clone pass at a scope no narrower than the
+    outstanding failure's clears it. The shadowing rule itself does not
+    change: a narrowed clean-clone run is refused as evidence on the same
+    terms a narrowed declared run already is, and a check that did not run
+    is not a pass. The comparison is made where the exit code is read
+    rather than inside clean_clone_check, mirroring the declared run,
+    whose check does not touch the field either — the loop decides — so
+    the standing assertion that only RunState and run_story name the field
+    holds without widening. A shadowing pass appends a note event naming
+    the failure it cleared, so the clear is reconstructable from events.log
+    as well as from state.json; a pass that does not shadow appends the
+    same carry-forward note the declared block does.
+
+    The standing test module tests/test_suite_run_shadow.py asserts the
+    opposite of this story: its resumable_run fixture is story-158's shape
+    exactly, and the case built on it asserts the resume escalates. That
+    case becomes the story's headline assertion — the resume completes —
+    and the refusal is rebuilt on a clean-clone run at a narrower scope and
+    on one that did not run. The module's prose and the architecture
+    document both say the clean-clone check is deliberately outside the
+    rule, which stops being true.
+  workflow: story-workflow
+
+tasks:
+  - In the clean-clone block of run_story, after a check that ran and exited 0, compare the check's recorded scope against the outstanding failure's scope through suite_run_shadows; where it shadows, clear unshadowed_suite_failure, save state at the decision, and append a note event naming the failure that was cleared; where it does not shadow, append the same carry-forward note the declared suite-run block appends. A check that did not run still escalates as it does today and clears nothing.
+  - Adapt tests/test_suite_run_shadow.py so the resume over a repaired suite with a clean-clone check declared completes rather than escalates, add the refusal cases for a clean-clone pass at a narrower scope and for a clean-clone check that did not run, and update the module's prose and the OUTSIDE_THE_RULE comments so the clean-clone check is no longer described as outside the rule.
+  - Update the "A rerun only shadows a broader failure" section of .harness/docs/ARCHITECTURE.md so the clean-clone check is inside the rule and the revert check alone is described as outside it.
+
+acceptance_criteria:
+  - A run carrying an outstanding suite failure, resumed at a stage after the one that declares the suite run, completes when the clean-clone check ran and exited 0 at a scope no narrower than the outstanding failure's; its state records no outstanding failure and a completion report is written.
+  - The same run still refuses to complete, escalating with the outstanding failure named, when the clean-clone check exits 0 at a scope narrower than the outstanding failure's, and when the clean-clone check did not run.
+  - The clearing is decided by suite_run_shadows over the recorded scopes, and the body and docstring of suite_run_shadows are unchanged.
+  - A clean-clone pass that clears the outstanding failure is recorded in events.log by a note naming the failure it cleared, and the state is saved at that decision.
+  - The declared suite-run path is unchanged: a red declared run still records the failure and advances, and a green declared run at a scope no narrower still clears it, exactly as before.
+  - The end-of-run refusal and the resume guard are unchanged in behaviour, and a run whose verifier stage declares no clean-clone check still reaches the refusal over a standing failure.
+  - Only RunState and run_story name unshadowed_suite_failure under orchestration/; clean_clone_check and run_clean_clone do not.
+  - The whole test suite passes, including tests/test_suite_run_shadow.py as adapted and tests/test_a_red_suite_reaches_the_verifier.py unchanged.
+
+technical_plan:
+  implementation_steps:
+    - In run_story's clean-clone block, after the exit-code branch that routes a failure and immediately around the _clean_clone_passed call, add the shadowing decision for a check that ran and exited 0 with state.unshadowed_suite_failure set - compare clean.scope against the outstanding scope with suite_run_shadows, clear and save_state on a shadow, append the carry-forward note otherwise.
+    - Append a note event on the shadowing clear that names the outstanding failure's stage, exit code and retained record and output paths, in the style of suite_failure_carried_forward_note.
+    - Adapt the resumable_run cases in tests/test_suite_run_shadow.py and add the two refusal cases by substituting for clean_clone_check so the recorded scope, or ran, differs while the real command still runs.
+    - Update the architecture document's section on the shadowing rule.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the clean-clone block puts its result to suite_run_shadows and clears or carries the outstanding failure accordingly
+    - file: tests/test_suite_run_shadow.py
+      stage: tester
+      reason: the resumed-run case flips from escalates to completes, the refusal cases are rebuilt on a narrowed scope and on a check that did not run, and the prose describing the clean-clone check as outside the rule is corrected
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the section on the shadowing rule says the clean-clone check is deliberately outside it, which this story makes untrue
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_suite_run_shadow.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - the body and docstring of suite_run_shadows
+    - the end-of-run refusal in run_story that escalates over an outstanding failure
+    - the resume guard and where a resume may enter
+    - the declared suite-run block's own recording and clearing of the failure
+    - tests/test_a_red_suite_reaches_the_verifier.py
+    - workflows/
+    - prompts/
+    - schemas/
+
+verification_requirements:
+  - Confirm the resumed run over a repaired suite with a clean-clone check declared completes, with the field cleared and a completion report written.
+  - Confirm the refusal still fires for a clean-clone pass at a narrower scope and for a clean-clone check that did not run, naming the outstanding failure.
+  - Confirm suite_run_shadows is byte-for-byte unchanged and is the function the clean-clone block calls.
+  - Confirm the shadowing clear is reconstructable from events.log and state.json.
+  - Confirm the declared suite-run path and the end-of-run refusal are unchanged by reading the diff, and that tests/test_a_red_suite_reaches_the_verifier.py passes unmodified.
+  - Confirm the full suite passes.
+
+constraints:
+  - The shadowing comparison is suite_run_shadows and no second rule written beside it; recorded scopes decide, never recency.
+  - Only a clean-clone run that actually ran may shadow; ran false is not a pass and clears nothing.
+  - The coordinator stays deterministic and makes no model calls.
+  - Python 3.10+, standard library only.
+  - Existing assertions are not weakened or skipped; the adapted test keeps the refusal asserted on the cases where it still applies.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-17 16:03:47
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 194
