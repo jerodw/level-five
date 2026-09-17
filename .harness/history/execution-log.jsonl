@@ -95,4 +95,6 @@
 {"story_id": "story-156", "status": "completed", "retry_count": 0, "timestamp": "2026-09-17 00:04:55"}
 {"story_id": "story-157", "status": "completed", "retry_count": 0, "timestamp": "2026-09-17 11:22:04"}
 {"story_id": "story-158", "status": "escalated", "retry_count": 0, "verifier_outcome": "failed", "timestamp": "2026-09-17 12:11:22"}
+{"story_id": "story-158", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-17 12:56:53"}
+{"story_id": "story-158", "status": "escalated", "retry_count": 0, "timestamp": "2026-09-17 13:09:59"}
 {"story_id": "story-159", "status": "completed", "retry_count": 1, "timestamp": "2026-09-17 17:10:19"}
