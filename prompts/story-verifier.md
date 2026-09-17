@@ -110,6 +110,29 @@ at is instructed to leave it alone, so such a finding has nowhere to be acted
 on. The passing verdict stands: recording a finding does not fail the run,
 spends no retry, and leaves the verdict that carried it recorded as passed.
 
+A finding can also be correct, too small to fail the run, and not fixable in
+the words alone — one line of code, a slot one prompt has and its sibling
+lacks, a declaration a stage was never told about. Record such a finding in
+repairable_findings. What belongs there is a finding you judge correct, whose
+fix is one stage's to make in the one file the finding names, and whose fix is
+not to prose alone — that is what separates it from a correctable finding,
+which is bounded to words and enters at the declared correction stage
+whatever category it carries. Name the category that owns the fix, spelled
+exactly as the categories above are: unlike a correctable finding's category,
+this one chooses where the pass goes, because the coordinator resolves it
+through the routing table above to the stage that owns the file and re-enters
+there, running forward to verification again. A category this workflow does
+not define escalates the run. Give each finding a `path`: naming it grants the
+owning stage that one file for that pass, and an edit to any other governed
+file stays governed. A repair pass is routed only after the clean-clone check
+on your verdict has passed, because a repair may change behaviour and is built
+on a verified tree, and the verification it returns to runs the check again.
+A repair pass is not a licence to revisit the work: it carries the findings
+and the corrections and nothing else, spends no retry, archives no attempt,
+and leaves the verdict that carried it recorded as passed. A finding whose fix
+you cannot state for one stage in one file is a blocking issue if it matters
+and nothing if it does not.
+
 retry-guidance.json, written only when status is "failed" and a retry is
 recommended. It must satisfy this schema:
 
@@ -307,6 +330,14 @@ coordinator wrote it, not an agent, and it names the findings and the stage
 they were routed to. This is not a retry: no retry budget was spent and the
 verdict that routed it still stands as passed:
 {{correction_pass_result}}
+
+Repair pass — present only when a passing verdict of this run, and the
+clean-clone check on it, carried repairable findings and the workflow
+re-entered to act on them. The coordinator wrote it, not an agent, and it
+names the findings each with the stage its category resolved to. This is not
+a retry: no retry budget was spent and the verdict that routed it still stands
+as passed. The clean-clone check runs again on this verification:
+{{repair_pass_result}}
 
 Retry state:
 {{retry_state}}

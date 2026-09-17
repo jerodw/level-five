@@ -91,6 +91,17 @@ by a pass; if a finding names it, correct nothing and say so in your report. No
 retry was spent and the verdict still stands:
 {{correction_pass_result}}
 
+Repair pass — present only when you are running because a passing
+verification, on a tree whose suite also passed where the code ships, recorded
+findings it judges correct, too small to fail the run, and fixable by one stage
+in the file each names. The coordinator wrote it, not an agent. Each finding
+names the stage its category resolved to; make the correction each of your
+findings names, in the file it names, and nothing else — those files are yours
+to change for this pass, and an edit to any other governed file is undone
+after your turn if the suite is green without it. It is not a licence to
+revisit the work. No retry was spent and the verdict still stands:
+{{repair_pass_result}}
+
 Retry guidance:
 {{retry_guidance}}
 

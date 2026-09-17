@@ -71,6 +71,11 @@
         "budget": 1,
         "stage": "documenter"
       },
+      "repair_pass": {
+        "result": "repair-pass.json",
+        "budget": 2,
+        "budget_reason": "Two rather than one, on the correction pass's arithmetic: a pass fixes the findings a verification raises, and the verification after it can find one the first findings did not reach, and a separate story to carry a leftover finding costs more than a second pass in the run that found it. Bounded at all because a repair pass may change behaviour, which is why it carries the findings and no guidance, routes only after the clean-clone check on the routing verdict has passed, and returns to a verification that runs the check again on the repaired tree. The stage comes off the retry_routing table below rather than off this declaration, so a finding is fixed by the stage that owns its file. Nothing reads this key; it records the judgement where a reader of the definition meets the budget."
+      },
       "on_failure": {
         "retry_routing": {
           "implementation": {

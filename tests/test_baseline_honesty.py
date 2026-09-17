@@ -2567,6 +2567,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "comparison is between the definitions this repository deploys, and a "
         "built workflow could not make it. The prompts, the schemas and the "
         "census it reads are shipped artifacts on the same terms",
+    "test_repair_pass.py":
+        "its runs are driven against a workflow it builds, where the "
+        "declaration, the categories, the confinement and the artifact name "
+        "are inputs. What remains has what is shipped as its subject: both "
+        "shipped definitions declaring repair_pass on their verifier, which is "
+        "story-155's acceptance criterion and which a built definition could "
+        "only say back to itself; every prompt a shipped stage names carrying "
+        "the slot, rendered through the shipped story workflow because what "
+        "reaches the agent is the claim; the shipped verifier prompts, which "
+        "are where a verifier reads what may go in the field and so the only "
+        "place its bound can be asserted; the schemas this repository ships "
+        "for the verification result and the execution history; and the retry "
+        "ceiling in rules/execution-rules.json",
     "test_retry_history.py":
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json "

@@ -55,3 +55,9 @@
 {"story_id": "story-154", "timestamp": "2026-09-16 17:01:19", "filed": 4, "dropped": 0, "routed": 4, "acted_on": 0}
 {"story_id": "story-154", "mode": "narrow", "cost_usd": 3.3866405000000004, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-16 17:18:31", "findings": 6, "filed": 0, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-154", "timestamp": "2026-09-16 17:24:21", "filed": 5, "dropped": 0, "routed": 6, "acted_on": 1}
+{"story_id": "story-155", "mode": "narrow", "cost_usd": 2.9324584999999996, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-16 19:35:09", "findings": 3, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-155", "timestamp": "2026-09-16 19:40:22", "filed": 3, "dropped": 0, "routed": 3, "acted_on": 0}
+{"story_id": "story-155", "mode": "narrow", "cost_usd": 3.4972214999999998, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-16 19:54:22", "findings": 5, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-155", "timestamp": "2026-09-16 19:56:29", "filed": 5, "dropped": 0, "routed": 5, "acted_on": 0}
+{"story_id": "story-155", "mode": "narrow", "cost_usd": 3.163644, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-16 20:08:58", "findings": 5, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-155", "timestamp": "2026-09-16 20:12:38", "filed": 5, "dropped": 0, "routed": 5, "acted_on": 0}

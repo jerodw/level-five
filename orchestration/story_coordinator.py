@@ -113,6 +113,15 @@ class RunState:
     #: spends, so this is a separate count and neither reads nor writes
     #: retry_count.
     correction_pass_count: int = 0
+    #: How many repair passes this run has taken. Cumulative for the run like
+    #: correction_pass_count, and for the same reason: the budget the verifier
+    #: stage declares is per run, and the count is what makes a repair the
+    #: verifier keeps rejecting terminate rather than cycle. Saved and restored
+    #: with the rest of the state so a resumed run cannot spend the pass again,
+    #: and defaulted so a state file written before it existed still loads. A
+    #: repair pass spends nothing a retry spends and neither reads nor writes
+    #: retry_count.
+    repair_pass_count: int = 0
     #: Which entry of the run is now executing: zero for the first, one after
     #: the first resume, and so on. A run is re-entered rather than restarted,
     #: and each re-entry opens an entry whose counter-keyed artifacts are kept
@@ -692,6 +701,43 @@ def correction_pass_problems(stages: list[dict]) -> list[str]:
             f"{', '.join(names)}"
         ]
     return []
+
+
+def repair_pass_problems(stages: list[dict]) -> list[str]:
+    """Check the repair-pass declaration against the workflow that carries it.
+
+    Beside `correction_pass_problems`, and for its reason: a declaration every
+    run under the definition would trip on is refused before any run state is
+    created rather than at the one moment everything else went right. Two
+    things a definition can be wrong about here. The budget must be a positive
+    integer, because a budget that is not a count cannot be spent and a budget
+    of zero is a declaration that should have been left out. And the stage
+    declaring the pass must declare a retry_routing table, because a repair
+    pass names no entry stage of its own: each finding's category is looked up
+    in that table exactly as a failed verdict's retry_target is, so a stage
+    with no table has nowhere to send a repair. A workflow carrying no
+    declaration is not checked — that is how the mechanism is switched off.
+    No stage name is written here; it comes off the loaded definition.
+    """
+    problems: list[str] = []
+    for stage in stages:
+        declaration = stage.get("repair_pass")
+        if not declaration:
+            continue
+        budget = declaration.get("budget")
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 1:
+            problems.append(
+                f"stage '{stage['name']}' declares a repair_pass budget of "
+                f"{budget!r}, which is not a positive integer"
+            )
+        routes = (stage.get("on_failure") or {}).get("retry_routing") or {}
+        if not routes:
+            problems.append(
+                f"stage '{stage['name']}' declares a repair_pass but no "
+                f"retry_routing table, so a repairable finding's category "
+                f"has nothing to resolve against"
+            )
+    return problems
 
 
 def _is_a_ceiling(value) -> bool:
@@ -6164,6 +6210,228 @@ def _correction_pass_recorded(
 
 
 # --------------------------------------------------------------------------
+# A finding about the story's own change is fixed by the stage that owns it
+#
+# A verifier that wants a finding fixed had two routes, and most findings fit
+# neither: a correctable finding enters at the declared correction stage and
+# is bounded to the words alone, and a blocking issue fails the verdict and
+# spends a retry. A finding whose fix is one line in a file the correction
+# stage does not own could be had only by failing the whole run, so story-154
+# filed five such findings as briefs instead.
+#
+# The repair pass is the third route. A passing verdict may carry
+# `repairable_findings`, each naming a path, a location, the finding, the
+# correction and a retry category. The category is looked up in the verifier
+# stage's retry_routing table exactly as a failed verdict's retry_target is,
+# the workflow re-enters at the earliest stage in workflow order among the
+# resolved stages, and runs forward to verification again. It has the
+# correction pass's cost and the retry routing's reach: nothing a retry spends
+# is spent — no retry_count increment, no attempts/attempt-N/ archive, no
+# retry-history entry, and the passing verdict that routed it stands — and
+# each stage entered is granted the paths of the findings whose category
+# resolves to it, for that attempt alone.
+#
+# Because a repair may change behaviour, it is built on a verified tree: it
+# routes only after the clean-clone check on the routing verdict has passed,
+# and the verification it returns to runs the check again. The budget is
+# declared on the verifier stage beside correction_pass, and the declaration
+# carries no stage key because the stage comes off the routing table. Nothing
+# below writes a stage name, a category or an artifact name.
+
+
+def repair_pass_declaration(stages: list[dict]) -> dict:
+    """The workflow's repair-pass declaration, wherever a stage carries it.
+
+    In `correction_pass_declaration`'s shape and for its reason: read off the
+    loaded definition rather than looked up by stage name, and a workflow that
+    declares it nowhere disables the mechanism entirely.
+    """
+    for stage in stages:
+        declaration = stage.get("repair_pass")
+        if declaration:
+            return declaration
+    return {}
+
+
+def repair_pass_result_file(artifact: str, number: int) -> str:
+    """Where one repair pass's record is written, keyed by the pass number.
+
+    Keyed for the reason `correction_pass_result_file` keys: the budget is
+    more than one, so a second pass would otherwise write over the first's
+    record.
+    """
+    return correction_pass_result_file(artifact, number)
+
+
+def repair_pass_grants(
+    run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
+) -> list[str]:
+    """The files this pass's findings grant one stage to change for one attempt.
+
+    Read off the current pass record exactly as `correction_pass_grants` reads
+    the correction record, so what the checks exempt and what the prompt
+    reports are one thing. The difference is that a repair pass enters more
+    than one stage: the record carries each finding with the stage its
+    category resolved to, and a stage is granted only the paths of the
+    findings that resolved to it. Bounded to the attempt the record names, so
+    a stage re-entered by a later retry in the same run inherits nothing. A
+    run that has taken no pass, a workflow that declares none, and a record
+    that is absent or unreadable each grant nothing.
+    """
+    if not state.repair_pass_count:
+        return []
+    declared = repair_pass_declaration(stages).get("result")
+    if not declared:
+        return []
+    record = run_dir / repair_pass_result_file(declared, state.repair_pass_count)
+    if not record.is_file():
+        return []
+    try:
+        parsed = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if parsed.get("attempt") != attempt:
+        return []
+    return [
+        finding["path"]
+        for finding in parsed.get("findings", [])
+        if isinstance(finding, dict)
+        and finding.get("stage") == stage_name
+        and finding.get("path")
+    ]
+
+
+def repair_pass_statement(entry_stage: str) -> str:
+    """What the coordinator tells the stages a repair pass re-enters.
+
+    A passing verdict writes no retry guidance, so there is no agent-authored
+    guidance behind this and the statement says so, as the correction-pass
+    statement does. What the stage most needs to know is that it is told the
+    findings and the corrections and nothing else, that only the files those
+    findings name are its to change on this pass, and that this is not a
+    licence to revisit the work.
+    """
+    return (
+        f"The verification passed, and the clean-clone check on that verdict "
+        f"passed too. It also recorded findings it judges correct, too small "
+        f"to fail the run, and fixable by one stage in the file each names, "
+        f"and the coordinator has re-entered the workflow at {entry_stage} so "
+        f"they are fixed by the stage that owns them rather than filed for a "
+        f"later story. This is the coordinator's own statement, not an "
+        f"agent's: a passing verdict writes no retry guidance, so nothing here "
+        f"was authored by a verifier beyond the findings themselves. This is "
+        f"not a retry and no retry budget was spent — the retry count is "
+        f"unchanged, no attempt was archived, and the passing verdict stands. "
+        f"Each finding below names the stage its category resolved to; if "
+        f"none names yours, you are running because the workflow runs forward "
+        f"from the entry stage, and you have nothing to repair. Make the "
+        f"correction each of your findings names, in the file it names, and "
+        f"nothing else: those files are yours to change for this pass, and an "
+        f"edit to any other governed file is put to the revert check after "
+        f"your turn. A repair pass is not a licence to revisit the work. The "
+        f"verification it returns to runs the clean-clone check again on the "
+        f"repaired tree."
+    )
+
+
+@dataclass(frozen=True)
+class RepairRouting:
+    """Where a verdict's repairable findings send execution, or why they cannot.
+
+    `stage` is the entry stage: the earliest in workflow order among the
+    stages the findings' categories resolved to, so a verdict naming two
+    categories costs one pass that runs forward through both. `resolved` is
+    each finding with its resolved stage added, in the order the verdict
+    carried them, so the pass record can say which stage owns which fix.
+    `unknown` holds the categories the table does not define, and it is
+    non-empty exactly when the run must escalate instead of routing — the
+    strictness an unrecognised retry_target already gets.
+    """
+
+    stage: str | None
+    resolved: list[dict]
+    unknown: list[str]
+
+
+def repair_destination(
+    findings: list[dict], routes: dict, stage_names: list[str]
+) -> RepairRouting:
+    """Resolve each finding's category through the routing table.
+
+    The table is the same one a failed verdict's retry_target is looked up
+    in, so the categories a repair pass may name and the stages it may enter
+    are exactly the ones the workflow already declares for a retry. No
+    category name and no stage name is written here.
+    """
+    unknown: list[str] = []
+    resolved: list[dict] = []
+    for finding in findings:
+        category = finding.get("category")
+        route = routes.get(category) if isinstance(category, str) else None
+        if route is None:
+            if category not in unknown:
+                unknown.append(category)
+            continue
+        resolved.append({**finding, "stage": route.get("stage")})
+    if unknown:
+        return RepairRouting(None, [], unknown)
+    stages = {one["stage"] for one in resolved}
+    entry = next((name for name in stage_names if name in stages), None)
+    return RepairRouting(entry, resolved, [])
+
+
+def _repair_pass_routed(
+    run_dir: Path,
+    stage_name: str,
+    destination: str,
+    findings: list[dict],
+    number: int,
+    budget: int,
+    routed_slugs=(),
+) -> None:
+    """Record a repair pass, and where its findings came from.
+
+    Worded with `routed_among` as the correction-pass event is, so a reader of
+    events.log can tell a re-entry spent on the Inspector's reading from one
+    spent on the verifier's own.
+    """
+    append_event(
+        run_dir,
+        f"repair pass {number} of {budget}: verification passed and the "
+        f"clean-clone check passed, carrying {len(findings)} repairable "
+        f"finding(s); re-entering at {destination}"
+        + routed_among(findings, routed_slugs),
+        kind="repair-pass-routed",
+        stage=stage_name,
+        retry_stage=destination,
+    )
+
+
+def _repair_pass_recorded(
+    run_dir: Path, stage_name: str, findings: list[dict], budget: int
+) -> None:
+    """Record findings a spent budget leaves unrepaired, and complete the run.
+
+    The bound is what makes termination a property rather than a hope: a fix
+    the verifier keeps rejecting cannot cycle. A later verdict still carrying
+    findings is not an error and routes nowhere, so the findings are named in
+    the event stream, where a developer meets them, and the run completes.
+    """
+    named = "; ".join(
+        f"{finding.get('location')}: {finding.get('finding')}"
+        for finding in findings
+    )
+    append_event(
+        run_dir,
+        f"repair pass budget of {budget} is spent; verification passed "
+        f"still carrying repairable findings, which are recorded here and "
+        f"left unrepaired: {named}",
+        kind="repair-pass-recorded",
+        stage=stage_name,
+    )
+
+
+# --------------------------------------------------------------------------
 # Ending a run so it can be resumed
 #
 # A successful run's work is durable: _complete commits it. An escalated run's
@@ -7017,6 +7285,22 @@ def _refuse_bad_correction_pass(workflow: dict, problems: list[str]) -> int:
         problems,
         "Fix the workflow definition's correction_pass stage before running a "
         "story under it.",
+    )
+
+
+def _refuse_bad_repair_pass(workflow: dict, problems: list[str]) -> int:
+    """Refuse a workflow whose repair pass cannot be spent or cannot route.
+
+    Thin, like every other caller of `refuse`. The definition is wrong, not the
+    story and not the tree, so the guidance points at the file that has to
+    change.
+    """
+    return refuse(
+        f"Workflow '{workflow['name']}' declares a repair pass that cannot "
+        f"be taken:",
+        problems,
+        "Fix the workflow definition's repair_pass declaration before running "
+        "a story under it.",
     )
 
 
@@ -7894,6 +8178,14 @@ def run_story(
     if entry_problems:
         return _refuse_bad_correction_pass(workflow, entry_problems)
 
+    # And the same pre-flight for the repair pass. Its budget has to be a
+    # count that can be spent, and the stage declaring it has to declare the
+    # retry_routing table a repairable finding's category is resolved through,
+    # or a passing verdict carrying one would have nowhere to send it.
+    repair_problems = repair_pass_problems(stages)
+    if repair_problems:
+        return _refuse_bad_repair_pass(workflow, repair_problems)
+
     # And the same pre-flight for the two cost ceilings. A ceiling that is not
     # a number can be neither compared against a spend nor handed to an
     # invocation, so a definition that cannot work is refused before a stage is
@@ -8588,6 +8880,20 @@ def run_story(
                 if record.is_file():
                     correction_pass_result = record.read_text(encoding="utf-8")
 
+        # The same for a repair pass: the current pass record, read back off
+        # the artifact the coordinator wrote, into every stage prompt, so the
+        # stage a pass entered is told the findings and the corrections and
+        # nothing else. None for every stage of a run that took none.
+        repair_pass_result = None
+        if state.repair_pass_count:
+            declared = repair_pass_declaration(stages).get("result")
+            if declared:
+                record = run_dir / repair_pass_result_file(
+                    declared, state.repair_pass_count
+                )
+                if record.is_file():
+                    repair_pass_result = record.read_text(encoding="utf-8")
+
         # The coordinator's record of the suite it ran after some stage's turn
         # ended. Read back off the artifact rather than passed along in memory,
         # for the reason the two records above are, and named off the
@@ -8642,6 +8948,7 @@ def run_story(
             allowed_tools=stage_tools,
             self_route_result=self_route_result,
             correction_pass_result=correction_pass_result,
+            repair_pass_result=repair_pass_result,
             suite_run_result=suite_run_result,
             revert_check_result="\n".join(revert_records) or None,
             inspection_findings=inspection_findings,
@@ -9096,7 +9403,22 @@ def run_story(
                     kind="correction-pass-grant-applied",
                     stage=name,
                 )
-            exempt = exempt + pass_grants
+            # A repair pass grants each stage it enters the files of the
+            # findings whose category resolved to that stage, for that attempt
+            # alone, on the same exempt list and the same terms: the record
+            # copies the findings with their resolved stages, so what was
+            # granted is recorded by the act that granted it.
+            repair_grants = repair_pass_grants(
+                run_dir, stages, state, name, attempt
+            )
+            for granted in repair_grants:
+                append_event(
+                    run_dir,
+                    f"repair-pass grant applied: {name} may change {granted}",
+                    kind="repair-pass-grant-applied",
+                    stage=name,
+                )
+            exempt = exempt + pass_grants + repair_grants
             ownership = _ownership_violation(run_dir, record_name, enforced, exempt)
             if ownership:
                 return _escalate(
@@ -9604,6 +9926,92 @@ def run_story(
                         index = stage_names.index(destination)
                         continue
                     _clean_clone_passed(run_dir, name, artifact)
+
+                # A finding about the story's own change whose fix is not to
+                # the words alone has somewhere to go, and it goes there only
+                # once the tree is known clean-clone-good. This block sits
+                # below the clean-clone check deliberately, where the
+                # correction block sits above it: a repair may change
+                # behaviour, so it is built on a verified tree and the
+                # verification it returns to runs the check again on the
+                # repaired one. A verdict whose clean-clone check failed has
+                # already taken the retry route above and never reaches here.
+                # Both names come off the declaration, so removing the key
+                # disables the whole mechanism with no change here.
+                repair = stage.get("repair_pass") or {}
+                repair_artifact = repair.get("result")
+                repairable = verdict.get("repairable_findings") or []
+                if repair_artifact and repairable:
+                    routing = repair_destination(repairable, routes, stage_names)
+                    if routing.unknown:
+                        # Above the budget comparison, for the reason the
+                        # correction block's escalation is: a finding naming a
+                        # category the workflow does not define is a bug in
+                        # what the verifier produced. Through _escalate, so
+                        # retry_count is untouched, and above archive_attempt,
+                        # so no attempts/attempt-N/ is written.
+                        named = ", ".join(f"'{one}'" for one in routing.unknown)
+                        return _escalate(
+                            run_dir,
+                            state,
+                            f"a repairable finding named {named}, which is "
+                            f"not a retry category {workflow['name']} defines; "
+                            f"it defines: {declared}",
+                            target_root=target_root,
+                            harness_root=harness_root,
+                            duration_seconds=elapsed(),
+                            verifier_outcome=verdict.get("status"),
+                            retry_decision="escalate",
+                            retry_reason=(
+                                f"a repairable finding named the unknown "
+                                f"category {named}"
+                            ),
+                        )
+                    repair_budget = repair["budget"]
+                    if state.repair_pass_count >= repair_budget:
+                        _repair_pass_recorded(
+                            run_dir, name, repairable, repair_budget
+                        )
+                    else:
+                        state.repair_pass_count += 1
+                        record = {
+                            "pass": state.repair_pass_count,
+                            "attempt": attempt,
+                            "stage": routing.stage,
+                            "findings": routing.resolved,
+                            "statement": repair_pass_statement(routing.stage),
+                        }
+                        (
+                            run_dir
+                            / repair_pass_result_file(
+                                repair_artifact, state.repair_pass_count
+                            )
+                        ).write_text(
+                            json.dumps(record, indent=2) + "\n", encoding="utf-8"
+                        )
+                        # Cleared for the reason the correction block clears
+                        # it: the passing verdict that routed this wrote no
+                        # guidance, so none is in force for the verification
+                        # the pass runs back into.
+                        state.guidance_in_force = []
+                        save_state(run_dir, state)
+                        _repair_pass_routed(
+                            run_dir,
+                            name,
+                            routing.stage,
+                            repairable,
+                            state.repair_pass_count,
+                            repair_budget,
+                            routed_slugs,
+                        )
+                        # Nothing a retry spends is spent: retry_count is
+                        # untouched, archive_attempt is not reached, and no
+                        # retry-history entry is appended. The pass names no
+                        # retry category and no retry destination; what each
+                        # stage is told comes off the record just written.
+                        routed_category, routed_stage = None, None
+                        index = stage_names.index(routing.stage)
+                        continue
             elif verdict.get("retry_recommended") and not target:
                 # Above the ceiling comparison deliberately: a verdict that
                 # cannot be routed is a bug in what the verifier produced, and

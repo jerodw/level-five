@@ -98,6 +98,36 @@
         }
       }
     },
+    "repairable_findings": {
+      "type": "array",
+      "description": "Findings you judge correct but too small to fail the run, whose fix is not to the words alone and belongs to one stage in the file each names. This is the third route between a correctable finding and a blocking issue: a correctable finding enters at the declared correction stage and is bounded to prose, and a blocking issue fails the verdict and spends a retry, while a repairable finding re-enters the workflow at the stage that owns it — the coordinator looks each finding's category up in this stage's retry_routing table exactly as it looks up a failed verdict's retry_target, enters at the earliest stage in workflow order among the resolved stages, and runs forward to verification again. Nothing a retry spends is spent: no retry is consumed, no attempt is archived, and the passing verdict that carried it stands. Its presence is the signal that a repair pass should run, for the same limitation retry_target, unfinishable_by_retry and correctable_findings record: this validator subset has no if/then and no dependentRequired, so presence-as-signal is the only shape with no state where the signal is set and the payload is missing. It is read only on a passing verdict, and only after the clean-clone check on that verdict has passed, because a repair may change behaviour and is therefore built on a verified tree; a failed verdict already routes and the correction travels in the retry guidance it writes. A category the workflow's retry_routing table does not define escalates the run naming the categories it does, with the strictness an unrecognised retry_target gets. It is optional because almost every verdict has no such finding, and it is bounded by the repair_pass budget the workflow declares.",
+      "items": {
+        "type": "object",
+        "required": ["path", "location", "finding", "correction", "category"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The repository-relative file the fix is in. Naming it is the grant: the stage the finding's category resolves to is granted this one file for that pass alone, on the same exempt list the ownership check and the revert check read, and an edit to any other governed file stays governed. A finding names one file; a fix spanning two files is two findings, or a blocking issue."
+          },
+          "location": {
+            "type": "string",
+            "description": "Where the defect is: the file, and the symbol, section or line within it. Where the finding was raised from one the pre-stage inspection routed to this story, name that finding's slug here, so the accounting counts it as acted on rather than filing it as a brief."
+          },
+          "finding": {
+            "type": "string",
+            "description": "What is wrong as it stands."
+          },
+          "correction": {
+            "type": "string",
+            "description": "What the fix is, specifically enough that the owning stage can make it without re-deciding what the finding meant. The stage entered is told the finding and the correction and nothing else."
+          },
+          "category": {
+            "type": "string",
+            "description": "The retry category that owns the fix, spelled exactly as the workflow's retry_routing table declares it. Unlike a correctable finding's category, this one chooses where the pass goes: it is resolved through that table to the stage that owns the file, and one the workflow does not declare escalates the run naming the categories it does."
+          }
+        }
+      }
+    },
     "unfinishable_by_retry": {
       "type": "string",
       "description": "The verifier's judgement that no number of retries closes the gap between what remains and what an attempt delivers, together with the split it recommends between this story and a follow-on. Its presence on a failed verdict ends the run in escalation at that verification, before the retry count is compared to the ceiling: the budget is left unspent and the retry count untouched, because the judgement is that spending them would not finish the work. Its content is both the judgement and the escalation's recorded reason, so the developer reads the verifier's own words rather than a reason the coordinator composed. It is one string rather than a boolean with a sibling reason for the same limitation retry_target records above: the validator subset has no if/then and no dependentRequired, so 'reason required when the flag is true' is inexpressible, and presence-as-signal leaves no state where the signal is set and the reason is missing. It is optional because almost every verdict has no such judgement to make, and it is read only on a failed verdict — a passing verification routes nowhere, so nothing there could act on it."

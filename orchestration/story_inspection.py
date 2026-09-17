@@ -1292,13 +1292,18 @@ def _slug_of(finding) -> str:
 
 
 def verdict_locations(verdict) -> tuple:
-    """Every location the verdict names, on a blocking issue or a correctable
-    finding, as the verdict wrote it.
+    """Every location the verdict names, on a blocking issue, a correctable
+    finding or a repairable finding, as the verdict wrote it.
+
+    A repairable finding counts for the reason a correctable one does: it is
+    an entry the verdict raised to have something acted on, so a routed
+    finding whose slug it names was acted on rather than declined, and is
+    not filed as a brief.
     """
     if not isinstance(verdict, dict):
         return ()
     named: list = []
-    for key in ("blocking_issues", "correctable_findings"):
+    for key in ("blocking_issues", "correctable_findings", "repairable_findings"):
         for entry in verdict.get(key) or ():
             if isinstance(entry, dict):
                 named.append(entry.get("location"))

@@ -1726,6 +1726,65 @@ def test_a_routed_finding_named_by_slug_is_acted_on_and_by_file_alone_is_not():
     assert remainder == [OWN_FINDING]
 
 
+#: story-155's third route, categorised for the fixture's one category so the
+#: entry is one a run could route. Its shape is the correctable entry's.
+REPAIRABLE_FINDING = {
+    "path": CHANGED_FILE,
+    "location": f"{CHANGED_FILE} - the helper",
+    "finding": "MARKER-REPAIRABLE the helper misses a case",
+    "correction": "MARKER-REPAIRABLE-FIX handle the case",
+    "category": RETRY_CATEGORY,
+}
+
+
+def repairing(*findings: dict) -> dict:
+    return {**PASS, "repairable_findings": [dict(one) for one in findings]}
+
+
+def test_a_routed_finding_named_by_slug_in_a_repairable_finding_is_acted_on_too():
+    """story-155: a repairable finding is an entry the verdict raised to have
+    something acted on, so a routed finding whose slug it names counts as
+    acted on exactly as one a correctable finding or a blocking issue names —
+    and by file alone it does not, which is the control that says the rule
+    is the slug and not the file the repairable finding happens to name.
+    """
+    acted, remainder = story_inspection.acted_on_by(
+        [OWN_FINDING], repairing(naming_the_slug(OWN_FINDING, REPAIRABLE_FINDING)))
+    assert acted == [OWN_FINDING]
+    assert remainder == []
+
+    acted, remainder = story_inspection.acted_on_by(
+        [OWN_FINDING], repairing(REPAIRABLE_FINDING))
+    assert REPAIRABLE_FINDING["location"].startswith(CHANGED_FILE), \
+        "the control names the file the finding is about"
+    assert acted == []
+    assert remainder == [OWN_FINDING]
+
+    # One routed finding named across the three kinds of entry, and the other
+    # in none of them: the remainder is still filed.
+    acted, remainder = story_inspection.acted_on_by(
+        [OWN_FINDING, BOTH_FINDING],
+        {**passing_with(CORRECTABLE_FINDING),
+         "repairable_findings": [naming_the_slug(OWN_FINDING, REPAIRABLE_FINDING)]})
+    assert acted == [OWN_FINDING]
+    assert remainder == [BOTH_FINDING]
+
+
+def test_verdict_locations_reads_all_three_kinds_of_entry_and_nothing_else():
+    """The reader the slug rule is built on, directly: every location a
+    blocking issue, a correctable finding or a repairable finding carries, in
+    that order, and none from a key it does not read."""
+    verdict = {
+        "blocking_issues": [{"location": "one"}],
+        "correctable_findings": [{"location": "two"}],
+        "repairable_findings": [{"location": "three"}, "not an entry"],
+        "unverified": [{"location": "four"}],
+    }
+    assert story_inspection.verdict_locations(verdict) == ("one", "two", "three")
+    assert story_inspection.verdict_locations({"repairable_findings": []}) == ()
+    assert story_inspection.verdict_locations("not a verdict") == ()
+
+
 def test_the_slug_rule_keeps_every_finding_and_names_one_slug_at_a_time():
     """Nothing is dropped between the two halves, and naming one routed
     finding's slug acts on that finding and no other — so two findings in one
@@ -1887,6 +1946,42 @@ def test_a_routed_finding_the_verdict_names_by_file_alone_is_filed(
     assert filings_of(filings, OWN_FINDING) == 1
     seen = [json.dumps(entry) for entry in run.runner.queue_at_judging[1]]
     assert any(OWN_FINDING["body"] in entry for entry in seen)
+
+
+def test_a_repairable_finding_naming_the_slug_is_acting_on_the_finding(
+        driven, filings):
+    """story-155's kind of entry, driven as a run. The fixture's workflow
+    declares no repair pass, so the verdict routes nowhere and the run
+    completes on it — which is the point: the accounting reads what the
+    verdict raised, whether or not a route acted on it, and a routed finding
+    a repairable finding names by slug is acted on and filed by nobody."""
+    run = driven(findings=[OWN_FINDING],
+                 verdicts=[repairing(naming_the_slug(OWN_FINDING,
+                                                     REPAIRABLE_FINDING))])
+
+    assert run.code == 0
+    assert run.state["status"] == "completed"
+    recorded = accounting(run)
+    assert (recorded["routed"], recorded["acted_on"], recorded["filed"]) == \
+        (1, 1, 0)
+    assert recorded["acted_on_slugs"] == [OWN_FINDING["slug"]]
+    assert routed_markers(run) == []
+    assert filings_of(filings, OWN_FINDING) == 0
+
+
+def test_a_repairable_finding_naming_the_file_alone_leaves_it_filed(
+        driven, filings):
+    """The control: the same run with the repairable finding naming the file
+    and no slug, and the routed finding is filed."""
+    run = driven(findings=[OWN_FINDING],
+                 verdicts=[repairing(REPAIRABLE_FINDING)])
+
+    assert run.code == 0
+    recorded = accounting(run)
+    assert (recorded["routed"], recorded["acted_on"], recorded["filed"]) == \
+        (1, 0, 1)
+    assert routed_markers(run) == [OWN_FINDING["body"]]
+    assert filings_of(filings, OWN_FINDING) == 1
 
 
 def test_a_blocking_issue_naming_the_slug_is_acting_on_the_finding(driven):

@@ -1248,6 +1248,68 @@ def test_this_deployment_declares_a_clean_clone_check_and_a_revert_check():
             assert declaration["baseline"], stage["name"]
 
 
+#: The key a stage declares a repair pass under, the key beside its budget
+#: that records the judgement, and the budget this deployment chose. Spelled
+#: once here: the mechanism is tests/test_repair_pass.py's question against a
+#: built definition, and what *this* deployment declares is asked here.
+REPAIR_PASS_KEY = "repair_pass"
+REPAIR_PASS_REASON_KEY = "budget" + REASON_SUFFIX
+REPAIR_PASS_BUDGET = 2
+
+
+@pytest.mark.parametrize("name", sorted(shipped_definitions()))
+def test_every_shipped_definition_declares_a_repair_pass_it_can_take(name):
+    """story-155: both shipped definitions declare the pass, on the one stage
+    that judges, with the budget this deployment chose and a reason beside it
+    that states the number. The declaration names no stage of its own — the
+    stage comes off the retry_routing table the same stage declares, which
+    the pre-flight requires and which is asserted here through it.
+    """
+    definition = shipped_definitions()[name]
+    declaring = [stage for stage in definition["stages"]
+                 if stage.get(REPAIR_PASS_KEY)]
+    assert len(declaring) == 1, [stage["name"] for stage in declaring]
+    (stage,) = declaring
+    declaration = stage[REPAIR_PASS_KEY]
+
+    assert stage["name"] == conftest.VERIFYING_STAGE
+    assert story_coordinator.repair_pass_problems(definition["stages"]) == [], name
+    assert declaration["budget"] == REPAIR_PASS_BUDGET
+    assert "stage" not in declaration
+    assert declaration["result"].endswith(".json")
+    assert states_the_number(declaration[REPAIR_PASS_REASON_KEY],
+                             declaration["budget"]), name
+    assert stage["on_failure"]["retry_routing"], name
+    # And it sits beside the correction pass rather than replacing it: the
+    # third route is added to the two, not substituted for one.
+    assert "correction_pass" in stage, name
+
+
+@pytest.mark.parametrize("declaration, table", [
+    ({"result": "r.json", "budget": 0}, True),
+    ({"result": "r.json", "budget": "two"}, True),
+    ({"result": "r.json", "budget": True}, True),
+    ({"result": "r.json", "budget": 1}, False),
+], ids=["a budget of zero", "a budget that is a word", "a budget that is a bool",
+        "no routing table to resolve through"])
+def test_repair_pass_problems_reports_a_declaration_the_pre_flight_refuses(
+    declaration, table,
+):
+    """The control for the clean sweep above, built rather than mutated from
+    what this repository deploys: a budget that is not a positive integer,
+    and a declaration on a stage with no table, are each reported."""
+    routing = {"the-work": {"stage": StageRef(0), "when": "when it is missing"}}
+    built = build_workflow(
+        workflow_stage(),
+        workflow_stage(name=conftest.VERIFYING_STAGE,
+                       repair_pass=declaration,
+                       **({"retry_routing": routing} if table else {})),
+        name="a-refused-repair-pass-workflow")
+    problems = story_coordinator.repair_pass_problems(built["stages"])
+    assert len(problems) == 1, problems
+    assert conftest.VERIFYING_STAGE in problems[0]
+
+
 #: The key a stage declares a pre-stage inspection under, and the key inside it
 #: that names the run-directory artifact the inspection writes. Spelled once
 #: here and derived from by everything below, so this module carries no second
