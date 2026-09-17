@@ -1,0 +1,114 @@
+story:
+  id: story-158
+  title: The shared target repository is built once and copied per test
+  description: |
+    tests/conftest.py's `target_root` fixture builds its sample repository
+    from scratch for every test that asks for it: six directories, six files,
+    then git init, two git config, git add and git commit. Measured on the
+    filing machine a build averaged 55.6 ms and a `shutil.copytree` copy of
+    the finished tree 12.0 ms, and 83 of the suite's 126 modules reference the
+    fixture, so the difference is on the order of 175 serial seconds per run
+    and is the part of the suite's cost that scales with how many tests there
+    are rather than with what any of them does.
+
+    This story builds the tree once per test session into a template and
+    copies it per test. Every test still receives a repository of its own to
+    mutate, at the same path it received before, with the same files and the
+    same single commit; no assertion changes and nothing about what is tested
+    moves. The template is keyed by workflow name, because the fixture takes
+    `configured_workflow` and a module that overrides it must go on receiving
+    a target configured for the workflow it built. The copy carries `.git`
+    faithfully — copytree with symlinks=True, which is what was measured —
+    because the repository's commit is what the clean-tree pre-flight reads.
+    The `.git` being copied is a real directory rather than a `gitdir:`
+    pointer, which is the question story-153 and #309 turned on: the template
+    is made by `git init` in a fresh directory of its own, never inside a
+    worktree, so there is no pointer to copy.
+
+    Planned from the brief filed under key 157.
+  workflow: story-workflow
+
+tasks:
+  - Add a session-scoped template to tests/conftest.py that builds the sample target once per workflow name, with exactly the directories, files, git configuration and initial commit `target_root` builds today, into a directory obtained from `tmp_path_factory` — one template per workflow name per pytest session (which under `-n auto` is one per worker).
+  - Rewrite `target_root` to copy the template for its `configured_workflow` into `tmp_path / "sample-target"` with `shutil.copytree(..., symlinks=True)` and return that copy, so a test's target lives where it lived before and is produced without spawning a process.
+  - Expose the template to tests in a way the isolation test can reach — a fixture returning the template path for the current workflow name is the expected shape — so a test can assert the template is untouched after a test has mutated its copy.
+  - Add a test module under tests/ asserting the property function scope was buying — a test that mutates its target leaves the template and every later copy unchanged — and the properties the copy has to keep — a clean tree, a `.git` that is a directory, and a config naming the workflow the template was built for.
+  - Record the template in .harness/docs/ARCHITECTURE.md beside the suite's other standing rules, saying why the template is per workflow name and why its `.git` is a directory rather than a pointer.
+
+acceptance_criteria:
+  - A target returned by `target_root` is at `tmp_path / "sample-target"`, holds every path the fixture wrote before this story (the .harness subtree, config.yaml, story-001.yaml, both standards files, ARCHITECTURE.md, src/app.py) with the same contents, and has exactly one commit.
+  - `git status --porcelain` in a freshly returned target prints nothing, so the clean-tree pre-flight `run_story` performs reads it as clean.
+  - `.git` in a returned target is a directory, not a file holding a `gitdir:` pointer.
+  - The per-test path of `target_root` spawns no process: git runs only when a template for a workflow name is first built in a session.
+  - A test that writes a file into its target and commits it leaves the template unchanged and leaves a copy taken afterwards without that file and with the template's single commit as HEAD. The assertion holds under `-n auto` regardless of which worker runs it and in what order, so it does not depend on one test running after another.
+  - A module that overrides `configured_workflow` receives a target whose .harness/config.yaml names that workflow, and two workflow names never share a template.
+  - The template is never returned to a test as its target; every test receives a copy.
+  - Every existing test passes unchanged; no assertion is altered, weakened or skipped.
+  - No test bounds how long a build or a copy takes; the saving is established by the fixture's structure rather than by a clock.
+
+technical_plan:
+  implementation_steps:
+    - Extract the body of `target_root` that writes the tree and commits it into a function that builds a target for a workflow name at a given root, keeping every command as it is (including `git init -q` with no `-b`, so the branch the template stands on is what it was).
+    - Add a session-scoped fixture holding a dict from workflow name to template path, built lazily through `tmp_path_factory.mktemp`, so the first test asking for a workflow name builds its template and every later one finds it.
+    - Make `target_root` look the template up for its `configured_workflow`, copy it to `tmp_path / "sample-target"` with `shutil.copytree(template, root, symlinks=True)`, and return the copy.
+    - Write the isolation test module so that a single test performs the mutation and the check itself (copy, mutate, then inspect the template and a second copy), rather than relying on two tests running in order on the same worker.
+    - Add a short section to .harness/docs/ARCHITECTURE.md recording the template and the two facts a later change must keep, per-workflow-name templates and a real .git directory.
+  likely_file_changes:
+    - file: tests/conftest.py
+      stage: implementer
+      reason: the fixture rewrite is the whole implementation; this file is the suite's shared helper library rather than a test module, and the grant below lifts the implementer's restriction for it
+    - file: tests/test_target_root_is_copied_per_test.py
+      stage: tester
+      reason: the new module asserting a mutated target leaves the template and every later copy unchanged, and that a copy is clean, has a real .git directory and names its workflow
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: record the template beside the suite's standing rules
+
+scope:
+  modify:
+    - tests/conftest.py
+    - tests/test_target_root_is_copied_per_test.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - scripts/
+    - prompts/
+    - workflows/
+    - schemas/
+    - every existing test module under tests/ other than the new one this story adds — the per-module make_target fixtures and the other function-scoped fixtures stay as they are
+
+verification_requirements:
+  - Confirm from the run's suite evidence that every existing test passes with no assertion changed, and that the census records no fall in assertion count.
+  - Confirm by reading tests/conftest.py that `target_root` copies from a session-scoped template keyed by workflow name, copies with symlinks=True, returns `tmp_path / "sample-target"`, and spawns no process on the per-test path.
+  - Confirm the new test module asserts each of these — a mutated target leaves the template and a later copy unchanged, the copy is clean under git status, its .git is a directory, and its config names its workflow — and that none of its assertions depends on test ordering or on a wall-clock window.
+  - Confirm the fixture remains function-scoped and that no test is handed the template itself.
+  - Confirm .harness/docs/ARCHITECTURE.md describes the template accurately against the code as it stands.
+
+constraints:
+  - The fixture stays function-scoped; each test receives its own repository, and what changes is how it is produced rather than how many there are.
+  - The template's tree, files, git configuration and single commit are exactly what `target_root` built before, so no test observes a different target.
+  - Copies are taken with shutil.copytree and symlinks=True; nothing clones the template over a git transport.
+  - Only tests/conftest.py, the new test module and the architecture document change; the per-module make_target fixtures and every other process-spawning fixture are left alone.
+  - No test bounds a wall-clock duration, per .harness/standards/testing.md.
+  - Python 3.10+ standard library and pytest only.
+
+stage_exceptions:
+  - stage: implementer
+    create: tests/conftest.py
+    reason: >-
+      This story's implementation is the fixture in tests/conftest.py, a
+      shared helper library rather than a test module. Without the grant the
+      revert check governs the edit and can only refuse it: reverting a
+      faster fixture that produces an identical target leaves the suite green,
+      so the change would be silently undone. The grant names this one file
+      and leaves the rest of tests/ governed. The same grant, for the same
+      reason, was made in story-056.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-17 11:50:36
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 157
