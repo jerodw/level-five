@@ -1463,18 +1463,26 @@ def acted_on_by(findings, verdict) -> tuple[list, list]:
     return acted, remainder
 
 
-def entries_among_the_routed(locations, routed_slugs) -> int:
-    """How many verdict entries name one of the routed findings' slugs.
+def routed_findings_named(locations, routed_slugs) -> int:
+    """How many of the routed findings a set of verdict entries names.
 
-    The re-entry events' number: of the findings an event carries, how many are
-    among the ones routed to this story. Counted over the entries and decided
-    by `names_a_slug`, so it is the accounting's own rule read from the other
-    side rather than a second one.
+    The re-entry events' number, counted over the **routed findings** and not
+    over the entries, because a verdict raises an entry per location a repair
+    has to reach and so names one finding several times: story-156's first
+    repair pass carried seven entries naming three routed findings, and
+    counting entries reported six of three — a number that cannot be true of
+    the thing it counts. Counting findings is also what makes the claim in
+    `names_a_slug` hold, that the events and the accounting cannot count
+    differently: `acted_on_by` splits the routed findings, so the event has to
+    be over findings for the two to agree.
+
+    Decided by `names_a_slug`, which is that one rule.
     """
     slugs = frozenset(one for one in routed_slugs if isinstance(one, str))
     if not slugs:
         return 0
-    return sum(1 for location in locations if names_a_slug(location, slugs))
+    return sum(1 for slug in slugs
+               if any(names_a_slug(location, {slug}) for location in locations))
 
 
 @dataclass(frozen=True)

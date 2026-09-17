@@ -2319,14 +2319,39 @@ def test_the_correction_pass_event_says_how_many_it_carries_were_routed(
                   verdicts=[passing_with(naming_the_slug(OWN_FINDING)), PASS],
                   name="named-journal")
     message = the_one(named, "correction-pass-routed")
-    assert f"1 of them are among the 1 {ROUTED_CLAUSE}" in message, message
+    assert f"they name 1 of the 1 {ROUTED_CLAUSE}" in message, message
 
     unnamed = drive(build_target(tmp_path / "unnamed"), harness, tmp_path,
                     findings=[OWN_FINDING],
                     verdicts=[passing_with(CORRECTABLE_FINDING), PASS],
                     name="unnamed-journal")
     message = the_one(unnamed, "correction-pass-routed")
-    assert f"0 of them are among the 1 {ROUTED_CLAUSE}" in message, message
+    assert f"they name 0 of the 1 {ROUTED_CLAUSE}" in message, message
+
+
+def test_several_entries_naming_one_finding_are_counted_as_that_one_finding(
+        harness, tmp_path):
+    """The clause counts findings and not entries, because a verdict raises an
+    entry per location a repair has to reach and so names one finding several
+    times.
+
+    Counting entries reported a number the sentence cannot carry: story-156's
+    own first repair pass carried seven entries naming three routed findings
+    and said "6 of them are among the 3 findings routed to this story". Here
+    three entries name the one routed finding, and the count that would have
+    been wrong is the one asserted.
+    """
+    run = drive(build_target(tmp_path / "several"), harness, tmp_path,
+                findings=[OWN_FINDING],
+                verdicts=[passing_with(naming_the_slug(OWN_FINDING),
+                                       naming_the_slug(OWN_FINDING),
+                                       naming_the_slug(OWN_FINDING)), PASS],
+                name="several-journal")
+    message = the_one(run, "correction-pass-routed")
+    assert f"they name 1 of the 1 {ROUTED_CLAUSE}" in message, message
+    # The entry count is still reported, and is still three: what changed is
+    # which of the two numbers the routed clause is about.
+    assert "3 correctable finding(s)" in message, message
 
 
 def test_the_retry_event_says_how_many_blocking_issues_were_routed(
@@ -2337,14 +2362,14 @@ def test_the_retry_event_says_how_many_blocking_issues_were_routed(
                   verdicts=[failing_naming(OWN_FINDING), PASS],
                   name="named-journal")
     message = the_one(named, "verification-failed")
-    assert f"1 of them are among the 1 {ROUTED_CLAUSE}" in message, message
+    assert f"they name 1 of the 1 {ROUTED_CLAUSE}" in message, message
 
     unnamed = drive(build_target(tmp_path / "unnamed"), harness, tmp_path,
                     findings=[OWN_FINDING],
                     verdicts=[failing_into(RETRY_CATEGORY), PASS],
                     name="unnamed-journal")
     message = the_one(unnamed, "verification-failed")
-    assert f"0 of them are among the 1 {ROUTED_CLAUSE}" in message, message
+    assert f"they name 0 of the 1 {ROUTED_CLAUSE}" in message, message
 
 
 @pytest.mark.parametrize("kind, verdict", [
@@ -2367,7 +2392,7 @@ def test_a_re_entry_event_says_nothing_about_routing_when_nothing_was_routed(
     # The clause's own phrasing, not the bare token "routed": the retry
     # event's accepted wording says "rerouted to <stage>", which is not a
     # claim about the Inspector's findings.
-    assert "of them are among the" not in message
+    assert "findings routed to this story" not in message
 
     undeclared_target = build_target(tmp_path / "undeclared")
     undeclared = drive(undeclared_target,

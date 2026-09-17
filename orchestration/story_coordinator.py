@@ -6173,18 +6173,26 @@ def routed_among(entries: list[dict], routed_slugs) -> str:
     """The clause a re-entry event carries when findings were routed.
 
     Empty when none were, so an event under a workflow declaring no inspection
-    is byte-for-byte what it was. Otherwise it says, of the entries the event
-    carries, how many name a routed finding's slug in their location — the
-    accounting's rule, reached through `story_inspection` rather than
-    respelled here, so the event and the accounting cannot count differently.
+    is byte-for-byte what it was. Otherwise it says how many of the findings
+    routed to this story the entries name — the accounting's rule, reached
+    through `story_inspection` rather than respelled here, so the event and the
+    accounting cannot count differently.
+
+    Both halves of the clause count findings. A verdict raises an entry per
+    location a repair has to reach, so the entries it carries are the wrong
+    unit to put against a count of findings: story-156's first repair pass
+    carried seven entries naming three routed findings, and the clause read
+    "6 of them are among the 3 findings routed to this story", which no reading
+    makes true. "They name" rather than "of them" for the same reason — what is
+    counted is no longer a subset of the entries.
     """
     slugs = tuple(routed_slugs)
     if not slugs:
         return ""
     locations = [entry.get("location") for entry in entries
                  if isinstance(entry, dict)]
-    among = story_inspection.entries_among_the_routed(locations, slugs)
-    return (f"; {among} of them are among the {len(slugs)} findings "
+    named = story_inspection.routed_findings_named(locations, slugs)
+    return (f"; they name {named} of the {len(slugs)} findings "
             f"routed to this story")
 
 
