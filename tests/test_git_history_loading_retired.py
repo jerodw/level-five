@@ -897,6 +897,27 @@ def ignored_paths(repo: Path) -> frozenset[str]:
     return frozenset(entry.rstrip("/") for entry in listed.split("\0") if entry)
 
 
+def run_git(arguments: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    """Run one git command in `cwd` with its output captured, raising with
+    what git wrote on stderr when it exits non-zero.
+
+    `copy_repository` below routes every git command it makes through this
+    rather than through `check=True`, because a `CalledProcessError` carries
+    the exit status and nothing else: a clone that cannot be made would error
+    the fixtures with `returned non-zero exit status 128`, and the line git
+    wrote saying why would be in a captured stderr nobody printed. The shape
+    of the message — the command, then git's stripped stderr — is the one
+    `_build_clone` in orchestration/story_coordinator.py already raises in.
+    """
+    result = subprocess.run(["git", *arguments], cwd=cwd,
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Could not run git {' '.join(arguments)} in {cwd}: "
+            f"{result.stderr.strip()}")
+    return result
+
+
 def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
     """Copy `source` to `destination`, carrying what the repository is and
     leaving behind what the runs left in it.
@@ -920,6 +941,16 @@ def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
     nothing here spells git's worktree layout, and the remote the clone
     records is removed afterwards so the copy holds no reference back to the
     source at all.
+
+    The clone is made over git's normal transport (`--no-local`), so git
+    negotiates a pack over a pipe and never reads the source's object files —
+    the same decision `_build_clone` in orchestration/story_coordinator.py
+    records for the clean-clone check, for the reason given in its docstring
+    and in the ARCHITECTURE.md record of the CI runs that forced it. Two
+    clones of this repository in one system should be made the way the
+    repository decided clones of it are made. It also means the copy's object
+    files are its own rather than hardlinks into the source, which is what
+    "no reference back to the source" has to mean for the copy to be that.
 
     The working tree is then laid over the clone rather than taken from it.
     A clone checks out HEAD's tree, and what the nested pytest runs must see
@@ -946,6 +977,14 @@ def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
     nothing. The callable below compares the repository-relative path of each
     entry instead, which is the form git reports.
     """
+    # The clone is the first thing asked of the source, ahead of the ignored
+    # listing: both only read it, and a source that is not a repository is
+    # then reported with the line git wrote refusing to clone it rather than
+    # with `ls-files` failing first.
+    run_git(["clone", "--quiet", "--no-local", "--no-checkout", str(source),
+             str(destination)], cwd=source)
+    run_git(["remote", "remove", "origin"], cwd=destination)
+
     excluded = ignored_paths(source)
 
     def leave_behind(directory, names):
@@ -956,15 +995,9 @@ def copy_repository(destination: Path, source: Path = REPO_ROOT) -> Path:
         prefix = f"{Path(relative).as_posix()}/"
         return {name for name in names if f"{prefix}{name}" in excluded}
 
-    subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(source),
-                    str(destination)], cwd=source, capture_output=True,
-                   text=True, check=True)
-    subprocess.run(["git", "remote", "remove", "origin"], cwd=destination,
-                   capture_output=True, text=True, check=True)
     shutil.copytree(source, destination, ignore=leave_behind,
                     dirs_exist_ok=True)
-    subprocess.run(["git", "reset", "--quiet"], cwd=destination,
-                   capture_output=True, text=True, check=True)
+    run_git(["reset", "--quiet"], cwd=destination)
     return destination
 
 
@@ -1359,6 +1392,78 @@ def test_a_copy_of_a_main_checkout_carries_what_it_carried_before(tmp_path):
         == [" M kept.txt", "?? added.txt"]
     assert ignored_paths(copy) == frozenset()
     assert not (copy / "left-behind").exists()
+
+
+#: The flag that makes a clone negotiate a pack over a pipe, and the flags
+#: that make it walk the source's object store as a directory tree instead.
+#: `--no-hardlinks` is a directory copy with its own object files; `--local`
+#: and `-l` are the directory copy git already defaults to for a path.
+NORMAL_TRANSPORT = "--no-local"
+DIRECTORY_COPY_FLAGS = ("--no-hardlinks", "--local", "-l")
+
+
+def test_the_copy_is_cloned_over_the_normal_transport(tmp_path, monkeypatch):
+    """Asserted against the argument list `subprocess.run` was handed during a
+    real call of `copy_repository`, not against the module's text: the spawn
+    is intercepted on this module's own `subprocess`, in the shape
+    `tests/test_clean_clone_check.py`'s `clone_argv` uses for `_build_clone`,
+    so what is recorded is what the operating system was asked to do.
+
+    Exactly one clone is made, it carries `--no-local`, and it carries none of
+    the flags that would make git enumerate and copy or hardlink the source's
+    `.git/objects` — the path `_build_clone`'s docstring records failing in CI
+    while a multi-pack index was being written.
+    """
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    (origin / "kept.txt").write_text("tracked\n", encoding="utf-8")
+    init_repository(origin)
+
+    seen: list[list[str]] = []
+    original = subprocess.run
+
+    def spy(args, *rest, **kwargs):
+        if isinstance(args, (list, tuple)) and list(args[:2]) == ["git", "clone"]:
+            seen.append([str(argument) for argument in args])
+        return original(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    copy = copy_repository(tmp_path / "copy", source=origin)
+    monkeypatch.undo()
+
+    assert (copy / "kept.txt").exists(), "the copy was not made"
+    assert len(seen) == 1, seen
+    argv = seen[0]
+    assert NORMAL_TRANSPORT in argv, argv
+    for flag in DIRECTORY_COPY_FLAGS:
+        assert flag not in argv, argv
+
+
+def test_a_clone_that_cannot_be_made_raises_with_what_git_said(tmp_path):
+    """A source that is not a repository errors `copy_repository` with git's
+    own line rather than with `returned non-zero exit status 128` and nothing
+    else.
+
+    The control runs the same `git clone` directly against the same source
+    and requires its stderr to be non-empty, so the message is shown to carry
+    the words git actually wrote and not a sentence that would be satisfied
+    by an empty stderr.
+    """
+    not_a_repository = tmp_path / "empty"
+    not_a_repository.mkdir()
+
+    direct = subprocess.run(
+        ["git", "clone", "--quiet", "--no-local", "--no-checkout",
+         str(not_a_repository), str(tmp_path / "direct")],
+        cwd=not_a_repository, capture_output=True, text=True)
+    assert direct.returncode != 0, "git cloned a directory that is not a repository"
+    what_git_said = direct.stderr.strip()
+    assert what_git_said, "git refused with nothing on stderr, so there is nothing to carry"
+
+    with pytest.raises(RuntimeError) as raised:
+        copy_repository(tmp_path / "copy", source=not_a_repository)
+    assert what_git_said in str(raised.value), str(raised.value)
+    assert "non-zero exit status" not in str(raised.value)
 
 
 def run_one_test(repo: Path, rel: str, test: str) -> subprocess.CompletedProcess:
