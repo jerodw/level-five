@@ -26,18 +26,30 @@ What is asserted here, and what each assertion's subject is:
     that module already builds the one definition declaring all three of the
     coordinator's suite runs, and the mechanism is the subject here while the
     stage list and the artifact names are inputs to it.
-  * That an outstanding failure survives a resume, and that a run reaching the
-    end of its workflow carrying one escalates rather than completing.
+  * That an outstanding failure survives a resume as the failure it was, and
+    what then clears it: the clean-clone check the verifying stage declares,
+    which since story-159 is put to the same rule a green declared run is. A
+    run resumed past the declaring stage never makes a declared run again, so
+    before that story it could pass every check it had and still be refused at
+    the end of its workflow, with no route out but resuming earlier for no
+    reason except to clear the field. Now the resume completes where the check
+    ran and exited zero at a scope no narrower than the failure's, and is
+    refused on the same terms a narrowed declared run is — where the check's
+    recorded scope is narrower, and where the check did not run at all.
+  * That a run whose verifying stage declares no clean-clone check still
+    reaches the refusal over a standing failure, because there is then no run
+    after the declaring stage that could shadow it.
 
-The declared suite run runs the configured command unnarrowed, so every one of
-them records an empty scope and today every rerun shadows. That is the property
-the harness wants and it is asserted below as the unaffected case; it is also
-why the refusing cases substitute for `suite_run_check` to make two runs of one
-story differ in their recorded scope. What is substituted is the scope alone —
-the real check still runs the target's real command, writes its real records and
-returns its real exit code — because the subject of those cases is the routing
-decision taken on the scope, and a scope no run can differ in leaves that
-decision unexercised.
+The declared suite run and the clean-clone check both run the configured
+command unnarrowed, so every one of them records an empty scope and today every
+rerun shadows. That is the property the harness wants and it is asserted below
+as the unaffected case; it is also why the refusing cases substitute for
+`suite_run_check` and for `clean_clone_check` to make two runs of one story
+differ in their recorded scope. What is substituted is the result the routing
+reads — its scope, or whether it ran — and nothing else: the real check still
+runs the target's real command, writes its real record and returns its real exit
+code, because the subject of those cases is the routing decision taken on the
+result, and a result no run can differ in leaves that decision unexercised.
 
 Every absence asserted here carries a demonstration that it can fail:
 
@@ -53,13 +65,23 @@ Every absence asserted here carries a demonstration that it can fail:
   * "the non-shadowing rerun takes no self-route" sits beside the carry-forward
     line it does write, and beside the same reading of a run whose suite never
     failed, which finds no such line;
-  * "the clean-clone check and the revert check neither read nor write the
-    field" is enumerated over every definition under `orchestration/` rather
-    than sampled, and sits beside the same scan over that source with a write of
-    the field planted in a definition of its own, which the scan reports;
-  * "the resumed run escalates and writes no completion report" sits beside the
-    identical resume of the identical run directory with the one field cleared,
-    which completes and writes one.
+  * "neither the clean-clone check's functions nor the revert check's read or
+    write the field" is enumerated over every definition under `orchestration/`
+    rather than sampled, and sits beside the same scan over that source with a
+    write of the field planted in a definition of its own, which the scan
+    reports. The clean-clone check is inside the rule now and its functions
+    still do not name the field, because the comparison is made in the loop
+    where the exit code is read — as it is for the declared run, whose check
+    does not touch the field either;
+  * "the resumed run refused on a narrowed clean-clone pass writes no shadowing
+    note and no completion report" sits beside the identical resume with the
+    check's scope left as recorded, which writes both;
+  * "the resume with the field already clear writes no shadowing note" sits
+    beside the same resume with the field set, which writes one — so the note
+    is written where a failure was cleared rather than at every pass;
+  * "no second rule decides the clear" is shown by substituting for the one
+    rule: the resume that completes is refused when `suite_run_shadows` is made
+    to say no, at the very scope it says yes to unsubstituted.
 
 `.harness/docs/ARCHITECTURE.md` is not asserted on: this story's plan assigns it
 to the documenter, the stage that runs after this one.
@@ -92,6 +114,7 @@ from test_coordinator_runs_the_suite import (  # noqa: F401
     STORY_ID,
     SUITE_ARTIFACT,
     VERIFYING,
+    WORKFLOW,
     Runner,
     all_three_run,
     carry_forward_lines,
@@ -99,6 +122,7 @@ from test_coordinator_runs_the_suite import (  # noqa: F401
     harness_root,
     history_of,
     make_target,
+    materialize,
     plan_touching_nothing_after,
     read_json,
     record_of,
@@ -674,102 +698,252 @@ def test_a_run_whose_suite_stays_red_ends_on_the_verifiers_exhausted_retries(
 
 
 # --------------------------------------------------------------------------
-# A resume carries the failure, and a run may not complete over one
+# A resume carries the failure, and the clean-clone check is what clears it
+#
+# The run below is story-158's shape exactly: refused at the retry ceiling with
+# the suite red, repaired by hand, and re-entered at the verifying stage. That
+# re-entry makes no declared suite run — it is past the stage that declares
+# one — so the only run of the suite it makes is the clean-clone check the
+# verifying stage declares, and that check is now what decides whether the
+# failure it carries in is the failure it carries out.
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture
-def resumable_run(target_root, harness_root):
-    """A run left with a failure outstanding and re-enterable past the stage
-    that declares the suite run.
+#: The artifact the verifying stage declares for its clean-clone check, read
+#: off the loaded definition rather than spelled here.
+CLEAN_CLONE_ARTIFACT = next(
+    stage["clean_clone"]["result"] for stage in WORKFLOW["stages"]
+    if "clean_clone" in stage)
 
-    The run is driven until the retry ceiling stops it with the suite still
-    red, which is how a real run leaves the field set. The developer then
-    repairs the suite by hand and commits, and the run directory is marked as
-    one that was interrupted at the verifying stage — the shape a crashed run
-    leaves, which re-enters with no guard. The re-entry therefore makes no
-    declared suite run at all, which is the only way the end of a workflow is
-    reached with a failure still outstanding.
+
+def test_the_verifying_stage_declares_the_check_and_the_declaring_one_does_not():
+    """The premise the resume cases rest on: the check that can shadow a
+    failure is declared on the stage a resume re-enters at, and nowhere
+    earlier — so a re-entry there makes exactly one run of the suite."""
+    declaring = [s["name"] for s in WORKFLOW["stages"] if "clean_clone" in s]
+    assert declaring == [VERIFYING]
+    assert CLEAN_CLONE_ARTIFACT not in COORDINATOR_SOURCE
+
+
+def leave_a_failure_outstanding(target_root: Path, harness: Path,
+                                workflow: dict | None = None) -> Path:
+    """Drive a run until the retry ceiling stops it with the suite still red,
+    which is how a real run leaves the field set; then repair the suite by
+    hand, commit, and mark the run directory as one interrupted at the
+    verifying stage — the shape a crashed run leaves, which re-enters with no
+    guard. Returns the run directory, re-enterable past the declaring stage.
     """
     code, _, run_dir = drive(
-        target_root, harness_root,
+        target_root, harness,
         plan_touching_nothing_after([BROKEN] * MORE_THAN_ANY_RUN_TAKES),
-        verdicts=[FAILED])
+        verdicts=[FAILED], workflow=workflow)
     assert code == 2, "the shape was meant to escalate"
     assert failure_in(run_dir), "the shape was meant to leave a failure"
 
     write(target_root / SENTINEL, "repaired\n")
     conftest.commit_setup(target_root, "the developer repaired the suite")
     write_state(run_dir, {"status": "running", "current_stage": VERIFYING})
-    return target_root, run_dir
+    return run_dir
+
+
+@pytest.fixture
+def resumable_run(target_root, harness_root):
+    """A run left with a failure outstanding and re-enterable past the stage
+    that declares the suite run, under the workflow whose verifying stage
+    declares the clean-clone check."""
+    return target_root, leave_a_failure_outstanding(target_root, harness_root)
+
+
+def shadow_lines(run_dir: Path, outstanding: dict) -> list[dict]:
+    """Every event saying a clean-clone pass cleared this failure.
+
+    Read as the line the coordinator composes for that failure, so the reading
+    is derived rather than spelled; a list rather than an assertion, so the
+    same reading can be made of a run that cleared nothing, which is the
+    control.
+    """
+    line = story_coordinator.suite_failure_shadowed_by_clean_clone_note(
+        outstanding)
+    return [entry for entry in history_of(run_dir) if entry["message"] == line]
+
+
+def clean_clone_record(run_dir: Path) -> dict:
+    return record_of(run_dir, CLEAN_CLONE_ARTIFACT)
+
+
+def archived_pair(run_dir: Path, outstanding: dict, entry: int = 1) -> tuple[Path, Path]:
+    """Where the outstanding failure's retained record and output are found
+    after the resume that cleared it.
+
+    A resume moves the entry it closes under the entry directory it opens, each
+    artifact keeping its position relative to the run directory, so the pair
+    the note names by its pre-resume paths is one directory further down by
+    the time the note is read. Composed from `entry_dir` rather than spelled,
+    so the directory name is written nowhere here.
+    """
+    opened = story_coordinator.entry_dir(run_dir, entry)
+    record = opened / outstanding["result_path"]
+    output = opened / Path(outstanding["output_path"]).relative_to(run_dir)
+    return record, output
 
 
 def test_a_resume_restores_the_outstanding_failure(resumable_run, harness_root):
     """It is evidence that a failure is unrepaired rather than a live allowance,
-    so the re-entry neither clears it nor writes it afresh: the record the
-    resumed run carries is the one the interrupted entry left, field for
-    field."""
+    so the re-entry neither clears it on loading nor writes it afresh: the
+    record the resumed verifying stage opens on is the one the interrupted
+    entry left, field for field. What clears it afterwards is a run of the
+    suite, asserted below, and the same run's ending is the control here — the
+    field is empty by then, so the snapshot at entry is where the restored
+    record is observable rather than a reading of something never cleared."""
     target_root, run_dir = resumable_run
     left_behind = failure_in(run_dir)
 
-    drive(target_root, harness_root)
+    runner = Snapshotting(target_root)
+    story_coordinator.run_story(STORY_ID, harness_root, target_root, runner)
 
-    assert failure_in(run_dir) == left_behind
+    assert runner.calls == [VERIFYING]
+    assert runner.snapshots[0][FIELD] == left_behind
     assert left_behind["stage"] == DECLARING
+    assert failure_in(run_dir) == {}
 
 
-def test_a_run_reaching_the_end_over_an_outstanding_failure_escalates(
+def test_a_resume_completes_when_the_clean_clone_check_shadows_the_failure(
     resumable_run, harness_root,
 ):
-    """The guard before completion. The re-entry runs the stages after the one
-    that declares the suite run, so nothing supersedes the failure, and the run
-    escalates rather than completing — naming the failure that still stands and
-    where its record and its output were kept."""
+    """The headline: the re-entry runs only the stages after the one that
+    declares the suite run, and the clean-clone check it makes ran, exited
+    zero, and recorded a scope no narrower than the failure's — so it
+    supersedes the failure, the field is cleared and the run completes with a
+    completion report rather than escalating at the end of its workflow."""
     target_root, run_dir = resumable_run
     outstanding = failure_in(run_dir)
 
     code, runner, _ = drive(target_root, harness_root)
-    reason = story_coordinator.escalation_reason(run_dir)
+    clean = clean_clone_record(run_dir)
 
-    assert code == 2
-    assert state_of(run_dir)["status"] == "escalated"
+    assert code == 0
     assert runner.calls == [VERIFYING]
-    assert outstanding["stage"] in reason
-    assert f"exited {outstanding['exit_code']}" in reason
-    assert outstanding["result_path"] in reason
-    assert outstanding["output_path"] in reason
-    assert not (run_dir / "completion-report.md").exists()
-    assert "story-completed" not in [e["event"] for e in history_of(run_dir)]
+    assert clean["ran"] is True
+    assert clean["exit_code"] == 0
+    assert SHADOWS(clean["scope"], outstanding["scope"]) is True
+    assert failure_in(run_dir) == {}
+    assert state_of(run_dir)["status"] == "completed"
+    assert (run_dir / "completion-report.md").is_file()
+    assert "story-completed" in [e["event"] for e in history_of(run_dir)]
 
 
-def test_that_guard_costs_no_declared_suite_run(resumable_run, harness_root):
-    """It is decided off the state rather than by asking the suite again: the
-    re-entry announces no run of the declared artifact. The runs the interrupted
-    entry announced are the control — the same reading of the same stream finds
-    those, so the absence is about this entry rather than about the reading."""
+def test_the_shadowing_clear_is_reconstructable_from_the_events_log(
+    resumable_run, harness_root,
+):
+    """A reader of events.log meets the clear as a note from the verifying
+    stage naming the failure it cleared — its stage, its exit code and the pair
+    its evidence was retained under — and the pair it names still exists and
+    still records that failure, so the clear is reconstructable without
+    state.json. The pair is read from where the resume archived it: the note
+    names the paths the failure was recorded under, and the resume that
+    cleared it moved the entry those paths belong to under its entry
+    directory before the verifying stage ran. The clean-clone pass itself is
+    announced beside it."""
+    target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
+
+    drive(target_root, harness_root)
+    (line,) = shadow_lines(run_dir, outstanding)
+    record, output = archived_pair(run_dir, outstanding)
+
+    assert line["stage"] == VERIFYING
+    assert line["event"] == "note"
+    assert outstanding["stage"] in line["message"]
+    assert f"exited {outstanding['exit_code']}" in line["message"]
+    assert outstanding["result_path"] in line["message"]
+    assert outstanding["output_path"] in line["message"]
+    assert read_json(record)["exit_code"] != 0
+    assert output.is_file()
+    assert line["message"] in (run_dir / "events.log").read_text(
+        encoding="utf-8")
+    assert [e["event"] for e in history_of(run_dir)
+            if e["event"] == "clean-clone-passed"] == ["clean-clone-passed"]
+
+
+def test_the_state_is_saved_at_the_decision_and_not_only_at_the_end(
+    resumable_run, harness_root, monkeypatch,
+):
+    """The clear reaches state.json before the note is appended, so a crash
+    between the decision and the run's end cannot leave a failure recorded
+    that a shadowing pass has superseded. Observed by interleaving every save
+    with every event: the first save carrying an empty field precedes the
+    note. The saves before the decision are the control — every one of them
+    still carries the failure, so the empty save is the decision's rather than
+    the resume's."""
+    target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
+    line = story_coordinator.suite_failure_shadowed_by_clean_clone_note(
+        outstanding)
+    sequence: list[tuple] = []
+    real_save, real_append = (story_coordinator.save_state,
+                              story_coordinator.append_event)
+
+    def saving(run_dir, state, *args, **kwargs):
+        sequence.append(("save", dict(getattr(state, FIELD))))
+        return real_save(run_dir, state, *args, **kwargs)
+
+    def appending(run_dir, message, *args, **kwargs):
+        sequence.append(("event", message))
+        return real_append(run_dir, message, *args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator, "save_state", saving)
+    monkeypatch.setattr(story_coordinator, "append_event", appending)
+
+    code, _, _ = drive(target_root, harness_root)
+
+    assert code == 0
+    note_at = sequence.index(("event", line))
+    empty_saves = [i for i, (kind, value) in enumerate(sequence)
+                   if kind == "save" and value == {}]
+    assert empty_saves and empty_saves[0] < note_at
+    assert all(value == outstanding for kind, value in sequence[:empty_saves[0]]
+               if kind == "save")
+    assert any(kind == "save" for kind, _ in sequence[:empty_saves[0]])
+
+
+def test_that_resume_costs_no_declared_suite_run(resumable_run, harness_root):
+    """The clear is decided on the clean-clone check's run rather than by
+    making the declared run again: the re-entry announces no run of the
+    declared artifact. The runs the interrupted entry announced are the
+    control — the same reading of the same stream finds those, so the absence
+    is about this entry rather than about the reading — and the clean-clone
+    announcement the re-entry does make is beside them."""
     target_root, run_dir = resumable_run
     before = declared_runs_announced(run_dir)
+    clean_before = runs_announced(run_dir, CLEAN_CLONE_ARTIFACT)
 
     drive(target_root, harness_root)
 
     assert before, "the interrupted entry announced no run to compare against"
     assert declared_runs_announced(run_dir) == before
+    assert runs_announced(run_dir, CLEAN_CLONE_ARTIFACT) == clean_before + 1
+
+
+def runs_announced(run_dir: Path, artifact: str) -> int:
+    return len([event for event in history_of(run_dir)
+                if event["event"] == "suite-rerun-started"
+                and event.get("artifacts") == [artifact]])
 
 
 def declared_runs_announced(run_dir: Path) -> int:
-    return len([event for event in history_of(run_dir)
-                if event["event"] == "suite-rerun-started"
-                and event.get("artifacts") == [SUITE_ARTIFACT]])
+    return runs_announced(run_dir, SUITE_ARTIFACT)
 
 
-def test_the_identical_resume_with_the_failure_cleared_completes(
+def test_the_identical_resume_with_the_failure_already_clear_writes_no_note(
     resumable_run, harness_root,
 ):
-    """The control for the guard: the same run directory, resumed the same way,
-    differing in the one field — and it completes, writes its completion report
-    and escalates nothing. So the escalation above is the guard firing rather
-    than the resumed run being unable to finish."""
+    """The control for the note: the same run directory, resumed the same way,
+    differing in the one field — and it completes identically but says
+    nothing about clearing a failure, because there was none to clear. So the
+    note above is written where a failure stood rather than at every clean-
+    clone pass."""
     target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
     write_state(run_dir, {FIELD: {}})
 
     code, runner, _ = drive(target_root, harness_root)
@@ -778,14 +952,220 @@ def test_the_identical_resume_with_the_failure_cleared_completes(
     assert runner.calls == [VERIFYING]
     assert state_of(run_dir)["status"] == "completed"
     assert (run_dir / "completion-report.md").is_file()
+    assert clean_clone_record(run_dir)["exit_code"] == 0
+    assert shadow_lines(run_dir, outstanding) == []
 
 
 # --------------------------------------------------------------------------
-# The two checks the rule leaves alone
+# The refusal, rebuilt on the clean-clone check
+#
+# A clean-clone pass is refused as evidence on the same terms a narrowed
+# declared run is, and a check that did not run is not a pass. Both are made
+# by substituting for `clean_clone_check` the way `scoping` substitutes for
+# `suite_run_check`: the real check runs, writes its real record and returns
+# its real result, and only the result the routing reads is altered.
+# --------------------------------------------------------------------------
+
+
+def clean_clone_scoping(monkeypatch, scope: tuple) -> list:
+    """Make the clean-clone check report `scope` while still really running.
+    Returns the list the real results are appended to, so a test can assert
+    the check did run and did pass underneath the substitution."""
+    real = story_coordinator.clean_clone_check
+    ran: list = []
+
+    def substituting(*args, **kwargs):
+        result = real(*args, **kwargs)
+        ran.append(result)
+        return dataclasses.replace(result, scope=scope)
+
+    monkeypatch.setattr(story_coordinator, "clean_clone_check", substituting)
+    return ran
+
+
+NOT_RUN_REASON = "substituted for this test: the check did not run"
+
+
+def clean_clone_not_running(monkeypatch) -> list:
+    """Make the clean-clone check report that it did not run, while the real
+    check still runs underneath — so a refusal here is about the result the
+    routing read rather than about a suite that failed."""
+    real = story_coordinator.clean_clone_check
+    ran: list = []
+
+    def substituting(*args, **kwargs):
+        result = real(*args, **kwargs)
+        ran.append(result)
+        return dataclasses.replace(
+            result, ran=False, exit_code=None, output_tail=None,
+            output_path=None, clone_path=None, reason=NOT_RUN_REASON)
+
+    monkeypatch.setattr(story_coordinator, "clean_clone_check", substituting)
+    return ran
+
+
+def test_the_substitution_narrows_the_check_below_what_failed(
+    resumable_run, harness_root, monkeypatch,
+):
+    """The premise the refusal rests on: the substituted scope is genuinely
+    not a subset of the failure's, the real check ran, and it passed — so the
+    refusal below is about the scope and about nothing else."""
+    target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
+    ran = clean_clone_scoping(monkeypatch, NARROWED)
+
+    drive(target_root, harness_root)
+
+    assert SHADOWS(NARROWED, outstanding["scope"]) is False
+    assert [(r.ran, r.exit_code) for r in ran] == [(True, 0)]
+    assert SHADOWS(ran[0].scope, outstanding["scope"]) is True
+
+
+def test_a_clean_clone_pass_at_a_narrower_scope_leaves_the_refusal_standing(
+    resumable_run, harness_root, monkeypatch,
+):
+    """The refusal the story keeps: a clean-clone pass that recorded a scope
+    narrower than the failure's established nothing about what it stopped
+    running, so it clears nothing, the carry-forward line is written where the
+    declared block would write it, and the run escalates at the end of its
+    workflow naming the failure that still stands and where its record and its
+    output were kept."""
+    target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
+    clean_clone_scoping(monkeypatch, NARROWED)
+
+    code, runner, _ = drive(target_root, harness_root)
+    reason = story_coordinator.escalation_reason(run_dir)
+    carried = [line for line in carry_forward_lines(run_dir)
+               if line["stage"] == VERIFYING]
+
+    assert code == 2
+    assert state_of(run_dir)["status"] == "escalated"
+    assert runner.calls == [VERIFYING]
+    assert failure_in(run_dir) == outstanding
+    assert outstanding["stage"] in reason
+    assert f"exited {outstanding['exit_code']}" in reason
+    assert outstanding["result_path"] in reason
+    assert outstanding["output_path"] in reason
+    assert not (run_dir / "completion-report.md").exists()
+    assert "story-completed" not in [e["event"] for e in history_of(run_dir)]
+    assert shadow_lines(run_dir, outstanding) == []
+    assert len(carried) == 1
+    assert outstanding["result_path"] in carried[0]["message"]
+    assert outstanding["output_path"] in carried[0]["message"]
+
+
+def test_a_clean_clone_check_that_did_not_run_clears_nothing(
+    resumable_run, harness_root, monkeypatch,
+):
+    """Not a pass: a check that reports it did not run escalates as it did
+    before this story, naming the reason it could not run, and the failure it
+    found outstanding is the failure it leaves — no clear, no note, no
+    completion. The real check underneath passed, which is the control: the
+    refusal is about the result the routing read rather than about the
+    suite."""
+    target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
+    ran = clean_clone_not_running(monkeypatch)
+
+    code, runner, _ = drive(target_root, harness_root)
+    reason = story_coordinator.escalation_reason(run_dir)
+
+    assert code == 2
+    assert state_of(run_dir)["status"] == "escalated"
+    assert runner.calls == [VERIFYING]
+    assert "could not run" in reason
+    assert NOT_RUN_REASON in reason
+    assert failure_in(run_dir) == outstanding
+    assert shadow_lines(run_dir, outstanding) == []
+    assert not (run_dir / "completion-report.md").exists()
+    assert [(r.ran, r.exit_code) for r in ran] == [(True, 0)]
+
+
+def test_the_clear_is_decided_by_the_one_rule_and_by_no_second_one(
+    resumable_run, harness_root, monkeypatch,
+):
+    """The comparison is `suite_run_shadows` and nothing written beside it:
+    with that one name made to answer no, the resume that completes
+    unsubstituted — same run directory, same check, same recorded scopes — is
+    refused instead. The rule was asked with the check's recorded scope and
+    the failure's, and recency decided nothing: the pass was the more recent
+    result and did not clear the failure on it."""
+    target_root, run_dir = resumable_run
+    outstanding = failure_in(run_dir)
+    asked: list[tuple] = []
+
+    def refusing(passing_scope, failing_scope):
+        asked.append((tuple(passing_scope), tuple(failing_scope)))
+        return False
+
+    monkeypatch.setattr(story_coordinator, "suite_run_shadows", refusing)
+
+    code, _, _ = drive(target_root, harness_root)
+    clean = clean_clone_record(run_dir)
+
+    assert code == 2
+    assert state_of(run_dir)["status"] == "escalated"
+    assert clean["exit_code"] == 0
+    assert asked == [(tuple(clean["scope"]), tuple(outstanding["scope"]))]
+    assert failure_in(run_dir) == outstanding
+    assert shadow_lines(run_dir, outstanding) == []
+
+
+def without_the_clean_clone_declaration(tmp_path: Path,
+                                        name: str = "no-clean-clone"
+                                        ) -> tuple[Path, dict]:
+    """The same workflow with the clean-clone declaration removed from every
+    stage, which is the shadowing run disabled: the key is the switch."""
+    workflow = json.loads(json.dumps(WORKFLOW))
+    for stage in workflow["stages"]:
+        stage.pop("clean_clone", None)
+    workflow["name"] = name
+    root = materialize(workflow, tmp_path / name)
+    return root, workflow
+
+
+def test_a_verifier_declaring_no_clean_clone_check_still_reaches_the_refusal(
+    make_target, tmp_path,
+):
+    """The end-of-run refusal is unchanged: under a workflow whose verifying
+    stage declares no clean-clone check, the same resume makes no run of the
+    suite at all, nothing can shadow the failure, and the run escalates naming
+    it exactly as it did before this story. The resume that completes above,
+    differing only in the declaration, is the control."""
+    harness, workflow = without_the_clean_clone_declaration(tmp_path)
+    target_root = make_target("undeclared-clean-clone", workflow=workflow["name"])
+    run_dir = leave_a_failure_outstanding(target_root, harness, workflow)
+    outstanding = failure_in(run_dir)
+    announced_before = len([e for e in history_of(run_dir)
+                            if e["event"] == "suite-rerun-started"])
+
+    code, runner, _ = drive(target_root, harness, workflow=workflow)
+    reason = story_coordinator.escalation_reason(run_dir)
+
+    assert code == 2
+    assert state_of(run_dir)["status"] == "escalated"
+    assert runner.calls == [VERIFYING]
+    assert failure_in(run_dir) == outstanding
+    assert outstanding["stage"] in reason
+    assert f"exited {outstanding['exit_code']}" in reason
+    assert outstanding["result_path"] in reason
+    assert outstanding["output_path"] in reason
+    assert not (run_dir / "completion-report.md").exists()
+    assert len([e for e in history_of(run_dir)
+                if e["event"] == "suite-rerun-started"]) == announced_before
+    assert shadow_lines(run_dir, outstanding) == []
+
+
+# --------------------------------------------------------------------------
+# Which definitions may name the field
 #
 # Enumerated over every definition under `orchestration/` rather than sampled,
-# because what is asserted is that nothing outside the declared suite run and
-# the completion guard touches the field.
+# because what is asserted is that nothing outside the state and the run loop
+# touches the field. The clean-clone check is inside the rule now, and its
+# functions still do not name the field: the comparison is made in the loop
+# where the exit code is read, as the declared run's is. The revert check is
+# the one check the rule leaves alone.
 # --------------------------------------------------------------------------
 
 
@@ -812,12 +1192,17 @@ def definitions_naming_the_field(source: str) -> set[str]:
 MAY_TOUCH_IT = {story_coordinator.RunState.__name__,
                 story_coordinator.run_story.__name__}
 
-#: The functions implementing the two checks the rule leaves outside it: the
-#: clean-clone run, which always runs the configured command unnarrowed, and the
+#: The functions implementing the clean-clone check, which is inside the rule
+#: and decided by the loop: they run the configured command unnarrowed and
+#: return a result, and the comparison on that result is made where its exit
+#: code is read — so neither of them names the field, exactly as the declared
+#: run's own check does not.
+INSIDE_THE_RULE_DECIDED_BY_THE_LOOP = [story_coordinator.clean_clone_check,
+                                       story_coordinator.run_clean_clone]
+
+#: The functions implementing the one check the rule leaves outside it: the
 #: revert check with the selector runs it makes, which are narrowed by design.
-OUTSIDE_THE_RULE = [story_coordinator.clean_clone_check,
-                    story_coordinator.run_clean_clone,
-                    story_coordinator.revert_check,
+OUTSIDE_THE_RULE = [story_coordinator.revert_check,
                     story_coordinator.run_nomination,
                     story_coordinator._run_selection]
 
@@ -834,15 +1219,33 @@ def test_no_other_module_under_orchestration_names_it(module):
     assert definitions_naming_the_field(module.read_text(encoding="utf-8")) == set()
 
 
-@pytest.mark.parametrize("function", OUTSIDE_THE_RULE,
-                         ids=lambda function: function.__name__)
-def test_neither_check_the_rule_leaves_alone_is_among_them(function):
-    """Said of the two checks by name as well as by enumeration, so a reader
+@pytest.mark.parametrize(
+    "function", INSIDE_THE_RULE_DECIDED_BY_THE_LOOP + OUTSIDE_THE_RULE,
+    ids=lambda function: function.__name__)
+def test_no_check_function_is_among_them(function):
+    """Said of the checks by name as well as by enumeration, so a reader
     looking for the story's constraint finds it stated rather than inferred.
     Each function's own source is parsed, so a read or a write anywhere inside
     it — including in a nested definition — is what is being denied."""
     assert function.__name__ not in MAY_TOUCH_IT
     assert definitions_naming_the_field(inspect.getsource(function)) == set()
+
+
+def test_the_clean_clone_block_of_the_loop_calls_the_rule_and_the_note():
+    """The comparison the loop makes for the clean-clone check reaches the one
+    rule and the note that names the cleared failure, read off the loop's own
+    source: both names appear in it, and the note's composer names the field
+    nowhere — it takes the record as a value, the way the carry-forward line
+    does. Beside it, `test_the_clear_is_decided_by_the_one_rule_and_by_no_second_one`
+    shows the same thing driven."""
+    loop = inspect.getsource(story_coordinator.run_story)
+    note = story_coordinator.suite_failure_shadowed_by_clean_clone_note
+
+    assert story_coordinator.suite_run_shadows.__name__ in loop
+    assert note.__name__ in loop
+    assert definitions_naming_the_field(inspect.getsource(note)) == set()
+    assert (story_coordinator.suite_failure_carried_forward_note.__name__
+            in loop)
 
 
 #: A write of the field in a definition of its own, appended to a source to show

@@ -65,8 +65,8 @@ import worktrees
 # declaring stage runs the suite and whose verifying stage runs the clean
 # clone, and a fake runner that drives both. Reused rather than copied so a
 # regression in that machinery reddens both files.
-from test_coordinator_runs_the_suite import (BROKEN, DECLARING, PROMPTS,
-                                             SENTINEL, STORY_ID,
+from test_coordinator_runs_the_suite import (BROKEN, DECLARING, FAILED,
+                                             PROMPTS, SENTINEL, STORY_ID,
                                              SUITE_ARTIFACT,
                                              UNRUNNABLE_COMMAND, WORKFLOW,
                                              Runner, build_suite_target, drive,
@@ -694,11 +694,18 @@ def test_an_escalating_runs_commit_contains_no_linked_path(
     """The other end a run stops at. An escalation commits the tree the run
     stopped in, so it is the second place a linked path could reach a branch.
 
+    The run escalates on a verdict that fails past the retry ceiling. A red
+    declared suite alone no longer gets it there: since story-159 the verifying
+    stage's repair of the sentinel makes the clean-clone check pass, and that
+    pass shadows the failure the declared run left, so the run completes. The
+    verdict is what stops it, and the repair still happens, which is what puts
+    the sentinel in the commit.
+
     The same control as above: the escalation commit carries the paths the run
     did write, and the same reading finds them.
     """
     code, _, run_dir = drive(probe_target, harness_root,
-                             {DECLARING: [BROKEN] * 3})
+                             {DECLARING: [BROKEN] * 3}, verdicts=[FAILED])
     run_root = conftest.run_root_for(probe_target, STORY_ID)
     paths = committed_paths(run_root, "HEAD")
 

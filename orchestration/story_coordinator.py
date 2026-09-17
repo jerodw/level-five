@@ -3440,6 +3440,32 @@ def suite_failure_carried_forward_note(outstanding: dict) -> str:
     )
 
 
+def suite_failure_shadowed_by_clean_clone_note(outstanding: dict) -> str:
+    """What the events log says where a clean-clone pass clears an outstanding failure.
+
+    The clean-clone check runs the configured command in a fresh clone with the
+    story committed, and where it exits zero at a scope no narrower than the
+    outstanding failure's it shadows that failure on the same terms a green
+    declared run does. The clear is a routing decision — it is what lets a run
+    resumed past the declaring stage finish — so it is reconstructable from
+    events.log as well as from state.json: the line names the failure that was
+    cleared, off the outstanding-failure record rather than off a second
+    reading of the run, in the shape the carry-forward line takes.
+
+    This composes the line and does not append it; `run_story` appends it with
+    the generic `note` kind, where every other note in a run's stream is
+    spelled, and for the reason the carry-forward line is a note rather than a
+    kind of its own.
+    """
+    return (
+        f"the clean-clone check passed at a scope no narrower than the suite "
+        f"failure outstanding since {outstanding.get('stage')} exited "
+        f"{outstanding.get('exit_code')}; that failure is cleared. Its record "
+        f"was {outstanding.get('result_path')} and its output was "
+        f"{outstanding.get('output_path')}"
+    )
+
+
 def clean_clone_check(
     run_dir: Path,
     target_root: Path,
@@ -9869,8 +9895,10 @@ def run_story(
                         index = stage_names.index(routing.stage)
                         continue
 
-                # The suite passed where the verifier stood; run it once more
-                # where the code ships. The artifact name comes off the loaded
+                # The verdict passed where the verifier stood; run the suite
+                # once more where the code ships, and put the outcome to the
+                # outstanding failure below, since the declared suite may
+                # still be red here. The artifact name comes off the loaded
                 # workflow definition, so removing that declaration disables
                 # the check with no change here.
                 # Both names come off the one declaration: the result the
@@ -9954,6 +9982,49 @@ def run_story(
                         index = stage_names.index(destination)
                         continue
                     _clean_clone_passed(run_dir, name, artifact)
+                    if state.unshadowed_suite_failure:
+                        # A check that ran and exited zero is put to the same
+                        # rule a green declared run is put to, on the same
+                        # terms: it supersedes the outstanding failure only
+                        # where its recorded scope is no narrower than the
+                        # failure's, decided by suite_run_shadows over the
+                        # recorded scopes and never by recency. A check that
+                        # did not run escalated above and clears nothing.
+                        # Without this a run resumed past the declaring stage
+                        # could pass every check and still be refused at the
+                        # end of the workflow, because the declared-run block
+                        # is the only other place the field is cleared and a
+                        # resume entering here never reaches it. Decided here,
+                        # where the exit code is read, rather than inside
+                        # clean_clone_check — mirroring the declared run, whose
+                        # check does not touch the field either.
+                        outstanding = state.unshadowed_suite_failure
+                        if suite_run_shadows(
+                            clean.scope, outstanding.get("scope", [])
+                        ):
+                            state.unshadowed_suite_failure = {}
+                            # Saved at the decision, so a crash between here
+                            # and the run's end cannot leave a failure recorded
+                            # that a shadowing pass has superseded.
+                            save_state(run_dir, state)
+                            append_event(
+                                run_dir,
+                                suite_failure_shadowed_by_clean_clone_note(
+                                    outstanding
+                                ),
+                                kind="note",
+                                stage=name,
+                            )
+                        else:
+                            # The same carry-forward the declared block
+                            # appends: the failure stands, pointed at by its
+                            # own retained pair, for the end-of-run refusal.
+                            append_event(
+                                run_dir,
+                                suite_failure_carried_forward_note(outstanding),
+                                kind="note",
+                                stage=name,
+                            )
 
                 # A finding about the story's own change whose fix is not to
                 # the words alone has somewhere to go, and it goes there only
@@ -10292,12 +10363,14 @@ def run_story(
         # A run must not reach completion carrying a declared suite failure
         # nothing has superseded. The suite-run block records a failure and
         # advances — it attributes nothing and refuses nothing — and the
-        # verifier is where the failure is judged, so arriving here with one
-        # outstanding means no judgement superseded it: a verifier that read a
-        # red suite and passed the work anyway, or one that never met it. This
-        # refusal is what stops such a run completing, escalating naming the
-        # failure that still stands. It costs no suite run: the verdict is read
-        # off state.json.
+        # clean-clone block above clears the failure where its check ran and
+        # exited zero at a scope no narrower than the failure's. So what
+        # arrives here with one outstanding is a run whose verifying stage
+        # declares no clean-clone check, or whose check did not run, or whose
+        # check passed at a scope narrower than the failure's. This refusal is
+        # what stops such a run completing, escalating naming the failure
+        # that still stands. It costs no suite run: the verdict is read off
+        # state.json.
         outstanding = state.unshadowed_suite_failure
         return _escalate(
             run_dir,
