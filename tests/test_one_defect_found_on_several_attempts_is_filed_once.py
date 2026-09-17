@@ -666,7 +666,7 @@ def test_the_filing_event_is_neither_an_inspection_nor_an_accounting(driven):
 def test_every_accounting_event_says_held_and_carries_filed_and_dropped_at_zero(
         driven):
     """One accounting per attempt, each with filed and dropped at zero and a
-    message saying how many were held for the run's completion — and no entry
+    message saying how many the verdict left for the run's completion — and no entry
     before the filing carries a filed count above zero, in its field or in its
     words. The control is the filing entry itself, which the same two readings
     do match."""
@@ -678,7 +678,7 @@ def test_every_accounting_event_says_held_and_carries_filed_and_dropped_at_zero(
     for event in accounted:
         assert event["filed"] == 0
         assert event["dropped"] == 0
-        assert "1 held for the run's completion" in event["message"]
+        assert "1 left by it for the run's completion" in event["message"]
         assert "0 filed" in event["message"]
 
     history = story_coordinator.load_history(run.run_dir)
@@ -822,7 +822,11 @@ def test_under_a_workflow_declaring_no_inspection_the_filing_is_not_reached(
     assert without_it.code == 0
     assert normalised(with_it) == normalised(without_it)
     assert filed_events(with_it) == []
-    assert not any("held for the run's completion" in line
+    # The clause both lines share, rather than either one's wording: an
+    # absence asserted against one phrasing stops failing the moment that
+    # phrasing moves, which is how this control was left passing vacuously
+    # once the accounting line stopped saying "held".
+    assert not any("for the run's completion" in line
                    for line in with_it.messages)
 
 
