@@ -1,0 +1,179 @@
+story:
+  id: story-155
+  title: A finding about the story's own change is fixed by the stage that owns it, whatever that stage is
+  description: |
+    Planned from the brief filed under 321.
+
+    A verifier that wants a finding about the story's own change fixed has
+    two routes today, and most findings fit neither. A correctable finding
+    re-enters at the stage the correction_pass declaration names -- the
+    documenter in both shipped workflows -- and is bounded to the words
+    alone. A blocking issue fails the verdict, spends a retry and archives
+    the attempt. There is nothing between them, so a finding whose fix is
+    one line in a file the documenter does not own can be had only by
+    failing the whole run. story-154 routed six such findings and fixed
+    one; among the five it filed were a prompt never told about the
+    confinement the story gave its stage, and a slot one verifier prompt
+    has and its sibling lacks -- both the implementer's file, both not
+    prose-only, both plainly part of the story they were filed from.
+
+    This story adds a third route, the repair pass: a passing verdict may
+    carry repairable_findings, each naming a path, a location, the finding,
+    the correction and a retry category; the coordinator looks the category
+    up in the verifier stage's retry_routing table exactly as it looks up a
+    failed verdict's retry_target, re-enters the workflow at the stage the
+    table names, and runs forward to verification again. It has the
+    correction pass's cost and the retry routing's reach: nothing a retry
+    spends is spent -- no retry_count increment, no attempts/attempt-N/
+    archive, no retry-history entry, and the passing verdict that routed it
+    stands -- and the stage entered is granted the paths its findings name
+    for that attempt alone and is told the finding and the correction and
+    nothing else. It is bounded by a budget of its own, declared on the
+    verifier stage as repair_pass beside correction_pass, with a reason
+    where a reader meets the number.
+
+    Because a repair pass may change behaviour, it is built on a verified
+    tree: it routes only after the clean-clone check on the routing verdict
+    has passed, and the verification it returns to runs the check again on
+    the repaired tree. The correction pass is untouched -- still prose-only,
+    still entering at the documenter, still its own budget -- and the
+    verifier's right to decline a finding is untouched too: a routed finding
+    the verdict does not name is still filed as a brief by story-152's
+    accounting, and a repairable finding that names a slug counts as acted
+    on by that same accounting.
+  workflow: story-workflow
+
+tasks:
+  - Add a repair_pass declaration to the verifier stage of both shipped workflow definitions, shaped like correction_pass without a stage key (the stage comes off the retry_routing table), with result "repair-pass.json", budget 2, and a budget_reason recording the judgement behind the number.
+  - Add repairable_findings to schemas/verification-result.schema.json, an optional array of objects requiring path, location, finding, correction and category, with descriptions saying what the field is for, that it is read only on a passing verdict, that presence is the signal, and that a category is checked against the retry_routing table with the strictness an unrecognised retry_target gets.
+  - In orchestration/story_coordinator.py, read the declaration off the loaded workflow wherever a stage carries it, hold it to a pre-flight beside correction_pass_problems (a budget that is not a positive integer, or a declaration on a stage that declares no retry_routing table, is refused before any run state is created), and add repair_pass_count to RunState defaulting to zero so an existing state.json still loads and a resumed run cannot spend the pass again.
+  - In the verifier branch, on a passing verdict, after the clean-clone check has passed and before the run completes, route a repair pass when the verdict carries repairable_findings and the budget is unspent, resolving each finding's category through the stage's retry_routing table, escalating on a category the table does not define (naming the offending categories and the ones the workflow defines), entering at the earliest stage in workflow order among the resolved stages, writing a numbered pass record (pass, attempt, entry stage, the findings each with its resolved stage, and the coordinator's statement), clearing guidance in force, spending no retry, archiving no attempt and appending no retry-history entry. When the budget is spent, record the findings in an event and complete the run as the correction pass does.
+  - Grant each stage entered during a repair pass the paths of the findings whose category resolves to it, for that attempt alone, on the same exempt list the ownership check and the revert check read, with one event per granted path beside the correction-pass grant events.
+  - Inject the current pass record into every stage prompt through a repair_pass_result context key in orchestration/context_assembler.py and a {{repair_pass_result}} slot in prompts/story-implementer.md, prompts/story-tester.md, prompts/documenter.md, prompts/refactor-implementer.md, prompts/story-verifier.md and prompts/refactor-verifier.md, described the way the correction-pass slot is.
+  - In prompts/story-verifier.md and prompts/refactor-verifier.md, add a section beside the correctable-findings one bounding what may go in repairable_findings, a finding judged correct, too small to fail the run, fixable by one stage in the file it names, whose fix is not to the words alone, naming the category that owns the fix spelled as the retry_routing table declares it, and saying that a repair pass is not a licence to revisit the work.
+  - Extend orchestration/story_inspection.verdict_locations to read repairable_findings beside blocking_issues and correctable_findings, so a repairable finding naming a routed finding's slug counts as acted on and the remainder are still filed, and word the repair-pass re-entry event with routed_among as the correction-pass event is.
+  - Write tests under tests/ covering the routing, the bound, the budget, the pre-flight, the accounting and both shipped workflows.
+  - Document the repair pass in .harness/docs/ARCHITECTURE.md, beside the correction-pass section, including why it routes after the clean-clone check and what the budget is set from.
+
+acceptance_criteria:
+  - A passing verdict carrying one repairable finding whose category the retry_routing table maps to the implementer re-enters the workflow at the implementer, and afterwards retry_count is unchanged, no attempts/attempt-N/ directory was written, retry-history.json gained no entry, and the archived verdict still records passed.
+  - The re-entry happens only after the clean-clone check on the routing verdict has run and exited 0; a verdict whose clean-clone check fails takes the existing clean-clone retry route and no repair pass record is written for it.
+  - The verification the repair pass returns to runs the clean-clone check again.
+  - The stage entered is granted, for that attempt only, exactly the paths of the findings whose category resolves to it, so an edit to a granted path is exempt from both the ownership check and the revert check and an edit to any other governed path is not; a later attempt of the same stage inherits no grant.
+  - A repairable finding naming a category the workflow's retry_routing table does not define escalates the run through _escalate, with retry_count untouched and no attempt archived, naming the offending category and the categories the workflow defines.
+  - When repair_pass_count has reached the declared budget, a passing verdict still carrying repairable findings appends an event naming each finding and the run completes with no further stage invocation.
+  - A workflow declaring repair_pass with a budget that is not a positive integer, or on a stage that declares no retry_routing table, is refused at pre-flight before any run state is created, with a message naming the problem.
+  - A workflow declaring no repair_pass key routes a passing verdict carrying repairable_findings nowhere, and its events.log is unchanged from what it was before this story.
+  - A routed inspection finding whose slug is named in the location of a repairable finding is counted as acted on by the accounting and is not filed; a routed finding no verdict entry names is still filed as a brief.
+  - Both shipped workflow definitions declare repair_pass with budget 2 and a budget_reason, and both pass the workflow validation the suite already holds them to.
+  - Every stage prompt named in the tasks carries a {{repair_pass_result}} slot, and the context assembler renders the current pass record into it for the stages a pass enters and None for a run that took none.
+  - The verification-result schema accepts a verdict carrying repairable_findings whose entries carry path, location, finding, correction and category, and refuses an entry missing any of them.
+  - Every existing test passes unchanged; the correction pass's behaviour, budget and prose-only bound are as they were.
+
+technical_plan:
+  implementation_steps:
+    - Add the repair_pass declaration to the verifier stage of workflows/story-workflow.json and workflows/refactor-workflow.json, with budget 2 and a budget_reason that records why two rather than one (a separate story to carry a leftover finding costs more than a second pass in the run that found it) and why the pass is bounded (it may change behaviour, so it carries the findings and no guidance, and the verification it returns to runs the clean-clone check on the result).
+    - Add repairable_findings to schemas/verification-result.schema.json beside correctable_findings, reusing that entry's shape and cross-referencing it in the description.
+    - In orchestration/story_coordinator.py add repair_pass_count to RunState; add repair_pass_declaration, repair_pass_result_file, repair_pass_grants (keyed on stage and attempt, reading each finding's resolved stage off the record), repair_pass_statement, repair_destination (walks the findings against the routes table, returns the entry stage as the earliest in workflow order among the resolved stages, or the unknown categories), repair_pass_problems for pre-flight, and the routed and recorded event writers; register the pre-flight beside correction_pass_problems in the workflow-loading path.
+    - In the verifier branch, after the clean-clone block succeeds, add the repair-pass block; on routing set the index to the entry stage and continue, exactly as the correction-pass block does; extend the exempt list at the post-stage checks with repair_pass_grants beside correction_pass_grants; read the current record into a repair_pass_result context value beside correction_pass_result.
+    - Add repair_pass_result to orchestration/context_assembler.py's context and the slot to the six stage prompts; add the bounding section to both verifier prompts.
+    - Extend story_inspection.verdict_locations with the new key.
+    - Tester writes tests/test_repair_pass.py holding the criteria above with a fake runner, plus the accounting and shipped-workflow assertions, adding to existing modules where a corpus test already holds the thing (the shipped-workflow validity test, the verdict-locations tests).
+    - Documenter adds the section to .harness/docs/ARCHITECTURE.md and updates the correction-pass section's mention that there is nothing between a correctable finding and a blocking issue.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the repair pass declaration reader, pre-flight, state field, routing block, grants, statement, events and prompt injection
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: verdict_locations reads repairable_findings so the accounting counts a named slug as acted on
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: the repair_pass_result context key
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: the repairable_findings field
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: the repair_pass declaration on the verifier stage with budget and reason
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: the same declaration for the refactor workflow
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: the section bounding repairable_findings and the repair-pass slot
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: the same section and slot for the refactor verifier
+    - file: prompts/story-implementer.md
+      stage: implementer
+      reason: the repair-pass slot so an entered implementer is told what it was entered to fix
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: the repair-pass slot
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: the repair-pass slot
+    - file: prompts/refactor-implementer.md
+      stage: implementer
+      reason: the repair-pass slot
+    - file: tests/test_repair_pass.py
+      stage: tester
+      reason: the routing, bound, budget, pre-flight, grant and accounting assertions for the repair pass
+    - file: tests/test_shipped_workflow_is_valid.py
+      stage: tester
+      reason: both shipped workflows declare repair_pass and validate
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the repair pass section and the correction-pass section's statement that no route existed between it and a blocking issue
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - orchestration/context_assembler.py
+    - schemas/verification-result.schema.json
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - prompts/story-implementer.md
+    - prompts/story-tester.md
+    - prompts/documenter.md
+    - prompts/refactor-implementer.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The correction pass: its prose-only bound, its declared entry stage, its budget and its result artifact stay as they are
+    - The verifier's right to decline a finding, and story-152's accounting that files a declined routed finding as a brief
+    - orchestration/agent_runner.py
+    - scripts/
+    - hooks/
+    - The findings story-154 filed as briefs; this story builds the route and does not fix them
+
+verification_requirements:
+  - Confirm from the tests and a fake-runner run that a passing verdict carrying a repairable finding routed to the implementer re-enters there with retry_count, attempts/ and retry-history.json untouched and the archived verdict still passed.
+  - Confirm the repair-pass block sits after the clean-clone check in the verifier branch and that the check runs again on the verification the pass returns to.
+  - Confirm the grant is bounded to the paths the findings name, the stage they resolve to and the attempt of the pass, and that both the ownership check and the revert check read it.
+  - Confirm an undefined category escalates without spending a retry, and a spent budget records the findings and completes the run.
+  - Confirm the accounting counts a repairable finding naming a routed slug as acted on and still files an unnamed one.
+  - Confirm both shipped workflows declare repair_pass with budget 2 and a budget_reason, and that the whole suite passes in the clean clone.
+  - Confirm the correction pass's tests pass unchanged and its prose-only bound is unaltered in both verifier prompts, the schema and the coordinator's statement.
+
+constraints:
+  - No stage name, category name or artifact name for the repair pass is written into coordinator logic; each comes off the loaded workflow definition, as every other route does.
+  - The coordinator stays deterministic; no model call is added outside agent_runner.py.
+  - The repair pass spends nothing a retry spends; a run that declares no repair_pass key behaves exactly as before.
+  - A repair pass routes only after the clean-clone check on the routing verdict has passed.
+  - The correction pass remains prose-only and is not widened; the two passes are independent mechanisms with independent budgets.
+  - Every routing decision the repair pass makes is reconstructable from state.json and events.log.
+  - Python 3.10+, standard library only; existing tests are neither weakened nor skipped.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-16 18:56:19
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 321
