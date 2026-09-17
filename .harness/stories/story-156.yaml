@@ -1,0 +1,160 @@
+story:
+  id: story-156
+  title: One defect found on several attempts of a run is filed once
+  description: |
+    Planned from the brief filed under 190.
+
+    A run that takes several attempts inspects its change once per attempt,
+    and each attempt files what its verdict declined as soon as the verdict
+    is in. story-155 took three attempts and filed thirteen briefs that were
+    six defects: the same defect re-found on attempt two and three was filed
+    again each time, because a brief is filed under the slug, the category
+    and the path set, and all three are the Inspector's output on a second
+    reading -- rephrased for the same reason a title is. The dedupe that
+    story-152 relied on, that a retry's inspection re-finds the defect and
+    drops it as already queued, matches on that key and so never fired. The
+    Inspector was not shown what the run had already queued either: the
+    already-filed block it is handed comes from the tracker query, and a
+    run's briefs sit pending in the outbox until the completion sweep.
+
+    This story stops a run filing against itself by filing once, at
+    completion, from the final attempt. Nothing an inspection finds during
+    a run reaches the queue until the run completes. Each attempt's
+    pre-stage inspection still routes the findings about the change to the
+    verifier, but it writes the findings about neighbouring files to a held
+    artifact beside its findings record instead of filing them. The
+    accounting after the verdict still splits the routed findings into what
+    the verdict acted on and the remainder and writes its artifact, but it
+    files nothing and records the remainder. When the run completes, the
+    coordinator files the final attempt's held findings and its remainder
+    through the one filing call, between the completion commit and the
+    sweep so the same sweep drains them, and says what it filed in an event
+    of its own. The final attempt's inspection read the code that shipped,
+    so a run of three attempts files exactly what a run of one attempt over
+    that same code would have filed.
+
+    The alternative the brief put first -- comparing a later attempt's
+    findings against what the run already filed on the title, body and
+    paths together -- was declined deliberately. Any comparison the
+    coordinator can make between two findings' prose is a similarity
+    threshold, a number nothing checks, which would suppress two distinct
+    findings about one file on some runs and let a rephrasing through on
+    others with neither failure visible; and the coordinator may not call a
+    model. Filing once from one inspection is exact.
+
+    Two consequences are accepted. A run that escalates and is abandoned
+    files none of what it held: the change never landed, and a run that is
+    resumed and then completes files its own final attempt's. And the
+    verifier is handed a re-found finding on every attempt rather than once,
+    because nothing is queued mid-run for the retry's inspection to drop it
+    against; each verdict judges the current code with the whole reading,
+    which reverses a property story-152 chose and the documentation must
+    say so. Filing is delayed by the length of the run, which the brief
+    accepts as the cost.
+
+    The cross-run dedupe against the tracker, the identity a brief is filed
+    under, the Inspector's slug rule and how many findings an inspection
+    reports are all left as they are.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/story_inspection.py, add held_artifact_file(artifact, attempt) naming a per-attempt held artifact beside the findings record, prefixed the way accounting_artifact_file is so the findings artifact's attempt-wildcarded glob does not match it, and have the pre-stage inspection write the findings that are not about the change to it as the Inspector wrote them instead of filing them; the inspection's summary line says how many were held rather than filed.
+  - In orchestration/story_inspection.py, have the accounting after the verdict split the routed findings as it does today and write its artifact carrying the remainder's slugs beside the routed and acted-on slugs, filing nothing; its event keeps the inspection-accounted kind, says in words how many were held for the run's completion, and carries filed and dropped at zero because that is true when it is written.
+  - In orchestration/story_inspection.py, add file_at_completion(run_dir, target_root, config, harness_root, story_id, stages) -> None, total in the shape of inspect_after_story, inspect_before_stage and account_after_verdict, which reads the artifact name off the workflow's inspection declaration, finds the highest attempt in the run directory that has an accounting artifact, files that attempt's held findings and the remainder its accounting recorded (read back off the attempt's findings record) through inspection.file_findings with the bound inspection.bounds(config) resolves, writes an event of a new kind inspection-filed saying how many were filed and dropped with each drop reason named with its count, and appends the same record to the cross-run inspection log. Where no attempt has an accounting artifact it files nothing and writes no event.
+  - In orchestration/story_coordinator.py, call file_at_completion from _complete in the position the post-story inspection occupies, after the completion commit and before the sweep, only where a stage of the loaded workflow declares an inspection, reading nothing from it; and have inspection_artifacts glob the held artifact beside the findings record and the accounting so a resume moves all three.
+  - In schemas/cross-run-history.schema.json and schemas/execution-history.schema.json, add inspection-filed to the enums beside inspection-accounted, declare it as the record of the filing a run makes at completion, and reword the descriptions of the accounting entry's filed and dropped fields so they no longer describe the accounting as the filing.
+  - Adapt the tests in tests/test_inspection_findings_reach_the_story.py that pin per-attempt filing and the already-queued drop on a retry to the deferred behaviour, without weakening what they hold about the split, the once-per-attempt rule and the resume.
+  - Write a new test module under tests/ holding the assertion story-155 would have failed and the consequences this story accepts, with a fake runner and no model.
+  - In .harness/docs/ARCHITECTURE.md, rewrite the story-152 paragraph that says a retry's inspection drops a filed finding as already queued, document the held artifact, the completion filing and its event, why escalation files nothing, and why matching on the defect was declined.
+
+acceptance_criteria:
+  - A driven run of three attempts, whose three inspections each report one finding about the change under a different slug, a different category and a different path set, and whose three verdicts each decline it, holds exactly one entry for it in the queue when the run completes, and that entry is the final attempt's finding.
+  - Before a run completes, the queue holds no entry for any finding its inspections reported, whether the finding was about the change or about a file beside it; after it completes, the final attempt's held findings and remainder are in the queue and the earlier attempts' are not.
+  - A run whose attempt 1 inspection reports a finding that no later attempt's inspection reports leaves no entry for it in the queue at completion.
+  - A run whose attempt 2 inspection re-finds a finding attempt 1 routed to the verifier routes it to the verifier again on attempt 2, writes it in attempt 2's findings record, and accounts for it under attempt 2.
+  - A run that escalates leaves the queue exactly as it found it, with its held and accounting artifacts still in the run directory; a run that is resumed after an escalation and completes files its own final attempt's held findings and remainder, once.
+  - A resume moves the held artifact into resumes/resume-K/ beside the findings record and the accounting, and the resumed entry's attempt 1 writes its own.
+  - The completion filing reaches the queue through inspection.file_findings and through no other call, the scan tests/test_inspection.py holds over every filing call in orchestration/story_inspection.py still passes, and the event it writes is of kind inspection-filed carrying filed and dropped, with each drop reason named with its count in the message.
+  - An accounting event written after a verdict carries filed and dropped at zero and its message says how many findings were held for the run's completion; no event line written before the run completes says a finding was filed.
+  - Both history schemas declare inspection-filed, the cross-run inspection log receives one such record per completed run that filed or dropped anything, and the tests holding the two schemas' enums and optional properties equal to append_event's keywords pass.
+  - Under a workflow declaring no inspection, and under one whose file cap is unset, events.log is byte-for-byte what it was before this story.
+  - The whole test suite passes with no existing assertion weakened or skipped.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_inspection.py, add held_artifact_file beside accounting_artifact_file, add a write_held that writes the not-about-the-change findings as the Inspector wrote them under the findings record's shape (story_id, attempt, findings), and change _inspect_before_stage to call write_held with `others` in place of the inspection.file_findings call, building the Report with filed empty and the summary line saying how many were held.
+    - In _account_after_verdict, remove the inspection.file_findings call, extend write_accounting with the remainder's slugs, and word the inspection-accounted event as held rather than filed; keep the artifact-presence once-per-attempt rule and the routed-nothing-accounts-nothing rule as they are.
+    - Add file_at_completion with a guarded body the way the three existing entry points are written, a FILED_EVENT constant of "inspection-filed", a helper that finds the highest accounted attempt by globbing accounting_artifact_file with an attempt wildcard, and a helper that reads the held artifact and the remainder off the findings record by the slugs the accounting recorded; file both lists through inspection.file_findings with _Routed-shaped entries carrying the same Scope the accounting built, then _say with the new kind and record through the cross-run append the accounting uses.
+    - In orchestration/story_coordinator.py, in _complete, beside the `if not inspection_declaration(stages)` block, call story_inspection.file_at_completion where the declaration is present; in inspection_artifacts add the held artifact's glob beside the accounting's; extend the scan test's expectations if the call-site scan in tests/test_inspection_findings_reach_the_story.py enumerates the call sites.
+    - Add inspection-filed to both schema enums, describe it, and reword the accounting entry's filed and dropped descriptions; check the execution-history keyword-equality tests.
+    - Adapt the tests in tests/test_inspection_findings_reach_the_story.py named in likely_file_changes below to the deferred behaviour.
+    - Tester writes tests/test_one_defect_found_on_several_attempts_is_filed_once.py holding the criteria above with the driven fixture that module already uses, including the drifting-key run, the pre-completion empty queue, the attempt-1-only finding, the re-routing on attempt 2, the escalated run, the resumed run, the resume of the held artifact and the no-inspection byte-for-byte control.
+    - Documenter updates .harness/docs/ARCHITECTURE.md as the last task says.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: the held artifact, the accounting that files nothing, and file_at_completion
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the completion call site beside the post-story inspection and the held artifact in inspection_artifacts
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: the inspection-filed kind and the reworded accounting descriptions
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: the inspection-filed kind in the closed enum
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: implementer
+      reason: the tests that pin per-attempt filing and the already-queued drop on a retry, adapted to filing at completion
+      reverting_breaks_the_suite: these tests assert that the accounting files after each verdict and that a retry's re-found finding is dropped as already queued, which is the behaviour this story removes on purpose; with the implementer's change in place and these edits reverted, the suite is red.
+    - file: tests/test_one_defect_found_on_several_attempts_is_filed_once.py
+      stage: tester
+      reason: the assertion story-155 would have failed and the consequences this story accepts
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the completion filing, the held artifact, the reversed story-152 property and the declined alternative
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - schemas/cross-run-history.schema.json
+    - schemas/execution-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_brief.py and the identity it defines; the key a brief is filed under stays the kind, the category, the sorted bare paths and the slug
+    - prompts/inspector.md; the slug rule is correct and stays
+    - The cross-run dedupe in orchestration/inspection.py, the filed query and the local index; this story is about one run filing against itself
+    - inspect_after_story and its position in _complete for a workflow declaring no inspection
+    - How many findings an inspection reports, the severity floor and the brief cap
+    - The escalation and pause paths; neither files anything and neither is changed
+    - orchestration/outbox.py, orchestration/agent_runner.py, scripts/, workflows/
+
+verification_requirements:
+  - Confirm the driven three-attempt run with drifting slug, category and paths holds one queue entry at completion and that it is the final attempt's, by reading the queue rather than the events.
+  - Confirm the queue is empty of the run's findings before completion and that an escalated run leaves it as it found it.
+  - Confirm the resume test moves the held artifact with the findings record and the accounting.
+  - Confirm no event written before completion says a finding was filed, and that the completion event is of kind inspection-filed and reaches the cross-run inspection log.
+  - Confirm the byte-for-byte events.log controls for a workflow declaring no inspection and for an unset file cap pass.
+  - Confirm the scan over filing calls in orchestration/story_inspection.py still passes and that file_at_completion is total, returns nothing and declares no parameter by which a caller could stop a run.
+  - Confirm the whole suite passes and no existing assertion was weakened or skipped.
+
+constraints:
+  - No model call on the completion filing path; the coordinator stays deterministic and the agent runner is not reached from file_at_completion.
+  - file_at_completion is total in the shape of the three existing entry points: it returns nothing, raises on no path and declares no parameter by which a caller could be told to stop; a failure inside it is printed and recorded and changes neither the run's status nor its exit code.
+  - The completion filing sits after the completion commit and before the sweep, so the durability of the work never waits on it and the same sweep drains what it filed.
+  - Every event line is true when it is written; an accounting line never says a finding was filed.
+  - Filing reaches the queue only through inspection.file_findings, with the floor, the cap, the drop reasons, the dedupe and the queue every other producer uses.
+  - A workflow declaring no inspection, and one whose file cap is unset, writes events.log byte-for-byte as before.
+  - The held and accounting artifacts of an escalated run stay in the run directory as evidence; nothing deletes them.
+  - The story dialect is not YAML and the identity a brief is filed under is not changed by this story.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-16 22:32:50
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 190
