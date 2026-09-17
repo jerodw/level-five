@@ -839,13 +839,19 @@ def configured_workflow() -> str:
     return "story-workflow"
 
 
-@pytest.fixture
-def target_root(tmp_path: Path, configured_workflow: str) -> Path:
-    root = tmp_path / "sample-target"
+def build_sample_target(root: Path, workflow: str) -> None:
+    """Write the sample target repository at `root`, configured for `workflow`.
+
+    This is what `target_root` used to do inline for every test, and it is
+    what the session template below does once per workflow name. Every command
+    is as it was — `git init -q` with no `-b`, so the branch the target stands
+    on is whatever it was before the template existed — because a test must
+    observe exactly the target it observed when the tree was built per test.
+    """
     for sub in (".harness/standards", ".harness/stories", ".harness/runs", ".harness/logs", ".harness/docs", "src"):
         (root / sub).mkdir(parents=True)
     (root / ".harness" / "config.yaml").write_text(
-        CONFIG.format(workflow=configured_workflow), encoding="utf-8")
+        CONFIG.format(workflow=workflow), encoding="utf-8")
     (root / ".harness" / "stories" / "story-001.yaml").write_text(STORY, encoding="utf-8")
     (root / ".harness" / "standards" / "coding.md").write_text("# Coding Standards\n- keep it simple\n", encoding="utf-8")
     (root / ".harness" / "standards" / "testing.md").write_text("# Testing Standards\n- test everything\n", encoding="utf-8")
@@ -856,6 +862,57 @@ def target_root(tmp_path: Path, configured_workflow: str) -> Path:
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
+
+
+@pytest.fixture(scope="session")
+def sample_target_templates(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """The session's sample-target templates, one per workflow name, built lazily.
+
+    Building the sample target spawns git several times, and most of the suite
+    asks for one; the tree is the same for every test that configures the same
+    workflow, so it is built once per name per session — under `-n auto`, once
+    per worker — and copied per test. The mapping starts empty and
+    `target_template` fills it the first time a workflow name is asked for, so
+    a module that overrides `configured_workflow` gets a template built for the
+    workflow it named and two names never share one.
+
+    Nothing returns a template to a test: `target_root` copies it, and a test
+    that mutates its copy leaves the template as it was built. `git init` runs
+    in a fresh directory of its own, never inside a worktree, so the template's
+    `.git` is a real directory rather than a `gitdir:` pointer and a copy of it
+    is a repository of its own.
+    """
+    return {}
+
+
+@pytest.fixture
+def target_template(sample_target_templates: dict[str, Path],
+                    tmp_path_factory: pytest.TempPathFactory,
+                    configured_workflow: str) -> Path:
+    """The template `target_root` copies for the current `configured_workflow`.
+
+    Exposed so a test can assert the template is untouched after a test has
+    mutated its copy. The first test in a session asking for a workflow name
+    builds it; every later one finds it.
+    """
+    template = sample_target_templates.get(configured_workflow)
+    if template is None:
+        template = tmp_path_factory.mktemp("sample-target-template") / "sample-target"
+        build_sample_target(template, configured_workflow)
+        sample_target_templates[configured_workflow] = template
+    return template
+
+
+@pytest.fixture
+def target_root(tmp_path: Path, target_template: Path) -> Path:
+    """A sample target repository of this test's own, at the path it always had.
+
+    A copy of the session template rather than a fresh build, so the per-test
+    path spawns no process; `symlinks=True` carries `.git` faithfully, and the
+    copy holds the same files and the same single commit the build wrote.
+    """
+    root = tmp_path / "sample-target"
+    shutil.copytree(target_template, root, symlinks=True)
     return root
 
 
@@ -890,7 +947,7 @@ def init_repository(root: Path,
                     message: str = "the tree this starts from") -> None:
     """Make `root` a git repository with everything under it committed.
 
-    `target_root` above does this inline for the target it builds. This is the
+    `build_sample_target` above does this for the target it builds. This is the
     same act for a root a module built itself, and it is what every fixture
     that drives `scripts/l5-plan` needs: since story-117 planning happens in a
     worktree cut from the base, so a directory that is not a repository is one
