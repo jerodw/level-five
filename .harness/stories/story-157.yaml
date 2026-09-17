@@ -1,0 +1,112 @@
+story:
+  id: story-157
+  title: The test copy is cloned over the transport the clean-clone check already uses
+  description: |
+    Planned from the brief filed under 166, which also covers the work filed
+    as #310 (closed as superseded by it).
+
+    `copy_repository` in tests/test_git_history_loading_retired.py clones the
+    repository with git's default local transport, which for a path on the
+    same filesystem enumerates and copies or hardlinks the source's
+    `.git/objects` as a directory tree. The repository has met that path
+    failing: .harness/docs/ARCHITECTURE.md records three CI runs in which a
+    clone of this repository died enumerating the source's object store while
+    a multi-pack index was being written, and `_build_clone` in
+    orchestration/story_coordinator.py records the decision taken -
+    `--no-local`, so git negotiates a pack over a pipe and never reads the
+    source's object files whatever is writing them - and the lesson to carry:
+    remove the class rather than the instance. The module-scoped `repo_copy`
+    and `pristine_copy` fixtures make two such clones on every run of the
+    suite, and the built-repository tests make more, so the two clones in one
+    system disagree about whether that failure is possible. The local
+    transport also leaves the copy's object files as hardlinks into the
+    source, so the docstring's claim that the copy holds no reference back to
+    the source is stronger than what the copy is.
+
+    This story passes `--no-local` on that clone, for the reason the
+    coordinator already records, so both clones of this repository are made
+    the way the repository decided clones of it are made. It also replaces
+    the three `check=True` git invocations in `copy_repository` with a helper
+    that raises with git's stderr in the message, so a clone that cannot be
+    made errors the fixtures with the line git wrote rather than with
+    `returned non-zero exit status 128` and nothing else.
+
+    The copy's history, HEAD, branch, index state and working tree are
+    unchanged by the transport. The validation that shows so already exists
+    - the three story-153 tests and the standing assertions on the pristine
+    copy - and carries across untouched. Two assertions are added for the two
+    things the story changes, which nothing asserts today: the transport the
+    copy is cloned over, read off the argument list handed to `git clone`,
+    and the message a failed clone raises.
+  workflow: refactor-workflow
+
+tasks:
+  - In `copy_repository` (tests/test_git_history_loading_retired.py), pass `--no-local` to the `git clone` invocation, keeping `--quiet` and `--no-checkout`.
+  - Add a short paragraph to `copy_repository`'s docstring saying the clone is made over git's normal transport and why, pointing at `_build_clone`'s docstring in orchestration/story_coordinator.py and the ARCHITECTURE.md record rather than repeating them; note that the copy's object files are therefore its own rather than hardlinks into the source.
+  - Add one module-level helper in tests/test_git_history_loading_retired.py that runs a git command with output captured and, on non-zero exit, raises `RuntimeError` naming the command and carrying git's stderr, in the shape `_build_clone` already uses; route the clone, the `git remote remove origin` and the `git reset --quiet` in `copy_repository` through it and drop `check=True` from all three.
+  - Add a test in tests/test_git_history_loading_retired.py that captures every argument list handed to `git clone` while `copy_repository` runs on a repository built for it (the spy pattern `clone_argv` in tests/test_clean_clone_check.py uses, intercepting `subprocess.run`), and asserts exactly one clone was made, `--no-local` is in its arguments, and none of `--no-hardlinks`, `--local` or `-l` is.
+  - Add a test in tests/test_git_history_loading_retired.py that calls `copy_repository` with a source that is not a git repository (an empty directory under tmp_path) and asserts it raises `RuntimeError` whose message carries git's own stderr text for that failure, controlled by running the same `git clone` directly and asserting the stderr it produced is non-empty and appears in the raised message.
+  - Leave every existing test and assertion in tests/test_git_history_loading_retired.py as it stands.
+  - Record in .harness/docs/ARCHITECTURE.md, beside the story-153 paragraph that describes `copy_repository` as clone-then-overlay, that since story-157 the clone is made with `--no-local` for the reason the story-033 record gives, and that a git command failing inside `copy_repository` raises with git's stderr.
+
+acceptance_criteria:
+  - The `git clone` invocation in `copy_repository` carries `--no-local` and carries none of `--no-hardlinks`, `--local` or `-l`, asserted by a test that reads the argument list `subprocess.run` was handed during a real call of `copy_repository`, not the module's text.
+  - No `subprocess.run(..., check=True)` remains in `copy_repository`; each of its three git commands goes through one helper that raises `RuntimeError` on non-zero exit with git's stderr in the message.
+  - A test shows that `copy_repository` called on a source that is not a git repository raises `RuntimeError` whose message contains the stderr git wrote for that clone, and that stderr is shown to be non-empty.
+  - `test_a_copy_of_a_worktree_has_a_git_directory_of_its_own`, `test_the_copy_is_isolated_from_its_source_and_starts_where_it_stood`, `test_a_copy_of_a_main_checkout_carries_what_it_carried_before`, `test_a_freshly_made_copy_holds_no_path_the_repository_ignores` and `test_the_copy_carries_the_history_and_not_what_the_runs_left` are unchanged in text and pass.
+  - The docstring of `copy_repository` states that the clone is made over git's normal transport and points at where the reason is recorded.
+  - The full suite passes under the configured test command.
+  - .harness/docs/ARCHITECTURE.md records the transport change and the failure reporting change beside the story-153 clone-and-overlay paragraph.
+
+technical_plan:
+  implementation_steps:
+    - Read `_build_clone` in orchestration/story_coordinator.py (the clone command and the RuntimeError shape it raises) and the `clone_argv` fixture in tests/test_clean_clone_check.py.
+    - Add a helper near `copy_repository` (above it, beside `ignored_paths`) that takes the git argument list and a `cwd`, runs it with `capture_output=True, text=True`, and raises `RuntimeError` on non-zero exit with the command and the stripped stderr; it returns the CompletedProcess otherwise.
+    - Rewrite the three git calls in `copy_repository` through that helper, adding `--no-local` to the clone.
+    - Extend the docstring of `copy_repository` as described in the tasks.
+    - Add the two tests beside the story-153 tests, building their source repositories with the module's existing `init_repository` and `git_in` helpers; the transport test intercepts `subprocess.run` on the test module's own `subprocess` via monkeypatch and restores it afterwards.
+    - Run the configured test command.
+  likely_file_changes:
+    - file: tests/test_git_history_loading_retired.py
+      stage: implementer
+      reason: The clone transport, the failure-reporting helper, the docstring paragraph and the two new tests all live here.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the transport change and the failure reporting beside the story-153 paragraph on `copy_repository`.
+
+scope:
+  modify:
+    - tests/test_git_history_loading_retired.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - scripts/
+    - prompts/
+    - schemas/
+    - workflows/
+    - hooks/
+    - templates/
+    - tests/test_clean_clone_check.py
+    - tests/conftest.py
+
+verification_requirements:
+  - Confirm the argument list of the `git clone` in `copy_repository` carries `--no-local` and no directory-copy flag, and that a test asserts it off the captured argument list.
+  - Confirm every git command in `copy_repository` raises with git's stderr on failure and no `check=True` remains there, and that a test demonstrates the raised message carries git's words.
+  - Confirm the five existing copy tests named in the acceptance criteria are textually unchanged against the story's base commit and pass.
+  - Confirm no assertion anywhere in tests/ was weakened, skipped or removed.
+  - Confirm the ARCHITECTURE.md change describes the code as it now stands and names no symbol that does not exist.
+
+constraints:
+  - Behaviour of a successful `copy_repository` call is unchanged: same history, HEAD, branch, working tree contents, index state and ignored-path exclusions as before.
+  - No file outside tests/test_git_history_loading_retired.py and .harness/docs/ARCHITECTURE.md changes; `_build_clone` is the reference, not a subject.
+  - Standard library only; the helper and tests use `subprocess`, `pytest` and the module's existing helpers.
+  - Existing assertions are not edited, weakened or skipped to accommodate the change.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-17 10:48:27
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 166
