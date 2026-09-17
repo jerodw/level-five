@@ -250,6 +250,7 @@ def build_context(
     allowed_tools: list[str] | None = None,
     self_route_result: str | None = None,
     correction_pass_result: str | None = None,
+    repair_pass_result: str | None = None,
     suite_run_result: str | None = None,
     revert_check_result: str | None = None,
     inspection_findings: str | None = None,
@@ -350,6 +351,13 @@ def build_context(
         # coordinator's to compose. Defaulted to None so a call that omits it
         # renders exactly what it rendered before.
         "correction_pass_result": correction_pass_result,
+        # A stage the workflow re-entered because a passing verdict, and the
+        # clean-clone check on it, carried repairable findings is told so by
+        # the coordinator's own record of that pass — the findings each with
+        # the stage its category resolved to. Passed in for the reason the
+        # correction-pass record beside it is, and defaulted to None so a call
+        # that omits it renders exactly what it rendered before.
+        "repair_pass_result": repair_pass_result,
         # The coordinator's own record of the suite it ran after a stage's turn
         # ended: the exit status of a subprocess it owns, rather than an
         # agent's assertion about a run it made itself. Passed in for the

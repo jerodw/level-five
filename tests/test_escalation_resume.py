@@ -2461,7 +2461,8 @@ NEW_FIELDS = {"story_digest", "escalation_commit", "harness_revision"}
 #: noticing still turns the assertion below red.
 FIELDS_ADDED_SINCE = {"self_route_count", "bookkeeping_self_route_count",
                       "guidance_in_force",
-                      "correction_pass_count", "resume_count",
+                      "correction_pass_count", "repair_pass_count",
+                      "resume_count",
                       "entry_cost_usd", "stopped_on_cost", "workflow",
                       "unshadowed_suite_failure"}
 

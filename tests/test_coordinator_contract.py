@@ -199,6 +199,12 @@ def state_contract_problems(state: dict) -> list[str]:
         # bound is one pass per run and that bound is what makes the mechanism
         # terminate.
         "correction_pass_count": int,
+        # story-155's repair-pass counter: how many repair passes this run has
+        # taken, bounded by the budget the verifier stage declares. Defaulted
+        # like the fields above, and zero means none has been taken. Cumulative
+        # over the run for the reason correction_pass_count is, and saved with
+        # the state so a resumed run cannot spend the pass again.
+        "repair_pass_count": int,
         # story-062's entry index: which entry of the run is now executing,
         # zero for the first and one higher after each resume. Defaulted like
         # the fields above, so a state file written before it existed reads as
