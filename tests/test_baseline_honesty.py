@@ -2669,6 +2669,19 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "prompts/story-tester.md, because the criterion is that this "
         "repository's own tester prompt shortened and names the guard, which "
         "only the shipped template can answer",
+    "test_suite_turns.py":
+        "every run it drives goes through a workflow it builds, against target "
+        "repositories it constructs, because which stages declare the three "
+        "whole-suite runs and what the configured command is are inputs to "
+        "whether those runs take turns. What it resolves live has what is "
+        "shipped as its subject and nothing else: that this repository's own "
+        ".harness/config.yaml and the template l5-init installs set the "
+        "suite_turn_wait_minutes bound and say why it is a duration, and that "
+        "schemas/cross-run-history.schema.json names no suite-turn event, so "
+        "the wait reaches a run's own history and no durable cross-run log. A "
+        "fixture configuration could say only what the module had written "
+        "into it, and a fixture schema could not answer what this deployment "
+        "projects across runs",
     "test_the_assist_agent_files_a_brief.py":
         "everything the filing decides is driven against a harness root it "
         "mirrors and a target repository it builds, because the workflow set, "

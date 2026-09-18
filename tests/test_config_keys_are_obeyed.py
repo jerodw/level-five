@@ -56,6 +56,7 @@ a model: every run below goes through a fake runner.
 from __future__ import annotations
 
 import ast
+import fcntl
 import json
 import shutil
 import subprocess
@@ -115,6 +116,12 @@ TOKEN_EXEMPT: dict[str, str] = {
     "max_pause_wait_seconds": (
         "the value is a duration in seconds, parsed to a number and refused at "
         "pre-flight when it is not one, so it cannot carry a word"
+    ),
+    "suite_turn_wait_minutes": (
+        "the value is a duration in minutes — how long a run waits for the "
+        "repository's turn at the whole suite — parsed to a non-negative "
+        "number and refused at pre-flight when it is not one, so it cannot "
+        "carry a word"
     ),
     "history_retention_days": (
         "the value is a retention bound in days, parsed to a non-negative "
@@ -181,6 +188,22 @@ TOKEN_EXEMPT: dict[str, str] = {
 PAUSE_WAIT = 4919
 WITHIN_THE_BOUND = PAUSE_WAIT - 19
 BEYOND_THE_BOUND = PAUSE_WAIT + 61
+
+#: How long the fixture lets a run wait for the repository's turn at the
+#: suite, in minutes. Not a whole number, which no harness would pick: the
+#: default written in harness source is sixty and this repository configures
+#: sixty. It stands in for the token the value cannot carry, and its proof
+#: pins it from both sides through an injected clock — a holder that lets go
+#: inside the bound is waited for and the turn taken, and one that never lets
+#: go is waited for exactly this long and no longer before the suite runs
+#: without a turn. Nothing sleeps: the clock is the test's.
+SUITE_TURN_WAIT = 0.7
+SUITE_TURN_WAIT_SECONDS = SUITE_TURN_WAIT * 60
+HOLDER_LETS_GO_AT = SUITE_TURN_WAIT_SECONDS / 2
+
+#: The default the fallback comparison and the ordering above are stated
+#: against, read off the coordinator rather than written here.
+DEFAULT_SUITE_TURN_WAIT = story_coordinator.DEFAULT_SUITE_TURN_WAIT_MINUTES
 
 #: How far back the retention fixture is configured to keep records. A bound no
 #: harness would choose and this repository does not configure, standing in for
@@ -456,6 +479,7 @@ VARYING: dict[str, object] = {
     "source_dirs": [INSPECT_SOURCE_DIR],
     "standards_dir": ".harness/xyzzy-standards",
     "stories_dir": ".harness/xyzzy-stories",
+    "suite_turn_wait_minutes": str(SUITE_TURN_WAIT),
     "sweep_max_entries": str(SWEEP_MAX_ENTRIES),
     "sync_command": SYNC_COMMAND_REL,
     "sync_timeout_seconds": str(SYNC_TIMEOUT),
@@ -506,6 +530,7 @@ FALLBACKS: dict[str, object] = {
     "source_dirs": None,
     "standards_dir": ".harness/standards",
     "stories_dir": ".harness/stories",
+    "suite_turn_wait_minutes": DEFAULT_SUITE_TURN_WAIT,
     "sweep_max_entries": DEFAULT_SWEEP_MAX_ENTRIES,
     "sync_command": None,
     "sync_timeout_seconds": DEFAULT_SYNC_TIMEOUT,
@@ -624,6 +649,9 @@ KEY_PROOFS: dict[str, Proof] = {
         BEHAVIOURAL),
     "stories_dir": Proof(
         "test_stories_dir_is_where_the_story_artifact_is_read_from",
+        BEHAVIOURAL),
+    "suite_turn_wait_minutes": Proof(
+        "test_suite_turn_wait_minutes_is_the_bound_on_waiting_for_a_turn_at_the_suite",
         BEHAVIOURAL),
     "sweep_max_entries": Proof(
         "test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts",
@@ -819,6 +847,11 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("orchestration/story_coordinator.py",
          'config.get("stories_dir", ".harness/stories")',
          '".harness/stories"'),
+    ),
+    "suite_turn_wait_minutes": (
+        ("orchestration/story_coordinator.py",
+         'config.get("suite_turn_wait_minutes", DEFAULT_SUITE_TURN_WAIT_MINUTES)',
+         "DEFAULT_SUITE_TURN_WAIT_MINUTES"),
     ),
     # The three sweep keys are read in the seam rather than in the script.
     # story-092 moved the transport build out of `scripts/l5-sync` and into
@@ -1201,8 +1234,8 @@ EXPECTED_KEYS = (
     "item_update_command", "item_update_timeout_seconds",
     "logs_dir", "mandate_max_depth", "max_pause_wait_seconds",
     "model", "permission_mode", "runs_dir", "source_dirs", "standards_dir",
-    "stories_dir", "sweep_max_entries", "sync_command", "sync_timeout_seconds",
-    "test_command",
+    "stories_dir", "suite_turn_wait_minutes", "sweep_max_entries",
+    "sync_command", "sync_timeout_seconds", "test_command",
     "test_selection_command", "tests_dir", "verification_runner", "workflow",
     "worktree_dir",
 )
@@ -1585,6 +1618,12 @@ def test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own():
 
     assert WITHIN_THE_BOUND < PAUSE_WAIT < BEYOND_THE_BOUND
     assert KEPT_AT_THE_BOUND < RETENTION_DAYS < DROPPED_AT_THE_BOUND
+    # And the suite-turn bound, pinned the same way: the holder lets go inside
+    # the configured value, and the value sits below the default written in
+    # harness source, so a harness that fell back to the default would keep
+    # waiting long past the point the configured bound stops.
+    assert 0 < HOLDER_LETS_GO_AT < SUITE_TURN_WAIT_SECONDS \
+        < float(DEFAULT_SUITE_TURN_WAIT) * 60
     # And the sync bound, which is pinned on both sides at once: a command
     # sleeping past it is killed under the configured value and would finish
     # and land under the default, so the second half of its proof is what
@@ -2906,6 +2945,92 @@ def test_max_pause_wait_seconds_is_the_only_bound_on_an_in_place_wait(tmp_path):
     assert outside.state["status"] == "paused"
 
     assert story_coordinator.pause_wait_bound(inside.config) == float(PAUSE_WAIT)
+
+
+class TurnClock:
+    """The clock and the sleep `suite_turn` is handed, so nothing waits.
+
+    Each sleep the turn asks for is recorded and added to the clock. A holder
+    handed in is closed — which releases the kernel lock it holds — once the
+    clock passes `lets_go_at`, so the turn is granted mid-wait exactly as it
+    would be when another run's suite ended.
+    """
+
+    def __init__(self, holder=None, lets_go_at: float | None = None):
+        self.now_at = 0.0
+        self.slept: list[float] = []
+        self.holder = holder
+        self.lets_go_at = lets_go_at
+
+    def now(self) -> float:
+        return self.now_at
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now_at += seconds
+        if (self.holder is not None and self.lets_go_at is not None
+                and self.now_at >= self.lets_go_at and not self.holder.closed):
+            self.holder.close()
+
+
+def turn_under_a_held_lock(tmp_path: Path, *, lets_go_at: float | None
+                           ) -> tuple[TurnClock, list[str]]:
+    """One turn at the fixture target's suite while its lock is held.
+
+    The lock is the one the coordinator derives for the target, held here by
+    a second handle; `lets_go_at` is when that handle is closed on the injected
+    clock, or None to hold it for the whole wait. Returns what the turn slept
+    and the events it wrote.
+    """
+    values = fixture_config()
+    target = build_target(tmp_path, values)
+    config = harness_config.load_config(target)
+    run_dir = tmp_path / "turn-run"
+    run_dir.mkdir()
+    lock = story_coordinator.suite_lock_path(target, config)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    clock = TurnClock(holder, lets_go_at)
+    try:
+        with story_coordinator.suite_turn(
+                run_dir, target, config, "xyzzy-stage", "xyzzy-suite.json",
+                sleep=clock.sleep, clock=clock.now):
+            pass
+    finally:
+        holder.close()
+    events = [entry["event"] for entry in json.loads(
+        (run_dir / "execution-history.json").read_text(encoding="utf-8"))]
+    return clock, events
+
+
+def test_suite_turn_wait_minutes_is_the_bound_on_waiting_for_a_turn_at_the_suite(
+        tmp_path):
+    """The configured bound decides both halves, observed rather than read.
+
+    A holder that lets go inside the bound is waited for until it does and the
+    turn is then taken, with the wait announced and no note; one that never
+    lets go is waited for exactly the configured minutes and then the suite
+    runs without a turn, with a note saying the bound expired. The two differ
+    only in when the holder lets go, so what separates the second from a wait
+    of an hour can only be the number the configuration carries — and a
+    harness that had stopped reading the key would wait the default sixty
+    minutes and fail the second half.
+    """
+    granted, events = turn_under_a_held_lock(
+        tmp_path / "granted", lets_go_at=HOLDER_LETS_GO_AT)
+    assert HOLDER_LETS_GO_AT <= sum(granted.slept) \
+        < HOLDER_LETS_GO_AT + 2 * story_coordinator.SUITE_TURN_POLL_SECONDS
+    assert events == ["suite-turn-waited"]
+
+    expired, events = turn_under_a_held_lock(tmp_path / "expired", lets_go_at=None)
+    assert sum(expired.slept) == pytest.approx(
+        SUITE_TURN_WAIT_SECONDS, abs=story_coordinator.SUITE_TURN_POLL_SECONDS)
+    assert max(expired.slept) <= story_coordinator.SUITE_TURN_POLL_SECONDS
+    assert events == ["suite-turn-waited", "note"]
+
+    config = harness_config.load_config(build_target(tmp_path / "read", fixture_config()))
+    assert story_coordinator.suite_turn_wait_seconds(config) == SUITE_TURN_WAIT_SECONDS
 
 
 def test_verification_runner_is_the_executable_the_check_resolves(tmp_path):

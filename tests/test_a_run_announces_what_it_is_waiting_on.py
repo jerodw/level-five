@@ -157,6 +157,11 @@ ANNOUNCEMENT_KINDS = frozenset(announcing_calls(COORDINATOR_SOURCE))
 INSPECTION_KIND = "inspection-started"
 SWEEP_KIND = "outbox-sweep-started"
 
+#: The kind story-167 added on the same terms: a run that finds another run
+#: of its repository holding the turn at the suite says it is waiting, through
+#: the composer, before it waits.
+SUITE_TURN_KIND = "suite-turn-waited"
+
 
 def test_a_composed_line_says_what_started_and_what_the_wait_is_worth():
     """The two halves and the one separator, which is the whole convention."""
@@ -197,6 +202,7 @@ def test_each_step_that_announces_renders_its_line_through_the_composer():
         SUITE_RERUN_KIND: "_suite_rerun_started",
         INSPECTION_KIND: "inspection_started",
         SWEEP_KIND: "outbox_sweep_started",
+        SUITE_TURN_KIND: "suite_turn",
     }
 
 

@@ -27,6 +27,8 @@ suite has ever been run.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import functools
 import hashlib
 import json
@@ -800,9 +802,11 @@ def cost_ceiling_problems(workflow: dict) -> list[str]:
     return problems
 
 
-#: What a target that configures no pause wait waits: nothing. It is the one
-#: duration written in harness source, and it is the one that means "do not
-#: wait" — every wait the harness ever takes is read from configuration.
+#: What a target that configures no pause wait waits: nothing. Zero is the
+#: default here because here zero means "do not wait". The other default
+#: durations in harness source — `DEFAULT_SUITE_TURN_WAIT_MINUTES` below and
+#: the sync timeout in `orchestration/outbox_sweep.py` — are non-zero because
+#: for each of them zero means something else, and each says what.
 NO_PAUSE_WAIT = "0"
 
 
@@ -838,6 +842,63 @@ def pause_wait_problems(config: dict) -> list[str]:
         return [
             f"max_pause_wait_seconds is {configured!r}, which is not a "
             f"non-negative number of seconds"
+        ]
+    return []
+
+
+#: How long a run waits for its turn at the whole suite when another run of
+#: the same repository holds it, unset. Sixty minutes is several suite runs on
+#: this repository, so a run that outlasts it is a suite hung in another run
+#: rather than one that is merely slow — and a hung suite must not stall every
+#: run behind it, which is why the wait is bounded at all.
+DEFAULT_SUITE_TURN_WAIT_MINUTES = "60"
+
+#: How often a run waiting for its turn asks for the lock again. The poll is
+#: what makes a killed holder's release visible: the kernel drops the lock the
+#: moment the holder dies, and the next poll takes it.
+SUITE_TURN_POLL_SECONDS = 0.5
+
+#: The lock file's name under the worktree root. Beside the worktrees because
+#: that directory is already the harness's own, already outside the repository,
+#: and already shared by every worktree of one repository.
+SUITE_LOCK_NAME = "suite.lock"
+
+
+def suite_turn_wait_seconds(config: dict) -> float:
+    """The configured bound on waiting for a turn at the suite, in seconds.
+
+    Shaped like `pause_wait_bound`: read as the string `load_config` produces,
+    parsed here, and only ever called after `suite_turn_wait_problems` has
+    passed, so the parse cannot fail. The key is in minutes because that is the
+    unit a suite run is measured in; it is returned in seconds because that is
+    the unit the clock is read in.
+    """
+    minutes = float(
+        config.get("suite_turn_wait_minutes", DEFAULT_SUITE_TURN_WAIT_MINUTES)
+    )
+    return minutes * 60.0
+
+
+def suite_turn_wait_problems(config: dict) -> list[str]:
+    """Check the configured suite-turn wait against what a bound can be.
+
+    Shaped like `pause_wait_problems`, and for its reason: a bound that cannot
+    be compared against a wait is a defect every run under that configuration
+    carries, so it is refused before a stage is spent on it. An absent key is
+    not checked at all — absent means sixty minutes, which is what
+    `suite_turn_wait_seconds` answers for it.
+    """
+    if "suite_turn_wait_minutes" not in config:
+        return []
+    configured = config["suite_turn_wait_minutes"]
+    try:
+        bound = float(configured)
+    except (TypeError, ValueError):
+        bound = -1.0
+    if bound < 0 or bound != bound:  # NaN compares unequal to itself
+        return [
+            f"suite_turn_wait_minutes is {configured!r}, which is not a "
+            f"non-negative number of minutes"
         ]
     return []
 
@@ -3457,6 +3518,148 @@ def _suite_rerun_started(
     )
 
 
+# --------------------------------------------------------------------------
+# Suite runs take turns
+#
+# A story's time divides sharply. Its agent turns are network-bound and take
+# tens of minutes while using almost no local CPU; its whole-suite runs take
+# every core, because the configured test command carries the parallel flag.
+# Two runs at once overlap the agent time happily and collide only in the
+# suite time, and the collision is worse than arithmetic: load makes
+# timing-dependent tests fail or go inconclusive, a spurious failure costs a
+# retry, and the retry adds another suite run to the load.
+#
+# So the three whole-suite runs — the declared suite run, the clean-clone
+# check and the revert check's whole-suite fallthrough — take an exclusive
+# turn before running and release it after. The command is not touched: the
+# worker count stays as configured and the coordinator knows nothing about the
+# flag. What changes is that two coordinators of one repository queue for the
+# suite instead of sharing the machine.
+#
+# The lock is scoped to the repository rather than to the machine, and that is
+# a decision rather than a shortcut. A machine-wide lock deadlocks the moment
+# this harness is its own target: the suite running under the lock drives the
+# coordinator on constructed targets thousands of times, and each of those
+# would wait on the lock the outer run holds. The coordinator may not read the
+# environment, so nesting cannot be detected that way. The lock is keyed on
+# the primary working tree instead, which every worktree of a repository shares
+# and which `worktrees.worktree_root` already derives, and lives beside the
+# worktrees the harness already owns. Two runs of one repository serialise; a
+# run of another repository does not.
+#
+# The turn fails toward running, in three ways. It is a kernel file lock,
+# released when its holder dies, so a killed run never holds it. A lock file
+# that cannot be created or opened costs the turn and never the run. And a wait
+# that outlasts the configured bound runs the suite anyway, because a suite
+# hung in another run would otherwise stall every run behind it and the harness
+# puts no timeout on the suite itself. Every path that runs without a turn says
+# so in events.log.
+
+
+def suite_lock_path(target_root: Path, config: dict) -> Path:
+    """Where the turn is taken for the repository `target_root` belongs to.
+
+    Derived through `worktrees.worktree_root` and nowhere else, so the lock
+    follows a configured `worktree_dir` and is otherwise beside the repository
+    rather than inside any one worktree of it — which is what makes it one lock
+    per repository rather than one per tree.
+    """
+    return worktrees.worktree_root(target_root, config) / SUITE_LOCK_NAME
+
+
+def _try_suite_lock(handle) -> bool:
+    """One non-blocking attempt at the lock: True when taken, False when held.
+
+    Any failure other than the lock being held propagates, so the caller can
+    tell a lock file it cannot use from a turn it has to wait for.
+    """
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+@contextlib.contextmanager
+def suite_turn(
+    run_dir: Path,
+    target_root: Path,
+    config: dict,
+    stage_name: str,
+    artifact: str,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+):
+    """Hold the repository's turn at the whole suite for the body's duration.
+
+    The lock is tried without blocking first. When it is held, a
+    `suite-turn-waited` event announces the wait — through `_announcement`,
+    naming what the wait is worth — and the lock is then polled every
+    `SUITE_TURN_POLL_SECONDS` until it is granted or the configured bound
+    expires. The announcement is written before the wait and the suite's own
+    announcement after it, so the wait is readable off the events log as the
+    gap between the two lines; an uncontended turn writes nothing at all.
+
+    Every way of not taking the turn runs the body anyway and says why as a
+    note: a lock file that cannot be created or opened, and a bound that
+    expired with the lock still held. Nothing here refuses or stops a run.
+
+    `sleep` and `clock` are parameters for the reason `run_story`'s `sleep`
+    is: a test observes the wait without taking it. The kind is a literal in
+    this one function body, for the reason `_suite_rerun_started` gives.
+    """
+    lock_path = suite_lock_path(target_root, config)
+    handle = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a", encoding="utf-8")
+        taken = _try_suite_lock(handle)
+        if not taken:
+            bound = suite_turn_wait_seconds(config)
+            append_event(
+                run_dir,
+                _announcement(
+                    f"waiting for the repository's turn at the suite, which "
+                    f"another run holds at {lock_path}",
+                    f"this waits until that run's suite ends, or for at most "
+                    f"{bound / 60:g} minutes, whichever comes first",
+                ),
+                kind="suite-turn-waited",
+                stage=stage_name,
+                artifacts=[artifact],
+            )
+            started = clock()
+            while not taken and clock() - started < bound:
+                sleep(min(SUITE_TURN_POLL_SECONDS, max(0.0, bound - (clock() - started))))
+                taken = _try_suite_lock(handle)
+            if not taken:
+                append_event(
+                    run_dir,
+                    f"the turn at the suite was still held after {bound / 60:g} "
+                    f"minutes, so the suite runs without one; a suite hung in "
+                    f"another run must not stall this one",
+                    stage=stage_name,
+                    artifacts=[artifact],
+                )
+    except OSError as error:
+        append_event(
+            run_dir,
+            f"no turn at the suite was taken because the lock file "
+            f"{lock_path} could not be created or opened ({error}); the "
+            f"suite runs without one",
+            stage=stage_name,
+            artifacts=[artifact],
+        )
+    try:
+        yield
+    finally:
+        if handle is not None:
+            # Closing releases the lock the kernel granted, if any; a handle
+            # that never took it releases nothing.
+            handle.close()
+
+
 def inspection_started(run_dir: Path, story_id: str, scope_files: int) -> None:
     """Announce the post-story inspection, before the invocation is made.
 
@@ -3628,28 +3831,33 @@ def clean_clone_check(
     and keyword-only for the reason `capture_stage_baseline`'s `accounted_for`
     is — a defaulted argument would let a later call site silence the
     announcement by omission.
+
+    The whole suite runs under the repository's turn, taken before the
+    announcement so a contended wait is announced ahead of the run and
+    released when the run returns.
     """
-    _suite_rerun_started(
-        run_dir,
-        stage_name,
-        artifact,
-        "in a fresh clone with the story committed, to check that it still "
-        "passes where the code ships",
-    )
-    scratch = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
-    try:
-        result = run_clean_clone(
-            target_root,
-            config["test_command"],
-            config.get("verification_runner"),
-            scratch,
-            output_path=run_dir / suite_output_file(artifact),
-            # The configured test command as configured: the coordinator
-            # narrows it by nothing here.
-            scope=(),
+    with suite_turn(run_dir, target_root, config, stage_name, artifact):
+        _suite_rerun_started(
+            run_dir,
+            stage_name,
+            artifact,
+            "in a fresh clone with the story committed, to check that it still "
+            "passes where the code ships",
         )
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        scratch = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
+        try:
+            result = run_clean_clone(
+                target_root,
+                config["test_command"],
+                config.get("verification_runner"),
+                scratch,
+                output_path=run_dir / suite_output_file(artifact),
+                # The configured test command as configured: the coordinator
+                # narrows it by nothing here.
+                scope=(),
+            )
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
     (run_dir / artifact).write_text(
         json.dumps(result.as_record(), indent=2) + "\n", encoding="utf-8"
     )
@@ -3860,48 +4068,52 @@ def suite_run_check(
     runner = argv[0]
     named = shlex.join(argv)
 
-    _suite_rerun_started(
-        run_dir,
-        stage_name,
-        artifact,
-        "in the target's own working tree, because the stage that authors the "
-        "validation no longer runs it",
-    )
-    try:
-        result = subprocess.run(
-            argv,
-            cwd=target_root,
-            capture_output=True,
-            text=True,
+    # The whole suite runs under the repository's turn, taken before the
+    # announcement so a contended wait is announced ahead of the run and
+    # released when the run returns.
+    with suite_turn(run_dir, target_root, config, stage_name, artifact):
+        _suite_rerun_started(
+            run_dir,
+            stage_name,
+            artifact,
+            "in the target's own working tree, because the stage that authors "
+            "the validation no longer runs it",
         )
-    except OSError as error:
-        decided = CleanCloneResult(
-            ran=False,
-            command=named,
-            runner=runner,
-            scope=(),
-            reason=f"the configured test command could not be run: {error}",
-        )
-        canonical_output = None
-    else:
-        output = result.stdout + result.stderr
-        # The whole output is written twice, beside each record that points at
-        # it, so following either record's own pointer reaches that record's
-        # run rather than the other pair's file.
-        canonical_output = _write_suite_output(
-            run_dir / suite_output_file(artifact), output
-        )
-        decided = CleanCloneResult(
-            ran=True,
-            command=named,
-            runner=runner,
-            scope=(),
-            exit_code=result.returncode,
-            output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
-            output_path=_write_suite_output(
-                run_dir / suite_output_file(retained), output
-            ),
-        )
+        try:
+            result = subprocess.run(
+                argv,
+                cwd=target_root,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as error:
+            decided = CleanCloneResult(
+                ran=False,
+                command=named,
+                runner=runner,
+                scope=(),
+                reason=f"the configured test command could not be run: {error}",
+            )
+            canonical_output = None
+        else:
+            output = result.stdout + result.stderr
+            # The whole output is written twice, beside each record that
+            # points at it, so following either record's own pointer reaches
+            # that record's run rather than the other pair's file.
+            canonical_output = _write_suite_output(
+                run_dir / suite_output_file(artifact), output
+            )
+            decided = CleanCloneResult(
+                ran=True,
+                command=named,
+                runner=runner,
+                scope=(),
+                exit_code=result.returncode,
+                output_tail=output[-CLEAN_CLONE_OUTPUT_TAIL:],
+                output_path=_write_suite_output(
+                    run_dir / suite_output_file(retained), output
+                ),
+            )
     # One record, written twice with each copy's output_path repointed at the
     # output file beside it, in the shape _archive_companion_output already uses
     # for an archived record. The returned result carries the retained pointer,
@@ -4858,37 +5070,46 @@ def revert_check(
             )
             return _record_revert_check(run_dir, artifact, decided)
 
-        _suite_rerun_started(
-            run_dir,
-            stage_name,
-            artifact,
-            f"with {', '.join(paths)} reverted, to decide whether those edits "
-            "were needed",
-        )
-        scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
-        try:
-            result = run_clean_clone(
-                target_root,
-                command,
-                config.get("verification_runner"),
-                scratch,
-                revert=list(paths),
-                baseline=resolved,
-                output_path=run_dir / suite_output_file(artifact),
-                # The whole suite, narrowed by nothing. What was reverted is
-                # `paths`, which is a different fact and has its own field.
-                scope=(),
+        # Only the whole-suite fallthrough takes the repository's turn: the
+        # selector runs above take seconds and run no suite. The turn is taken
+        # before the announcement, so a contended wait is announced ahead of
+        # the run, and released when the run returns.
+        with suite_turn(run_dir, target_root, config, stage_name, artifact):
+            _suite_rerun_started(
+                run_dir,
+                stage_name,
+                artifact,
+                f"with {', '.join(paths)} reverted, to decide whether those "
+                "edits were needed",
             )
-        except (RuntimeError, OSError) as error:
-            result = CleanCloneResult(
-                ran=False,
-                command=command,
-                runner=runner,
-                scope=(),
-                reason=f"the clone with the edits reverted could not be built: {error}",
-            )
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+            scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
+            try:
+                result = run_clean_clone(
+                    target_root,
+                    command,
+                    config.get("verification_runner"),
+                    scratch,
+                    revert=list(paths),
+                    baseline=resolved,
+                    output_path=run_dir / suite_output_file(artifact),
+                    # The whole suite, narrowed by nothing. What was reverted
+                    # is `paths`, which is a different fact and has its own
+                    # field.
+                    scope=(),
+                )
+            except (RuntimeError, OSError) as error:
+                result = CleanCloneResult(
+                    ran=False,
+                    command=command,
+                    runner=runner,
+                    scope=(),
+                    reason=(
+                        "the clone with the edits reverted could not be built: "
+                        f"{error}"
+                    ),
+                )
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
 
     decided = RevertCheckResult(
         result=result,
@@ -7602,6 +7823,24 @@ def _refuse_bad_pause_wait(target_root: Path, problems: list[str]) -> int:
     )
 
 
+def _refuse_bad_suite_turn_wait(target_root: Path, problems: list[str]) -> int:
+    """Refuse a run whose configured suite-turn wait is not a duration.
+
+    Thin, like `_refuse_bad_pause_wait` beside it and for its reason: the
+    configuration is wrong, not the story and not the tree, so the guidance
+    names the file to edit and what the key may hold.
+    """
+    return refuse(
+        f"{target_root / '.harness' / 'config.yaml'} configures a suite-turn "
+        f"wait that cannot be compared against a wait:",
+        problems,
+        "Set suite_turn_wait_minutes to a non-negative number of minutes, or "
+        "remove it — removed, a run waits up to 60 minutes for another run of "
+        "the same repository to finish its suite; zero takes the turn only "
+        "when it is free.",
+    )
+
+
 def _refuse_dirty_tree(target_root: Path, paths: list[str]) -> int:
     """Refuse a run whose target tree already holds work no stage produced.
 
@@ -8199,6 +8438,13 @@ def run_story(
     wait_problems = pause_wait_problems(config)
     if wait_problems:
         return _refuse_bad_pause_wait(target_root, wait_problems)
+
+    # And for the other duration: the bound on waiting for the repository's
+    # turn at the suite, refused here on the same terms so a run never reaches
+    # its first suite run holding a bound it cannot compare against.
+    turn_problems = suite_turn_wait_problems(config)
+    if turn_problems:
+        return _refuse_bad_suite_turn_wait(target_root, turn_problems)
 
     # The story artifact and any existing run state are read before the
     # workflow, because both can name the workflow this run loads. Reading

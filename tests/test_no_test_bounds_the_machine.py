@@ -137,6 +137,12 @@ CLASSIFICATION = {
     "test_no_test_bounds_the_machine.py": CARRIES_PRECONDITIONS,
     "test_plan_commit.py": CARRIES_PRECONDITIONS,
     "test_pty_drain.py": CARRIES_PRECONDITIONS,
+    # Two coordinator runs in two processes, whose configured command records
+    # its own interval and holds until released: a run has to have started
+    # that command, and both have to have finished, before their intervals
+    # can be read. The bound the story adds is observed through an injected
+    # clock and never against a real one.
+    "test_suite_turns.py": CARRIES_PRECONDITIONS,
     "test_the_approval_is_observed.py": CARRIES_PRECONDITIONS,
 }
 

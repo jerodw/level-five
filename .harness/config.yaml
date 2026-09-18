@@ -16,6 +16,15 @@ permission_mode: acceptEdits
 # committed before any sleep begins, so a process killed while waiting leaves a
 # run a fresh l5-run resumes at the stage it paused on.
 max_pause_wait_seconds: 18000
+# How long a run waits for this repository's turn at the whole suite when
+# another run of it holds the turn, in minutes. The coordinator takes an
+# exclusive lock around each whole-suite run so two runs queue for the suite
+# instead of sharing every core; the test command below is not touched. The
+# value is a duration and not a core count because what it governs is waiting:
+# each suite still uses every core, and this only bounds how long a suite hung
+# in another run can delay this one before the suite runs anyway. Zero takes
+# the turn only when it is free; unset is 60.
+suite_turn_wait_minutes: 60
 stories_dir: .harness/stories
 runs_dir: .harness/runs
 logs_dir: .harness/logs

@@ -28,6 +28,7 @@
           "verification-passed",
           "verification-failed",
           "suite-rerun-started",
+          "suite-turn-waited",
           "inspection-started",
           "outbox-sweep-started",
           "clean-clone-passed",
