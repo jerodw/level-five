@@ -1,0 +1,108 @@
+story:
+  id: story-162
+  title: A declared suite rerun that clears an outstanding failure records the clear in the events log as the clean-clone pass does
+  description: |
+    Planned from the brief filed under 197.
+
+    Two places in run_story clear RunState.unshadowed_suite_failure on the
+    same rule, and they disagree about what they write. The clean-clone block
+    clears the field, saves state and appends a note composed by
+    suite_failure_shadowed_by_clean_clone_note naming the failure it cleared;
+    its composer's docstring gives the reason — the clear is a routing
+    decision, so it is reconstructable from events.log as well as from
+    state.json. The declared-run block clears the same field on the same
+    comparison, saves state, and appends nothing. The only trace in
+    events.log is the absence of a carry-forward line after the rerun's
+    announcement, and a reader has to infer the clear from that absence and
+    from state.json no longer carrying the field. The reason given for the
+    clean-clone note is not specific to the clean clone: a declared rerun's
+    clear lets a run complete on exactly the same terms.
+
+    This story makes the declared block write what the clean-clone block
+    writes. Where a declared rerun passes at a scope no narrower than the
+    outstanding failure's, the block clears the field, saves state at the
+    decision, and then appends a note event composed by a sibling of the
+    clean-clone composer that names the declared rerun — the failure's stage,
+    its exit code, and the retained record and output the failure left behind,
+    all read off the outstanding-failure record. The note is appended with the
+    generic note kind and the declaring stage's name, where the clean-clone
+    block's note carries the verifying stage's. The clean-clone composer's
+    docstring stops presenting its reason as belonging to the clean clone.
+
+    The judgement recorded here: the two paths were deliberately made alike
+    by story-159, and a reader of one path never sees the other, so the
+    reason either holds for both or holds for neither. It holds; the
+    declared clear was under-recorded.
+
+  workflow: story-workflow
+
+tasks:
+  - Add a composer beside suite_failure_shadowed_by_clean_clone_note that says a declared suite rerun cleared an outstanding failure, naming the failure's stage, exit code, result_path and output_path off the outstanding-failure record, in the shape the clean-clone note takes.
+  - In the declared-suite-run block of run_story, where a shadowing pass clears the field and saves state, append the new note with the generic note kind and the declaring stage's name, after the save.
+  - Revise the docstrings of the two shadowing composers so the reason the clear is recorded is stated as holding for both paths rather than for the clean clone alone.
+  - Extend tests/test_suite_run_shadow.py with the reading of the declared clear from the red-then-green run, its controls, and the sibling composer's coverage in the existing composer test, and record the new absence-with-demonstration in the module docstring.
+  - Update .harness/docs/ARCHITECTURE.md so the declared-block bullet says the clear appends the note and the clean-clone paragraph's reason is stated for both paths.
+
+acceptance_criteria:
+  - A run whose declared suite run fails and whose rerun at a scope no narrower passes writes exactly one note event whose message is the new composer's line for the cleared failure; the event carries the declaring stage's name and the note kind.
+  - That note names the cleared failure's stage, its exit code, and its result_path and output_path verbatim from the outstanding-failure record, and the record and output at those paths still exist and still record the failure.
+  - In that run, state.json is saved with the field empty before the note is appended, in the order the clean-clone block already uses.
+  - A run in which no declared suite run fails writes no such note, and the same reading of it finds nothing.
+  - A rerun narrowed to a scope the failure did not carry writes no such note; the note appears only after the later rerun at a scope no narrower than the failure's clears the field.
+  - The new composer, given a repointed record, says exactly what it said of the original with the two paths substituted and nothing else different, alongside the two composers the existing test already reads.
+  - The clean-clone block's note, carry-forward notes, the end-of-run refusal and the resume guard are unchanged; every existing test in tests/test_suite_run_shadow.py and tests/test_coordinator_runs_the_suite.py passes without weakening.
+  - RunState and run_story remain the only definitions under orchestration/ that name the field; the new composer reads a record passed to it and does not name the field.
+
+technical_plan:
+  implementation_steps:
+    - Add suite_failure_shadowed_by_declared_rerun_note(outstanding) beside suite_failure_shadowed_by_clean_clone_note, returning a line of the same shape that says the suite the coordinator ran after the declaring stage passed at a scope no narrower than the outstanding failure and that the failure is cleared, naming stage, exit_code, result_path and output_path off the record.
+    - In run_story's declared-suite-run block, in the branch where suite_run_shadows returns true, keep the clear and the save_state and append the new note after them with kind note and stage=name.
+    - Revise both shadowing composers' docstrings so the reason — the clear is a routing decision and is reconstructable from events.log as well as state.json — is stated once as holding for both paths, and each names the other as its sibling.
+    - In tests/test_suite_run_shadow.py add a reader beside shadow_lines that composes the declared-rerun line, and a test on red_then_green_run asserting one note from the declaring stage naming the failure's stage, exit code and retained pair, with the pair read at the paths the note names; add controls on green_run and on the narrowing rerun; add the new composer to the composers iterated at the repointed-record test; add a save-before-note ordering test mirroring the clean-clone one; record the new absence in the module docstring.
+    - In ARCHITECTURE.md, amend the declared-block bullet under the outstanding-failure section so shadowing clears, saves and appends the note composed by the new composer, and amend the clean-clone paragraph so its reason reads as shared with the declared block.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The sibling composer, the append in the declared block, and the composers' docstrings.
+    - file: tests/test_suite_run_shadow.py
+      stage: tester
+      reason: The reading of the declared clear from the red-then-green run, its controls, the sibling composer in the composer test, and the module docstring.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The declared-block bullet and the clean-clone paragraph say the clear is recorded on both paths.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_suite_run_shadow.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - schemas/
+    - prompts/
+    - orchestration/ other than story_coordinator.py
+    - tests/ other than test_suite_run_shadow.py
+
+verification_requirements:
+  - The red-then-green run writes exactly one declared-clear note, from the declaring stage, naming the failure's stage, exit code and retained pair, and the pair exists at the named paths and records the failure.
+  - The green run and the narrowed pass of the narrowing rerun write no declared-clear note.
+  - The save of the emptied field precedes the declared-clear note.
+  - The new composer is covered by the repointed-record composer test alongside the two existing composers.
+  - The whole suite passes with no existing assertion weakened or skipped.
+
+constraints:
+  - The comparison stays suite_run_shadows over the recorded scopes, with no second rule beside it; recency decides nothing.
+  - The note is appended with the generic note kind, spelled in run_story, for the reason the existing shadowing note is a note rather than a kind of its own; no history-schema change.
+  - The clear saves state before the note is appended, as the clean-clone block does.
+  - The new composer reads the outstanding-failure record and does not name RunState.unshadowed_suite_failure; RunState and run_story remain the only definitions under orchestration/ naming the field.
+  - The clean-clone block, the carry-forward notes, the end-of-run refusal and the resume guard are not changed.
+  - The coordinator stays deterministic: no model calls, no reading of the run beyond the record already in state.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 06:01:08
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 197
