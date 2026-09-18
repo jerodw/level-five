@@ -1382,6 +1382,15 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
 # what changes is that declining no longer deletes — and that nothing is filed
 # until the run completes, so a defect declined on three attempts is filed
 # once rather than three times under three rephrased keys.
+#
+# Since story-164 the verdict may also say *why* it left a routed finding, in
+# an optional `declined_findings` array naming a slug and a reason, and the
+# accounting carries that reason beside each left finding — or the fact that
+# none was given. The verifier's prompt makes correcting or repairing a routed
+# finding the default and declining the exception that is recorded; this is
+# where the record lands. It enforces nothing and stops no run: a finding left
+# with a reason and one left in silence are both the remainder, both filed at
+# completion, and told apart only in the artifact and the event.
 
 
 #: What a location must name for a routed finding to count as acted on: the
@@ -1442,8 +1451,9 @@ def acted_on_by(findings, verdict) -> tuple[list, list]:
     """Split routed findings into what the verdict acted on and the rest.
 
     Returns `(acted_on, remainder)`, in the order given. A finding is acted on
-    when the verdict names its slug in the location of a blocking issue or a
-    correctable finding; every other finding is the remainder, including one
+    when the verdict names its slug in the location of a blocking issue, a
+    correctable finding or a repairable finding; every other finding is the
+    remainder, including one
     the verdict named by file alone and one carrying no slug at all — a
     finding nothing can name is a finding nothing acted on, and filing it is
     the loss-free reading.
@@ -1461,6 +1471,54 @@ def acted_on_by(findings, verdict) -> tuple[list, list]:
         else:
             remainder.append(one)
     return acted, remainder
+
+
+def declined_reasons(verdict) -> dict:
+    """The reason the verdict's `declined_findings` gives for each slug.
+
+    A mapping from slug to reason, read off the verdict's optional
+    `declined_findings` array. An entry that is not a mapping, whose slug is
+    not a non-empty string, or whose reason is not a non-empty string
+    contributes nothing — the schema refuses the last two before a verdict
+    reaches here, and reading defensively is what keeps the accounting total
+    over a verdict it was handed anyway. The first entry naming a slug wins.
+    Nothing routes on the answer: it is read into the accounting artifact and
+    worded into its event, and decides nothing about what is filed.
+    """
+    if not isinstance(verdict, dict):
+        return {}
+    reasons: dict = {}
+    for entry in verdict.get("declined_findings") or ():
+        if not isinstance(entry, dict):
+            continue
+        slug = entry.get("slug")
+        reason = entry.get("reason")
+        if not (isinstance(slug, str) and slug):
+            continue
+        if not (isinstance(reason, str) and reason.strip()):
+            continue
+        reasons.setdefault(slug, reason)
+    return reasons
+
+
+def declined_accounting(remainder, reasons) -> list:
+    """One entry per finding the verdict left, saying why or that nothing said.
+
+    Each carries the finding's slug and `reason_given`; the reason itself is
+    present only where `declined_findings` gave one for that slug, so the
+    marker that none was given is the boolean and not an empty string a reader
+    could mistake for a reason that happened to be blank. A finding carrying
+    no slug cannot have been declined by name and is recorded as declined
+    without a reason.
+    """
+    declined: list = []
+    for one in remainder:
+        slug = _slug_of(one)
+        entry = {"slug": slug, "reason_given": slug in reasons}
+        if slug in reasons:
+            entry["reason"] = reasons[slug]
+        declined.append(entry)
+    return declined
 
 
 def routed_findings_named(locations, routed_slugs) -> int:
@@ -1509,6 +1567,7 @@ def _read_findings_record(run_dir: Path, artifact: str, attempt: int):
 
 def write_accounting(run_dir: Path, artifact: str, attempt: int,
                      story_id: str, *, routed, acted_on, remainder,
+                     declined=None,
                      filed: int = 0, dropped: int = 0,
                      reason: str = "") -> None:
     """Write the accounting artifact for one attempt.
@@ -1518,10 +1577,18 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
     findings it carries are among the ones routed, and that is decidable only
     from the slugs. The remainder's slugs are what `file_at_completion` reads
     back to know which of the attempt's routed findings the verdict left
-    unanswered. `filed` and `dropped` are zero when this is written, because
-    the accounting files nothing: they are here so the record and the event
-    say the same thing. Nothing routes on any of it.
+    unanswered. Beside them, `declined` records for each finding the verdict
+    left the reason its `declined_findings` gave for the slug, or that none
+    was given — see `declined_accounting` for the shape — and the two counts
+    say how many were declined each way; a caller passing none records every
+    left finding as declined without a reason, which is what a verdict
+    carrying no `declined_findings` means. `filed` and `dropped` are zero when
+    this is written, because the accounting files nothing: they are here so
+    the record and the event say the same thing. Nothing routes on any of it.
     """
+    if declined is None:
+        declined = declined_accounting(remainder, {})
+    with_reason = sum(1 for one in declined if one.get("reason_given"))
     try:
         path = Path(run_dir) / accounting_artifact_file(artifact, attempt)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1536,6 +1603,9 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
                     "acted_on_slugs": [_slug_of(one) for one in acted_on],
                     "remainder": len(remainder),
                     "remainder_slugs": [_slug_of(one) for one in remainder],
+                    "declined": declined,
+                    "declined_with_reason": with_reason,
+                    "declined_without_reason": len(declined) - with_reason,
                     "filed": filed,
                     "dropped": dropped,
                     "reason": reason,
@@ -1584,9 +1654,15 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     the passed/failed routing, only where the stage declares an inspection. It
     reads the attempt's findings artifact, splits the routed findings into the
     ones the verdict acted on — named by slug in the location of a blocking
-    issue or a correctable finding — and the remainder, writes the accounting
-    artifact carrying both, and says the split in the run's own record. It
-    **files nothing**: the remainder is held for the run's completion, where
+    issue, a correctable finding or a repairable finding — and the remainder,
+    writes the accounting artifact carrying both, and says the split in the
+    run's own record. For
+    each finding of the remainder it also records the reason the verdict's
+    `declined_findings` gave for its slug, or that none was given, and the
+    event says how many were declined each way — a report and never a
+    decision, so a verdict carrying no `declined_findings` is accounted as it
+    always was, with every left finding recorded as declined without a reason.
+    It **files nothing**: the remainder is held for the run's completion, where
     `file_at_completion` files the final attempt's through
     `inspection.file_findings`, so its event carries `filed` and `dropped` at
     zero because that is true when it is written.
@@ -1639,13 +1715,22 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
         return
 
     acted, remainder = acted_on_by(routed, verdict)
+    # Why each left finding was left, where the verdict said. The verdict's
+    # `declined_findings` names a slug and a reason; a left finding it names
+    # is recorded with that reason, and one it does not name is recorded as
+    # declined without one. This decides nothing — the remainder is the
+    # remainder whether or not it was declined by name — and stops no run: it
+    # makes a silent decline visible where a reader of the run looks first.
+    declined = declined_accounting(remainder, declined_reasons(verdict))
+    with_reason = sum(1 for one in declined if one["reason_given"])
+    without_reason = len(declined) - with_reason
 
     # The remainder is recorded and not filed. What is filed, and when, is
     # `file_at_completion`'s: it reads these slugs back off this artifact for
     # the final attempt and files them through the one filing call, so a
     # finding declined on every attempt reaches the queue once.
     write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
-                     acted_on=acted, remainder=remainder)
+                     acted_on=acted, remainder=remainder, declined=declined)
     # "left by the verdict" rather than "held", because `held` is already this
     # module's word for the *other* set — the findings about files beside the
     # change, which `_summary` and the filing at completion both count under
@@ -1656,7 +1741,8 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     _say(run_dir,
          f"{label}: {len(routed)} routed on attempt {attempt}; "
          f"{len(acted)} acted on by the verdict, {len(remainder)} left by it "
-         f"for the run's completion; 0 filed, 0 dropped",
+         f"for the run's completion, of which {with_reason} declined with a "
+         f"reason and {without_reason} declined without one; 0 filed, 0 dropped",
          kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
          filed=0, dropped=0)
 

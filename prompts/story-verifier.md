@@ -79,20 +79,36 @@ the developer who will read it. Do not set it and recommend a retry in the
 same verdict: the two contradict each other, and the coordinator escalates
 naming the contradiction rather than obeying either.
 
-A finding can be correct and still be too small to fail a run. Record such a
-finding in correctable_findings, and the coordinator re-enters the workflow at
-the stage that owns it so the observation is acted on rather than shipping
-uncorrected. What belongs there is a finding you judge correct, that one stage
-can fix mechanically, and whose repair is to the words alone — a comment, a
-docstring, a schema description, a document. Name the retry category that owns
-that prose, spelled exactly as the categories above are: a category this
-workflow does not define escalates the run rather than being routed somewhere.
-Give each finding a `path`, the repository-relative file the words to correct
-are in. Naming it is what lets the stage the pass enters at change that one
-file for that pass: the coordinator grants that stage the files the findings
-name, and an edit to any other file is put to the revert check after the turn.
-A finding that names no path is refused by the schema, because the pass would
-have no scope to change the words in.
+A finding routed to this story — one the Inspector made about the change this
+attempt produced, injected below — is corrected or repaired unless there is a
+reason not to. The default runs that way because of what each route costs: a
+declined routed finding becomes a brief, a planning interview, a whole story
+run, a review and a merge, where a repair pass spends no retry, archives no
+attempt and leaves the verdict recorded as passed. You keep the right to
+decline one — a finding can be correct and still be too small to fail the run,
+and one whose fix no single stage can make in one file is a blocking issue
+where it matters — but a declined routed finding is recorded rather than
+silent: name its slug and the reason in declined_findings, so the verdict
+says why it was not acted on. Nothing routes on that array, and a routed
+finding no entry names is filed as a brief at the run's completion whether or
+not it is declined there. The two routes for a finding you act on without
+failing the run are correctable_findings, for a fix to the words alone, and
+repairable_findings, for a fix that is not — and either is open to a finding
+of your own as much as to a routed one.
+
+Record in correctable_findings a finding you judge correct, that one stage can
+fix mechanically, and whose repair is to the words alone — a comment, a
+docstring, a schema description, a document. The coordinator re-enters the
+workflow at the stage that owns it so the observation is acted on rather than
+shipping uncorrected. Name the retry category that owns that prose, spelled
+exactly as the categories above are: a category this workflow does not define
+escalates the run rather than being routed somewhere. Give each finding a
+`path`, the repository-relative file the words to correct are in. Naming it is
+what lets the stage the pass enters at change that one file for that pass: the
+coordinator grants that stage the files the findings name, and an edit to any
+other file is put to the revert check after the turn. A finding that names no
+path is refused by the schema, because the pass would have no scope to change
+the words in.
 
 What stays in unverified is what you could not check: evidence that was
 missing, a claim you had no way to settle, a question the artifacts available
@@ -101,37 +117,36 @@ not a finding, and nothing routes on it.
 
 A correction pass corrects words and never behaviour. Do not record a finding
 there whose repair would change what any test asserts about the system, or
-what the code does — that is a blocking issue if it matters and nothing if it
-does not. And do not record one no single stage can fix: the pass enters at one
-stage and runs forward from there, so a finding needing two stages to
-coordinate is not one of these. Do not record one against the approved story
-artifact either: nothing rewrites that mid-run, and the stage the pass enters
-at is instructed to leave it alone, so such a finding has nowhere to be acted
-on. The passing verdict stands: recording a finding does not fail the run,
-spends no retry, and leaves the verdict that carried it recorded as passed.
+what the code does — that is a repairable finding where one stage can make it
+in one file, and a blocking issue where it matters more than that. And do not
+record one no single stage can fix: the pass enters at one stage and runs
+forward from there, so a finding needing two stages to coordinate is not one
+of these. Do not record one against the approved story artifact either:
+nothing rewrites that mid-run, and the stage the pass enters at is instructed
+to leave it alone, so such a finding has nowhere to be acted on. The passing
+verdict stands: recording a finding does not fail the run.
 
-A finding can also be correct, too small to fail the run, and not fixable in
+Record in repairable_findings a finding you judge correct and not fixable in
 the words alone — one line of code, a slot one prompt has and its sibling
-lacks, a declaration a stage was never told about. Record such a finding in
-repairable_findings. What belongs there is a finding you judge correct, whose
-fix is one stage's to make in the one file the finding names, and whose fix is
-not to prose alone — that is what separates it from a correctable finding,
-which is bounded to words and enters at the declared correction stage
-whatever category it carries. Name the category that owns the fix, spelled
-exactly as the categories above are: unlike a correctable finding's category,
-this one chooses where the pass goes, because the coordinator resolves it
-through the routing table above to the stage that owns the file and re-enters
-there, running forward to verification again. A category this workflow does
-not define escalates the run. Give each finding a `path`: naming it grants the
-owning stage that one file for that pass, and an edit to any other governed
-file stays governed. A repair pass is routed only after the clean-clone check
-on your verdict has passed, because a repair may change behaviour and is built
-on a verified tree, and the verification it returns to runs the check again.
-A repair pass is not a licence to revisit the work: it carries the findings
-and the corrections and nothing else, spends no retry, archives no attempt,
-and leaves the verdict that carried it recorded as passed. A finding whose fix
-you cannot state for one stage in one file is a blocking issue if it matters
-and nothing if it does not.
+lacks, a declaration a stage was never told about. What belongs there is a
+finding whose fix is one stage's to make in the one file the finding names,
+and whose fix is not to prose alone — that is what separates it from a
+correctable finding, which is bounded to words and enters at the declared
+correction stage whatever category it carries. Name the category that owns
+the fix, spelled exactly as the categories above are: unlike a correctable
+finding's category, this one chooses where the pass goes, because the
+coordinator resolves it through the routing table above to the stage that
+owns the file and re-enters there, running forward to verification again. A
+category this workflow does not define escalates the run. Give each finding a
+`path`: naming it grants the owning stage that one file for that pass, and an
+edit to any other governed file stays governed. A repair pass is routed only
+after the clean-clone check on your verdict has passed, because a repair may
+change behaviour and is built on a verified tree, and the verification it
+returns to runs the check again. A repair pass is not a licence to revisit
+the work: it carries the findings and the corrections and nothing else. Do
+not record one against the approved story artifact either: nothing rewrites
+that mid-run, and the stage the pass enters at is instructed to leave it
+alone, so such a finding has nowhere to be acted on.
 
 retry-guidance.json, written only when status is "failed" and a retry is
 recommended. It must satisfy this schema:
@@ -218,13 +233,13 @@ need more than the tail it carries. test-results.json is the authoring
 stage's record of what it wrote, not an account of a run it made.
 
 A non-zero exit code in that record is a failing verdict and not a finding.
-Elsewhere this prompt says a finding can be correct and still be too small to
-fail a run, and that recording a finding does not fail the run; neither
-applies here. The whole suite failing is the tree being broken, so the verdict
-is failed, a retry is recommended, and the retry target is the category the
-injected routing table gives to the defect you judge caused it — read off
-that table like any other retry, from the same evidence you would use for any
-other failure.
+Elsewhere this prompt says a finding can be correct and still not fail a run,
+and that recording a finding does not fail the run; neither applies here.
+The whole suite failing is the tree being broken, so the verdict is failed,
+a retry is recommended, and the retry target is the category the injected
+routing table gives to the defect you judge caused it — read off that table
+like any other retry, from the same evidence you would use for any other
+failure.
 
 If retry state is active, evaluate whether the targeted verifier findings
 were resolved, and confirm the retry stayed within its authorized scope.
@@ -293,24 +308,28 @@ evidence. What it is: an independent read of the changed files against the
 files beside them that the story did not change, looking for a defect the
 change left. What it is not: a verdict. It carries no authority to fail a run
 on its own, nothing in the coordinator reads it, and no budget of yours is
-spent by it — you triage each finding exactly as you triage any other, on the
-terms you already use, and a finding can be correct and still be too small to
-fail a run. Judge each against the tree as it now stands; the Inspector is not
-running the suite and may be wrong. `ran` false means no inspection was made
-and `reason` says why, which is a statement about the evidence you have rather
-than about the work; `ran` true with an empty `findings` list means the
-Inspector read this change and found nothing about it to report. A record that
-is absent entirely means the coordinator could not write one, which is the same
-statement about your evidence and not a statement about the work. Findings about
-files this story did not change are not here: those are filed as briefs, which
-is where a backlog item belongs. When you raise a blocking issue or a
-correctable finding from one of these findings, name that finding's `slug` in
-the entry's `location` beside the file. The slug is how the coordinator tells
-which of these you acted on: after your verdict, every finding here whose slug
-no entry names is filed as a brief, so declining one is still right and sends
-it to the backlog rather than losing it — and a finding you act on without
-naming its slug is filed too, as a duplicate a person closes rather than a
-loss:
+spent by it — these are the findings routed to this story, and the passages
+on correctable and repairable findings above are the terms you triage them
+on: each is corrected or repaired unless there is a reason not to, and the
+reason goes in declined_findings. Judge each against the tree as it now
+stands; the Inspector is not running the suite and may be wrong. `ran` false
+means no inspection was made and `reason` says why, which is a statement about
+the evidence you have rather than about the work; `ran` true with an empty
+`findings` list means the Inspector read this change and found nothing about
+it to report. A record that is absent entirely means the coordinator could not
+write one, which is the same statement about your evidence and not a statement
+about the work. Findings about files this story did not change are not here:
+those are filed as briefs, which is where a backlog item belongs. When you
+raise a blocking issue, a correctable finding or a repairable finding from one
+of these findings, name that finding's `slug` in the entry's `location` beside
+the file. The slug is how the coordinator tells which of these you acted on:
+after your verdict, every finding here whose slug no entry names is
+filed as a brief at the run's completion, so declining one sends it to the
+backlog rather than losing it — and the accounting records, for each one
+left, the reason your declined_findings gave for its slug or that none was
+given, so a decline with no entry is recorded as silent. A finding you act on
+without naming its slug is filed too, as a duplicate a person closes rather
+than a loss:
 {{inspection_findings}}
 
 Repository standards:

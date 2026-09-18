@@ -70,7 +70,7 @@
     },
     "correctable_findings": {
       "type": "array",
-      "description": "Findings you judge correct but too small to fail the run, that one stage can fix mechanically. Its presence is the signal that a correction pass should run: there is no separate key saying whether this field means anything, for the same limitation retry_target, unfinishable_by_retry and guidance_outcomes.unmet already record above — this validator subset has no if/then and no dependentRequired, so a flag with a sibling payload has a state where the flag is set and the payload is missing, while presence-as-signal has none. A correctable finding is a correction to words alone — a comment, a docstring, a schema description, a document — and never to behaviour: nothing a correction pass changes may alter what any test asserts about the system, and the suite must pass unchanged across a pass. A finding whose repair would change behaviour is a blocking issue or belongs in unverified, not here. It is read only on a passing verdict, because a failed verdict already routes and the correction travels in the retry guidance it already writes. It is optional because almost every verdict has no such finding.",
+      "description": "Findings you judge correct but too small to fail the run, that one stage can fix mechanically. Its presence is the signal that a correction pass should run: there is no separate key saying whether this field means anything, for the same limitation retry_target, unfinishable_by_retry and guidance_outcomes.unmet already record above — this validator subset has no if/then and no dependentRequired, so a flag with a sibling payload has a state where the flag is set and the payload is missing, while presence-as-signal has none. A correctable finding is a correction to words alone — a comment, a docstring, a schema description, a document — and never to behaviour: nothing a correction pass changes may alter what any test asserts about the system, and the suite must pass unchanged across a pass. A finding whose repair would change behaviour is a repairable finding where one stage can make it in one file, a blocking issue where it matters more than that, and belongs in unverified where it cannot be settled — not here. It is read only on a passing verdict, because a failed verdict already routes and the correction travels in the retry guidance it already writes. It is optional because almost every verdict has no such finding.",
       "items": {
         "type": "object",
         "required": ["path", "location", "finding", "correction", "category"],
@@ -81,7 +81,7 @@
           },
           "location": {
             "type": "string",
-            "description": "Where the wording is: the file, and the symbol, section or line within it that carries the words to correct."
+            "description": "Where the wording is: the file, and the symbol, section or line within it that carries the words to correct. Where the finding was raised from one the pre-stage inspection routed to this story, name that finding's slug here, so the accounting counts it as acted on rather than filing it as a brief."
           },
           "finding": {
             "type": "string",
@@ -124,6 +124,24 @@
           "category": {
             "type": "string",
             "description": "The retry category that owns the fix, spelled exactly as the workflow's retry_routing table declares it. Unlike a correctable finding's category, this one chooses where the pass goes: it is resolved through that table to the stage that owns the file, and one the workflow does not declare escalates the run naming the categories it does."
+          }
+        }
+      }
+    },
+    "declined_findings": {
+      "type": "array",
+      "description": "The findings routed to this story — the pre-stage inspection's findings about the story's own change — that the verifier declined to correct or repair, each with the reason. The default is that a routed finding is corrected or repaired unless there is a reason not to, and this is where the reason goes: an entry names the routed finding's slug and says why it was left. Its presence is the signal, on the terms retry_target, unfinishable_by_retry, correctable_findings and repairable_findings already record: this validator subset has no if/then and no dependentRequired, so presence-as-signal is the only shape with no state where the signal is set and the payload is missing. Nothing routes on it. It changes nothing about what is filed: the coordinator's accounting after the verdict still files, at the run's completion, every routed finding whose slug no blocking issue, correctable finding or repairable finding names, whether or not an entry here declines it — what an entry here changes is that the accounting records the reason beside the slug rather than recording that none was given. It is optional because most verdicts decline nothing, and a verdict carrying none is accounted exactly as before, with every routed finding the verdict left recorded as declined without a reason.",
+      "items": {
+        "type": "object",
+        "required": ["slug", "reason"],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "The slug of the routed finding being declined, as the inspection findings carry it. Matched by the accounting as the whole string, so it is the slug alone — not the file beside it, not a location — and an entry whose slug differs from the finding's by any character is recorded as though no reason was given."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the finding was not corrected or repaired: too small to be worth a pass, wrong on the evidence, a fix no single stage can make in one file. Written for the reader of the run who meets the accounting and wants to know why a finding reached the backlog instead of being fixed here."
           }
         }
       }

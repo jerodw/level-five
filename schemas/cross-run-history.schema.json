@@ -108,7 +108,7 @@
           },
           "acted_on": {
             "type": "integer",
-            "description": "On an accounting record: how many of the routed findings the verdict acted on, decided by the verdict naming the finding's slug in the location of a blocking issue or a correctable finding — never by file. The routed findings not counted here are the remainder, held for the run's completion and filed then by the filing record, if that attempt was the final one. Present even where it is zero, because none acted on is an answer, and absent on an inspection record. An accounting record carries no cost_usd, no invocations and no dedupe_ran: it made no invocation and asked no query."
+            "description": "On an accounting record: how many of the routed findings the verdict acted on, decided by the verdict naming the finding's slug in the location of a blocking issue, a correctable finding or a repairable finding — never by file. The routed findings not counted here are the remainder, held for the run's completion and filed then by the filing record, if that attempt was the final one. Present even where it is zero, because none acted on is an answer, and absent on an inspection record. An accounting record carries no cost_usd, no invocations and no dedupe_ran: it made no invocation and asked no query."
           },
           "dedupe_ran": {
             "type": "boolean",

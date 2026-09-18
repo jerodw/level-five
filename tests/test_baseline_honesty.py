@@ -2317,6 +2317,26 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "shipped assertions use, so every absence it asserts of the shipped "
         "tree is controlled by the same check against a constructed tree with "
         "the violation planted in it",
+    "test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py":
+        "what it resolves live is what its criteria are about and nothing "
+        "else: prompts/story-verifier.md and prompts/refactor-verifier.md — "
+        "found through the shipped workflows' inspection declarations rather "
+        "than named — because the claim is that this repository's own two "
+        "verdict-writing prompts state the inverted default, carry the cost "
+        "sentence once, state the right to decline once, give the repairable "
+        "paragraph the story-artifact bound and agree character for character "
+        "in the passages the story changed; and "
+        "schemas/verification-result.schema.json, because the claim is that "
+        "the verdict shape this harness ships gained an optional "
+        "declined_findings array and refuses nothing it accepted before. A "
+        "fixture prompt would say nothing about what either verifier is told, "
+        "and a fixture schema would say back only what the module had just "
+        "written into it. Where a run *is* an input — the accounting written "
+        "after a verdict — the module drives the coordinator against the "
+        "workflow and target its sibling test_inspection_findings_reach_the_story "
+        "builds and derives every name from that. Every absence it asserts of "
+        "the shipped prompts is controlled against a copy with the removed "
+        "closing or the repeated right put back into it",
     "test_a_stage_can_check_its_own_outputs.py":
         "every verdict it drives is taken against a workflow it builds with "
         "conftest.build_workflow, in a run directory it writes for itself, "
