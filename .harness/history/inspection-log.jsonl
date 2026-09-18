@@ -99,3 +99,4 @@
 {"story_id": "story-165", "timestamp": "2026-09-18 11:40:26", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 0}
 {"story_id": "story-165", "mode": "narrow", "cost_usd": 3.3778239999999995, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-18 11:52:15", "findings": 2, "filed": 0, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-165", "timestamp": "2026-09-18 11:54:43", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 1}
+{"story_id": "story-165", "timestamp": "2026-09-18 12:18:40", "filed": 1, "dropped": 0}
