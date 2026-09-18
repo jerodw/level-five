@@ -52,6 +52,19 @@ What is asserted here, and what each assertion's subject is:
     both paths in the forms they already take, leaves every other field alone,
     leaves a record whose pair did not move in this resume alone, and names the
     resumes directory nowhere.
+  * That a declared rerun's clear is recorded as the clean-clone check's is
+    (story-162). Both blocks clear the field on the same rule, and until that
+    story only the clean-clone block wrote the clear down: the declared
+    block's only trace in events.log was the absence of a carry-forward line
+    after the rerun's announcement. Now the declared block, where a rerun
+    passes at a scope no narrower than the failure's, saves the emptied field
+    and then appends a note composed by
+    `suite_failure_shadowed_by_declared_rerun_note` — the clean-clone
+    composer's sibling, naming the cleared failure's stage, exit code and
+    retained pair off the same record — under the declaring stage's name. The
+    cases read that note off the red-then-green run and off the narrowing
+    rerun, read the pair at the paths the note names, and observe the save
+    preceding the note the way the clean-clone case does.
 
 The declared suite run and the clean-clone check both run the configured
 command unnarrowed, so every one of them records an empty scope and today every
@@ -99,7 +112,16 @@ Every absence asserted here carries a demonstration that it can fail:
     same scan of `entry_dir`, the one place that directory is named, which the
     scan reports;
   * "the retry record is not rewritten by the resume" sits beside the state
-    file the same resume did rewrite, read the same way.
+    file the same resume did rewrite, read the same way;
+  * "a run whose declared suite never failed writes no declared-clear note"
+    and "the narrowed pass writes none" sit beside the red-then-green run and
+    the narrowing rerun's unnarrowed pass, where the same reading finds exactly
+    one — so the note is written where a declared rerun cleared a failure
+    rather than at every green declared run;
+  * "the declared clear is not recorded as the clean-clone composer's line"
+    sits beside the resume cases, where the same reading of that line finds it
+    — so the two composers are told apart by what they say, and the note the
+    declared block writes is its own composer's.
 
 `.harness/docs/ARCHITECTURE.md` is not asserted on: this story's plan assigns it
 to the documenter, the stage that runs after this one.
@@ -689,6 +711,220 @@ def test_a_run_whose_suite_never_failed_writes_no_such_line(green_run):
     written where a failure stood rather than at every advance."""
     _, _, run_dir = green_run
     assert carry_forward_lines(run_dir) == []
+
+
+def declared_clear_lines(run_dir: Path, outstanding: dict) -> list[dict]:
+    """Every event saying a declared rerun cleared this failure.
+
+    Read as the line the coordinator composes for that failure, the way
+    `shadow_lines` reads the clean-clone clear, so the reading is derived
+    rather than spelled; a list rather than an assertion, so the same reading
+    can be made of a run that cleared nothing, which is the control.
+    """
+    line = story_coordinator.suite_failure_shadowed_by_declared_rerun_note(
+        outstanding)
+    return [entry for entry in history_of(run_dir) if entry["message"] == line]
+
+
+def cleared_failure_notes(run_dir: Path) -> list[dict]:
+    """Every note saying some failure was cleared, whichever composer said it.
+
+    Read by the words both shadowing composers share rather than by a record,
+    so a control run with no failure to compose a record from can still be
+    read — and so a note composed off a record other than the one a test
+    expected is found rather than missed.
+    """
+    return [entry for entry in history_of(run_dir)
+            if entry["event"] == "note"
+            and "that failure is cleared" in entry["message"]]
+
+
+def snapshotted_run(target_root: Path, harness: Path, plan, verdicts):
+    """A run driven with the snapshotting runner, so the outstanding record can
+    be read off the state the stage after the failure opened on rather than
+    composed here: returns the exit code, the runner and the run directory."""
+    runner = Snapshotting(target_root, plan, verdicts=verdicts)
+    code = story_coordinator.run_story(STORY_ID, harness, target_root, runner)
+    return code, runner, run_dir_of(target_root)
+
+
+def test_the_declared_rerun_records_the_clear_it_made_in_the_events_log(
+    target_root, harness_root,
+):
+    """A reader of events.log meets the declared clear the way they meet the
+    clean-clone one: as one note from the declaring stage, composed by the
+    sibling composer, naming the failure it cleared — its stage, its exit code
+    and the pair its evidence was retained under, verbatim off the record the
+    judging stage opened on after the red run — and the pair it names still
+    exists and still records that failure. The same run says nothing in the
+    clean-clone composer's words: that line is the resume cases' and the
+    reading that finds it there finds nothing here, so the note is the
+    declared block's own rather than the other block's borrowed."""
+    code, runner, run_dir = snapshotted_run(
+        target_root, harness_root,
+        plan_touching_nothing_after([BROKEN, REPAIR]), [FAILED, PASS])
+    outstanding = runner.snapshots[1][FIELD]
+    (line,) = declared_clear_lines(run_dir, outstanding)
+    record, output = named_pair(run_dir, outstanding)
+
+    assert code == 0
+    assert runner.calls == [DECLARING, VERIFYING, DECLARING, VERIFYING]
+    assert line["stage"] == DECLARING
+    assert line["event"] == "note"
+    assert outstanding["stage"] in line["message"]
+    assert f"exited {outstanding['exit_code']}" in line["message"]
+    assert outstanding["result_path"] in line["message"]
+    assert outstanding["output_path"] in line["message"]
+    assert record.is_file() and output.is_file()
+    assert read_json(record)["exit_code"] == outstanding["exit_code"] != 0
+    assert line["message"] in (run_dir / "events.log").read_text(
+        encoding="utf-8")
+    assert cleared_failure_notes(run_dir) == [line]
+    assert shadow_lines(run_dir, outstanding) == []
+    assert failure_in(run_dir) == {}
+
+
+def test_the_declared_clear_is_written_after_the_rerun_and_after_the_carry_forward(
+    target_root, harness_root,
+):
+    """Where in the stream the note sits: after the rerun that cleared the
+    failure was announced, and after the carry-forward line the red run wrote
+    — so a reader following the log meets the failure, then its carry-forward,
+    then the rerun, then the clear, in the order the run took them."""
+    _, runner, run_dir = snapshotted_run(
+        target_root, harness_root,
+        plan_touching_nothing_after([BROKEN, REPAIR]), [FAILED, PASS])
+    outstanding = runner.snapshots[1][FIELD]
+    history = history_of(run_dir)
+    (note,) = declared_clear_lines(run_dir, outstanding)
+    announcements = [i for i, e in enumerate(history)
+                     if e["event"] == "suite-rerun-started"
+                     and e.get("artifacts") == [SUITE_ARTIFACT]]
+    carried = [i for i, e in enumerate(history)
+               if e in carry_forward_lines(run_dir)]
+
+    assert len(announcements) == 2
+    assert len(carried) == 1
+    assert history.index(note) > announcements[-1]
+    assert history.index(note) > carried[-1]
+
+
+def test_a_run_whose_declared_suite_never_failed_writes_no_declared_clear_note(
+    green_run,
+):
+    """The control for that reading, on the run that made the same declared
+    suite run and passed it first time: read as the line composed off the
+    record the block would have written had that run failed — the declaring
+    stage, its retained pair, its exit code — and read by the words both
+    shadowing composers share, the same run says nothing about clearing a
+    failure. So the note above is written where a failure was cleared rather
+    than at every green declared run."""
+    _, _, run_dir = green_run
+    result, output = retained_pair(run_dir, 1, 0)
+    had_it_failed = {"stage": DECLARING, "attempt": 1, "try": 0, "scope": [],
+                     "exit_code": read_json(run_dir / result)["exit_code"],
+                     "result_path": result, "output_path": output}
+
+    assert read_json(run_dir / result)["exit_code"] == 0
+    assert declared_clear_lines(run_dir, had_it_failed) == []
+    assert cleared_failure_notes(run_dir) == []
+    assert carry_forward_lines(run_dir) == []
+
+
+def test_a_narrowed_pass_writes_no_declared_clear_and_the_unnarrowed_one_writes_it(
+    target_root, harness_root, monkeypatch,
+):
+    """The absence and its demonstration in one run: the pass narrowed to a
+    scope the failure did not carry clears nothing and says nothing about
+    clearing, and the later rerun at a scope no narrower clears the failure
+    and writes exactly one note naming it. That the note is the third run's
+    and not the second's is read off the stream: it sits after the third
+    declared run's announcement and after both carry-forward lines, and there
+    is one where there were two passes. What it names is the *original*
+    failure's retained pair; the narrowed pass's own pair, which exists and
+    records a pass, is the control beside it."""
+    scoping(monkeypatch, [(), NARROWED, ()])
+    _, runner, run_dir = snapshotted_run(
+        target_root, harness_root,
+        plan_touching_nothing_after([BROKEN, REPAIR, REPAIR]),
+        [FAILED, FAILED, PASS])
+    # snapshots: [declaring, verifier, declaring, verifier, declaring, verifier]
+    outstanding = runner.snapshots[1][FIELD]
+    after_the_narrowed_pass = runner.snapshots[3][FIELD]
+    history = history_of(run_dir)
+    (note,) = declared_clear_lines(run_dir, outstanding)
+    narrowed_result, narrowed_output = retained_pair(run_dir, 2, 0)
+    announcements = [i for i, e in enumerate(history)
+                     if e["event"] == "suite-rerun-started"
+                     and e.get("artifacts") == [SUITE_ARTIFACT]]
+    carried = [i for i, e in enumerate(history)
+               if e in carry_forward_lines(run_dir)]
+
+    assert runner.calls == [DECLARING, VERIFYING] * 3
+    assert after_the_narrowed_pass == outstanding
+    assert cleared_failure_notes(run_dir) == [note]
+    assert note["stage"] == DECLARING
+    assert len(announcements) == 3
+    assert len(carried) == 2
+    assert history.index(note) > announcements[-1]
+    assert history.index(note) > carried[-1]
+    assert outstanding["result_path"] in note["message"]
+    assert outstanding["output_path"] in note["message"]
+    assert narrowed_result not in note["message"]
+    assert narrowed_output not in note["message"]
+    assert read_json(run_dir / narrowed_result)["exit_code"] == 0
+    assert read_json(run_dir / outstanding["result_path"])["exit_code"] != 0
+    assert failure_in(run_dir) == {}
+
+
+def test_the_declared_clear_reaches_the_state_before_the_note_is_appended(
+    target_root, harness_root, monkeypatch,
+):
+    """The clear reaches state.json before the note is appended, in the order
+    the clean-clone block already uses, so a crash between the decision and
+    the note cannot leave a failure recorded that a shadowing rerun has
+    superseded. Observed by interleaving every save with every event: the
+    first save carrying an empty field after the failure was recorded precedes
+    the note. The saves between the failure and the clear are the control —
+    every one of them carries the failure, so the empty save is the
+    decision's rather than one from before the suite ran red."""
+    sequence: list[tuple] = []
+    real_save, real_append = (story_coordinator.save_state,
+                              story_coordinator.append_event)
+
+    def saving(run_dir, state, *args, **kwargs):
+        sequence.append(("save", dict(getattr(state, FIELD))))
+        return real_save(run_dir, state, *args, **kwargs)
+
+    def appending(run_dir, message, *args, **kwargs):
+        sequence.append(("event", message))
+        return real_append(run_dir, message, *args, **kwargs)
+
+    monkeypatch.setattr(story_coordinator, "save_state", saving)
+    monkeypatch.setattr(story_coordinator, "append_event", appending)
+
+    code, _, _ = drive(target_root, harness_root,
+                       plan_touching_nothing_after([BROKEN, REPAIR]),
+                       verdicts=[FAILED, PASS])
+
+    failing_saves = [i for i, (kind, value) in enumerate(sequence)
+                     if kind == "save" and value]
+    outstanding = sequence[failing_saves[0]][1]
+    line = story_coordinator.suite_failure_shadowed_by_declared_rerun_note(
+        outstanding)
+    note_at = sequence.index(("event", line))
+    empty_saves_after_the_failure = [
+        i for i, (kind, value) in enumerate(sequence)
+        if kind == "save" and value == {} and i > failing_saves[0]]
+
+    assert code == 0
+    assert outstanding["stage"] == DECLARING
+    assert empty_saves_after_the_failure
+    assert empty_saves_after_the_failure[0] < note_at
+    assert all(value == outstanding
+               for kind, value in sequence[failing_saves[0]:note_at]
+               if kind == "save" and value)
+    assert failing_saves[-1] < empty_saves_after_the_failure[0]
 
 
 def test_a_run_whose_suite_stays_red_ends_on_the_verifiers_exhausted_retries(
@@ -1436,28 +1672,81 @@ def test_the_helper_names_the_resumes_directory_nowhere():
     assert spelled_in_entry_dir
 
 
+#: Every composer that reads the outstanding-failure record into a line: the
+#: carry-forward note and the two shadowing siblings, one per path that clears
+#: the field.
+COMPOSERS_OFF_THE_RECORD = (
+    story_coordinator.suite_failure_carried_forward_note,
+    story_coordinator.suite_failure_shadowed_by_clean_clone_note,
+    story_coordinator.suite_failure_shadowed_by_declared_rerun_note,
+)
+
+
 def test_the_composers_read_the_record_and_change_nothing_else_in_what_they_say(
     tmp_path,
 ):
     """The fix is to what the lines read, not to what they say: each composer
     given the repointed record says exactly what it said of the original with
-    the two paths substituted and nothing else different. Asserted for the two
-    composers that are functions and for the end-of-run refusal's shape as the
-    driven refusal cases above show it, where the reason names the repointed
-    paths in the wording it named the original ones in."""
+    the two paths substituted and nothing else different. Asserted for the
+    composers that are functions — the carry-forward line and the two
+    shadowing siblings — and for the end-of-run refusal's shape as the driven
+    refusal cases above show it, where the reason names the repointed paths
+    in the wording it named the original ones in."""
     run_dir = tmp_path / "run"
     record = a_failure_under(run_dir)
     repointed = REPOINT(record, the_pair_of(record, run_dir),
                         story_coordinator.entry_dir(run_dir, 1), run_dir)
 
-    for compose in (story_coordinator.suite_failure_carried_forward_note,
-                    story_coordinator.suite_failure_shadowed_by_clean_clone_note):
+    for compose in COMPOSERS_OFF_THE_RECORD:
         original = compose(record)
         assert compose(repointed) == (
             original
             .replace(record["output_path"], repointed["output_path"])
             .replace(record["result_path"], repointed["result_path"]))
         assert compose(repointed) != original
+
+
+@pytest.mark.parametrize("compose", COMPOSERS_OFF_THE_RECORD,
+                         ids=lambda function: function.__name__)
+def test_each_composer_names_the_stage_the_exit_code_and_the_pair(compose):
+    """What every line composed off the record carries, whichever block
+    appends it: the failure's stage, its exit code and both retained paths,
+    verbatim. A record whose values are distinct sentinels is the control
+    against a composer that names the right fields off the wrong record: each
+    value appears, and a value from a second record does not."""
+    record = {**A_FAILURE, "stage": "a-stage-of-its-own", "exit_code": 42,
+              "result_path": "kept/one.json", "output_path": "/kept/one.txt"}
+    other = {**A_FAILURE, "stage": "another-stage", "exit_code": 43,
+             "result_path": "kept/two.json", "output_path": "/kept/two.txt"}
+    line = compose(record)
+
+    assert record["stage"] in line
+    assert f"exited {record['exit_code']}" in line
+    assert record["result_path"] in line
+    assert record["output_path"] in line
+    assert not any(value in line for value in (
+        other["stage"], f"exited {other['exit_code']}",
+        other["result_path"], other["output_path"]))
+
+
+def test_the_two_shadowing_siblings_say_different_things_of_the_same_record():
+    """The siblings are told apart by what they say rather than by where they
+    are appended: the declared-rerun line and the clean-clone line composed off
+    one record differ, each says the failure is cleared, and neither is the
+    carry-forward line — so a reader of events.log knows which run cleared the
+    failure from the words alone, and `declared_clear_lines` and
+    `shadow_lines` read disjoint sets of events."""
+    record = a_failure_under(Path("/a/run"))
+    declared = story_coordinator.suite_failure_shadowed_by_declared_rerun_note(
+        record)
+    clean = story_coordinator.suite_failure_shadowed_by_clean_clone_note(record)
+    carried = story_coordinator.suite_failure_carried_forward_note(record)
+
+    assert declared != clean
+    assert "that failure is cleared" in declared
+    assert "that failure is cleared" in clean
+    assert "that failure is cleared" not in carried
+    assert len({declared, clean, carried}) == 3
 
 
 # --------------------------------------------------------------------------
@@ -1549,6 +1838,23 @@ def test_the_clean_clone_block_of_the_loop_calls_the_rule_and_the_note():
     assert definitions_naming_the_field(inspect.getsource(note)) == set()
     assert (story_coordinator.suite_failure_carried_forward_note.__name__
             in loop)
+
+
+def test_the_declared_block_of_the_loop_calls_the_sibling_note():
+    """The same reading for the other path: the declared block reaches the
+    sibling composer, read off the loop's own source, and that composer names
+    the field nowhere — it takes the record as a value, exactly as its sibling
+    and the carry-forward line do. So the loop and the state stay the only
+    definitions naming the field, which the enumeration above holds, and the
+    new composer is not what widened it. Beside it, the driven cases on the
+    red-then-green run show the note appended."""
+    loop = inspect.getsource(story_coordinator.run_story)
+    note = story_coordinator.suite_failure_shadowed_by_declared_rerun_note
+
+    assert note.__name__ in loop
+    assert note.__name__ not in MAY_TOUCH_IT
+    assert definitions_naming_the_field(inspect.getsource(note)) == set()
+    assert FIELD not in inspect.getsource(note)
 
 
 #: A write of the field in a definition of its own, appended to a source to show

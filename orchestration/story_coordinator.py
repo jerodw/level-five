@@ -3511,15 +3511,19 @@ def suite_failure_shadowed_by_clean_clone_note(outstanding: dict) -> str:
     The clean-clone check runs the configured command in a fresh clone with the
     story committed, and where it exits zero at a scope no narrower than the
     outstanding failure's it shadows that failure on the same terms a green
-    declared run does. The clear is a routing decision — it is what lets a run
-    resumed past the declaring stage finish — so it is reconstructable from
-    events.log as well as from state.json: the line names the failure that was
-    cleared, off the outstanding-failure record rather than off a second
-    reading of the run, in the shape the carry-forward line takes. The route
-    this line was written for is a run resumed at the verifier, and the resume
-    moves the retained pair under its entry directory before the verifier
-    runs; the record's paths follow that move (repoint_outstanding_failure),
-    so the pair this line names is where a reader finds it.
+    declared run does. Whichever path clears the field, the clear is a routing
+    decision — it is what lets the run complete — so it is recorded on both
+    paths and is reconstructable from events.log as well as from state.json:
+    the line names the failure that was cleared, off the outstanding-failure
+    record rather than off a second reading of the run, in the shape the
+    carry-forward line takes. `suite_failure_shadowed_by_declared_rerun_note`
+    is this composer's sibling for the other path, a declared rerun that
+    passes at a scope no narrower than the failure's; the two differ only in
+    which run they say did the clearing. The route this line was written for
+    is a run resumed at the verifier, and the resume moves the retained pair
+    under its entry directory before the verifier runs; the record's paths
+    follow that move (repoint_outstanding_failure), so the pair this line
+    names is where a reader finds it.
 
     This composes the line and does not append it; `run_story` appends it with
     the generic `note` kind, where every other note in a run's stream is
@@ -3528,6 +3532,38 @@ def suite_failure_shadowed_by_clean_clone_note(outstanding: dict) -> str:
     """
     return (
         f"the clean-clone check passed at a scope no narrower than the suite "
+        f"failure outstanding since {outstanding.get('stage')} exited "
+        f"{outstanding.get('exit_code')}; that failure is cleared. Its record "
+        f"was {outstanding.get('result_path')} and its output was "
+        f"{outstanding.get('output_path')}"
+    )
+
+
+def suite_failure_shadowed_by_declared_rerun_note(outstanding: dict) -> str:
+    """What the events log says where a declared rerun clears an outstanding failure.
+
+    The suite the coordinator runs after the declaring stage's turn, where it
+    exits zero at a scope no narrower than the outstanding failure's, shadows
+    that failure and clears the field. The reason the clear is written down is
+    the one `suite_failure_shadowed_by_clean_clone_note` gives, and it is not
+    specific to either path: the clear is a routing decision, it lets the run
+    complete, and so it is reconstructable from events.log as well as from
+    state.json. Without this line the only trace of a declared clear was the
+    absence of a carry-forward line after the rerun's announcement, and a
+    reader had to infer the clear from that absence and from state.json no
+    longer carrying the field. The line names the failure that was cleared —
+    its stage, its exit code, and the retained record and output it left
+    behind — off the outstanding-failure record rather than off a second
+    reading of the run, in the shape its sibling and the carry-forward line
+    take; the paths it names are current for the reason theirs are.
+
+    This composes the line and does not append it; `run_story` appends it with
+    the generic `note` kind and the declaring stage's name, where every other
+    note in a run's stream is spelled, and for the reason the carry-forward
+    line is a note rather than a kind of its own.
+    """
+    return (
+        f"a declared suite rerun passed at a scope no narrower than the suite "
         f"failure outstanding since {outstanding.get('stage')} exited "
         f"{outstanding.get('exit_code')}; that failure is cleared. Its record "
         f"was {outstanding.get('result_path')} and its output was "
@@ -9804,6 +9840,20 @@ def run_story(
                     # stage's start, so a crash between the two cannot leave a
                     # failure recorded that a shadowing pass has superseded.
                     save_state(run_dir, state)
+                    # Recorded after the save, as the clean-clone block records
+                    # its clear: the clear is a routing decision on either
+                    # path, so it is reconstructable from events.log and not
+                    # only from the field's absence in state.json. The line
+                    # names the failure that was cleared, off the record read
+                    # before the field was emptied.
+                    append_event(
+                        run_dir,
+                        suite_failure_shadowed_by_declared_rerun_note(
+                            outstanding
+                        ),
+                        kind="note",
+                        stage=name,
+                    )
                 else:
                     # What stands is the suite failure, and a standing red
                     # suite never re-enters the authoring stage by any path:
