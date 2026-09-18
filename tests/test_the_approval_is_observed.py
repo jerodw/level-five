@@ -109,6 +109,7 @@ from test_planner_injection import (
 )
 from test_story_mandate import (
     CONFERRED_LOG,
+    conferred_log_relative,
     PLANNED_ID,
     PLANNED_REL,
     conferring_records,
@@ -528,8 +529,8 @@ def history_log(planning: Planning, tree: Path | None = None) -> Path:
     refusal kept and named. The default stays the checkout, which is where an
     absence is asserted of the tree the invocation was meant to leave alone.
     """
-    return (tree or planning.root) / harness_config.DEFAULT_HISTORY_DIR \
-        / CONFERRED_LOG
+    return (tree or planning.root) / conferred_log_relative(
+        harness_config.DEFAULT_HISTORY_DIR)
 
 
 def test_a_rejection_stamps_commits_and_pushes_nothing(planning: Planning):
@@ -579,7 +580,7 @@ def test_the_same_fixture_approved_stamps_commits_and_pushes(planning: Planning)
     # tip still says what it always said and the log is one commit down. Asked
     # of the branch rather than of the tip's own path list, which is what
     # `planned_paths` reads.
-    relative = str(Path(harness_config.DEFAULT_HISTORY_DIR) / CONFERRED_LOG)
+    relative = conferred_log_relative(harness_config.DEFAULT_HISTORY_DIR)
     repo, revision = planning.planned_in()
     assert subprocess.run(
         ["git", "-C", str(repo), "cat-file", "-e", f"{revision}:{relative}"],

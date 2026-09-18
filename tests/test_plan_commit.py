@@ -267,7 +267,8 @@ class Planning:
         ).stdout
 
 
-def conferring_paths(planning: "Planning") -> list[str]:
+def conferring_paths(planning: "Planning",
+                     *story_ids: str) -> list[str]:
     """Where a conferring record lands, as paths relative to the target root.
 
     Since story-087 an l5-plan session that stamps a mandate writes a record of
@@ -275,13 +276,17 @@ def conferring_paths(planning: "Planning") -> list[str]:
     reaches is read off the same declaration the append reads, so a schema that
     stops naming the conferring kind for a log stops it being expected here
     with no change to this helper; the directory is resolved through the
-    target's own configuration exactly as the script resolves it.
+    target's own configuration exactly as the script resolves it, and since
+    story-165 the segment beneath it — one per story conferred on — through
+    the same writer-side resolver the script resolves it through.
     """
     config = harness_config.load_config(planning.root)
     directory = harness_config.history_dir(planning.root, config)
     event = story_coordinator.HISTORY_EVENT_PROPERTY
     return sorted(
-        str((directory / name).relative_to(planning.root))
+        str((harness_config.history_segment(directory, story_id) / name)
+            .relative_to(planning.root))
+        for story_id in (story_ids or ("story-900",))
         for name, declaration in
         story_coordinator.history_log_declarations().items()
         if plan_mandate.CONFERRED_EVENT in declaration["properties"][event]["enum"]
@@ -815,7 +820,8 @@ def test_more_than_one_new_artifact_is_one_commit_naming_each(planning: Planning
     assert subprocess.run(
         ["git", "-C", str(repo), "rev-list", "--count", f"{before}..{revision}"],
         capture_output=True, text=True).stdout.strip() == "2"
-    assert committed_paths(repo, f"{revision}~1") == conferring_paths(planning)
+    assert committed_paths(repo, f"{revision}~1") == \
+        conferring_paths(planning, "story-903", "story-904")
     assert "story-903" in planning.planned_subject("story-903")
     assert "story-904" in planning.planned_subject("story-903")
 

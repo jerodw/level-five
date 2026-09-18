@@ -851,8 +851,11 @@ def test_every_declared_log_is_reachable_through_the_explicit_directory(
         directory,
         {"event": a_kind_of(log), "timestamp": "2026-08-28 09:00:00"},
         "story-900", [])
+    # Under the story's own segment of that directory, which is where a record
+    # for a story goes since story-165.
+    segment = harness_config.history_segment(directory, "story-900")
     written = [json.loads(line) for line in
-               (directory / log).read_text(encoding="utf-8").splitlines() if line]
+               (segment / log).read_text(encoding="utf-8").splitlines() if line]
     assert [record["story_id"] for record in written] == ["story-900"]
 
 
@@ -905,8 +908,10 @@ def test_the_conferring_log_is_declared_and_no_run_produces_it(
     # In the tree the run worked in, which since story-117 is a worktree of its
     # own: the invoked checkout has no history directory at all, and reading it
     # there would report the absence this test is about for the wrong reason.
-    directory = conftest.run_root_for(target_root, STORY_ID) \
-        / harness_config.DEFAULT_HISTORY_DIR
+    directory = harness_config.history_segment(
+        conftest.run_root_for(target_root, STORY_ID)
+        / harness_config.DEFAULT_HISTORY_DIR,
+        STORY_ID)
     written = {path.name for path in directory.iterdir()}
     assert log not in written
     assert written
@@ -1112,13 +1117,26 @@ def test_can_prompt_is_what_decides_whether_a_mandate_is_stamped():
 CONFERRED_LOG = log_declaring(plan_mandate.CONFERRED_EVENT)
 
 
-def conferring_records(root: Path, directory: str) -> list[dict]:
-    path = root / directory / CONFERRED_LOG
+def conferred_log_relative(directory: str, story_id: str = PLANNED_ID) -> str:
+    """Where the conferring record for one story is, relative to the tree.
+
+    Since story-165 a record for a story goes to that story's own segment of
+    the history directory, resolved through the writer-side resolver l5-plan
+    itself resolves it through rather than a second spelling here.
+    """
+    return (harness_config.history_segment(Path(directory), story_id)
+            / CONFERRED_LOG).as_posix()
+
+
+def conferring_records(root: Path, directory: str,
+                       story_id: str = PLANNED_ID) -> list[dict]:
+    path = root / conferred_log_relative(directory, story_id)
     return [json.loads(line)
             for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def planned_conferring_records(planning, story_id: str = PLANNED_ID) -> list[dict]:
+def planned_conferring_records(planning, story_id: str = PLANNED_ID, *,
+                               planned_as: str | None = None) -> list[dict]:
     """The conferring records the plan commit holds.
 
     Since story-117 the log is written in the planning worktree and committed
@@ -1126,9 +1144,14 @@ def planned_conferring_records(planning, story_id: str = PLANNED_ID) -> list[dic
     has landed. So what survives an invocation is the commit, and a caller
     asking what an *approved* session recorded reads it there; `conferring_records`
     above still reads a tree, which is what an assertion about a tree wants.
+
+    `planned_as` names the story whose plan commit holds the record where a
+    session stamped more than one artifact: every record of one session is
+    committed on the branch of the first story it planned.
     """
     text = planning.planned_file(
-        f"{harness_config.DEFAULT_HISTORY_DIR}/{CONFERRED_LOG}", story_id)
+        conferred_log_relative(harness_config.DEFAULT_HISTORY_DIR, story_id),
+        planned_as or story_id)
     return [json.loads(line) for line in text.splitlines() if line]
 
 
@@ -1144,7 +1167,11 @@ def test_l5_plan_writes_one_conferring_record_per_story_it_stamped(planning):
          artifact("story-901", title="A second planned story"))))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    records = planned_conferring_records(planning)
+    # One record per story, each in that story's own segment: the two stories
+    # of one session are two files, so a branch that planned either never
+    # appends to a file the other's did.
+    records = planned_conferring_records(planning) + \
+        planned_conferring_records(planning, "story-901", planned_as=PLANNED_ID)
     assert [record["story_id"] for record in records] == [PLANNED_ID, "story-901"]
     for record in records:
         assert record["conferred_by"] == "Test <test@example.com>"
@@ -1169,7 +1196,7 @@ def test_the_conferring_record_is_committed_rather_than_left_in_the_tree(
     assert run_plan(
         planning,
         L5_STUB_WRITE=session_writing(artifact(PLANNED_ID))).returncode == 0
-    relative = f"{harness_config.DEFAULT_HISTORY_DIR}/{CONFERRED_LOG}"
+    relative = conferred_log_relative(harness_config.DEFAULT_HISTORY_DIR)
     assert relative not in planning.status()
     assert planning.status() == ""
     # In the plan commit, on the story branch: since story-117 the record is
@@ -1213,12 +1240,12 @@ def test_the_record_goes_to_the_configured_history_directory(tmp_path):
         L5_STUB_WRITE=session_writing(artifact(PLANNED_ID))).returncode == 0
     # Read out of the plan commit, which since story-117 is what survives the
     # planning worktree the record was written and committed in.
-    written = planning.planned_file(f"{configured}/{CONFERRED_LOG}", PLANNED_ID)
+    written = planning.planned_file(conferred_log_relative(configured), PLANNED_ID)
     assert [json.loads(line)["story_id"]
             for line in written.splitlines() if line] == [PLANNED_ID]
     # And the default directory holds nothing, in the commit or in the tree.
     repo, revision = planning.planned_in(PLANNED_ID)
-    default = f"{harness_config.DEFAULT_HISTORY_DIR}/{CONFERRED_LOG}"
+    default = conferred_log_relative(harness_config.DEFAULT_HISTORY_DIR)
     assert subprocess.run(
         ["git", "-C", str(repo), "cat-file", "-e", f"{revision}:{default}"],
         capture_output=True).returncode != 0
@@ -1235,8 +1262,8 @@ def test_a_refused_session_writes_no_conferring_record(planning):
     """
     assert plan_without_a_terminal(planning, L5_STUB_WRITE=session_writing(
         artifact(PLANNED_ID) + conftest.MANDATE_BLOCK)).returncode == 1
-    assert not (planning.root / harness_config.DEFAULT_HISTORY_DIR /
-                CONFERRED_LOG).exists()
+    assert not (planning.root / conferred_log_relative(
+        harness_config.DEFAULT_HISTORY_DIR)).exists()
 
 
 def test_the_block_and_the_record_are_composed_from_one_place(tmp_path):

@@ -349,13 +349,22 @@ def commit_records(target_root: Path, directory: Path, conferred) -> Commit:
     branch tip and still says what it said: a reader of the log meets `Plan
     story-NNN` where they always did, with the record it rests on beneath it.
     Nothing here amends, resets or pushes, and only the paths named are staged.
+
+    What is staged is the segment file the record was written to — each
+    story's own segment of the history, resolved through the same writer-side
+    resolver the append took — so what is committed is what was written.
     """
     conferred = list(conferred)
     paths = tuple(
         sorted(
             {
-                str((directory / log).relative_to(target_root))
-                for log in _logs_holding(conferred)
+                str(
+                    (
+                        harness_config.history_segment(directory, one.story_id) / log
+                    ).relative_to(target_root)
+                )
+                for one in conferred
+                for log in _logs_holding([one])
             }
         )
     )

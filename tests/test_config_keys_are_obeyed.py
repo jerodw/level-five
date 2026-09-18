@@ -2617,12 +2617,16 @@ def test_history_dir_is_where_the_cross_run_records_are_written(tmp_path):
     run = complete_run(tmp_path)
     configured = run.run_root / str(VARYING["history_dir"])
     assert configured.is_dir()
-    assert {path.name for path in configured.iterdir()} <= set(HISTORY_LOGS)
-    assert {path.name for path in configured.iterdir()}
+    # Beneath the configured directory the run's records are in the story's
+    # own segment, where a run's records go since story-165.
+    segment = harness_config.history_segment(configured, STORY_ID)
+    assert segment.is_dir()
+    assert {path.name for path in segment.iterdir()} <= set(HISTORY_LOGS)
+    assert {path.name for path in segment.iterdir()}
     assert not (run.run_root / harness_config.DEFAULT_HISTORY_DIR).exists()
     # The record really is this run's, so the directory is where the harness
     # wrote rather than merely a directory it created.
-    written = [json.loads(line) for log in configured.iterdir()
+    written = [json.loads(line) for log in segment.iterdir()
                for line in log.read_text(encoding="utf-8").splitlines() if line]
     assert [record for record in written if record["story_id"] == STORY_ID]
     assert harness_config.history_dir(run.run_root, run.config) == configured

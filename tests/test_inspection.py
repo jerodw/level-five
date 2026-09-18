@@ -1170,7 +1170,13 @@ def test_the_query_is_asked_about_the_scopes_paths_and_its_answer_is_injected(
     # comparing the question against the scope rather than against a moment.
     # In a deployment the subtraction is empty: the shipped execution rules
     # block the history directory, so the record never enters a scope at all.
-    recorded = set(inspection.record_paths(found.target, configuration()))
+    # A broad-mode record goes to a segment named for the moment it was
+    # written, so the segment is read off the history directory the
+    # inspection left rather than known in advance.
+    (segment,) = [path for path in harness_config.history_dir(
+        found.target, configuration()).iterdir() if path.is_dir()]
+    recorded = set(inspection.record_paths(
+        found.target, configuration(), segment=segment))
     assert question_paths(transcript) == [
         path
         for path in inspection.scope_paths(

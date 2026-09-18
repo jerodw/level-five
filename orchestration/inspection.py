@@ -1255,17 +1255,35 @@ def reported_total(costs) -> float | None:
     return sum(reported) if reported else None
 
 
-def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
-    """The repository-relative record paths a broad-mode commit stages.
+def record_paths(target_root: Path, config: dict, *, story_id: str = "",
+                 segment: Path | None = None) -> tuple[str, ...]:
+    """The repository-relative record paths an inspection's commit stages.
 
     Asked of the same projection the append took, the shape
     `plan_mandate._logs_holding` established: a declaration that stops routing
     this kind stops staging the file, with no edit here and no log filename
     written at any call site.
+
+    What is staged is the segment file the record was written to, resolved
+    through the writer-side resolver the append resolved it through. A record
+    a run wrote went to that story's own segment, so the run's producer names
+    its `story_id`. A broad-mode record went to a segment named for the moment
+    it was written, which only the append that wrote it knows, so `record`
+    passes that `segment` in. A caller naming neither is refused rather than
+    answered with a guess, because a path staged by a guess is a path nothing
+    wrote.
     """
     import story_coordinator
 
-    directory = harness_config.history_dir(target_root, config)
+    if segment is None:
+        if not story_id:
+            raise ValueError(
+                "no history segment to stage: neither a story nor the segment "
+                "a record was written to was named"
+            )
+        segment = harness_config.history_segment(
+            harness_config.history_dir(target_root, config), story_id
+        )
     logs = [
         log for log, declaration in
         story_coordinator.history_log_declarations().items()
@@ -1274,7 +1292,7 @@ def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
         ) is not None
     ]
     return tuple(sorted(
-        str((directory / log).relative_to(target_root)) for log in logs
+        str((segment / log).relative_to(target_root)) for log in logs
     ))
 
 
@@ -1330,14 +1348,19 @@ def record(target_root: Path, config: dict, report: Report) -> None:
             # Absent where nothing was reported, rather than zero: the same
             # distinction the schema states, made here by not writing the key.
             entry["cost_usd"] = report.cost_usd
-        story_coordinator.append_history_records(
+        written = story_coordinator.append_history_records(
             harness_config.history_dir(target_root, config), entry, "", []
         )
     except Exception:  # noqa: BLE001 - a record that cannot be written costs
         return                                   # the record and nothing else
 
     try:
-        paths = record_paths(target_root, config)
+        if not written:
+            return
+        # The segment is the one the append resolved for a record with no
+        # story: named for the moment it was written, so it is read off what
+        # was written rather than derived a second time.
+        paths = record_paths(target_root, config, segment=written[0].parent)
         if not paths:
             return
         argv = ["git", "-C", str(target_root)]

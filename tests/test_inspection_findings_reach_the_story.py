@@ -638,7 +638,7 @@ class Run:
     def log_records(self) -> list[dict]:
         """Every record the cross-run inspection log holds, of either kind."""
         found: list[dict] = []
-        for relative in story_inspection.record_paths(self.tree, {}):
+        for relative in story_inspection.record_paths(self.tree, {}, STORY_ID):
             path = self.tree / relative
             if path.is_file():
                 found += [json.loads(line) for line
@@ -1572,7 +1572,7 @@ def test_the_record_it_wrote_is_carried_by_the_runs_completion_commit(driven):
     run = driven(findings=[OWN_FINDING])
 
     assert len(run.history_records) == 1
-    recorded = story_inspection.record_paths(run.tree, {})
+    recorded = story_inspection.record_paths(run.tree, {}, STORY_ID)
     assert recorded, "this target routes the kind to no log at all"
     completions = story_coordinator.completion_commits(
         run.tree, "HEAD", STORY_ID)

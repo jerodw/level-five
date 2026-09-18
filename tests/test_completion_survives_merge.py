@@ -179,11 +179,16 @@ HISTORY_REL = harness_config.DEFAULT_HISTORY_DIR
 
 
 def history_paths(root: Path) -> set[str]:
-    """The repository-relative paths of the logs a completion wrote here."""
+    """The repository-relative paths of the logs a completion wrote here.
+
+    Gathered through the reader-side resolver, so a log a completion wrote
+    into the story's segment — where a run's records go since story-165 — is
+    found where the run put it.
+    """
     directory = Path(root) / HISTORY_REL
-    return {f"{HISTORY_REL}/{log}"
+    return {path.relative_to(root).as_posix()
             for log in story_coordinator.history_log_declarations()
-            if (directory / log).is_file()}
+            for path in story_coordinator.history_log_files(directory, log)}
 
 
 def history_records(root: Path) -> list[dict]:
@@ -191,8 +196,7 @@ def history_records(root: Path) -> list[dict]:
     directory = Path(root) / HISTORY_REL
     written = []
     for log in story_coordinator.history_log_declarations():
-        path = directory / log
-        if path.is_file():
+        for path in story_coordinator.history_log_files(directory, log):
             written += [json.loads(line)
                         for line in path.read_text(encoding="utf-8").splitlines()
                         if line.strip()]

@@ -1042,7 +1042,7 @@ def history_record(
 
 def append_history_records(
     history_directory: Path, entry: dict, story_id: str, history: list[dict]
-) -> None:
+) -> tuple[Path, ...]:
     """Project one entry into every log whose declaration names its kind.
 
     The history directory is explicit, so a caller outside a run — a process
@@ -1052,17 +1052,48 @@ def append_history_records(
     which records reach which log lives here: the declaration decides it, and
     an entry whose kind appears in no log's enum writes nothing at all.
 
+    Where a record goes within the directory is the writer-side resolver's
+    answer, `harness_config.history_segment`: a record for a story is appended
+    under that story's own segment, and one with no story under a segment
+    named for the moment it is written. The files written are returned, so a
+    caller staging what it wrote stages exactly that rather than re-deriving
+    a moment it cannot know.
+
     Opened for appending and never for writing: a record already written is
     never rewritten by an append, and the single point at which a log is
     rewritten is the prune below, which announces itself.
     """
+    segment: Path | None = None
+    written: list[Path] = []
     for log, declaration in history_log_declarations().items():
         record = history_record(entry, history, story_id, declaration)
         if record is None:
             continue
-        history_directory.mkdir(parents=True, exist_ok=True)
-        with open(history_directory / log, "a", encoding="utf-8") as handle:
+        if segment is None:
+            segment = harness_config.history_segment(history_directory, story_id)
+            segment.mkdir(parents=True, exist_ok=True)
+        with open(segment / log, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
+        written.append(segment / log)
+    return tuple(written)
+
+
+def history_log_files(history_directory: Path, log: str) -> list[Path]:
+    """Every file holding one declared log: the reader-side resolver.
+
+    The root-level file of that name, if present — every record written
+    before the segments existed, left exactly where it is — followed by each
+    segment's file of that name in sorted segment order. Only files that exist
+    are named, so a log nothing has written to yet resolves to nothing.
+    """
+    files: list[Path] = []
+    if (history_directory / log).is_file():
+        files.append(history_directory / log)
+    if history_directory.is_dir():
+        for segment in sorted(history_directory.iterdir()):
+            if segment.is_dir() and (segment / log).is_file():
+                files.append(segment / log)
+    return files
 
 
 def _append_history_records(run_dir: Path, entry: dict, history: list[dict]) -> None:
@@ -1119,23 +1150,28 @@ def prune_history(directory: Path, config: dict) -> HistoryPrune:
     An unset bound keeps everything: nothing is dropped and no log is
     rewritten. The logs are still read, because a corrupted record is worth
     refusing on whether or not this deployment prunes.
+
+    A log is every file the reader-side resolver names for it — the root-level
+    file and each segment's — read and judged alike, and a record is dropped
+    from whichever file holds it. What was dropped is keyed by the file
+    relative to the history directory, so the announcement names the file that
+    was rewritten.
     """
     parsed: dict[Path, list[tuple[str, object]]] = {}
     for name in history_log_declarations():
-        path = directory / name
-        if not path.is_file():
-            continue
-        lines: list[tuple[str, object]] = []
-        for number, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            try:
-                lines.append((line, json.loads(line)))
-            except json.JSONDecodeError as error:
-                return HistoryPrune(
-                    [f"{path}, line {number}: is not valid JSON ({error.msg})"], {}
-                )
-        parsed[path] = lines
+        for path in history_log_files(directory, name):
+            lines: list[tuple[str, object]] = []
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                try:
+                    lines.append((line, json.loads(line)))
+                except json.JSONDecodeError as error:
+                    return HistoryPrune(
+                        [f"{path}, line {number}: is not valid JSON ({error.msg})"],
+                        {},
+                    )
+            parsed[path] = lines
 
     configured = config.get(HISTORY_RETENTION_KEY)
     if configured is None:
@@ -1159,7 +1195,7 @@ def prune_history(directory: Path, config: dict) -> HistoryPrune:
         kept = [line for line, record in lines if not _record_is_older(record, cutoff)]
         if len(kept) == len(lines):
             continue
-        dropped[path.name] = len(lines) - len(kept)
+        dropped[path.relative_to(directory).as_posix()] = len(lines) - len(kept)
         path.write_text(
             "".join(f"{line}\n" for line in kept), encoding="utf-8"
         )

@@ -648,11 +648,14 @@ def history_records(target: Path) -> list[dict]:
     """The inspection log's records, found by the declaration that routes this
     kind rather than by a filename written here."""
     target = in_the_runs_tree(target)
-    directory = harness_config.history_dir(target, {})
+    # The story's own segment of the history directory, where a run's records
+    # go since story-165, resolved through the writer-side resolver.
+    segment = harness_config.history_segment(
+        harness_config.history_dir(target, {}), STORY_ID)
     found: list[dict] = []
-    for relative in story_inspection.record_paths(target, {}):
+    for relative in story_inspection.record_paths(target, {}, STORY_ID):
         path = target / relative
-        assert path.parent == directory, (path, directory)
+        assert path.parent == segment, (path, segment)
         if path.is_file():
             found += [json.loads(line)
                       for line in path.read_text(encoding="utf-8").splitlines()
@@ -2158,7 +2161,7 @@ def test_the_record_is_inside_a_commit_rather_than_left_in_the_working_tree(
     target, _journal, _code, _inspector, _runner = completing_run(
         tmp_path, harness, monkeypatch, name="committed", findings=[finding()])
 
-    paths = list(story_inspection.record_paths(target, {}))
+    paths = list(story_inspection.record_paths(target, {}, STORY_ID))
     assert paths, "the declaration routes this kind to no log"
     assert head_subject(target) == \
         story_inspection.COMMIT_SUBJECT.format(story_id=STORY_ID)
@@ -2184,7 +2187,7 @@ def test_the_record_commit_stages_the_record_paths_and_nothing_else(
 
     assert code == 0
     assert committed_paths(target) == list(
-        story_inspection.record_paths(target, {}))
+        story_inspection.record_paths(target, {}, STORY_ID))
     assert SIBLING_SOURCE in story_coordinator.dirty_paths(in_the_runs_tree(target))
 
 

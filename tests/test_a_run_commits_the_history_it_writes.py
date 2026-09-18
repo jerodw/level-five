@@ -332,7 +332,19 @@ def run_root_of(target: Path) -> Path:
 
 
 def history_dir_of(target: Path) -> Path:
-    return run_root_of(target) / HISTORY_DIR
+    """The segment of the history this story's run writes to.
+
+    Since story-165 a run's records go to the story's own segment of the
+    history directory rather than to its root-level files, resolved through
+    the same writer-side resolver the run resolves it through.
+    """
+    return harness_config.history_segment(run_root_of(target) / HISTORY_DIR,
+                                          STORY_ID)
+
+
+def segment_relative() -> str:
+    """That segment relative to the run root, as git names it."""
+    return harness_config.history_segment(Path(HISTORY_DIR), STORY_ID).as_posix()
 
 
 def subject_of(target: Path, revision: str = "HEAD") -> str:
@@ -351,7 +363,7 @@ def working_records(target: Path, log: str = OUTCOME_LOG) -> list[dict]:
 
 def committed_text(target: Path, log: str) -> str:
     """A log as the commit at HEAD carries it, or "" when HEAD carries none."""
-    relative = f"{HISTORY_DIR}/{log}"
+    relative = f"{segment_relative()}/{log}"
     result = subprocess.run(
         ["git", "-C", str(run_root_of(target)), "show", f"HEAD:{relative}"],
         capture_output=True, text=True)

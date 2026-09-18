@@ -10,6 +10,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import schema_validator
@@ -191,6 +192,43 @@ def history_dir(target_root: Path, config: dict) -> Path:
     cannot have.
     """
     return target_root / config.get("history_dir", DEFAULT_HISTORY_DIR)
+
+
+#: The prefix a segment named for a moment carries, so that such a segment can
+#: never be read as a story id: a story id names a story, and this names when.
+MOMENT_SEGMENT_PREFIX = "at-"
+
+
+def moment_segment_name(when: datetime | None = None) -> str:
+    """The name a record with no story to name is written under.
+
+    Derived from the moment it is written — down to the microsecond, so two
+    writers with no story that happen to write in the same second do not
+    share a file — and carrying a prefix no story id carries.
+    """
+    when = datetime.now() if when is None else when
+    return MOMENT_SEGMENT_PREFIX + when.strftime("%Y-%m-%dT%H-%M-%S-%f")
+
+
+def history_segment(history_directory: Path, story_id: str) -> Path:
+    """Where a record goes: the one segment of the history a writer appends to.
+
+    A record for a story goes to `<history_directory>/<story-id>/`, and a
+    record with no story — a broad-mode inspection, which has none to name —
+    goes to a segment named for the moment it is written. Every writer resolves
+    its segment through this one function — the run through its event write
+    path, l5-plan for the mandate it records, l5-inspect for a broad-mode
+    inspection — so the three cannot disagree about where a story's records
+    are.
+
+    Two branches therefore never append to the same file: each run's records
+    are in a segment named for the story, and the merge between two stories'
+    branches has nothing to reconcile. The root-level files under the history
+    directory hold every record written before the segments existed and are
+    left exactly where they are; a log is read as the root-level file, if
+    present, followed by every segment's file of that name.
+    """
+    return history_directory / (story_id or moment_segment_name())
 
 
 #: Where a target keeps the raw output of the agents a run invokes when it says

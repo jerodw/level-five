@@ -380,9 +380,28 @@ def state_of(run_dir: Path) -> dict:
     return json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
 
+def segment_of(target_root: Path, story_id: str = "story-001") -> Path:
+    """The segment of the history a run of that story writes to.
+
+    Resolved through the writer-side resolver the run itself resolves it
+    through, so a reader here looks where the run wrote rather than at the
+    root-level file the layout deliberately leaves untouched.
+    """
+    return harness_config.history_segment(
+        history_dir_of(target_root, story_id), story_id)
+
+
 def log_text(target_root: Path, log: str, story_id: str = "story-001") -> str:
-    path = history_dir_of(target_root, story_id) / log
-    return path.read_text(encoding="utf-8") if path.is_file() else ""
+    """One log gathered whole: the root-level file, then every segment's.
+
+    Through the reader-side resolver, so what is read is what the prune reads
+    — a record already at the root and one in a segment alike.
+    """
+    return "".join(
+        path.read_text(encoding="utf-8")
+        for path in story_coordinator.history_log_files(
+            history_dir_of(target_root, story_id), log)
+    )
 
 
 def records(target_root: Path, log: str, story_id: str = "story-001") -> list[dict]:
@@ -531,9 +550,13 @@ def test_the_harness_creates_no_log_the_declaration_does_not_name(
     what a stopped run must not.
     """
     target_root, _ = retried_then_completed
-    present = {path.name for path in history_dir_of(target_root).iterdir()}
+    present = {path.name for path in segment_of(target_root).iterdir()}
     assert RUN_PRODUCED_LOGS and RUNLESS_LOGS
     assert present == RUN_PRODUCED_LOGS
+    # And the run wrote nothing at the root of the history directory: the
+    # only thing there is the story's own segment.
+    assert [path.name for path in history_dir_of(target_root).iterdir()] == \
+        ["story-001"]
     for name in RESERVED:
         assert name not in present
 
@@ -712,7 +735,7 @@ def test_the_reproduction_check_reports_an_artifact_copied_into_a_log(
     copied = tmp_path / "copied-target"
     shutil.copytree(target_root, copied)
     artifact = run_dir_of(copied) / conftest.IMPLEMENTATION_SUMMARY
-    with open(history_dir_of(copied) / OUTCOME_LOG, "a", encoding="utf-8") as handle:
+    with open(segment_of(copied) / OUTCOME_LOG, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(
             {"story_id": "story-001",
              "status": artifact.read_text(encoding="utf-8").strip()}) + "\n")

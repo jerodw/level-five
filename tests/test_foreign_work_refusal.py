@@ -1077,10 +1077,12 @@ def history_paths(target_root: Path) -> set[str]:
     target_root = working_tree(target_root)
     config = harness_config.load_config(target_root)
     directory = harness_config.history_dir(target_root, config)
+    # Gathered through the reader-side resolver, because since story-165 a
+    # run's records go to the story's own segment beneath the directory.
     return {
-        str((directory / log).relative_to(target_root))
+        str(path.relative_to(target_root))
         for log in story_coordinator.history_log_declarations(REPO_ROOT)
-        if (directory / log).is_file()
+        for path in story_coordinator.history_log_files(directory, log)
     }
 
 

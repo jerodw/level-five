@@ -510,16 +510,36 @@ def routed_logs() -> dict:
 
 
 def records(target: Path) -> list[dict]:
-    """Every inspection record the target holds, oldest first."""
+    """Every inspection record the target holds, oldest first.
+
+    Gathered through the reader-side resolver — the root-level file, then each
+    segment's — because since story-165 a run's record goes to the story's own
+    segment and a broad-mode record to one named for the moment it was
+    written, and a reader looking at the root alone would find neither.
+    """
     directory = harness_config.history_dir(target, {})
     found: list[dict] = []
     for log in sorted(routed_logs()):
-        path = directory / log
-        if path.is_file():
+        for path in story_coordinator.history_log_files(directory, log):
             found += [json.loads(line)
                       for line in path.read_text(encoding="utf-8").splitlines()
                       if line.strip()]
     return found
+
+
+def broad_segment(target: Path) -> Path:
+    """The one segment a broad-mode inspection wrote its record to.
+
+    Named for the moment it was written rather than for a story, which is
+    asserted: a broad-mode inspection has no story to name, so its segment
+    must not read as one.
+    """
+    directory = harness_config.history_dir(target, {})
+    segments = [path for path in directory.iterdir() if path.is_dir()]
+    assert len(segments) == 1, segments
+    assert segments[0].name.startswith(harness_config.MOMENT_SEGMENT_PREFIX)
+    assert not segments[0].name.startswith("story-")
+    return segments[0]
 
 
 def one_record(target: Path) -> dict:
@@ -603,16 +623,24 @@ def test_a_broad_mode_record_names_no_story_and_a_narrow_mode_record_names_its_o
 
 def test_one_read_of_one_file_answers_what_inspection_cost_across_both_modes(
         target, harness, monkeypatch):
-    """The criterion as a reader would exercise it: one file, both modes, and
-    no run directory walked to get either figure."""
+    """The criterion as a reader would exercise it: one log, both modes, and
+    no run directory walked to get either figure.
+
+    Since story-165 the log is one gathering of files rather than one file —
+    the run's record in its story's segment, the broad one in a segment named
+    for its moment — so the two are told apart by the mode each carries
+    rather than by the order the gathering reads them in.
+    """
     code, narrow, _runner = narrow_run(target, harness, monkeypatch,
                                        findings=[finding()])
     assert code == 0
     _report, broad = broad_inspection(target, harness, findings=[])
 
     written = records(target)
-    assert [one["cost_usd"] for one in written] == [
-        sum(narrow.reported), sum(broad.reported)]
+    assert len(written) == 2
+    assert {one["mode"]: one["cost_usd"] for one in written} == {
+        inspection.MODE_NARROW: sum(narrow.reported),
+        inspection.MODE_BROAD: sum(broad.reported)}
     assert all("cost_usd" in one and "scope_files" in one and
                "invocations" in one and "mode" in one for one in written)
 
@@ -1029,7 +1057,8 @@ def test_the_broad_mode_record_is_committed_staging_the_declared_paths_by_name(
                      act=edits_a_file_elsewhere)
 
     declared = list(inspection.record_paths(
-        target, harness_config.load_config(target)))
+        target, harness_config.load_config(target),
+        segment=broad_segment(target)))
     assert declared, "the declaration routes this kind to no log"
     assert head_subject(target) == inspection.COMMIT_SUBJECT
     assert committed_paths(target) == declared

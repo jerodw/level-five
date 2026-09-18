@@ -608,7 +608,8 @@ def record_cost(run_dir: Path, cost: float | None) -> None:
         pass
 
 
-def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
+def record_paths(target_root: Path, config: dict,
+                 story_id: str) -> tuple[str, ...]:
     """The repository-relative record paths this inspection's commit stages.
 
     Asked of the same projection the append took, the shape
@@ -618,10 +619,16 @@ def record_paths(target_root: Path, config: dict) -> tuple[str, ...]:
     The derivation is `inspection.record_paths`, reached through here rather
     than copied, because both modes write a record of the same kind and two
     derivations of which logs that kind reaches are two answers that can
-    disagree. The guard stays here, because this producer may not raise.
+    disagree. The story is named because since story-165 a run's record goes
+    to that story's own segment of the history, and what is staged is what
+    was written. The story is required rather than defaulted: the guard
+    below turns every refusal into no paths, so a defaulted story would let
+    a caller that omitted it stage nothing and say nothing, which is a record
+    written and never committed. An omission fails at the call site instead.
+    The guard stays here, because this producer may not raise.
     """
     try:
-        return inspection.record_paths(target_root, config)
+        return inspection.record_paths(target_root, config, story_id=story_id)
     except Exception:  # noqa: BLE001 - the totality is the guarantee
         return ()
 
@@ -642,7 +649,7 @@ def commit_record(target_root: Path, config: dict, story_id: str,
     filing passes its own, so the two records a branch can carry are told
     apart by what each commit says about itself.
     """
-    paths = record_paths(target_root, config)
+    paths = record_paths(target_root, config, story_id)
     if not paths:
         return
     argv = ["git", "-C", str(target_root)]
