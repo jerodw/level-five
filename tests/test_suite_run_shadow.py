@@ -39,6 +39,19 @@ What is asserted here, and what each assertion's subject is:
   * That a run whose verifying stage declares no clean-clone check still
     reaches the refusal over a standing failure, because there is then no run
     after the declaring stage that could shadow it.
+  * That the record's two paths follow the move a resume makes (story-161). A
+    resume moves the closed entry's counter-keyed artifacts under the entry
+    directory it opens, and the retained pair the record names is among them;
+    before that story the record was left as it was, so the shadowing note, the
+    carry-forward note and the end-of-run refusal — all composed off the record
+    — named paths that no longer held the files, and the case reading the note
+    had to compose where the pair had gone from `entry_dir` instead. Now the
+    record is repointed by `repoint_outstanding_failure` in the resume branch,
+    and every case here reads the pair at the paths the record and the lines
+    name. The helper is asserted directly beside the driven cases: it moves
+    both paths in the forms they already take, leaves every other field alone,
+    leaves a record whose pair did not move in this resume alone, and names the
+    resumes directory nowhere.
 
 The declared suite run and the clean-clone check both run the configured
 command unnarrowed, so every one of them records an empty scope and today every
@@ -81,7 +94,12 @@ Every absence asserted here carries a demonstration that it can fail:
     is written where a failure was cleared rather than at every pass;
   * "no second rule decides the clear" is shown by substituting for the one
     rule: the resume that completes is refused when `suite_run_shadows` is made
-    to say no, at the very scope it says yes to unsubstituted.
+    to say no, at the very scope it says yes to unsubstituted;
+  * "the repointing helper names the resumes directory nowhere" sits beside the
+    same scan of `entry_dir`, the one place that directory is named, which the
+    scan reports;
+  * "the retry record is not rewritten by the resume" sits beside the state
+    file the same resume did rewrite, read the same way.
 
 `.harness/docs/ARCHITECTURE.md` is not asserted on: this story's plan assigns it
 to the documenter, the stage that runs after this one.
@@ -771,40 +789,108 @@ def clean_clone_record(run_dir: Path) -> dict:
     return record_of(run_dir, CLEAN_CLONE_ARTIFACT)
 
 
-def archived_pair(run_dir: Path, outstanding: dict, entry: int = 1) -> tuple[Path, Path]:
-    """Where the outstanding failure's retained record and output are found
-    after the resume that cleared it.
+def named_pair(run_dir: Path, outstanding: dict) -> tuple[Path, Path]:
+    """The outstanding failure's retained record and output, at the paths the
+    record names and nothing else: result_path joined to the run directory,
+    output_path as given. Every line composed from the record names these two
+    paths verbatim, so reading here is reading where the lines point."""
+    return (Path(run_dir) / outstanding["result_path"],
+            Path(outstanding["output_path"]))
 
-    A resume moves the entry it closes under the entry directory it opens, each
-    artifact keeping its position relative to the run directory, so the pair
-    the note names by its pre-resume paths is one directory further down by
-    the time the note is read. Composed from `entry_dir` rather than spelled,
-    so the directory name is written nowhere here.
+
+def moved_under(run_dir: Path, outstanding: dict, entry: int = 1) -> dict:
+    """The record as a resume opening `entry` should leave it: the same record
+    with its two paths one directory further down, result_path still
+    run-relative and output_path still absolute.
+
+    Composed from `entry_dir` rather than spelled, so the directory name is
+    written nowhere here; composed here rather than through the helper under
+    test, so a driven case compares the coordinator's result against an
+    expectation it did not produce.
     """
-    opened = story_coordinator.entry_dir(run_dir, entry)
-    record = opened / outstanding["result_path"]
-    output = opened / Path(outstanding["output_path"]).relative_to(run_dir)
-    return record, output
+    opened = story_coordinator.entry_dir(Path(run_dir), entry)
+    below = opened.relative_to(run_dir)
+    return {**outstanding,
+            "result_path": str(below / outstanding["result_path"]),
+            "output_path": str(
+                opened / Path(outstanding["output_path"]).relative_to(run_dir))}
+
+
+def resume(target_root: Path, harness: Path, workflow: dict | None = None):
+    """The re-entry, driven with the snapshotting runner: returns the exit
+    code, the runner and the outstanding record as the resumed stage opened on
+    it — which is the record after the resume's move, and the one every line
+    the re-entry composes is read off. The run's end is not where to read it:
+    a re-entry that clears the failure ends with the field empty."""
+    runner = Snapshotting(target_root, workflow=workflow)
+    code = story_coordinator.run_story(STORY_ID, harness, target_root, runner)
+    return code, runner, runner.snapshots[0].get(FIELD, {})
 
 
 def test_a_resume_restores_the_outstanding_failure(resumable_run, harness_root):
     """It is evidence that a failure is unrepaired rather than a live allowance,
     so the re-entry neither clears it on loading nor writes it afresh: the
     record the resumed verifying stage opens on is the one the interrupted
-    entry left, field for field. What clears it afterwards is a run of the
-    suite, asserted below, and the same run's ending is the control here — the
-    field is empty by then, so the snapshot at entry is where the restored
-    record is observable rather than a reading of something never cleared."""
+    entry left, field for field, differing in exactly the two paths — which
+    follow the pair the resume moved under its entry directory, in the forms
+    they already took, and hold the files there. What clears it afterwards is
+    a run of the suite, asserted below, and the same run's ending is the
+    control here — the field is empty by then, so the snapshot at entry is
+    where the restored record is observable rather than a reading of something
+    never cleared."""
     target_root, run_dir = resumable_run
     left_behind = failure_in(run_dir)
+    before_the_move = named_pair(run_dir, left_behind)
+    assert all(path.is_file() for path in before_the_move)
 
-    runner = Snapshotting(target_root)
-    story_coordinator.run_story(STORY_ID, harness_root, target_root, runner)
+    code, runner, restored = resume(target_root, harness_root)
+    record, output = named_pair(run_dir, restored)
 
+    assert code == 0
     assert runner.calls == [VERIFYING]
-    assert runner.snapshots[0][FIELD] == left_behind
+    assert restored == moved_under(run_dir, left_behind)
+    assert restored != left_behind
+    assert {key for key in restored if restored[key] != left_behind[key]} == {
+        "result_path", "output_path"}
+    assert not Path(restored["result_path"]).is_absolute()
+    assert Path(restored["output_path"]).is_absolute()
+    assert record.is_file() and output.is_file()
+    assert read_json(record)["exit_code"] == left_behind["exit_code"] != 0
+    assert not any(path.exists() for path in before_the_move)
     assert left_behind["stage"] == DECLARING
     assert failure_in(run_dir) == {}
+
+
+def test_the_resume_rewrites_the_state_and_not_the_retry_record(
+    resumable_run, harness_root,
+):
+    """The judgement the story records, driven: the outstanding-failure field
+    is the one record a resume repoints, because it is a live pointer the
+    coordinator routes on and reads back into prose. The retry record is
+    append-only evidence whose moved archive paths the log resolves, and the
+    same resume leaves it byte for byte as it was. The state file, rewritten
+    by the same resume and read the same way, is the control for the absence.
+    The archive note is the other thing left as it was: it names what moved
+    by the run-relative names the move was made under, which is the pair's
+    pre-resume name rather than the repointed one."""
+    target_root, run_dir = resumable_run
+    retry_record = story_coordinator._retry_record_file(run_dir)
+    assert story_coordinator.load_retry_records(run_dir), (
+        "the run was meant to have taken retries before it was stopped")
+    retries_before = retry_record.read_bytes()
+    state_before = (run_dir / "state.json").read_bytes()
+    left_behind = failure_in(run_dir)
+
+    code, _, restored = resume(target_root, harness_root)
+    archive_notes = [e for e in history_of(run_dir)
+                     if e["event"] == "note" and "archived under" in e["message"]]
+
+    assert code == 0
+    assert retry_record.read_bytes() == retries_before
+    assert (run_dir / "state.json").read_bytes() != state_before
+    assert len(archive_notes) == 1
+    assert left_behind["result_path"] in archive_notes[0]["message"]
+    assert restored["result_path"] not in archive_notes[0]["message"]
 
 
 def test_a_resume_completes_when_the_clean_clone_check_shadows_the_failure(
@@ -839,17 +925,20 @@ def test_the_shadowing_clear_is_reconstructable_from_the_events_log(
     stage naming the failure it cleared — its stage, its exit code and the pair
     its evidence was retained under — and the pair it names still exists and
     still records that failure, so the clear is reconstructable without
-    state.json. The pair is read from where the resume archived it: the note
-    names the paths the failure was recorded under, and the resume that
-    cleared it moved the entry those paths belong to under its entry
-    directory before the verifying stage ran. The clean-clone pass itself is
-    announced beside it."""
+    state.json. The pair is read at the paths the note names and nowhere
+    else: the resume that cleared the failure moved the entry those paths
+    belong to under its entry directory before the verifying stage ran, and
+    the record the note is composed from followed the move — so the paths are
+    the pair's current ones, not the ones the failure was first recorded
+    under. The pre-resume paths are the control: the same reading finds no
+    note composed from them, and nothing is at them any more. The clean-clone
+    pass itself is announced beside it."""
     target_root, run_dir = resumable_run
-    outstanding = failure_in(run_dir)
+    left_behind = failure_in(run_dir)
 
-    drive(target_root, harness_root)
+    _, _, outstanding = resume(target_root, harness_root)
     (line,) = shadow_lines(run_dir, outstanding)
-    record, output = archived_pair(run_dir, outstanding)
+    record, output = named_pair(run_dir, outstanding)
 
     assert line["stage"] == VERIFYING
     assert line["event"] == "note"
@@ -857,12 +946,14 @@ def test_the_shadowing_clear_is_reconstructable_from_the_events_log(
     assert f"exited {outstanding['exit_code']}" in line["message"]
     assert outstanding["result_path"] in line["message"]
     assert outstanding["output_path"] in line["message"]
+    assert record.is_file() and output.is_file()
     assert read_json(record)["exit_code"] != 0
-    assert output.is_file()
     assert line["message"] in (run_dir / "events.log").read_text(
         encoding="utf-8")
     assert [e["event"] for e in history_of(run_dir)
             if e["event"] == "clean-clone-passed"] == ["clean-clone-passed"]
+    assert shadow_lines(run_dir, left_behind) == []
+    assert not any(path.exists() for path in named_pair(run_dir, left_behind))
 
 
 def test_the_state_is_saved_at_the_decision_and_not_only_at_the_end(
@@ -873,10 +964,10 @@ def test_the_state_is_saved_at_the_decision_and_not_only_at_the_end(
     that a shadowing pass has superseded. Observed by interleaving every save
     with every event: the first save carrying an empty field precedes the
     note. The saves before the decision are the control — every one of them
-    still carries the failure, so the empty save is the decision's rather than
-    the resume's."""
+    still carries the failure, in the form the resume's move left it, so the
+    empty save is the decision's rather than the resume's."""
     target_root, run_dir = resumable_run
-    outstanding = failure_in(run_dir)
+    outstanding = moved_under(run_dir, failure_in(run_dir))
     line = story_coordinator.suite_failure_shadowed_by_clean_clone_note(
         outstanding)
     sequence: list[tuple] = []
@@ -954,6 +1045,7 @@ def test_the_identical_resume_with_the_failure_already_clear_writes_no_note(
     assert (run_dir / "completion-report.md").is_file()
     assert clean_clone_record(run_dir)["exit_code"] == 0
     assert shadow_lines(run_dir, outstanding) == []
+    assert shadow_lines(run_dir, moved_under(run_dir, outstanding)) == []
 
 
 # --------------------------------------------------------------------------
@@ -1029,30 +1121,41 @@ def test_a_clean_clone_pass_at_a_narrower_scope_leaves_the_refusal_standing(
     running, so it clears nothing, the carry-forward line is written where the
     declared block would write it, and the run escalates at the end of its
     workflow naming the failure that still stands and where its record and its
-    output were kept."""
+    output are kept — which, on this resumed run, is under the entry directory
+    the resume moved them to, so both the reason and the carry-forward line
+    name paths that exist. The pre-resume paths are the control: neither line
+    names them and nothing is at them."""
     target_root, run_dir = resumable_run
-    outstanding = failure_in(run_dir)
+    left_behind = failure_in(run_dir)
     clean_clone_scoping(monkeypatch, NARROWED)
 
-    code, runner, _ = drive(target_root, harness_root)
+    code, runner, outstanding = resume(target_root, harness_root)
     reason = story_coordinator.escalation_reason(run_dir)
     carried = [line for line in carry_forward_lines(run_dir)
                if line["stage"] == VERIFYING]
+    record, output = named_pair(run_dir, outstanding)
 
     assert code == 2
     assert state_of(run_dir)["status"] == "escalated"
     assert runner.calls == [VERIFYING]
+    assert outstanding == moved_under(run_dir, left_behind)
     assert failure_in(run_dir) == outstanding
     assert outstanding["stage"] in reason
     assert f"exited {outstanding['exit_code']}" in reason
     assert outstanding["result_path"] in reason
     assert outstanding["output_path"] in reason
+    assert record.is_file() and output.is_file()
+    assert read_json(record)["exit_code"] == outstanding["exit_code"] != 0
     assert not (run_dir / "completion-report.md").exists()
     assert "story-completed" not in [e["event"] for e in history_of(run_dir)]
     assert shadow_lines(run_dir, outstanding) == []
+    assert shadow_lines(run_dir, left_behind) == []
     assert len(carried) == 1
     assert outstanding["result_path"] in carried[0]["message"]
     assert outstanding["output_path"] in carried[0]["message"]
+    assert left_behind["output_path"] not in carried[0]["message"]
+    assert left_behind["output_path"] not in reason
+    assert not any(path.exists() for path in named_pair(run_dir, left_behind))
 
 
 def test_a_clean_clone_check_that_did_not_run_clears_nothing(
@@ -1065,7 +1168,7 @@ def test_a_clean_clone_check_that_did_not_run_clears_nothing(
     refusal is about the result the routing read rather than about the
     suite."""
     target_root, run_dir = resumable_run
-    outstanding = failure_in(run_dir)
+    outstanding = moved_under(run_dir, failure_in(run_dir))
     ran = clean_clone_not_running(monkeypatch)
 
     code, runner, _ = drive(target_root, harness_root)
@@ -1092,7 +1195,7 @@ def test_the_clear_is_decided_by_the_one_rule_and_by_no_second_one(
     the failure's, and recency decided nothing: the pass was the more recent
     result and did not clear the failure on it."""
     target_root, run_dir = resumable_run
-    outstanding = failure_in(run_dir)
+    outstanding = moved_under(run_dir, failure_in(run_dir))
     asked: list[tuple] = []
 
     def refusing(passing_scope, failing_scope):
@@ -1136,12 +1239,13 @@ def test_a_verifier_declaring_no_clean_clone_check_still_reaches_the_refusal(
     harness, workflow = without_the_clean_clone_declaration(tmp_path)
     target_root = make_target("undeclared-clean-clone", workflow=workflow["name"])
     run_dir = leave_a_failure_outstanding(target_root, harness, workflow)
-    outstanding = failure_in(run_dir)
+    outstanding = moved_under(run_dir, failure_in(run_dir))
     announced_before = len([e for e in history_of(run_dir)
                             if e["event"] == "suite-rerun-started"])
 
     code, runner, _ = drive(target_root, harness, workflow=workflow)
     reason = story_coordinator.escalation_reason(run_dir)
+    record, output = named_pair(run_dir, outstanding)
 
     assert code == 2
     assert state_of(run_dir)["status"] == "escalated"
@@ -1151,10 +1255,209 @@ def test_a_verifier_declaring_no_clean_clone_check_still_reaches_the_refusal(
     assert f"exited {outstanding['exit_code']}" in reason
     assert outstanding["result_path"] in reason
     assert outstanding["output_path"] in reason
+    assert record.is_file() and output.is_file()
     assert not (run_dir / "completion-report.md").exists()
     assert len([e for e in history_of(run_dir)
                 if e["event"] == "suite-rerun-started"]) == announced_before
     assert shadow_lines(run_dir, outstanding) == []
+
+
+# --------------------------------------------------------------------------
+# The helper that repoints the record after a resume's move
+#
+# Called directly, with values written here: the subject is a pure function
+# over a record, the names a resume moved, the entry directory it opened and
+# the run directory, and nothing about it needs a run driven. The driven cases
+# above show the coordinator calling it where the move is made.
+# --------------------------------------------------------------------------
+
+
+REPOINT = story_coordinator.repoint_outstanding_failure
+
+
+def a_failure_under(run_dir: Path) -> dict:
+    """`A_FAILURE` with its output where the suite-run check would have put
+    it: absolute, directly beneath the run directory, so its run-relative
+    name is the one a move would list."""
+    return {**A_FAILURE, "output_path": str(run_dir / "kept-output.txt")}
+
+
+def the_pair_of(record: dict, run_dir: Path) -> list[str]:
+    """The record's pair as a move would name it: run-relative, both halves."""
+    return [record["result_path"],
+            str(Path(record["output_path"]).relative_to(run_dir))]
+
+
+def test_the_helper_repoints_both_paths_in_the_forms_they_already_took(tmp_path):
+    """The moved case: result_path stays run-relative and goes one directory
+    further down, output_path stays absolute and goes the same way, and the
+    expectation is composed from `entry_dir` here rather than read back off
+    the helper."""
+    run_dir = tmp_path / "run"
+    record = a_failure_under(run_dir)
+    opened = story_coordinator.entry_dir(run_dir, 1)
+
+    repointed = REPOINT(record, the_pair_of(record, run_dir), opened, run_dir)
+
+    assert repointed == moved_under(run_dir, record)
+    assert not Path(repointed["result_path"]).is_absolute()
+    assert Path(repointed["output_path"]).is_absolute()
+    assert run_dir / repointed["result_path"] == opened / record["result_path"]
+    assert Path(repointed["output_path"]) == opened / "kept-output.txt"
+
+
+def test_the_helper_leaves_every_other_field_as_it_was(tmp_path):
+    """Stage, attempt, try, scope and exit code pass through untouched, and the
+    record handed in is not mutated: the caller assigns the result back, and a
+    helper that edited its argument would have repointed the state before the
+    assignment said so."""
+    run_dir = tmp_path / "run"
+    record = a_failure_under(run_dir)
+    handed_in = json.loads(json.dumps(record))
+
+    repointed = REPOINT(record, the_pair_of(record, run_dir),
+                        story_coordinator.entry_dir(run_dir, 1), run_dir)
+
+    assert {key for key in record if repointed[key] != record[key]} == {
+        "result_path", "output_path"}
+    assert set(repointed) == set(record)
+    assert record == handed_in
+
+
+def test_the_helper_leaves_a_record_whose_pair_did_not_move_alone(tmp_path):
+    """The unmoved case: a result_path not among the moved names is a pair this
+    resume did not move — never retained, or already under an earlier entry
+    directory — and the record comes back exactly as it went in. The moved
+    case beside it, same record and same directory differing only in the list,
+    is the control: the list is what decides."""
+    run_dir = tmp_path / "run"
+    record = a_failure_under(run_dir)
+    opened = story_coordinator.entry_dir(run_dir, 1)
+    something_else = ["a-prompt.md", "attempts"]
+
+    assert REPOINT(record, something_else, opened, run_dir) == record
+    assert REPOINT(record, [], opened, run_dir) == record
+    assert REPOINT(record, the_pair_of(record, run_dir), opened, run_dir) != record
+
+
+def test_the_helper_does_not_repoint_a_record_twice(tmp_path):
+    """The already-repointed case, which is what a second resume meets: the
+    record names the pair beneath the first entry directory, the second resume
+    moves the run-root names as before, and the record's result_path — one
+    directory down — is not among them, so it is left exactly as it was. The
+    first resume beside it is the control, moving the same record from the
+    run root under the first entry directory."""
+    run_dir = tmp_path / "run"
+    record = a_failure_under(run_dir)
+    moved_names = the_pair_of(record, run_dir)
+    first = story_coordinator.entry_dir(run_dir, 1)
+    second = story_coordinator.entry_dir(run_dir, 2)
+
+    once = REPOINT(record, moved_names, first, run_dir)
+    twice = REPOINT(once, moved_names, second, run_dir)
+
+    assert once == moved_under(run_dir, record, entry=1)
+    assert twice == once
+    assert twice != moved_under(run_dir, once, entry=2)
+
+
+def test_the_helper_leaves_an_empty_record_empty(tmp_path):
+    """A run with no failure outstanding carries an empty record through its
+    resume, and the helper gives it back as it was rather than inventing
+    paths on it."""
+    run_dir = tmp_path / "run"
+    assert REPOINT({}, ["kept-result.json"],
+                   story_coordinator.entry_dir(run_dir, 1), run_dir) == {}
+
+
+@pytest.mark.parametrize("output_path", ["", None],
+                         ids=["empty", "absent"])
+def test_the_helper_repoints_the_record_alone_when_no_output_was_retained(
+    tmp_path, output_path,
+):
+    """A record with no output path: the result is repointed and the output is
+    left as it was, rather than composed into a path nothing was ever written
+    to."""
+    run_dir = tmp_path / "run"
+    record = {**A_FAILURE, "output_path": output_path}
+    opened = story_coordinator.entry_dir(run_dir, 1)
+
+    repointed = REPOINT(record, [record["result_path"]], opened, run_dir)
+
+    assert repointed["result_path"] == str(
+        opened.relative_to(run_dir) / record["result_path"])
+    assert repointed["output_path"] == output_path
+
+
+def test_the_helper_leaves_an_output_the_move_did_not_list_where_it_was(
+    tmp_path,
+):
+    """The record moved and the output did not — an output outside the run
+    directory, or one the move did not find. Only what moved is repointed;
+    the output beneath the run directory and among the names is the control,
+    which the case above repoints."""
+    run_dir = tmp_path / "run"
+    elsewhere = {**A_FAILURE, "output_path": str(tmp_path / "elsewhere.txt")}
+    unlisted = a_failure_under(run_dir)
+    opened = story_coordinator.entry_dir(run_dir, 1)
+
+    for record in (elsewhere, unlisted):
+        repointed = REPOINT(record, [record["result_path"]], opened, run_dir)
+        assert repointed["result_path"] != record["result_path"]
+        assert repointed["output_path"] == record["output_path"]
+
+
+def string_constants_in(function) -> list[str]:
+    """Every string literal a function's body reaches for, its docstring set
+    aside: what the code spells, rather than what it says about itself."""
+    (definition,) = ast.parse(inspect.getsource(function)).body
+    body = definition.body[1:] if (
+        isinstance(definition.body[0], ast.Expr)
+        and isinstance(definition.body[0].value, ast.Constant)
+        and isinstance(definition.body[0].value.value, str)
+    ) else definition.body
+    return [node.value for statement in body for node in ast.walk(statement)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+
+
+def test_the_helper_names_the_resumes_directory_nowhere():
+    """The record follows the move by the names the resume moved and by the
+    directory the caller derived from `entry_dir`, never by matching that
+    directory's spelling — so `entry_dir` stays the one place it is named.
+    `entry_dir` itself is the control: the same reading of its body finds the
+    spelling."""
+    spelled_in_helper = [literal for literal in string_constants_in(REPOINT)
+                         if "resume" in literal.lower()]
+    spelled_in_entry_dir = [
+        literal for literal in string_constants_in(story_coordinator.entry_dir)
+        if "resume" in literal.lower()]
+
+    assert spelled_in_helper == []
+    assert spelled_in_entry_dir
+
+
+def test_the_composers_read_the_record_and_change_nothing_else_in_what_they_say(
+    tmp_path,
+):
+    """The fix is to what the lines read, not to what they say: each composer
+    given the repointed record says exactly what it said of the original with
+    the two paths substituted and nothing else different. Asserted for the two
+    composers that are functions and for the end-of-run refusal's shape as the
+    driven refusal cases above show it, where the reason names the repointed
+    paths in the wording it named the original ones in."""
+    run_dir = tmp_path / "run"
+    record = a_failure_under(run_dir)
+    repointed = REPOINT(record, the_pair_of(record, run_dir),
+                        story_coordinator.entry_dir(run_dir, 1), run_dir)
+
+    for compose in (story_coordinator.suite_failure_carried_forward_note,
+                    story_coordinator.suite_failure_shadowed_by_clean_clone_note):
+        original = compose(record)
+        assert compose(repointed) == (
+            original
+            .replace(record["output_path"], repointed["output_path"])
+            .replace(record["result_path"], repointed["result_path"]))
+        assert compose(repointed) != original
 
 
 # --------------------------------------------------------------------------

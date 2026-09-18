@@ -162,13 +162,23 @@ class RunState:
     #: stage, the attempt, the try, the recorded scope, the exit code, and the
     #: retained result and output paths of that run — everything a refusal has
     #: to name, so the failure is reconstructable from state.json alone. Written
-    #: where a red declared suite run self-routes, so the failure is outstanding
-    #: from the moment it happens, and cleared *only* by a later green declared
-    #: suite run whose scope shadows it. A resume does not clear it: it is
+    #: where a declared suite run fails and the run advances, so the failure is
+    #: outstanding from the moment it happens, and cleared only by a later green
+    #: run — declared or clean-clone — whose recorded scope shadows it. A resume
+    #: does not clear it: it is
     #: evidence that a failure is unrepaired rather than a live allowance, so it
     #: is restored with the rest of the state while the live counters beside it
-    #: are zeroed. Defaulted like every field above, so a state file written
-    #: before it existed loads and reads as no failure outstanding.
+    #: are zeroed. What a resume does do is repoint its two paths: the retained
+    #: pair moves under the entry directory the resume opens, and the record
+    #: follows it through repoint_outstanding_failure, so result_path and
+    #: output_path name the pair where it now stands — still run-relative and
+    #: absolute respectively — and every line composed from the record names a
+    #: path that holds the file. That is the one way this field departs from
+    #: retry-history.json, whose moved archive path is resolved by the log and
+    #: never rewritten: this is a live pointer the coordinator routes on and
+    #: reads back into prose, not append-only evidence. Defaulted like every
+    #: field above, so a state file written before it existed loads and reads
+    #: as no failure outstanding.
     unshadowed_suite_failure: dict = field(default_factory=dict)
 
 
@@ -2412,6 +2422,58 @@ def move_entry_artifacts(
     return moved
 
 
+def repoint_outstanding_failure(
+    outstanding: dict, moved: list[str], opened: Path, run_dir: Path
+) -> dict:
+    """The outstanding-failure record, following the move a resume just made.
+
+    The record names the failure's retained result and output — result_path
+    run-relative, output_path absolute, as the suite-run check writes them —
+    and every line composed from it afterwards names those paths: the
+    carry-forward note, the note a clean-clone pass clears it with, and the
+    end-of-run refusal. A resume moves the retained pair under the entry
+    directory it opens, so a record left as it was would point at paths that
+    no longer hold the files. This returns the record with both paths
+    repointed to where the pair now stands, in the forms they already take,
+    so what those lines read moves with the evidence and none of them has to
+    change what it says.
+
+    Pure over its inputs. The record is returned exactly as it was when it is
+    empty or its result_path is not among the names the resume moved — a pair
+    already under an earlier entry directory, or never retained, did not move
+    in this resume, so a second resume does not repoint it twice. output_path
+    is repointed only where it is non-empty and its run-relative form is among
+    the moved names, and is left as it was otherwise. Nothing here matches the
+    resumes/ spelling: the destination is `opened`, the entry directory the
+    caller derived from entry_dir, which stays the one place that directory
+    is named.
+
+    This is a deliberate exception to the rule that a record is never
+    rewritten and the log resolves a moved path, which is how the run's retry
+    record is treated. That record is append-only evidence; this field is a
+    live pointer the coordinator routes on and reads back into prose, and what
+    it points at is the retained pair itself, which the resume already moves.
+    The retry record and the resume's own archive note are untouched.
+    """
+    if not outstanding:
+        return outstanding
+    result_path = outstanding.get("result_path") or ""
+    if result_path not in moved:
+        return outstanding
+    below = opened.relative_to(run_dir)
+    repointed = dict(outstanding)
+    repointed["result_path"] = str(below / result_path)
+    output_path = outstanding.get("output_path") or ""
+    if output_path:
+        try:
+            output_name = str(Path(output_path).relative_to(run_dir))
+        except ValueError:
+            output_name = ""
+        if output_name in moved:
+            repointed["output_path"] = str(opened / output_name)
+    return repointed
+
+
 def accumulated_attempts(run_dir: Path, state: RunState) -> int:
     """How many attempts this run has taken, across every entry of it.
 
@@ -3418,7 +3480,10 @@ def suite_failure_carried_forward_note(outstanding: dict) -> str:
     is the one thing a reader of events.log must not conclude here — so the
     message names the declaring stage, the exit code, and the retained record
     and output the failure left behind, all off the outstanding-failure record
-    rather than off a second reading of the run.
+    rather than off a second reading of the run. The paths it names are
+    current: a resume that moves the retained pair repoints the record to
+    follow it (repoint_outstanding_failure), so this line, composed on a
+    resumed run, still names paths that hold the files.
 
     This composes the line and does not append it. Both routes that carry a
     failure forward append it with the generic `note` kind, and the kind is
@@ -3450,7 +3515,11 @@ def suite_failure_shadowed_by_clean_clone_note(outstanding: dict) -> str:
     resumed past the declaring stage finish — so it is reconstructable from
     events.log as well as from state.json: the line names the failure that was
     cleared, off the outstanding-failure record rather than off a second
-    reading of the run, in the shape the carry-forward line takes.
+    reading of the run, in the shape the carry-forward line takes. The route
+    this line was written for is a run resumed at the verifier, and the resume
+    moves the retained pair under its entry directory before the verifier
+    runs; the record's paths follow that move (repoint_outstanding_failure),
+    so the pair this line names is where a reader finds it.
 
     This composes the line and does not append it; `run_story` appends it with
     the generic `note` kind, where every other note in a run's stream is
@@ -8643,6 +8712,23 @@ def run_story(
         state.resume_count = entry
         state.retry_count = 0
         state.verification_iterations = 0
+        # The outstanding-failure record follows the move. Its retained pair is
+        # among the counter-keyed names just moved, and every line composed
+        # from the record afterwards — the carry-forward note, the clean-clone
+        # shadowing note, the end-of-run refusal — names the paths it holds;
+        # left as it was, a reader following any of them would find nothing
+        # at the path named. Repointed by the moved names rather than by the
+        # entry directory's spelling, above the save below and the resumed
+        # event, so the state saved for the re-entry already carries the
+        # current paths. A record whose pair did not move in this resume is
+        # returned unchanged, so a second resume does not repoint it twice.
+        # This is the one record a resume rewrites: retry-history.json and the
+        # archive note below stay as written and are resolved by the log,
+        # because they are evidence; this field is a live pointer the run
+        # routes on, and the pair it points at is what the resume moved.
+        state.unshadowed_suite_failure = repoint_outstanding_failure(
+            state.unshadowed_suite_failure, moved, opened, run_dir
+        )
         # The cost allowance is a live counter and resets where the other live
         # counters reset. The rule it conforms to is the one they already
         # follow: a counter is policy and is reset by the decision to continue,
@@ -10370,7 +10456,11 @@ def run_story(
         # check passed at a scope narrower than the failure's. This refusal is
         # what stops such a run completing, escalating naming the failure
         # that still stands. It costs no suite run: the verdict is read off
-        # state.json.
+        # state.json. The record and output the reason names are where they
+        # stand now, on a resumed run too: the resume repoints the record to
+        # follow the pair it moved, so the reason is composed from current
+        # paths rather than from the ones the failure was first recorded
+        # under.
         outstanding = state.unshadowed_suite_failure
         return _escalate(
             run_dir,
