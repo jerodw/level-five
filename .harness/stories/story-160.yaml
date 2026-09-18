@@ -1,0 +1,139 @@
+story:
+  id: story-160
+  title: The dedupe query answers for a change of any size against a tracker of any size
+  description: |
+    Planned from the brief filed under key 199.
+
+    Dedupe has stopped running: both of story-159's post-story inspections
+    report that the filed query ran past its 30-second bound and was killed,
+    so its briefs were filed without the tracker being asked whether they
+    were already there. This is the failure story-131 closed, returning by a
+    different road. That story batched twenty path markers to a search with a
+    per-path fallback for any batch whose page filled or whose search failed,
+    and the batching is still there and still correct. What changed is the
+    corpus: the private tracker now holds 198 issues, and the batch carrying
+    orchestration/story_coordinator.py matches 106 of them.
+
+    Measured at planning time against that tracker, the thirty seconds goes
+    to the fallback and nowhere else. One 20-marker batched search costs
+    1.6 seconds at the page limit of 50, but a batch whose page fills is
+    re-asked one path at a time at 0.6 to 0.9 seconds a path, so a 60-file
+    scope in which two or three batches fill runs past the bound. The same
+    batched search at a page limit of 200 returns all 106 in 2.9 seconds with
+    no fallback; three such batches answer in under ten seconds. Story-158's
+    inspection later the same evening answered because its sixty files fell
+    into batches that did not fill, which is why the failure is intermittent
+    rather than deterministic.
+
+    The measurement also exposed a truncation story-131's property was meant
+    to rule out: orchestration/story_coordinator.py alone has 75 issues
+    against it, so the per-path fallback search for that one path fills its
+    page of 50 and, having no page-fill check of its own, reports it as the
+    whole answer. Every inspection that has answered since the cutover has
+    been missing the coordinator's remaining briefs without saying so. And
+    the harness reads at most filed_query_max_items, defaulting to 50, out of
+    an answer that for a full scope now runs well past that, dropping the
+    rest with the drop named in the record but never shown to the inspector.
+
+    This story raises the query job's page limit to a size the fallback is
+    not reached at for any batch this tracker holds, gives the per-path
+    fallback the page-fill check the batched search already has so a single
+    path with more briefs than a page holds is refused rather than answered
+    short, declares an item cap in this repository's configuration that the
+    whole answer fits under, and records the measurement where story-131
+    recorded its own. The batching, the fallback, the harness's bound and
+    what an answer means are left exactly where they are. Filing the
+    findings when dedupe could not run stays deliberate and right.
+  workflow: story-workflow
+
+tasks:
+  - In the query job of templates/scripts/github.sh, raise the default of LIMIT (L5_QUERY_LIMIT) from 50 to 500, and rewrite the comment above it to say what the limit now governs: whether a batch reaches the fallback at all, since gh pages the search at 100 results a request and the cost of a search is proportional to the results it returns rather than to the limit it is given.
+  - In query_batch of templates/scripts/github.sh, give each per-path fallback search the page-fill check the batched search already makes: a per-path page holding LIMIT or more items is a page the tracker may have truncated, and there is no further fallback beneath one path, so the script says so on stderr naming the path and the limit and exits non-zero, which the harness reads as nothing known rather than as nothing filed.
+  - Rewrite the ONE SEARCH PER PATH DOES NOT SCALE and BATCHING IS ONLY SAFE WITH A FALLBACK passages of the query contract in templates/scripts/github.sh to carry this story's measurement beside story-131's: a batch whose page fills is re-asked one path at a time at 0.6 to 0.9 seconds a path, so the fallback multiplies the cost by the batch size, and the page limit is what decides whether it runs; one batched search of 20 markers against a 198-issue tracker answered 106 items in 2.9 seconds at a limit of 200.
+  - Apply the same edits to this repository's installed copy at .harness/scripts/github.sh, so the query branch stays the same text in both copies while each keeps the board constants it is configured with.
+  - In orchestration/filed_query.py, rewrite the module docstring passage that says how the answering command scales with the scope, and the comment above DEFAULT_MAX_ITEMS, to say what this story measured: the batched query is bounded by its page size rather than by the scope, and what is filed against one path set is not small on a tracker that has held every brief of a long-running repository, so a target whose answers run past the default declares filed_query_max_items rather than the default being read as a statement about its tracker. DEFAULT_MAX_ITEMS itself stays 50.
+  - In .harness/config.yaml, declare filed_query_max_items as 200 beside filed_query_command, with a comment saying why this repository declares it: a full scope against this tracker answers with more than the 50-item default, and an item the harness drops is an item the inspector never dedupes against.
+  - The tester writes a standing test module beside tests/test_a_filed_query_scales_with_its_scope.py that puts the shipped query branch to a stub tracker holding more briefs against one batch than the old page of 50 held, and asserts what this story bought; see the acceptance criteria.
+  - The documenter records in .harness/docs/ARCHITECTURE.md what this story measured and changed, in the section that records story-131's batching and beside the filed_query.py entry.
+
+acceptance_criteria:
+  - The query job's LIMIT in both templates/scripts/github.sh and .harness/scripts/github.sh defaults to 500, and the tests that read LIMIT_DEFAULT out of the shipped script continue to pass.
+  - A per-path fallback search whose page holds LIMIT or more items fails the whole answer: the script exits non-zero with a stderr line naming the path and the limit, and filed_query.query reads the result as nothing known (answered is False) rather than as an answer carrying that page.
+  - A test demonstrates that refusal: with L5_QUERY_LIMIT forced to a value smaller than the number of briefs filed against one path, a scope containing that path is answered as nothing known, and the same scope under the default limit is answered with every brief.
+  - A test demonstrates that a scope of 60 paths, against a stub tracker where every batch holds more briefs than the old page of 50 held but fewer than the new default, costs one batched search per batch and no per-path search, answers under the harness's default bound, and carries every brief filed against the scope with its per-item path attribution.
+  - The existing assertions in tests/test_a_filed_query_scales_with_its_scope.py hold unchanged: a batch whose page fills at a forced limit is still re-asked one path at a time, a batch whose search fails is still re-asked, and the batched answer still equals the per-path loop's answer.
+  - The query branch is the same text in templates/scripts/github.sh and .harness/scripts/github.sh, as test_both_shipped_copies_carry_the_same_query_branch requires, and the sync and item branches of both files are unchanged.
+  - .harness/config.yaml declares filed_query_max_items as 200, filed_query.resolve_settings reads it as the item cap, and a test shows the configured value is what the query obeys rather than DEFAULT_MAX_ITEMS.
+  - DEFAULT_MAX_ITEMS in orchestration/filed_query.py is still 50, DEFAULT_TIMEOUT_SECONDS is still 30.0, and filed_query_timeout_seconds is not declared in .harness/config.yaml: the bound is not raised.
+  - The comments above LIMIT and BATCH in the script, the query contract's two batching passages, and filed_query.py's docstring passage on how the command scales record this story's measurement in the terms the description gives, and no longer describe the page limit as merely a bound on what the tracker is asked for.
+  - The filed-items schema, the question document on stdin, and the shape of the answer on stdout are unchanged.
+
+technical_plan:
+  implementation_steps:
+    - In templates/scripts/github.sh, change LIMIT's default from 50 to 500 and rewrite the comment above it and the two batching passages in the query contract as the tasks describe.
+    - In query_batch, after each per-path search succeeds, count its page with jq the way the batched page is counted; an uncountable page or a count at or above LIMIT calls fail naming the path and the limit. Leave the batched search's own fallback exactly as it is.
+    - Copy the query branch and the rewritten comments into .harness/scripts/github.sh without touching either file's board constants, then confirm with diff that the two files differ only in those constants, as they did before.
+    - In orchestration/filed_query.py, rewrite the docstring passage beginning "How the answering command scales with the scope" and the comment above DEFAULT_MAX_ITEMS; change no code.
+    - In .harness/config.yaml, add filed_query_max_items 200 beneath filed_query_command with its comment.
+    - The tester builds on the stub tracker and helpers tests/test_filed_query.py and tests/test_a_filed_query_scales_with_its_scope.py already export, seeding many briefs against a few hot paths through the reference sync branch so that one batch holds more than 50 items, and drives the limit through L5_QUERY_LIMIT as the existing filled-page test does.
+    - The documenter records the measurement and the change in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: LIMIT's default, the per-path page-fill check in query_batch, and the query contract's batching passages.
+    - file: .harness/scripts/github.sh
+      stage: implementer
+      reason: The installed copy of the same query branch, kept identical to the template's.
+    - file: orchestration/filed_query.py
+      stage: implementer
+      reason: The docstring passage on how the command scales, and the comment above DEFAULT_MAX_ITEMS; no code changes.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Declares filed_query_max_items as 200 for this repository's tracker.
+    - file: tests/test_a_filed_query_answers_against_a_tracker_of_any_size.py
+      stage: tester
+      reason: The standing module holding the per-path refusal, the 60-path scope answered without fallback, and the configured item cap.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records what this story measured and changed beside story-131's account of the batching.
+
+scope:
+  modify:
+    - templates/scripts/github.sh
+    - .harness/scripts/github.sh
+    - orchestration/filed_query.py
+    - .harness/config.yaml
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - orchestration/brief_fetch.py
+    - schemas/filed-items.schema.json
+    - The sync and item branches of either github.sh copy
+    - The batched search's own fallback in query_batch, and the value of BATCH
+    - DEFAULT_TIMEOUT_SECONDS and DEFAULT_MAX_ITEMS in orchestration/filed_query.py
+
+verification_requirements:
+  - Confirm the query branch is the same text in templates/scripts/github.sh and .harness/scripts/github.sh and that the two files differ only in their board constants.
+  - Confirm the per-path fallback refuses a filled page by reading the test that forces the limit small, and that the batched search's fallback is still exercised by the existing filled-page test.
+  - Confirm the 60-path scope test counts searches at the stub rather than inferring from elapsed time, and that it seeds more than 50 briefs against at least one batch.
+  - Confirm .harness/config.yaml declares filed_query_max_items and no filed_query_timeout_seconds.
+  - Confirm the suite passes in the clean clone under the configured test command.
+
+constraints:
+  - A truncated page is never read as a complete answer, at either the batch or the per-path level; where nothing further can be asked, the answer is refused rather than reported short.
+  - Filing the findings when dedupe could not run stays as it is; nothing here blocks, refuses or fails a run.
+  - The batching story-131 added and its per-batch fallback are left as they are; what changes is the page size the fallback is reached at and what the per-path search does with a page of its own that fills.
+  - The harness's bound on the query, the scope it hands over, and what Answer.answered means are unchanged.
+  - The implementer may not create files under tests/, as the workflow declares; the test module is the tester's.
+  - Every count recorded in a comment or docstring is a measurement with its size and date named, not a restatement of an adjacent list.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-17 22:05:57
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 199
