@@ -1,0 +1,187 @@
+story:
+  id: story-165
+  title: Two runs in flight at once merge without contending for the history a third one wrote
+  description: |
+    Every run appends its cross-run history records to the same four tracked
+    files under .harness/history — execution-log.jsonl, inspection-log.jsonl,
+    mandate-log.jsonl and retry-log.jsonl — on its own story branch. Two
+    branches that both ran therefore add different lines at the same end of
+    the same file, and every merge between them conflicts in every log each
+    run touched. This already happens one run at a time: the rebases of
+    story-136, story-143 and story-158 each conflicted on the mandate log and
+    then on the execution and inspection logs, and each was resolved by hand
+    as the union of both sides. With runs in flight together it is a conflict
+    on every merge, which is what blocks running two stories at once.
+
+    This story moves where the lines are written, and nothing about what they
+    say. A record goes into a segment named for the writer that produced it:
+    a run's records, and the mandate record l5-plan writes for the same story,
+    go to .harness/history/<story-id>/<log>.jsonl, and a broad-mode inspection,
+    which has no story to name, goes to a segment named for the moment it ran.
+    A log kind is then the gathering of every file of that name under the
+    history directory — the root-level file, which holds every record written
+    before this story and stays exactly where it is, plus one per segment. Two
+    branches never append to the same file, so a merge has nothing to
+    reconcile, and each run still writes its history as it goes, so a crash
+    mid-run still leaves a record a reader can trust.
+
+    The census that chose this shape: three writers, all through one function
+    (append_history_records in orchestration/story_coordinator.py) — the run
+    through append_event, l5-plan through plan_mandate.record, and broad-mode
+    l5-inspect through inspection.record; one reader of content, the prune at
+    run start; two helpers that only compute which files to stage,
+    plan_mandate.commit_records and inspection.record_paths; and nothing under
+    scripts/ that reads a log. A merge=union attribute was considered and
+    declined because it lives outside the harness — a target lacking it
+    regresses silently, and this repository merges through pull requests where
+    the driver may not be honoured. Deriving the history from commits was
+    declined as more than the brief needs.
+
+    This story was planned from the brief filed under 212.
+  workflow: story-workflow
+
+tasks:
+  - Give the history one resolver for where a record goes and one for which files hold a log, so that a record for a story is written to .harness/history/<story-id>/<log>.jsonl, a record with no story is written to a segment named for the moment it was written, and a log kind is read as the root-level file of that name, if present, followed by every segment's file of that name in sorted segment order.
+  - Route append_history_records through the writer-side resolver, keeping its append-only opening and its schema-driven selection of which logs a record reaches.
+  - Make prune_history read every file the reader-side resolver names for each log, refuse on a malformed line naming the file and the line number as it does now, and rewrite only the files it actually dropped records from.
+  - Make plan_mandate.commit_records and inspection.record_paths stage the segment files the record was written to rather than the root-level log paths.
+  - Correct the sentences in schemas/cross-run-history.schema.json descriptions that name .harness/history/<log>.jsonl as the path a record is written to, changing no property, enum, required list or field description of what a record carries.
+  - Adapt the existing tests that read or plant records at the root-level log paths to the segment layout, without weakening what they assert.
+  - Add a test that completes two stories from one base on two branches, each carrying a mandate record and a run's records, and shows that merging one into the other reports no conflict and that the gathered logs afterwards hold both stories' records.
+  - Record the layout, the census that chose it and the alternatives declined in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A run of story X writes its execution-log, retry-log and inspection-log records to .harness/history/X/<log>.jsonl and writes nothing to .harness/history/<log>.jsonl.
+  - The mandate record l5-plan writes for story X is written to .harness/history/X/mandate-log.jsonl, and commit_records stages that path.
+  - A broad-mode inspection writes its record to a segment directory whose name is not a story id and is derived from the time it was written, and record_paths stages that path.
+  - A test completes two stories from one base on two branches in a real git repository with a fake runner, merges the second branch into the first, and asserts that git reports no conflict and that every record either branch wrote is present in the gathered logs of the merged tree.
+  - Records already present in the root-level .harness/history/<log>.jsonl files are read by the prune and by the gather exactly as records in a segment are, and this story's run leaves those files byte-for-byte unchanged.
+  - prune_history with a retention bound set drops older records from whichever file holds them and rewrites only the files it dropped from; with the bound unset it rewrites nothing; and a malformed line in any segment refuses the run naming that file and line number with nothing rewritten.
+  - The append path still opens a log for appending and never for writing, and tests/test_cross_run_history.py's assertion of that property still holds against the source.
+  - No module under orchestration/ names a log file outside the declaration-driven resolvers; which kinds reach which log is still read from schemas/cross-run-history.schema.json and nowhere else.
+  - The records a run writes are still written as the events occur through append_event, and every terminal path still commits the records it wrote, as tests/test_a_run_commits_the_history_it_writes.py asserts.
+  - No property, enum, required list or field description in schemas/cross-run-history.schema.json changes; only the sentences naming the path a record is written to.
+
+technical_plan:
+  implementation_steps:
+    - Add beside history_dir in orchestration/harness_config.py a resolver for the segment a record with a given story id goes to, and the name a record with no story id gets, spelled once so that the run, l5-plan and l5-inspect resolve the same path.
+    - In orchestration/story_coordinator.py, make append_history_records write to the resolved segment file, creating the directory as it does now, and add a reader-side resolver returning, for each declared log, the root-level file if present followed by each segment's file in sorted segment order.
+    - Rewrite prune_history over that list of files, parsing every file of every log before rewriting any, and returning dropped counts keyed by the file relative to the history directory so the announcement names the file that was rewritten.
+    - Point plan_mandate.commit_records and inspection.record_paths at the segment paths through the same resolver, so what is staged is what was written.
+    - Correct the path sentences in the schema's descriptions.
+    - Adapt the tests that plant or read records at the root-level paths, keeping every assertion; then write the two-runs-merge test and the segment-layout assertions in a new module under tests/.
+    - Add the ARCHITECTURE.md section.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: append_history_records writes to a segment, a reader-side resolver gathers a log's files, and prune_history reads and rewrites per file
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: the segment resolver, beside history_dir and run_log_path, so every writer spells the path once
+    - file: orchestration/plan_mandate.py
+      stage: implementer
+      reason: commit_records stages the segment file the mandate record was written to
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: record_paths stages the segment file a broad-mode record was written to, and record resolves a segment for a writer with no story
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: description sentences naming .harness/history/<log>.jsonl as the write path are corrected; no structural change
+    - file: tests/test_cross_run_history.py
+      stage: implementer
+      reason: reads and plants records at the root-level log paths, adapted to the segment layout
+      reverting_breaks_the_suite: these tests read a run's records at history_dir/<log>.jsonl, which the implementer's change deliberately stops writing; with the change in place and these edits reverted, the suite is red.
+    - file: tests/test_cross_run_history_retention.py
+      stage: implementer
+      reason: plants records at the root-level paths and reads the prune's dropped counts, adapted to files under segments
+      reverting_breaks_the_suite: these tests plant and read records at history_dir/<log>.jsonl and pin the prune's announcement by file name, both of which the layout change deliberately alters; with the change in place and these edits reverted, the suite is red.
+    - file: tests/test_a_run_commits_the_history_it_writes.py
+      stage: implementer
+      reason: reads the records a terminal path committed at the root-level paths, adapted to the segment paths
+      reverting_breaks_the_suite: these tests read the committed record at history_dir/<log>.jsonl, which the implementer's change stops writing; with the change in place and these edits reverted, the suite is red.
+    - file: tests/test_story_mandate.py
+      stage: implementer
+      reason: reads the conferring record at the root-level mandate log, adapted to the story's segment
+      reverting_breaks_the_suite: these tests read the mandate record at history_dir/mandate-log.jsonl, which the implementer's change stops writing; with the change in place and these edits reverted, the suite is red.
+    - file: tests/test_plan_commit.py
+      stage: implementer
+      reason: asserts the path the conferring commit stages, adapted to the segment path
+      reverting_breaks_the_suite: this assertion names the root-level mandate log as the staged path, which commit_records deliberately stops staging; with the change in place and the edit reverted, the suite is red.
+    - file: tests/test_an_inspection_records_what_it_cost.py
+      stage: implementer
+      reason: reads the broad-mode record at the root-level inspection log, adapted to the segment
+      reverting_breaks_the_suite: this test reads the record at history_dir/inspection-log.jsonl, which the implementer's change stops writing; with the change in place and the edit reverted, the suite is red.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: implementer
+      reason: reads the story-scoped inspection record at the root-level inspection log, adapted to the story's segment
+      reverting_breaks_the_suite: this test reads the record at history_dir/inspection-log.jsonl, which the implementer's change stops writing; with the change in place and the edit reverted, the suite is red.
+    - file: tests/test_a_run_stands_on_its_branch_first.py
+      stage: implementer
+      reason: reads which branch's history file a run wrote, adapted to the segment path
+      reverting_breaks_the_suite: these tests read a run's record at history_dir/<log>.jsonl, which the implementer's change stops writing; with the change in place and these edits reverted, the suite is red.
+    - file: tests/test_completion_survives_merge.py
+      stage: implementer
+      reason: asserts a record was written whenever one was asked for, reading the root-level path, adapted to the segment
+      reverting_breaks_the_suite: this assertion reads history_dir/<log>.jsonl, which the implementer's change stops writing; with the change in place and the edit reverted, the suite is red.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: implementer
+      reason: the history_dir mutation case reads a record at the root-level path under the relocated directory, adapted to the segment
+      reverting_breaks_the_suite: the history_dir case reads a record at <relocated>/<log>.jsonl, which the implementer's change stops writing; with the change in place and the edit reverted, the suite is red.
+    - file: tests/test_foreign_work_refusal.py
+      stage: implementer
+      reason: plants a history file where a dirty-tree case expects one, adapted to the segment path if it reads the root-level path
+      reverting_breaks_the_suite: where this module reads a record at history_dir/<log>.jsonl the implementer's change stops writing there; with the change in place and the edit reverted, the suite is red.
+    - file: tests/test_two_runs_merge_without_contending.py
+      stage: tester
+      reason: the assertion the brief names — two runs from one base merge without conflict and the merged tree holds both runs' records — plus the segment-layout, root-file-untouched and no-story-segment assertions
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: a section recording the segment layout, the census that chose it, the root-level files left in place, and the alternatives declined
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/harness_config.py
+    - orchestration/plan_mandate.py
+    - orchestration/inspection.py
+    - schemas/cross-run-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/history/
+    - orchestration/story_ids.py
+    - orchestration/outbox.py
+    - orchestration/worktrees.py
+    - schemas/execution-history.schema.json
+    - schemas/story.schema.json
+    - workflows/
+    - prompts/
+    - scripts/
+    - rules/
+
+verification_requirements:
+  - Confirm the full suite passes under the configured test command.
+  - Confirm the two-runs-merge test performs a real git merge of two branches that each completed a run and each carry a mandate record, and that its assertion of no conflict is read off git's own exit status or index state rather than off the absence of an exception.
+  - Confirm a run's records land under .harness/history/<story-id>/ and that the root-level .harness/history/<log>.jsonl files in this repository are unchanged by this story's own run.
+  - Confirm the prune reads the root-level files and every segment, and that the malformed-line, unset-bound and dropped-records cases in tests/test_cross_run_history_retention.py still hold with every assertion intact.
+  - Confirm the census reports no fall in assertion count for any adapted test module.
+  - Confirm no module under orchestration/ spells a log filename outside the declaration-driven resolvers, as tests/test_cross_run_history.py asserts.
+  - Confirm schemas/cross-run-history.schema.json differs from its previous version only in description strings.
+
+constraints:
+  - What a record carries does not change: every field, enum and required list in schemas/cross-run-history.schema.json stays as it is.
+  - A record is still written through append_event as the event occurs; nothing assembles history at completion.
+  - The append path opens files for appending only; the prune remains the only reader and the only rewriter, and it refuses rather than repairs.
+  - The records already in the root-level .harness/history/<log>.jsonl files are neither moved, rewritten nor re-read differently from records in a segment; migrating them is not this story's work.
+  - Story-id reservation, the outbox queue, worktree separation and scratch directories are already safe under concurrency and are not touched.
+  - How many runs a machine should host at once is a separate question and is not addressed here.
+  - No existing assertion is weakened, skipped or removed; adaptations change where a test reads a record, not what it asserts about it.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 10:59:08
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 212
