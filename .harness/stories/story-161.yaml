@@ -1,0 +1,107 @@
+story:
+  id: story-161
+  title: The note that records a cleared suite failure names the record and output where they are when it is written
+  description: |
+    Planned from the brief filed under 198.
+
+    When a clean-clone pass clears an outstanding suite failure, the note
+    appended to events.log names the failure's retained record and output off
+    the outstanding-failure record in state.json. On the route that note was
+    written for — a run resumed at the verifier — those paths are stale by the
+    time the line is written: the resume moves every counter-keyed artifact of
+    the entry it closes under resumes/resume-K/ before the resumed stage runs,
+    and the record in state.json is not repointed to follow them, so a reader
+    who follows the note finds nothing at the path it names. The end-of-run
+    refusal reason and the carry-forward note the clean-clone block appends on
+    a non-shadowing pass read the same record and go stale the same way after
+    a resume. The standing test has to know this: it composes where the pair
+    ended up from entry_dir instead of reading the paths the note names.
+
+    This story makes the outstanding-failure record follow the move. When a
+    resume moves the closed entry's artifacts, the record's result_path and
+    output_path are repointed to where the pair now stands, in the forms they
+    already take — result_path run-relative, output_path absolute — so every
+    line composed from the record afterwards names a path that holds the file.
+    The three composers are unchanged; what they read moves with the evidence.
+    A record whose pair did not move in this resume — already under an earlier
+    entry directory, or never retained — is left exactly as it was, so a
+    second resume does not repoint it twice.
+
+    The judgement recorded here: the architecture says a record is never
+    rewritten and the log resolves a moved path, which is how
+    retry-history.json is treated. The outstanding-failure field is treated
+    differently on purpose. It is a live pointer the coordinator routes on and
+    reads back into prose rather than an append-only record, and the evidence
+    it points at is the retained pair itself, which the resume already moves.
+    retry-history.json and the resume's own archive note are untouched.
+  workflow: story-workflow
+
+tasks:
+  - Add a pure helper beside move_entry_artifacts in orchestration/story_coordinator.py that, given the outstanding-failure record, the names the resume moved, the entry directory it opened and the run directory, returns the record with result_path and output_path repointed to where the pair now stands, and returns the record unchanged when its pair is not among the moved names.
+  - Call that helper in the resume branch of run_story immediately after move_entry_artifacts and before the state is saved and the resumed event appended, assigning its result back to state.unshadowed_suite_failure.
+  - Say in the comments and docstrings of the field, the three composers (suite_failure_carried_forward_note, suite_failure_shadowed_by_clean_clone_note, the end-of-run refusal) and the resume branch that the record's paths follow a resume's move, so a reader of those lines is told the paths are current.
+  - In tests/test_suite_run_shadow.py, delete the archived_pair workaround and read the outstanding failure's retained pair at the paths the shadowing note names; adapt the resume-restores-the-failure case to compare field for field with the two paths following the move; make the narrowed-clean-clone refusal case assert that the reason and the carry-forward line name paths that exist; and add direct tests of the helper.
+  - Update .harness/docs/ARCHITECTURE.md where it says the pair is read from where the resume archived it and that a test of the clear has to allow for the move, and record why the state field follows the move while retry-history.json does not.
+
+acceptance_criteria:
+  - After a resume that moves the outstanding failure's retained record and output under the entry directory, state.json's unshadowed_suite_failure names them at their new location, with result_path run-relative to the run directory and output_path absolute, and both paths exist.
+  - Every other field of the outstanding-failure record — stage, attempt, try, scope, exit_code — is unchanged by the resume.
+  - On a run resumed at the verifier whose clean-clone check passes at a scope no narrower than the failure's, the shadowing note in events.log names a result_path and an output_path that both exist and the record at result_path still records the non-zero exit; the test reads them at the paths the note names and not from entry_dir.
+  - On a run resumed at the verifier whose clean-clone check passes at a narrower scope, the carry-forward note appended by the clean-clone block and the end-of-run escalation reason both name paths that exist.
+  - The repointing helper leaves a record unchanged when its result_path is not among the names the resume moved, and leaves a record already naming a path beneath an earlier entry directory unchanged on a later resume.
+  - A run that never resumes records the outstanding failure exactly as it does today, and a run whose suite never fails still writes no note.
+  - The three composers and the resume's archive note are not changed in what they say; only the record they read is repointed.
+  - retry-history.json is not rewritten by this story.
+
+technical_plan:
+  implementation_steps:
+    - Define the helper beside move_entry_artifacts. It takes the outstanding dict, the moved names list, the opened entry directory and the run directory. If the dict is empty or its result_path is not in the moved names, return it as is. Otherwise return a copy whose result_path is the opened directory's run-relative path joined to the old result_path, and whose output_path — where it is non-empty and its run-relative form is among the moved names — is the absolute path of the same name under the opened directory. Derive nothing from the resumes/ spelling; go through entry_dir's result as passed in.
+    - In the resume branch, after the moved list is computed, assign state.unshadowed_suite_failure = the helper's result, above the counter reset's save and the _resumed event, so the state saved for the re-entry already carries the repointed paths.
+    - Update the comments on the field declaration, the two note composers, the end-of-run refusal and the resume branch to say the record's paths follow a resume's move and why the field is repointed while retry-history.json is not.
+    - In tests/test_suite_run_shadow.py, replace archived_pair with a reader that resolves the pair from the outstanding record read after the resume (result_path joined to run_dir, output_path as given); adapt the resume-restores case to assert the restored record equals the pre-resume record with the two paths repointed under entry_dir; add the exists assertions to the narrowed-scope refusal case; add direct helper tests for the moved, unmoved and already-repointed cases and for the two path forms.
+    - Update ARCHITECTURE.md's suite-run-shadow section and the sentence in the tests paragraph about a resume's archiving.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the repointing helper, its call in the resume branch, and the comments on the field, the composers and the refusal that say the paths follow a resume.
+    - file: tests/test_suite_run_shadow.py
+      stage: tester
+      reason: remove the archived_pair workaround, read the pair at the paths the note names, adapt the assertions that compared the restored record and the refusal reason against pre-resume paths, and test the helper directly.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the section on the shadowing rule says the pair is read from where the resume archived it and that a test must allow for the move; both are no longer true, and the judgement about which records follow a move is recorded.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_suite_run_shadow.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py's retry-history record and the resume's archive note, which are not rewritten and not reworded
+    - schemas/
+    - workflows/
+    - prompts/
+    - tests/ other than tests/test_suite_run_shadow.py
+
+verification_requirements:
+  - Confirm that after a resume the outstanding-failure record in state.json names the retained pair at its moved location, in the forms it already took, and that the other fields of the record are unchanged.
+  - Confirm the shadowing note, the clean-clone block's carry-forward note and the end-of-run refusal reason name paths that exist on a resumed run, and that tests/test_suite_run_shadow.py reads the pair at the paths the note names rather than composing them from entry_dir.
+  - Confirm the helper leaves an unmoved or already-repointed record unchanged.
+  - Confirm no composer's wording changed and retry-history.json is not rewritten.
+  - Confirm the full suite passes.
+
+constraints:
+  - The coordinator stays deterministic; no model call is added.
+  - The record follows the move by the moved names the resume already computes, never by matching the resumes/ directory name; entry_dir stays the one place that directory is named.
+  - result_path stays run-relative and output_path stays absolute, as the suite-run check writes them.
+  - The three lines composed from the record keep their wording; the fix is to what they read.
+  - Standard library only; existing tests are neither weakened nor skipped, and assertions adapted for the repointed paths keep what they asserted before.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-17 23:10:21
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 198
