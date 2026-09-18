@@ -141,8 +141,32 @@ def sweep_limit(config: dict):
     return limit, ""
 
 
+#: How many transport timeouts an in-flight entry may be held for before a
+#: sync reads it as held by nobody. One filing is killed at the timeout, so
+#: a claim older than twice it belongs to a sweep that was killed outright.
+RECLAIM_TIMEOUTS = 2
+
+
+def reclaim_bound(transport) -> float:
+    """The reclaim bound the queue is handed: twice the transport's timeout.
+
+    Derived here rather than read from configuration, because the queue
+    module reads no configured key and the transport already carries the
+    timeout it was built with. A transport carrying no usable timeout — a
+    fake, or none at all — is bounded by twice the transport module's own
+    default, so an explicit drain with no sync_command configured still
+    returns a stranded entry to the queue.
+    """
+    timeout = getattr(transport, "timeout", None)
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) \
+            or timeout <= 0:
+        timeout = _transport_module().DEFAULT_TIMEOUT_SECONDS
+    return RECLAIM_TIMEOUTS * float(timeout)
+
+
 def drain(queue: Path, transport, harness_root: Path | None = None,
-          *, limit: int | None = None) -> outbox.Summary:
+          *, limit: int | None = None,
+          reclaim_after: float | None = None) -> outbox.Summary:
     """The one call into the queue's drain that this repository makes.
 
     Both entry points go through here — `sweep` below with whatever the total
@@ -150,9 +174,14 @@ def drain(queue: Path, transport, harness_root: Path | None = None,
     so the drain itself is written once and the two halves cannot drift into
     passing the queue different things. It decides nothing: what a transport
     and a limit are is settled above it, by the caller whose refusal rules
-    apply.
+    apply. The one thing it derives is the reclaim bound, from the transport
+    it was handed, so the explicit drain and both coordinator sweeps agree on
+    how long a claim may stand before it is held by nobody.
     """
-    return outbox.sync(queue, transport, harness_root=harness_root, limit=limit)
+    if reclaim_after is None:
+        reclaim_after = reclaim_bound(transport)
+    return outbox.sync(queue, transport, harness_root=harness_root,
+                       limit=limit, reclaim_after=reclaim_after)
 
 
 def render(summary: outbox.Summary) -> str:

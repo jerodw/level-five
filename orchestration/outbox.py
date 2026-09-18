@@ -42,6 +42,26 @@ been attempted is looked up by that key before it is filed again. The provider
 is authoritative for what was filed; local state is only evidence of what was
 attempted.
 
+The lookup covers an entry that has been offered before, and nothing about it
+covers two sweeps reaching one entry on its *first* offer — both read attempts
+of zero, both skip the ask, and both file. The queue belongs to the repository
+rather than to a worktree and every run sweeps it twice, so under parallel
+execution one run's pre-flight sweep runs beside another run's completion sweep
+as a matter of course. So a sweep **claims** an entry before the transport is
+called: one atomic rename of the entry file out of the queue into the in-flight
+directory beneath it, so of two sweeps reaching one entry exactly one holds it
+and the other finds the file gone and moves on. The queue listing lists files
+only, so a claimed entry stops being offered the moment it is claimed. The
+entry's state stays pending; the location is the claim, and no state is added.
+After the transport answers the outcome is written and the in-flight copy
+removed, write first and unlink second, and a filing that exits without
+settling the entry returns it to the queue with its attempt counted. What no
+handler covers is a sweep killed outright, so every sync begins by reclaiming
+from the in-flight directory: an entry claimed longer ago than the bound handed
+in is held by nobody and goes back to the queue with its attempt counted. A
+claim that cannot be made for any reason other than the file being gone files
+the entry unclaimed, as before, and notes it — every path fails toward filing.
+
 The transport is injected, the way the agent runner and the sleep already are,
 so every state the queue can be in is proven against a fake and nothing here
 reaches a network. What a transport must provide is two operations:
@@ -59,10 +79,14 @@ it pending with the attempt counted and the error recorded. A transport that
 Sweeps do now run inside a story run, and they reach this module through one
 seam: `orchestration/outbox_sweep.py` is the only caller of `sync`, and the
 coordinator sweeps through it in the l5-run pre-flight and again after the
-completion commit. `l5-sync` stays the explicit drain. That those sweeps are
-safe to place inside a run rests entirely on the guarantee above — `sync` never
-raises into its caller and has no way to tell one to stop — which is why the
-seam is a module with a total entry point rather than a call site each.
+completion commit. `l5-sync` stays the explicit drain. Two of those sweeps
+running beside each other over one queue is the ordinary case rather than an
+edge, which is what the claim above is for. That those sweeps are safe to
+place inside a run rests entirely on the guarantee above — `sync` never raises
+into its caller and has no way to tell one to stop — which is why the seam is
+a module with a total entry point rather than a call site each. The reclaim
+bound arrives through `sync`'s parameters from that seam: this module reads
+no configuration key at all.
 """
 from __future__ import annotations
 
@@ -121,6 +145,22 @@ QUEUE_DIR = (".harness", "outbox")
 #: what makes the index outlive the tree that filed into it. Nothing tracked is
 #: written, so no clean-tree pre-flight sees it.
 RECEIPTS_DIR = (".harness", "receipts")
+
+#: The name of the directory beneath the queue that holds the entries a sweep
+#: is filing right now. Beneath the queue rather than beside it so that the
+#: three directories cannot disagree about which repository they belong to —
+#: it is derived from the queue a sweep was handed and from nothing else — and
+#: because `entry_files` lists files only, so an entry moved beneath the queue
+#: stops being offered the moment it is moved. The move is the claim: a single
+#: `os.rename`, which of two sweeps exactly one wins. The entry's state does
+#: not change with the move, and its change time, which the rename itself
+#: sets, is when the claim was made. Gitignored with the queue it sits under.
+IN_FLIGHT_DIR = "in-flight"
+
+#: What a reclaimed or unsettled entry says happened to it. The same words on
+#: both paths, because both mean the same thing: a sweep held the entry and
+#: did not settle it, so the next offer asks the provider first.
+UNSETTLED_ERROR = "claimed by a sweep and not settled"
 
 #: The shape an entry is written in and read back against. One file, so what
 #: the outbox writes and what it decides is poisoned cannot drift. A receipt is
@@ -207,6 +247,17 @@ def receipts_beside(queue: Path) -> Path:
     `receipts_dir` would have given it.
     """
     return queue.parent / RECEIPTS_DIR[-1]
+
+
+def in_flight_beside(queue: Path) -> Path:
+    """The in-flight directory that belongs to a queue directory.
+
+    Beneath the queue, derived from it in the shape `receipts_beside` takes,
+    so a sweep handed a queue names the same in-flight directory whichever
+    tree it stands in — the derivation is the queue's, and the queue is the
+    repository's.
+    """
+    return queue / IN_FLIGHT_DIR
 
 
 # --------------------------------------------------------------------------
@@ -321,6 +372,81 @@ def relocate_entry(queue: Path, receipts: Path, entry: dict) -> None:
     """
     write_entry(receipts, entry)
     entry_path(queue, entry["key"]).unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class Claim:
+    """What one attempt to claim an entry established.
+
+    `held` is a claim this sweep won: the file is in the in-flight directory
+    and no other sweep will be offered it. `gone` is a claim lost to another
+    sweep — the source was not there to rename, because someone else claimed
+    or landed it between this sweep's listing and its rename — and the entry
+    is skipped. Neither, with a `problem`, is a claim that could not be made
+    for a reason having nothing to do with another sweep, and the caller files
+    the entry unclaimed, as every sweep did before claims existed.
+    """
+
+    held: bool = False
+    gone: bool = False
+    problem: str = ""
+
+
+def claim_entry(queue: Path, key: str) -> Claim:
+    """Move one entry from the queue into the in-flight directory, atomically.
+
+    One `os.rename` and nothing else stands between the entry being offered
+    and the entry being held: of two sweeps reaching one key exactly one
+    rename succeeds, and the other meets a source that is no longer there. The
+    directory is created first so that a missing source is the only way to
+    meet a FileNotFoundError, and that error is read as the claim being lost
+    rather than as anything being wrong. Any other OSError — the directory
+    cannot be created, the rename is refused — is a claim that could not be
+    made, reported so the caller can file unclaimed and say so.
+
+    The rename sets the file's change time, so the claim carries its own
+    timestamp with no second write between the two.
+
+    A sweep that has settled everything it held removes the empty in-flight
+    directory behind it, so a FileNotFoundError can also be the directory
+    going away between this sweep's mkdir and its rename. The two are told
+    apart by the source: a source still in the queue is a claim that met a
+    vanished directory and is made again, and a source that is gone is a
+    claim lost. The second try is the last, so two sweeps cannot chase each
+    other's mkdir and rmdir forever.
+    """
+    in_flight = in_flight_beside(queue)
+    source, destination = entry_path(queue, key), entry_path(in_flight, key)
+    for last_try in (False, True):
+        try:
+            in_flight.mkdir(parents=True, exist_ok=True)
+            os.rename(source, destination)
+        except FileNotFoundError as error:
+            if not source.exists():
+                return Claim(gone=True)
+            if last_try:
+                return Claim(problem=f"the claim could not be made: {error}")
+            continue
+        except OSError as error:
+            return Claim(problem=f"the claim could not be made: {error}")
+        return Claim(held=True)
+    return Claim(problem="the claim could not be made")  # unreachable
+
+
+def release_in_flight(queue: Path) -> None:
+    """Remove the in-flight directory when a sync has left it empty.
+
+    A directory that holds nothing is nothing to reclaim, and every reader of
+    the queue that was written before the directory existed lists the queue's
+    names and opens each as an entry. An in-flight directory holding a claim
+    another sweep is filing, or one the reclaim left alone, stays exactly as
+    it is — the rmdir is refused on a directory that is not empty, and that
+    refusal is the whole of the guard.
+    """
+    try:
+        in_flight_beside(queue).rmdir()
+    except OSError:
+        pass
 
 
 def rendered_identity(identity) -> str:
@@ -699,6 +825,15 @@ class _Tally:
     #: however small the bound is.
     attempted: int = 0
     unattempted: int = 0
+    #: How many entries this sweep found already claimed by another sweep,
+    #: and the reasons a claim could not be made at all — each counted as a
+    #: transport problem is, into one note per distinct reason, so twenty
+    #: entries behind one unwritable in-flight directory say so once.
+    claimed_elsewhere: int = 0
+    unclaimed: list = field(default_factory=list)
+    #: How many in-flight entries this sync returned to the queue because they
+    #: had been claimed longer ago than the reclaim bound.
+    reclaimed: int = 0
 
     def summary(self, transport: bool) -> Summary:
         return Summary(
@@ -722,7 +857,8 @@ class _Tally:
 
 def sync(queue: Path, transport=None, harness_root: Path | None = None,
          now: float | None = None, *, limit: int | None = None,
-         receipts: Path | None = None) -> Summary:
+         receipts: Path | None = None,
+         reclaim_after: float | None = None) -> Summary:
     """Drain the queue through a transport, and never raise into the caller.
 
     Every path through this function returns a summary. A transport that is
@@ -748,18 +884,35 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
     summary carries a note naming the limit and how many it left undone: a cap
     whose effect is not stated is a cap that reads as an empty queue.
 
-    **Only the queue is listed.** A landed entry lives in the receipt index and
-    reaches no transport, so opening one would be a read that grows with
-    everything ever filed rather than with what is waiting to be filed. A
-    landed entry a sweep still finds in the queue — this deployment's entries as
-    they stood before the split — is relocated into the index by the same move
-    `_land` makes, and is tallied as landed exactly as it was before. That is
-    the whole of the migration: no one-off command and no flag day, so a
-    deployment that never runs a migration step cannot silently lose dedupe.
+    `reclaim_after` is the bound, in seconds, past which an entry in the
+    in-flight directory is held by nobody: a sweep killed outright cannot
+    settle what it claimed, and one filing is killed at the transport's own
+    timeout, so the seam that builds the transport hands in twice that bound.
+    Before the queue is listed — and whether or not a transport is present —
+    every in-flight entry whose change time is older than the bound is
+    written back into the queue as pending with its attempt counted and a
+    last_error saying it was claimed and not settled, and its in-flight copy
+    removed; one younger than the bound is left where it is. A caller giving
+    no bound reclaims nothing: this module reads no configuration key, and
+    the bound is the seam's to derive.
+
+    **Only the queue's files are listed**, and the in-flight directory beneath
+    it is not one of them, so an entry a sweep holds is not offered to another
+    while it is held. A landed entry lives in the receipt index and reaches no
+    transport, so opening one would be a read that grows with everything ever
+    filed rather than with what is waiting to be filed. A landed entry a sweep
+    still finds in the queue — this deployment's entries as they stood before
+    the split — is relocated into the index by the same move `_land` makes,
+    and is tallied as landed exactly as it was before. That is the whole of
+    the migration: no one-off command and no flag day, so a deployment that
+    never runs a migration step cannot silently lose dedupe.
     """
     tally = _Tally()
     if receipts is None:
         receipts = receipts_beside(queue)
+    in_flight = in_flight_beside(queue)
+    if reclaim_after is not None:
+        reclaim_stale(queue, reclaim_after, now, tally, harness_root)
     try:
         files = entry_files(queue)
     except OSError as error:
@@ -767,8 +920,8 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
         return tally.summary(transport is not None)
     for path in files:
         try:
-            _sync_one(queue, receipts, path, transport, tally, harness_root,
-                      now, limit)
+            _sync_one(queue, receipts, in_flight, path, transport, tally,
+                      harness_root, now, limit)
         except Exception as error:  # noqa: BLE001 - the guarantee is the point
             tally.notes.append(f"{path.name}: {error}")
             tally.pending.append(path.stem)
@@ -777,12 +930,30 @@ def sync(queue: Path, transport=None, harness_root: Path | None = None,
             f"{count} entr{'y' if count == 1 else 'ies'} could not be filed: "
             f"{problem}"
         )
+    for problem, count in _counted(tally.unclaimed):
+        tally.notes.append(
+            f"{count} entr{'y' if count == 1 else 'ies'} filed unclaimed: "
+            f"{problem}"
+        )
+    if tally.claimed_elsewhere:
+        tally.notes.append(
+            f"{tally.claimed_elsewhere} entr"
+            f"{'y was' if tally.claimed_elsewhere == 1 else 'ies were'} "
+            "being filed by another sweep"
+        )
+    if tally.reclaimed:
+        tally.notes.append(
+            f"{tally.reclaimed} in-flight entr"
+            f"{'y' if tally.reclaimed == 1 else 'ies'} claimed longer ago than "
+            f"{reclaim_after} seconds returned to the queue"
+        )
     if tally.unattempted:
         tally.notes.append(
             f"the limit of {limit} filing attempt(s) left "
             f"{tally.unattempted} pending entr"
             f"{'y' if tally.unattempted == 1 else 'ies'} unattempted"
         )
+    release_in_flight(queue)
     return tally.summary(transport is not None)
 
 
@@ -798,11 +969,79 @@ def _counted(problems: list) -> list[tuple[str, int]]:
     return list(counts.items())
 
 
-def _sync_one(queue: Path, receipts: Path, path: Path, transport,
-              tally: _Tally, harness_root: Path | None, now: float | None,
-              limit: int | None = None) -> None:
+def reclaim_stale(queue: Path, reclaim_after: float, now: float | None,
+                  tally: _Tally, harness_root: Path | None = None) -> None:
+    """Return every in-flight entry claimed longer ago than the bound.
+
+    A sweep that exits through the transport call returns its entry itself;
+    what no handler can cover is a sweep killed outright, and this is the
+    cover for it. An entry's claim time is its file's change time — the
+    rename that claimed it set that, so no second write stands between the
+    claim and its timestamp — and one older than `now - reclaim_after` is
+    held by nobody, because one filing is killed at the timeout the bound is
+    derived from. It goes back into the queue as pending with its attempt
+    counted and a last_error saying so, write first and unlink second, so the
+    next offer asks the provider before filing. One younger than the bound is
+    left exactly where it is — a sweep is holding it — and is counted as
+    pending with the note saying another sweep was filing it, so a reader of
+    this sync's one line sees the entry rather than an emptier queue than
+    there is. This runs before this sync claims anything, so what it counts is
+    other sweeps' claims and never its own.
+
+    Two sweeps reclaiming one entry write the same thing and both unlink, so
+    the path is idempotent. Every entry is guarded on its own: a stat that
+    fails, a file that cannot be read as an entry, or a write that fails is
+    noted and stops nothing, and an unreadable in-flight file is left where
+    it is rather than moved somewhere its problems would read as poison.
+    """
+    in_flight = in_flight_beside(queue)
+    try:
+        files = entry_files(in_flight)
+    except OSError as error:
+        tally.notes.append(
+            f"the in-flight directory could not be listed: {error}")
+        return
+    cutoff = (now if now is not None else time.time()) - reclaim_after
+    for path in files:
+        try:
+            if path.stat().st_ctime > cutoff:
+                tally.claimed_elsewhere += 1
+                tally.pending.append(path.stem)
+                continue
+            entry, problems = read_entry(path, harness_root)
+            if entry is None:
+                tally.notes.append(
+                    f"{path.name}: in flight and could not be read: "
+                    + "; ".join(problems))
+                continue
+            entry["attempts"] = entry["attempts"] + 1
+            entry["state"] = PENDING
+            entry["last_error"] = UNSETTLED_ERROR
+            entry["updated_at"] = _now(now)
+            write_entry(queue, entry)
+            path.unlink(missing_ok=True)
+            tally.reclaimed += 1
+        except Exception as error:  # noqa: BLE001 - reclaiming may not stop a run
+            tally.notes.append(f"{path.name}: could not be reclaimed: {error}")
+
+
+def _sync_one(queue: Path, receipts: Path, in_flight: Path, path: Path,
+              transport, tally: _Tally, harness_root: Path | None,
+              now: float | None, limit: int | None = None) -> None:
+    if not path.exists():
+        # Listed a moment ago and gone now: another sweep claimed or landed it
+        # between this sweep's listing and its read. Not poisoned, and not
+        # this sweep's to file.
+        tally.claimed_elsewhere += 1
+        tally.pending.append(path.stem)
+        return
     entry, problems = read_entry(path, harness_root)
     if entry is None:
+        if not path.exists():
+            # The same race, met one step later.
+            tally.claimed_elsewhere += 1
+            tally.pending.append(path.stem)
+            return
         # Left exactly as it is: named, counted, and otherwise untouched.
         tally.poisoned.append(Poisoned(path.name, tuple(problems)))
         return
@@ -837,55 +1076,139 @@ def _sync_one(queue: Path, receipts: Path, path: Path, transport,
         tally.unattempted += 1
         tally.pending.append(entry["key"])
         return
-    tally.attempted += 1
-    _file_one(queue, receipts, entry, transport, tally, now)
-
-
-def _file_one(queue: Path, receipts: Path, entry: dict, transport,
-              tally: _Tally, now: float | None) -> None:
-    """File one pending entry, resolving an ambiguous write by asking first."""
-    if entry["attempts"]:
-        # The entry has been offered to a provider before, so its absence
-        # here says nothing about whether it arrived. Ask about the key
-        # rather than risk a duplicate a human would have to reconcile.
-        reference, problem = _look_up(transport, entry["key"])
-        if problem:
-            # The lookup established nothing and the entry falls through to
-            # filing exactly as it did before, but the reason survives rather
-            # than being swallowed by the helper that met it.
-            tally.notes.append(f"{entry['key']}: {problem}")
-        if reference:
-            _land(queue, receipts, entry, reference, tally, now)
+    # The claim, before the transport is called. A claim lost to another sweep
+    # is that sweep's entry and not this one's; a claim that cannot be made
+    # files the entry unclaimed, as every sweep did before claims existed, and
+    # says so. Only a claim this sweep holds is re-read from where it now is:
+    # between this sweep's read above and its rename, another sweep may have
+    # claimed the entry, had its transport answer transiently and written the
+    # entry back with the attempt counted — and the file this sweep renamed
+    # is that one, whose attempt count is what decides whether to ask first.
+    claim = claim_entry(queue, entry["key"])
+    if claim.gone:
+        tally.claimed_elsewhere += 1
+        tally.pending.append(entry["key"])
+        return
+    held = None
+    if claim.held:
+        held = entry_path(in_flight, entry["key"])
+        entry, problems = read_entry(held, harness_root)
+        if entry is None:
+            # Held and unreadable, which nothing above this should have let
+            # through. Returned to the queue as it is rather than filed from
+            # a reading that does not exist; the next sweep meets it there.
+            os.replace(held, path)
+            tally.poisoned.append(Poisoned(path.name, tuple(problems)))
             return
-    answer, problem = _file(transport, entry)
-    if problem:
-        # The transport failed to answer at all, which is a fact about the
-        # sweep rather than about this entry: the entry records it as its own
-        # last_error either way, but a pending entry's last_error reaches no
-        # reader of the summary — not the one line a coordinator sweep puts in
-        # events.log, and not the l5-status queue section, which prints a last
-        # error only for an entry that failed terminally. Without this the
-        # case the whole design is most about, a provider that is unreachable,
-        # is the one case a reader is given a count and no cause.
-        tally.transport_problems.append(problem)
-    if answer.reference:
-        _land(queue, receipts, entry, answer.reference, tally, now)
-        return
-    entry["attempts"] = entry["attempts"] + 1
-    entry["last_error"] = answer.error or "the transport answered with nothing"
-    entry["updated_at"] = _now(now)
-    if answer.terminal:
-        entry["state"] = FAILED
-        write_entry(queue, entry)
-        tally.failed.append(entry["key"])
-        return
-    entry["state"] = PENDING
+    else:
+        tally.unclaimed.append(claim.problem)
+    tally.attempted += 1
+    _file_one(queue, receipts, held, entry, transport, tally, now)
+
+
+def _file_one(queue: Path, receipts: Path, held: Path | None, entry: dict,
+              transport, tally: _Tally, now: float | None) -> None:
+    """File one pending entry, resolving an ambiguous write by asking first.
+
+    `held` is the in-flight copy when this sweep holds the claim, and None
+    when the entry is being filed unclaimed. Every outcome writes its result
+    first and unlinks the held copy second, and the `finally` returns an
+    entry the body exited without settling — a transport that raised
+    something no `except Exception` catches, a write that failed — to the
+    queue with its attempt counted, so the next offer asks first. The
+    exception still propagates exactly as it did before.
+    """
+    settled = False
+    try:
+        if entry["attempts"]:
+            # The entry has been offered to a provider before, so its absence
+            # here says nothing about whether it arrived. Ask about the key
+            # rather than risk a duplicate a human would have to reconcile.
+            reference, problem = _look_up(transport, entry["key"])
+            if problem:
+                # The lookup established nothing and the entry falls through
+                # to filing exactly as it did before, but the reason survives
+                # rather than being swallowed by the helper that met it.
+                tally.notes.append(f"{entry['key']}: {problem}")
+            if reference:
+                _land(queue, receipts, held, entry, reference, tally, now)
+                settled = True
+                return
+        answer, problem = _file(transport, entry)
+        if problem:
+            # The transport failed to answer at all, which is a fact about
+            # the sweep rather than about this entry: the entry records it as
+            # its own last_error either way, but a pending entry's last_error
+            # reaches no reader of the summary — not the one line a
+            # coordinator sweep puts in events.log, and not the l5-status
+            # queue section, which prints a last error only for an entry that
+            # failed terminally. Without this the case the whole design is
+            # most about, a provider that is unreachable, is the one case a
+            # reader is given a count and no cause.
+            tally.transport_problems.append(problem)
+        if answer.reference:
+            _land(queue, receipts, held, entry, answer.reference, tally, now)
+            settled = True
+            return
+        entry["attempts"] = entry["attempts"] + 1
+        entry["last_error"] = (answer.error
+                               or "the transport answered with nothing")
+        entry["updated_at"] = _now(now)
+        if answer.terminal:
+            entry["state"] = FAILED
+            _settle_in_queue(queue, held, entry)
+            settled = True
+            tally.failed.append(entry["key"])
+            return
+        entry["state"] = PENDING
+        _settle_in_queue(queue, held, entry)
+        settled = True
+        tally.pending.append(entry["key"])
+    finally:
+        if not settled and held is not None:
+            _return_unsettled(queue, held, entry, tally, now)
+
+
+def _settle_in_queue(queue: Path, held: Path | None, entry: dict) -> None:
+    """Write an entry's outcome back into the queue and release the claim.
+
+    Write first and unlink second, in the shape `relocate_entry` has: a
+    process killed between the two leaves the key in both places, and the
+    in-flight copy is older than the bound by the time anything reclaims it,
+    so a sweep meeting it then writes the same pending entry back and unlinks
+    — one more attempt counted, and one more ask before filing.
+    """
     write_entry(queue, entry)
-    tally.pending.append(entry["key"])
+    if held is not None:
+        held.unlink(missing_ok=True)
 
 
-def _land(queue: Path, receipts: Path, entry: dict, reference: str,
-          tally: _Tally, now: float | None) -> None:
+def _return_unsettled(queue: Path, held: Path, entry: dict, tally: _Tally,
+                      now: float | None) -> None:
+    """Put an entry the filing exited without settling back in the queue.
+
+    With its attempt counted, because the transport may have been called and
+    nothing established whether the request arrived — the ambiguous write —
+    so the next offer asks first. Guarded whole: this runs in a `finally`
+    while an exception may be propagating, and a failure to return the entry
+    is noted and never replaces the exception it is running beside. An entry
+    it could not return stays in flight, where the reclaim meets it.
+    """
+    try:
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        entry["state"] = PENDING
+        entry["last_error"] = UNSETTLED_ERROR
+        entry["updated_at"] = _now(now)
+        _settle_in_queue(queue, held, entry)
+        tally.pending.append(entry["key"])
+    except Exception as error:  # noqa: BLE001 - returning may not become the failure
+        tally.notes.append(
+            f"{entry.get('key', held.stem)}: could not be returned to the "
+            f"queue and is left in flight: {error}")
+
+
+def _land(queue: Path, receipts: Path, held: Path | None, entry: dict,
+          reference: str, tally: _Tally, now: float | None) -> None:
     """Record the reference and drop the payload the entry no longer needs.
 
     The provider is authoritative for what was filed, so once it has named
@@ -894,13 +1217,26 @@ def _land(queue: Path, receipts: Path, entry: dict, reference: str,
     What is recorded is unchanged — the state, the reference, the dropped
     payload and the updated timestamp, in that same shape. What moved is where
     the entry lands: into the receipt index, with the queue file for that key
-    removed, because a landed entry is no longer work waiting to be filed.
+    removed — any copy the queue has gained at that key meanwhile, which is
+    what the unlink-by-key does — and the in-flight copy removed after it.
+    The receipt is written before either unlink.
     """
     entry["state"] = LANDED
     entry["reference"] = reference
-    entry.pop("payload", None)
+    payload = entry.pop("payload", None)
     entry["updated_at"] = _now(now)
-    relocate_entry(queue, receipts, entry)
+    try:
+        relocate_entry(queue, receipts, entry)
+    except BaseException:
+        # Nothing landed, so the entry the `finally` above returns to the
+        # queue is the pending one it was handed, body included.
+        entry["state"] = PENDING
+        entry.pop("reference", None)
+        if payload is not None:
+            entry["payload"] = payload
+        raise
+    if held is not None:
+        held.unlink(missing_ok=True)
     tally.landed.append(entry["key"])
 
 
