@@ -1,0 +1,168 @@
+story:
+  id: story-167
+  title: Suite runs in flight at once take the machine in turn rather than all at once
+  description: |
+    A story's time divides sharply. Its agent turns are network-bound and take
+    30 to 45 minutes while using almost no local CPU; its whole-suite runs take
+    5.5 to 7 minutes each and take every core, because the configured
+    `test_command` carries `-n auto`. A run makes at least two of those — the
+    declared run after the tester and the clean-clone check on a passing
+    verdict — and one more of each per retry. Two runs at once overlap the
+    agent time happily and collide only in the suite time, and the collision
+    is worse than arithmetic suggests: load makes timing-dependent tests fail
+    or go inconclusive, a spurious failure costs a retry, a retry costs another
+    suite run, and that run adds load.
+
+    This story makes whole-suite runs take turns. The coordinator takes an
+    exclusive lock before each of its three whole-suite runs — the declared
+    suite run, the clean-clone check and the revert check's whole-suite
+    fallthrough — and releases it when the run ends. The command is not
+    touched: `-n auto` stays as configured, each suite still uses every core,
+    and the coordinator still knows nothing about the flag. What changes is
+    that two coordinators of one repository queue for the suite instead of
+    sharing the machine.
+
+    The lock is scoped to the repository rather than to the machine, and that
+    is a decision rather than a shortcut. A machine-wide lock deadlocks the
+    moment this harness is its own target: the suite running under the lock
+    drives the coordinator on constructed targets thousands of times, and each
+    of those would wait on the lock the outer run holds. The coordinator may
+    not read the environment, so nesting cannot be detected that way. The lock
+    is therefore keyed on the primary working tree, which every worktree of a
+    repository shares and which `worktrees.primary_root` already derives, and
+    lives in the worktree root directory the harness already owns beside the
+    repository. Two runs of one repository serialise; a run of another
+    repository does not, which on a machine that hosts one repository is the
+    same thing.
+
+    The lock fails toward running, which is the guarantee the brief asks to
+    keep. It is a kernel file lock, released when its holder dies, so a killed
+    run can never hold it. A lock file that cannot be created or opened costs
+    the turn and never the run. A wait that outlasts the configured bound runs
+    the suite anyway, because a suite hung in another run would otherwise
+    stall every run behind it and the harness puts no timeout on the suite
+    itself. The bound is a new configuration key, `suite_turn_wait_minutes`,
+    set to 60 for this repository; unset it is 60, and a value that is not a
+    non-negative number is refused at pre-flight the way `max_pause_wait_seconds`
+    is. A run that finds the lock held announces the wait as an event before
+    waiting, so the wait is readable off events.log as the gap between that
+    line and the suite-rerun-started line that follows it.
+
+    The brief asks that two stories be run at once and measured before the
+    shape is chosen. That measurement was not made: it takes hours of
+    wall-clock and cannot be made in a planning session, and a mutex around
+    whole-suite runs is the right shape whatever resource turns out to contend,
+    because it serialises the suite wholesale rather than sharing one resource.
+    The measurement would change whether it is worth doing, not what it is.
+
+    Deliberately left alone: the worker count, and any core count written into
+    a target's configuration; the timing-dependent tests that fail under load,
+    which are filed separately; and the history logs two runs contend for on
+    merge, which story-165 settled. The revert check's selector runs and the
+    census take no turn, because neither runs the whole suite.
+
+    Planned from the brief filed under 214.
+  workflow: story-workflow
+
+tasks:
+  - Add a context manager `suite_turn` to `orchestration/story_coordinator.py` that takes an exclusive `fcntl.flock` on a lock file derived from the target repository's primary working tree - `worktrees.worktree_root(target_root, config) / "suite.lock"` - for the duration of one whole-suite run, and releases it on exit. The directory is created if absent; a lock file that cannot be created or opened is noted in events.log and the body runs without a turn.
+  - Wait for the turn under a bound. The lock is tried without blocking first; when it is held, the run writes an event of a new kind, `suite-turn-waited`, through the announcement convention (`_announcement`), naming the wait and what it is worth, and then waits by polling the non-blocking lock with a short sleep until it is granted or the bound expires. A bound that expires writes a note event and runs the suite without the turn.
+  - Enter the turn at the three whole-suite call sites and nowhere else - `suite_run_check` around its `subprocess.run`, `clean_clone_check` around its `run_clean_clone` call, and `revert_check` around its whole-suite `run_clean_clone` call - so that the turn is taken before `_suite_rerun_started` announces the run and released when the run returns. The selector runs in `run_nomination` and the census take no turn.
+  - Declare `suite_turn_wait_minutes` in `schemas/harness-config.schema.json` with a description saying what it bounds, that unset means 60, that zero means take the turn only if it is free and otherwise run at once, and that a value that is not a non-negative number refuses the run at pre-flight. Read it through a reader shaped like `pause_wait_seconds`, refuse a bad value through a checker shaped like `pause_wait_problems` wired into the same pre-flight, and set it to 60 in `.harness/config.yaml` and in `templates/config.yaml` with a comment saying why the value is a duration and not a core count.
+  - Add `suite-turn-waited` to the event enum in `schemas/execution-history.schema.json` and nowhere in `schemas/cross-run-history.schema.json`, so the announcement reaches events.log and the run's structured history and no durable cross-run log, the way `suite-rerun-started` does.
+  - Prove it in a standing module `tests/test_suite_turns.py`, and extend `tests/test_config_keys_are_obeyed.py` with the proof and token exemption the new key needs, so the coverage comparison in that module stays green.
+  - Record the decision in `.harness/docs/ARCHITECTURE.md` - one section saying why suite runs take turns rather than fewer workers, why the lock is per repository rather than per machine, how it fails toward running, and that the two-run measurement the brief asked for was not made.
+
+acceptance_criteria:
+  - Two coordinator runs of one repository whose fake test command records the interval each invocation was running never have overlapping intervals - shown by two runs driven concurrently against two worktrees of one constructed repository, each with a test command that writes its start and end times and sleeps long enough that unserialised runs would overlap.
+  - A coordinator run against a second, unrelated constructed repository is not delayed by a turn held on the first - the lock is derived from the target's own repository, so a run nested inside another run's suite never waits on the run hosting it.
+  - A process holding the turn that is killed releases it - a run started while a killed holder's lock file still exists takes the turn without waiting past the poll interval.
+  - A lock file that cannot be created - the worktree root directory replaced by a regular file, or made unwritable - still runs the suite, records the same suite result it would have recorded with the turn, and writes a note event naming why no turn was taken.
+  - A wait that outlasts `suite_turn_wait_minutes` runs the suite anyway and writes a note event saying the bound expired - shown with the key set to zero against a held lock, where the run proceeds at once.
+  - A run that finds the lock held writes exactly one `suite-turn-waited` event before the `suite-rerun-started` event of the same stage, and a run that finds it free writes none, so an uncontended run's events.log is byte-for-byte what it was before this story apart from nothing.
+  - The configured `test_command` is run exactly as configured on every path - with the turn, without a lock file, and after the bound expires - and no module under `orchestration/` reads, parses or rewrites the `-n` option; `tests/test_suite_parallelism.py` and `tests/test_suite_run_denial.py` pass unchanged.
+  - `suite_turn_wait_minutes` is proven to govern in `tests/test_config_keys_are_obeyed.py` - a run configured with a distinctive value follows it, the key carries a token exemption stating it is a duration, and the coverage comparison of declared keys against proofs passes in both directions.
+  - A value of `suite_turn_wait_minutes` that is not a non-negative number is refused at pre-flight naming the key and the value, and an absent key waits up to 60 minutes.
+  - The enum-completeness assertion in `tests/test_execution_history.py` passes with `suite-turn-waited` declared, and `schemas/cross-run-history.schema.json` is unchanged.
+  - The revert check's selector runs and the census command take no turn - a nomination that decides the revert check runs both selector runs while another process holds the lock, without waiting.
+  - `.harness/docs/ARCHITECTURE.md` gains a section recording the decision, the per-repository scope and its reason, the three ways the lock fails toward running, and that the measurement the brief asked for was not made.
+
+technical_plan:
+  implementation_steps:
+    - Add a module constant for the poll interval and the default bound in minutes, and a reader `suite_turn_wait_seconds(config)` returning the configured minutes as seconds, defaulting to 60 minutes, beside `pause_wait_seconds`; add `suite_turn_wait_problems(config)` beside `pause_wait_problems` and call it from the same pre-flight aggregation.
+    - Add `suite_lock_path(target_root, config)` returning `worktrees.worktree_root(target_root, config) / "suite.lock"`, so the lock is derived where worktrees already are and follows a configured `worktree_dir`.
+    - Add `suite_turn(run_dir, target_root, config, stage_name, artifact)` as a `contextlib.contextmanager`. It creates the directory, opens the lock file for appending, tries `fcntl.flock(fd, LOCK_EX | LOCK_NB)`; on `BlockingIOError` it writes the `suite-turn-waited` event through `_announcement` and polls until granted or the bound has elapsed; on any `OSError` opening or creating, or on an expired bound, it writes a note event through `append_event` with kind `note` and yields without the lock. The lock is released and the file closed in a finally.
+    - Wrap the three whole-suite call sites, taking the turn before `_suite_rerun_started` is called so the wait announcement precedes the run announcement in events.log.
+    - Declare the key in `schemas/harness-config.schema.json`, add `suite-turn-waited` to `schemas/execution-history.schema.json`, and set the key in `.harness/config.yaml` and `templates/config.yaml`.
+    - Write `tests/test_suite_turns.py` with the fixtures the acceptance criteria name, driving two coordinators through subprocesses against worktrees of one constructed repository, and add the key proof and exemption to `tests/test_config_keys_are_obeyed.py`.
+    - Write the ARCHITECTURE.md section.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The turn context manager, the lock path derivation, the key reader and checker, and the three call sites that enter the turn.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: Declares suite_turn_wait_minutes, so the scan of keys the harness reads against keys the schema declares stays green.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: The closed event enum gains suite-turn-waited, so the enum-completeness assertion stays green.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: Sets suite_turn_wait_minutes to 60 for this repository with a comment saying why.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The configuration l5-init installs carries the key with the same comment, so a new target gets the bound and its reason.
+    - file: tests/test_suite_turns.py
+      stage: tester
+      reason: The standing module holding the serialisation, the per-repository scope, the released-on-death, the no-lock-file, the expired-bound and the announcement properties.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The proof that suite_turn_wait_minutes governs and its token exemption; the coverage comparison in this module goes red on a declared key with no proof, so the entry is forced by the declaration.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section recording the decision.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/harness-config.schema.json
+    - schemas/execution-history.schema.json
+    - .harness/config.yaml
+    - templates/config.yaml
+    - tests/test_suite_turns.py
+    - tests/test_config_keys_are_obeyed.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The configured test_command, test_selection_command and census_command
+    - hooks/bash_guard.py
+    - schemas/cross-run-history.schema.json
+    - schemas/clean-clone-result.schema.json, schemas/revert-check-result.schema.json and schemas/suite-run-result.schema.json
+    - orchestration/worktrees.py
+    - tests/test_suite_parallelism.py and tests/test_suite_run_denial.py
+    - Every test module that fails under load
+
+verification_requirements:
+  - Two concurrent coordinator runs of one repository are shown never running the configured test command at the same time, from intervals the command itself recorded rather than from the order of events.
+  - Every failure of the lock - a file that cannot be created, a holder that died, a bound that expired - is shown running the suite and recording the same result it would have recorded with the turn.
+  - The configured test command runs unchanged on every path, and no module under orchestration/ names or parses the -n option.
+  - The new key is declared, proven to govern, refused when malformed and defaulted to 60 minutes when absent.
+  - The new event kind is declared in the execution-history schema and in no cross-run log, and an uncontended run writes no event of it.
+  - The full suite passes under the configured command, and the clean-clone check passes.
+
+constraints:
+  - The worker count is not lowered and no core count is written into any configuration file, template, or harness source; -n auto stays in test_command exactly as it is.
+  - The lock never refuses a run and never stops one - every path through suite_turn that cannot take the lock runs the suite without it and says so in events.log.
+  - The lock is a kernel file lock (fcntl.flock) so a killed holder releases it; no lock is implemented by the existence of a file, because a killed run would hold that forever.
+  - The lock is keyed on the target's repository, derived through worktrees.worktree_root and nowhere else, so a run on a constructed target never waits on a run of another repository.
+  - The coordinator reads no environment variable; the bound comes from configuration alone.
+  - Standard library only; the event write goes through append_event, the announcement through _announcement, and the new kind is a literal in exactly one function body.
+  - No result artifact changes shape; the wait is evidenced by events.log alone.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 15:09:30
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 214
