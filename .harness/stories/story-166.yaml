@@ -1,0 +1,147 @@
+story:
+  id: story-166
+  title: An entry one sweep is filing is not offered to a sweep running beside it
+  description: |
+    Two sweeps running at once can file one entry twice. The queue belongs to
+    the repository rather than to a worktree, every run sweeps it twice — in
+    the pre-flight and after the completion commit — and nothing claims an
+    entry before filing it: the queue file is removed by `_land` only after
+    the transport has answered, so between reading the queue and landing the
+    entry is visible to any other sweep. The lookup guard in `_file_one`
+    covers only an entry that has been offered before; an entry on its first
+    attempt takes no lookup at all, so two sweeps both read attempts of zero,
+    both skip the ask, and both file. What has carried this is the sync
+    script's search-before-create, which is check-then-act. Under parallel
+    execution one run's pre-flight sweep runs beside another run's completion
+    sweep as a matter of course, and the first-attempt path is exactly the
+    one a freshly enqueued brief takes.
+
+    This story makes a sweep claim an entry before the transport is called.
+    The claim is one atomic rename of the entry file from the queue into an
+    in-flight directory beneath it, `.harness/outbox/in-flight/`, so of two
+    sweeps reaching one entry exactly one holds it and the other finds the
+    file gone and moves on. The queue listing already lists files only, so a
+    claimed entry stops being offered the moment it is claimed. The entry's
+    state stays pending; the location is the claim, and no state is added.
+
+    After the transport answers, the outcome is written and the in-flight
+    copy removed, write first and unlink second. A sweep that exits through
+    the transport call without settling the entry returns it to the queue
+    with its attempt counted, so the next offer asks first. What no handler
+    can cover is a sweep killed outright, so every sweep begins by reclaiming
+    from the in-flight directory: an entry claimed longer ago than twice the
+    sync timeout is held by nobody, because one filing is killed at that
+    timeout, and it is returned to the queue with its attempt counted and a
+    last_error saying it was claimed and not settled. The claim time is the
+    file's change time, which the rename itself sets, so no second write
+    stands between the claim and its timestamp. A claim that cannot be made
+    for any reason other than the file being gone files the entry unclaimed,
+    as today, and notes it: the guarantee the module rests on — a failure to
+    file never blocks a run — holds, and every path fails toward filing.
+
+    Deliberately left alone: the sync script's search-before-create, which is
+    right and stays; the lookup on a re-offered entry, which covers the case
+    it was written for; and where the queue lives, which story-117 settled.
+
+    Planned from the brief filed under 213.
+  workflow: story-workflow
+
+tasks:
+  - Add an in-flight directory beneath the queue, `.harness/outbox/in-flight/`, derived beside `queue_dir` and `receipts_beside` so the three cannot disagree about which repository they belong to, and a claim that moves one entry file from the queue into it with a single `os.rename` before the transport is called. A rename whose source is gone means another sweep claimed or landed the entry, and that sweep skips it; a rename that fails for any other reason files the entry unclaimed and records a note.
+  - Settle a claimed entry after the transport answers, write first and unlink second in the shape `relocate_entry` already has - a landed entry is written to the receipt index and the in-flight copy removed, along with any copy the queue has gained at that key meanwhile, which is what the unlink-by-key does today; a transient or terminal outcome is written back into the queue and the in-flight copy removed. An exit from the filing that settled nothing returns the entry to the queue with its attempt counted, in a finally.
+  - Reclaim stranded claims at the start of every sync - an in-flight entry whose change time is older than the reclaim bound is written back into the queue as pending with its attempt counted and a last_error saying it was claimed and not settled, and its in-flight copy removed; one younger than the bound is left where it is. Two sweeps reclaiming the same entry write the same thing and both unlink, so the path is idempotent.
+  - Carry the reclaim bound into `sync` from the sweep seam rather than from configuration - `outbox.py` reads no configured key, so `outbox_sweep.drain` derives the bound as twice the timeout the transport was built with, or twice the transport module's default timeout where there is no transport, and passes it through; `scripts/l5-sync` and both coordinator sweeps reach `sync` through `drain` and so agree.
+  - Report a claimed entry the sweep did not attempt - a sweep that finds an entry already claimed by another counts it as pending and adds one note naming how many entries were being filed by another sweep, collected and counted the way transport problems already are.
+  - Rewrite the prose the change makes false - the module docstring's account of the ambiguous write and of what removes a queue file, `sync`'s "only the queue is listed", and the outbox-entry schema description's statement of where an entry lives by state, which now says a pending entry a sweep holds lives in the in-flight directory.
+  - Prove it - two sweeps driven against one queue over one entry file it once, a killed sweep's claim is reclaimed and filed with the lookup consulted, a fresh claim is left alone, a claim that cannot be made still files, and the explicit drain over a queue holding only a claimed entry exits zero.
+
+acceptance_criteria:
+  - Two syncs driven against one queue over one pending entry - the first held inside its transport's file call until the second has run to completion - call the transport's file operation exactly once between them, and afterwards the receipt index holds one landed entry for that key, the queue holds no file for it, and the in-flight directory is empty.
+  - The sync that found the entry already claimed reports it as pending and carries one note saying an entry was being filed by another sweep; it does not raise, and it does not call the transport for it.
+  - Before the transport is called the entry file has left the queue for `.harness/outbox/in-flight/` under the same `<key>.json` name, with state still pending; `entry_files` over the queue does not list it, and `local_index` and `l5-status` read the queue exactly as they did before.
+  - A landed entry leaves no copy in the in-flight directory and no copy in the queue at that key; a transient outcome leaves the entry in the queue as pending with the attempt counted and no copy in flight; a terminal outcome leaves it in the queue as failed with no copy in flight.
+  - A transport whose file call raises a BaseException that is not an Exception leaves the entry in the queue as pending with its attempt counted and no copy in flight, and the exception propagates as it does today.
+  - An in-flight entry whose change time is older than the reclaim bound handed to `sync` is, at the start of the next sync, written back into the queue as pending with its attempt counted, a last_error saying it was claimed and not settled, and its in-flight copy removed; that same sync then offers it with the lookup consulted first, because its attempt count is no longer zero. The test drives this with an injected `now` and no sleep.
+  - An in-flight entry younger than the reclaim bound is left where it is, unread by the transport and absent from the sync's counts except as the note above.
+  - Reclaim runs whether or not a transport is present, so an explicit drain with no sync_command configured still returns a stranded entry to the queue.
+  - A claim that fails for a reason other than the source file being gone - the in-flight directory cannot be created - files the entry through the transport exactly as an unclaimed entry is filed today, and the summary carries a note saying the entry was filed unclaimed and why.
+  - `outbox_sweep.drain` passes `sync` a reclaim bound of twice the transport's timeout when the transport carries one and twice `command_transport.DEFAULT_TIMEOUT_SECONDS` otherwise, and `scripts/l5-sync`, the pre-flight sweep and the completion sweep all reach `sync` through `drain`, which stays the single caller of it.
+  - `scripts/l5-sync` over a queue whose only entry is in flight and younger than the bound exits zero and reports it as pending.
+  - `sync` and `sweep` return a Summary on every path the story adds - a rename that raises, an in-flight directory that cannot be listed, an entry in flight that cannot be read - and no path raises into the caller.
+  - The outbox-entry schema description states that a pending entry a sweep holds lives in the in-flight directory beneath the queue, and the state enum is unchanged.
+  - The existing tests in tests/test_outbox.py and tests/test_the_outbox_belongs_to_the_repository.py pass unchanged, and no existing assertion is weakened or removed.
+  - .harness/docs/ARCHITECTURE.md gains a section describing the claim, what settles it, the age-based reclaim and why the change time is its stamp, and how the story fails toward filing.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/outbox.py, add `IN_FLIGHT_DIR` as the name of the directory beneath the queue, an `in_flight_beside(queue)` derivation beside `receipts_beside`, and `claim_entry(queue, key)` that renames `entry_path(queue, key)` to the in-flight path in one `os.rename` after creating the directory; return whether the claim was won, treating FileNotFoundError on the source as lost to another sweep and any other OSError as a claim that could not be made, so the caller can file unclaimed.
+    - Restructure `_file_one` so it claims first, then does what it does today inside a try/finally - the lookup on a non-zero attempt count, the file call, the three outcomes - with each outcome writing its result first and unlinking the in-flight copy second, and the finally returning an unsettled entry to the queue with its attempt counted where the body exited without settling it.
+    - Add `reclaim_stale(queue, reclaim_after, now, tally)` that lists the in-flight directory with `entry_files`, and for each entry whose `st_ctime` is older than `now - reclaim_after` writes it back into the queue as pending with attempts incremented and a last_error, then unlinks the in-flight copy; guard every entry on its own so a poisoned or unreadable in-flight file is noted and stops nothing. Call it at the top of `sync` before the queue is listed, whether or not a transport is present.
+    - Give `sync` a keyword `reclaim_after` in seconds and give `outbox_sweep.drain` the same, deriving it there from the transport's timeout (twice it) or twice `DEFAULT_TIMEOUT_SECONDS` through `_transport_module()`; both coordinator call sites and scripts/l5-sync already go through `drain` and need no change unless the signature forces one.
+    - Tally an entry another sweep holds as pending and record the reason in a collected list rendered as one counted note, in the `_counted` idiom `transport_problems` uses; note an unclaimed filing the same way.
+    - Rewrite the module docstring's paragraph on the ambiguous write and on sweeps inside a run, the `sync` docstring's listing paragraph, and the outbox-entry schema description to say where a claimed entry lives.
+  likely_file_changes:
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: The in-flight directory, the claim, settling a claimed entry, the stale reclaim, the reclaim_after keyword on sync, and the notes and docstrings that go with them.
+    - file: orchestration/outbox_sweep.py
+      stage: implementer
+      reason: drain derives the reclaim bound from the transport's timeout and passes it to sync, so the explicit drain and both coordinator sweeps agree on it.
+    - file: scripts/l5-sync
+      stage: implementer
+      reason: Only if drain's signature change forces one; the script already reaches sync through drain and is expected to be unchanged.
+    - file: schemas/outbox-entry.schema.json
+      stage: implementer
+      reason: The description states where an entry lives by state; a pending entry a sweep holds now lives in the in-flight directory beneath the queue.
+    - file: tests/test_outbox.py
+      stage: tester
+      reason: The two-sweeps-one-entry assertion, the reclaim of a killed sweep's claim, the fresh claim left alone, the unclaimed filing, the BaseException return, and the explicit drain over a claimed entry.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A section on the claim, what settles it, the age-based reclaim and its stamp, and how the story fails toward filing.
+
+scope:
+  modify:
+    - orchestration/outbox.py
+    - orchestration/outbox_sweep.py
+    - scripts/l5-sync
+    - schemas/outbox-entry.schema.json
+    - tests/test_outbox.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/scripts/github.sh
+    - templates/scripts/github.sh
+    - orchestration/command_transport.py
+    - orchestration/story_coordinator.py
+    - orchestration/run_status.py
+    - orchestration/inspection.py
+    - orchestration/brief_filing.py
+    - orchestration/worktrees.py
+
+verification_requirements:
+  - Confirm that two syncs over one queue and one pending entry make exactly one transport file call and leave one receipt, an empty queue and an empty in-flight directory, by running the test that drives one sync held inside its transport while the other completes.
+  - Confirm the claim is a single os.rename from the queue path to the in-flight path and that no state is added to the entry schema's enum.
+  - Confirm every outcome writes its result before unlinking the in-flight copy, and that an unsettled exit from the filing returns the entry to the queue with its attempt counted.
+  - Confirm the reclaim uses the in-flight file's st_ctime against an injected now and the reclaim_after bound, returns a stale entry with attempts incremented and a last_error, leaves a fresh one alone, and runs with no transport present.
+  - Confirm outbox_sweep.drain derives the bound as twice the transport's timeout or twice the transport module's default, that outbox.py reads no configuration key, and that drain remains the only caller of outbox.sync.
+  - Confirm a claim that fails for a reason other than a missing source still files the entry and notes it, and that sync and sweep return a Summary on every new path.
+  - Confirm the sync script's search-before-create, the lookup on a re-offered entry, and the queue's resolution through primary_root are unchanged.
+  - Confirm the existing outbox tests pass with no assertion weakened, and that the new section in .harness/docs/ARCHITECTURE.md describes the behaviour the code has.
+
+constraints:
+  - A failure to file never blocks a run - sync and sweep return a Summary on every path, and no claim, settle or reclaim may raise into a caller or refuse anything.
+  - Every new path fails toward filing - a claim that cannot be made files unclaimed, and a stranded claim is returned to the queue rather than held.
+  - No new entry state - the state enum stays pending, landed, failed, and the location of a claimed entry is the claim.
+  - orchestration/outbox.py reads no configuration key; the reclaim bound arrives through sync's parameters from outbox_sweep.drain.
+  - The sync script's search-before-create in both github.sh copies, the lookup on an entry whose attempt count is not zero, and the queue's resolution through primary_root are left as they are.
+  - Python 3.10+, standard library only; writes stay atomic through write_entry and the claim is one os.rename.
+  - Tests inject now and drive concurrency with held transports rather than sleeping, and bound no wall-clock window on the machine.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 12:55:13
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 213
