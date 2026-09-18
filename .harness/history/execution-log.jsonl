@@ -98,3 +98,5 @@
 {"story_id": "story-158", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-17 12:56:53"}
 {"story_id": "story-158", "status": "escalated", "retry_count": 0, "timestamp": "2026-09-17 13:09:59"}
 {"story_id": "story-159", "status": "completed", "retry_count": 1, "timestamp": "2026-09-17 17:10:19"}
+{"story_id": "story-158", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-17 18:36:27"}
+{"story_id": "story-158", "status": "completed", "retry_count": 0, "timestamp": "2026-09-17 18:50:23"}
