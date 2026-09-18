@@ -49,8 +49,26 @@ above exists against — and raising the bound only moves the size at which the
 same failure returns. So a command whose work is proportional to the scope is
 killed partway through and answers nothing, which the harness reports as dedupe
 not having run; the repair belongs in the command, and the query branch of
-`templates/scripts/github.sh` is where one is written that batches. Nothing
-about the timeout, the scope or what an answer means changes here.
+`templates/scripts/github.sh` is where one is written that batches. What that
+batched query's cost is bounded by is its page size rather than the scope:
+measured on 2026-09-17 against a 198-issue tracker, one batched search of 20
+path markers answered 106 items in 2.9 seconds at a page limit of 200, and the
+same batch at a page limit of 50 filled its page and was re-asked one path at a
+time at 0.6 to 0.9 seconds a path — which is where a 30-second bound goes on a
+60-file scope. So the page limit is what decides whether a scope answers, and
+it is the command's constant and not this module's. Nothing about the timeout,
+the scope or what an answer means changes here.
+
+**What is filed against one path set is not small on a tracker that has held
+every brief of a long-running repository.** The item cap below defaults to a
+count that was right when a tracker held a few briefs; on the tracker measured
+above one path alone had 75 items filed against it, and a full scope answers
+with well past the default. The default is a fallback for a target that has
+declared nothing, not a statement about any target's tracker: a target whose
+answers run past it declares `filed_query_max_items` at a size the whole answer
+fits under, because an item the harness drops past the cap is an item the
+inspector never dedupes against, and the drop is named in the record and never
+shown to the inspector.
 
 **Whether a closed item suppresses a refiling is the answering command's
 policy.** The harness must not encode it, must not infer it, and must not add a
@@ -90,9 +108,14 @@ ITEMS_SCHEMA = "filed-items"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 #: How many items one answer may carry when the target declares no bound. A
-#: count rather than a duration: what is filed against one path set is meant to
-#: be small, and a command answering with far more than this has answered a
-#: broader question than it was asked.
+#: count rather than a duration, and a fallback rather than a statement about
+#: any tracker: what is filed against one path set is not small on a tracker
+#: that has held every brief of a long-running repository — measured on
+#: 2026-09-17, one path of this repository alone had 75 items filed against it,
+#: and a full scope answers with well past this. A target whose answers run
+#: past it declares `filed_query_max_items` at a size the whole answer fits
+#: under, because every item dropped past the cap is one the inspector never
+#: dedupes against.
 DEFAULT_MAX_ITEMS = 50
 
 #: The most stdout this will read from a command. A document larger than this

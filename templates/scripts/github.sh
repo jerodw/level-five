@@ -167,9 +167,15 @@
 # composition below, which already deduplicates by URL. The cost of a search is
 # nearly flat in batch size — 5 markers measured 0.83 seconds, 10 measured 0.90
 # and 20 measured about 1.0 — so a 60-file scope becomes three searches rather
-# than sixty. Neither the harness's bound nor the scope it hands over is what
-# changed: the scope is not capped, because a capped scope means inventing a
-# partial answer and an answer here means the whole question was answered.
+# than sixty. What the cost of a search is proportional to is the results it
+# returns, not the markers it carries: measured on 2026-09-17 against a
+# 198-issue tracker, one batched search of 20 markers answered 106 items in 2.9
+# seconds at a limit of 200, where the same 20 markers at the page limit of 50
+# answered in 1.6 seconds and then, because the page had filled, cost a further
+# 0.6 to 0.9 seconds a path in the fallback below. Neither the harness's bound
+# nor the scope it hands over is what changed: the scope is not capped, because
+# a capped scope means inventing a partial answer and an answer here means the
+# whole question was answered.
 #
 # BATCHING IS ONLY SAFE WITH A FALLBACK, and the fallback is what a target
 # writing its own command must carry too. A search is capped at LIMIT results.
@@ -179,9 +185,19 @@
 # limit, and a batch whose search fails, are both re-asked one path at a time —
 # which is also what keeps this safe on a tracker whose limit on query length is
 # tighter than this one's, since a batch that is too long to search falls back
-# rather than failing. A per-path search that fails after that still fails the
-# whole answer, on the rule above: reporting the paths that did answer would say
-# that nothing is filed against the ones that did not.
+# rather than failing. The fallback multiplies the cost of a batch by its size:
+# a batch whose page fills is re-asked one path at a time at 0.6 to 0.9 seconds
+# a path, so a 20-marker batch that filled costs 12 to 18 seconds instead of
+# one search, and a 60-file scope in which two or three batches fill runs past
+# the harness's 30-second bound. The page limit is therefore what decides
+# whether the fallback runs at all, and it is set above to a size no batch this
+# tracker holds reaches. A per-path page that fills has no further fallback
+# beneath it — there is nothing narrower than one path to re-ask — so it is
+# refused rather than answered short: the answer fails naming the path and the
+# limit, and the harness reads that as nothing known rather than as nothing
+# filed. A per-path search that fails after the fallback still fails the whole
+# answer, on the rule above: reporting the paths that did answer would say that
+# nothing is filed against the ones that did not.
 #
 # THE QUERY BRANCH IS THE SYNC BRANCH'S PAIR, and they are now the same file,
 # which is what removes the way they used to be able to drift: the sync branch
@@ -378,9 +394,17 @@ IN_PROGRESS_OPTION="${L5_ITEM_IN_PROGRESS_OPTION:-In progress}"
 READY_TO_MERGE_OPTION="${L5_ITEM_READY_TO_MERGE_OPTION:-Ready to merge}"
 
 # --- what only the query job uses. Edit these. ---------------------------
-# How many items one search may return. The harness bounds what it will
-# read as well; this bound is about what the tracker is asked for.
-LIMIT="${L5_QUERY_LIMIT:-50}"
+# How many items one search may return. It is not merely a bound on what the
+# tracker is asked for: it is what decides whether a batch reaches the fallback
+# at all. gh pages the search at 100 results a request, and the cost of a search
+# is proportional to the results it returns rather than to the limit it is
+# given, so a limit the answer never fills costs nothing extra — while a limit
+# the answer does fill costs one search per path in the batch, at 0.6 to 0.9
+# seconds a path, which is where the harness's 30-second bound went. See
+# BATCHING IS ONLY SAFE WITH A FALLBACK above for the measurement. The harness
+# bounds what it will read out of the answer separately, under
+# filed_query_max_items.
+LIMIT="${L5_QUERY_LIMIT:-500}"
 
 # How many path markers one search carries. It exists because the number of
 # searches, not the cost of one, is what stopped this branch answering a scope
@@ -389,7 +413,12 @@ LIMIT="${L5_QUERY_LIMIT:-50}"
 # how long one search's text is, for a tracker whose limit on query length is
 # tighter than this one's, and how many paths one filled page can hide, since a
 # batch whose page fills to LIMIT is re-asked path by path and a smaller batch
-# makes that fallback rarer.
+# makes that fallback rarer. Since story-160 the page limit above is what
+# decides whether a batch reaches the fallback at all, and when it does the
+# fallback costs 0.6 to 0.9 seconds a path — measured on 2026-09-17 against a
+# 198-issue tracker — so a filled batch costs its size times that rather than
+# one search; the batch size still bounds the search's length and how many
+# paths one filled page can hide.
 BATCH="${L5_QUERY_BATCH:-20}"
 
 # --- the failure vocabularies -------------------------------------------
@@ -789,7 +818,13 @@ batch_count=0
 #
 # A per-path search that fails after that fails the whole answer, which is the
 # behaviour this branch has always had: reporting the paths that did answer
-# would say that nothing is filed against the ones that did not.
+# would say that nothing is filed against the ones that did not. A per-path
+# page that fills fails the whole answer on the same rule: it is a page the
+# tracker may have truncated exactly as a batched page is, and there is no
+# further fallback beneath one path, so it is refused naming the path and the
+# limit rather than reported as the whole answer. The harness reads that
+# failure as nothing known, which is the honest answer, rather than as nothing
+# filed, which a short page would have claimed.
 query_batch() {
   local page returned fallback one marker
 
@@ -823,6 +858,11 @@ query_batch() {
     page="$(gh issue list --search "\"${marker}\"" --state all --limit "$LIMIT" \
               --json number,title,body,url,state,stateReason 2>/dev/null)" \
       || fail "the search for ${one} failed, so what is filed is not known"
+    returned="$(printf '%s' "$page" | jq 'length' 2>/dev/null)" || returned=""
+    [ -n "$returned" ] \
+      || fail "the page for ${one} could not be counted, so what is filed is not known"
+    [ "$returned" -lt "$LIMIT" ] \
+      || fail "the page for ${one} filled its limit of ${LIMIT} and may be truncated, and there is no narrower search to fall back to, so what is filed is not known"
     found="${found}${page}
 "
   done <<BATCH_PATHS

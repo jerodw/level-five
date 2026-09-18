@@ -76,3 +76,7 @@
 {"story_id": "story-158", "mode": "narrow", "cost_usd": 2.0205900000000003, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-17 18:40:49", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-158", "timestamp": "2026-09-17 18:44:29", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 0}
 {"story_id": "story-158", "timestamp": "2026-09-17 18:50:23", "filed": 1, "dropped": 0}
+{"story_id": "story-160", "mode": "narrow", "cost_usd": 2.5821070000000006, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-17 22:26:17", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-160", "timestamp": "2026-09-17 22:29:44", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 0}
+{"story_id": "story-160", "mode": "narrow", "cost_usd": 2.592599, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-17 22:40:18", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-160", "timestamp": "2026-09-17 22:44:04", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 0}

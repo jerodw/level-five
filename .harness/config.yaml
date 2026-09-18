@@ -85,6 +85,16 @@ sync_command: .harness/scripts/github.sh sync
 # markers, which is a contract the harness requires and cannot enforce — and
 # which is now kept by their being one file with one declaration of each.
 filed_query_command: .harness/scripts/github.sh query
+# How many items the harness reads out of one answer to that command. This
+# repository declares it because a full scope against its tracker answers with
+# more than the 50-item default — the tracker has held every brief of every
+# story, and one path alone had 75 filed against it when this was measured on
+# 2026-09-17 — and an item the harness drops past the cap is an item the
+# inspector never dedupes against, with the drop named in the record and never
+# shown to the inspector. The bound on how long the command may run is not
+# raised beside it: the query answers a full scope in under ten seconds at the
+# page limit the script now carries, so the default holds.
+filed_query_max_items: 200
 # The third member of that family: how this repository publishes a planned
 # story onto the item it was planned from. Without it the tracker item a
 # developer has been watching still shows the brief and nothing about the plan
