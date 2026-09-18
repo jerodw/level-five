@@ -1,0 +1,140 @@
+story:
+  id: story-163
+  title: A fixture that drives a whole coordinator run is built once for the tests that read it
+  description: |
+    Planned from the brief filed under 195.
+
+    The suite's most expensive work is a handful of fixtures that drive a
+    full coordinator run and are rebuilt for every test that reads one. In
+    `tests/test_coordinator_contract.py` none of the run fixtures declares a
+    scope, so `completed_run`, `retried_run` and `escalated_run` are
+    function-scoped and each builds a fresh target and calls
+    `story_coordinator.run_story` end to end for a test that only reads
+    `state.json`, `events.log` or the run directory's listing and asserts on
+    its shape. The brief measured the module at about forty-five coordinator
+    runs, and that cost is then paid again in a subprocess:
+    `tests/test_contract_assertions_bite.py` runs the same file nested
+    against a mutated copy, and two of those nested runs — the control that
+    shows the unmutated coordinator passes, and the case that shows a run
+    gaining an artifact and an event still passes — run the whole file
+    unnarrowed while the mutation cases beside them already narrow with
+    `-k` and cost a fraction.
+
+    This story makes each shape's run happen once per module, per xdist
+    worker, and hands every reader a copy of the run directory of its own,
+    so the property function scope was buying — that one test cannot
+    disturb the next — goes on being bought by the copy rather than by the
+    rebuild. The two nested runs that ran the whole file take the `-k`
+    narrowing their siblings use. And `tests/test_config_keys_are_obeyed.py`,
+    whose proofs each build a different configuration and so cannot share a
+    run, gets the one saving its shape admits: the harness copy each
+    mutation case builds is built once per session and copied per test.
+
+    The assertion that keeps the saving honest is the one the brief names:
+    a test that mutates what a shared run fixture produced does not change
+    what the next test reads. It takes the shape story-158 gave the same
+    claim for the sample target — mutate a copy, then read the shared run
+    and take a fresh copy, inside one test.
+
+    The whole change is under `tests/` and the architecture document, so
+    the tester stage owns the code and the documenter owns the record; the
+    implementer has nothing to write.
+
+    Named in the brief and deliberately left alone: the two interrupt cases
+    in `tests/test_plan_commit.py`, whose cost is `DRAIN_DEADLINE` reporting
+    inconclusive under load and whose cause is a separate defect; the kill
+    and process-group family, already filed; the nested pytest mechanism
+    itself, whose startup is not the cost; and
+    `tests/test_git_history_loading_retired.py`.
+  workflow: story-workflow
+
+tasks:
+  - In tests/test_coordinator_contract.py, lift each run shape's coordinator run into a module-scoped fixture built under tmp_path_factory, using conftest.build_sample_target and conftest.materialize_workflow directly, since a module-scoped fixture cannot take the function-scoped target_root or harness_root.
+  - Keep completed_run, retried_run and escalated_run function-scoped, each returning a shutil.copytree copy of its shared run directory at a path under the test's own tmp_path, so every existing test keeps its fixture name and body and the tests that write into or delete from the run directory reach only their copy.
+  - Point the two completion-commit tests at the repository the shared run committed into, through a fixture that hands back that run's target root, which those tests only read with git log.
+  - In tests/test_contract_assertions_bite.py, narrow the control at the unmutated coordinator with -k to the union of the contract tests VIOLATIONS names, and narrow the artifact-and-event case to the contract tests about the run directory, the events log and state.json; both keep asserting that the selection ran something.
+  - In tests/test_config_keys_are_obeyed.py, build the tree harness_copy produces once per session under tmp_path_factory and copy it per test, so apply_mutation still edits a copy of its own and the pristine control still runs every proof in an unmutated copy.
+  - Add tests/test_contract_run_is_built_once.py holding the standing assertions that each shape's run is built once per module and that a mutated copy leaves the shared run and a later copy unchanged.
+  - Record the change in .harness/docs/ARCHITECTURE.md beside the story-158 section, including why the config-keys module could take only the copy saving.
+
+acceptance_criteria:
+  - Running tests/test_coordinator_contract.py alone invokes story_coordinator.run_story once per run shape per worker, asserted by counting invocations through a wrapped run_story or a spawn counter resolved with request.getfixturevalue, never by timing.
+  - completed_run, retried_run and escalated_run each return a path under the requesting test's tmp_path that is not the shared run's path, holding the same files with the same contents as the shared run directory.
+  - One test in tests/test_contract_run_is_built_once.py writes a file into its copy, appends an event to it and deletes a required artifact from it, then reads the shared run directory and takes a fresh copy, and requires both to hold exactly the files and contents they held before, all inside that one test.
+  - Every test already in tests/test_coordinator_contract.py still passes with its name and assertions unchanged, including the three that mutate the run directory they receive and the two that read the completion commit off the repository the run committed into.
+  - test_the_contract_file_passes_against_an_unmutated_coordinator runs the contract file with a -k expression selecting the union of the tests VIOLATIONS names, and test_the_contract_holds_when_a_run_gains_an_artifact_and_an_event runs it with a -k expression selecting the run-directory, events-log and state contract tests; each asserts the run passed and that "no tests ran" does not appear in the output.
+  - Every parametrized case of test_the_contract_fails_when_the_shape_it_names_is_violated still goes red at the contract test it names.
+  - In tests/test_config_keys_are_obeyed.py, test_the_pristine_copy_runs_every_proof_green still runs every proof node in an unmutated copy, and each case of test_the_proof_for_each_key_goes_red_when_that_key_stops_being_read still applies its mutation to a copy of its own and reports exactly one failed test.
+  - No test added or changed by this story bounds a wall-clock duration.
+  - .harness/docs/ARCHITECTURE.md carries a section on the shared run fixture beside the story-158 section.
+
+technical_plan:
+  implementation_steps:
+    - Read the three run fixtures and FakeRunner at tests/test_coordinator_contract.py:469-557, and the commit_message helper at :885 which reads git from conftest.run_root_for(target_root), so the shared run's target root is what the two completion-commit tests are pointed at.
+    - Write a module-scoped builder that makes a target under tmp_path_factory.mktemp with conftest.build_sample_target(root, WORKFLOW["name"]), materializes WORKFLOW beside it, runs the coordinator through FakeRunner with the shape's verdicts, asserts the exit code the shape expects, and returns the target root and run directory; one such fixture per shape, or one parametrized by shape.
+    - Rewrite completed_run, retried_run and escalated_run to copytree the shared run directory into tmp_path with symlinks=True and return the copy; leave every consuming test as it is.
+    - Add a fixture handing back the completed shape's target root and take it in test_a_completed_runs_commit_holds_the_message_the_contract_names and test_the_composed_message_and_the_committed_one_are_the_same_message in place of target_root.
+    - In tests/test_contract_assertions_bite.py, compute the control's -k names as the union over VIOLATIONS of the expected tuples, and name the three contract tests the artifact-and-event case selects; pass each through run_contract's existing names argument.
+    - In tests/test_config_keys_are_obeyed.py, add a session-scoped fixture that builds the harness_copy tree once under tmp_path_factory, and have harness_copy copy it to the per-test root with the same layout it had; keep COPIED_TREES and COPIED_TESTS as the single statement of what is copied.
+    - Write tests/test_contract_run_is_built_once.py in the shape of tests/test_target_root_is_copied_per_test.py, with a demonstration beside each absence that it can fail.
+    - Document the change in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: tests/test_coordinator_contract.py
+      stage: tester
+      reason: The run fixtures move to one run per shape per module with a copy per reader, and the two completion-commit tests take the shared run's repository.
+    - file: tests/test_contract_assertions_bite.py
+      stage: tester
+      reason: The two unnarrowed nested runs take the -k narrowing the mutation cases beside them already use.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The harness copy each mutation case builds is built once per session and copied per test.
+    - file: tests/test_contract_run_is_built_once.py
+      stage: tester
+      reason: The standing assertions that the run is built once and that a mutated copy leaves the shared run and a later copy unchanged.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The record of the shared run fixture, its copy-per-reader shape, and why the config-keys module took only the copy saving.
+
+scope:
+  modify:
+    - tests/test_coordinator_contract.py
+    - tests/test_contract_assertions_bite.py
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_contract_run_is_built_once.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/
+    - tests/conftest.py
+    - tests/test_plan_commit.py
+    - tests/test_git_history_loading_retired.py
+    - tests/test_target_root_is_copied_per_test.py
+    - tests/machine_load.py
+    - workflows/
+    - prompts/
+    - schemas/
+
+verification_requirements:
+  - Confirm the full suite passes under the configured test command.
+  - Confirm tests/test_coordinator_contract.py drives the coordinator once per run shape per worker, read off the counting assertion in tests/test_contract_run_is_built_once.py rather than off a duration.
+  - Confirm the mutation-isolation test is a real check: that it would fail if a reader were handed the shared run directory itself rather than a copy.
+  - Confirm every existing test in tests/test_coordinator_contract.py is present with its assertions unchanged, and that the census reports no fall in assertion count for the module.
+  - Confirm the two narrowed nested runs in tests/test_contract_assertions_bite.py select at least one test each and pass, and that every VIOLATIONS case still reddens at the test it names.
+  - Confirm each config-keys mutation case still mutates a copy of its own and the pristine control still runs every proof node.
+  - Confirm no wall-clock bound was added by this story.
+
+constraints:
+  - No existing assertion in any of the three modules is weakened, skipped or removed; the change is to how the run is produced, not to what any test observes.
+  - The isolation between tests is asserted inside one test rather than across two, so it holds under -n auto whichever worker runs it and in whatever order.
+  - No wall-clock bound is added. The saving is a property of the fixture's structure, and the structure is what is asserted.
+  - A shared run's directory is never handed to a test that writes; a reader that needs to write gets a copy.
+  - The nested pytest mechanism is left as it is; only the -k selection of the two unnarrowed runs changes.
+  - The interrupt cases in tests/test_plan_commit.py, the kill and process-group family, and tests/test_git_history_loading_retired.py are out of scope.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 07:10:26
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 195
