@@ -23,6 +23,7 @@ import ast
 import dataclasses
 import json
 import re
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -71,19 +72,6 @@ WORKFLOW = conftest.build_workflow(
 
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
-
-
-@pytest.fixture
-def configured_workflow() -> str:
-    """Point the shared target fixture at the definition built above."""
-    return WORKFLOW["name"]
-
-
-@pytest.fixture
-def harness_root(tmp_path: Path) -> Path:
-    """A harness root carrying that definition."""
-    return conftest.materialize_workflow(
-        WORKFLOW, tmp_path / "contract-harness")
 
 #: The retry category a failing verdict names, read off the loaded workflow.
 #: Since story-028 a recommended retry must name a category the workflow's
@@ -533,28 +521,110 @@ def read_state(run_dir: Path) -> dict:
     return json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
 
 
-@pytest.fixture
-def completed_run(target_root, harness_root) -> Path:
-    runner = FakeRunner(target_root, [PASS])
+#: The three shapes a run can end in, each as the verdicts that produce it
+#: and the exit code the coordinator returns for it. Keyed by the name of the
+#: fixture that hands a test the run, which is how the parametrized tests
+#: below already name a shape.
+RUN_SHAPES: dict[str, tuple[list[dict], int]] = {
+    "completed_run": ([PASS], 0),
+    "retried_run": ([FAIL, PASS], 0),
+    "escalated_run": ([FAIL, FAIL, FAIL], 2),
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class SharedRun:
+    """One shape's run, driven once per module and never handed to a test.
+
+    Since story-163 the coordinator is driven once for each shape rather than
+    once for each test that reads the shape: every reader here only inspects
+    `state.json`, `events.log` or the run directory's listing, and a run built
+    for one reader is the same run for the next. What function scope was
+    buying — that a test writing into its run directory cannot be seen by any
+    other — is bought by the copy each reader receives instead, so the
+    directory here is only ever copied from. The target the run committed
+    into is carried beside it for the two tests that read the completion
+    commit off that repository.
+    """
+
+    target_root: Path
+    run_dir: Path
+
+
+def drive_shared_run(tmp_path_factory: pytest.TempPathFactory,
+                     shape: str) -> SharedRun:
+    """Build a target and a harness of their own and run `shape` end to end.
+
+    Built with `conftest.build_sample_target` and `conftest.materialize_workflow`
+    directly rather than through the `target_root` fixture, which is
+    function-scoped and so cannot be taken by a module-scoped one. The target
+    is the same tree that fixture copies for every test, configured for this
+    module's workflow, so the run is the run every reader used to drive for
+    itself.
+    """
+    verdicts, exit_code = RUN_SHAPES[shape]
+    root = tmp_path_factory.mktemp(f"contract-{shape.replace('_', '-')}")
+    target_root = root / "sample-target"
+    conftest.build_sample_target(target_root, WORKFLOW["name"])
+    harness = conftest.materialize_workflow(WORKFLOW, root / "contract-harness")
+    runner = FakeRunner(target_root, verdicts)
     assert story_coordinator.run_story(
-        "story-001", harness_root, target_root, runner) == 0
-    return run_dir_of(target_root)
+        "story-001", harness, target_root, runner) == exit_code
+    return SharedRun(target_root=target_root, run_dir=run_dir_of(target_root))
+
+
+@pytest.fixture(scope="module")
+def shared_completed_run(tmp_path_factory) -> SharedRun:
+    return drive_shared_run(tmp_path_factory, "completed_run")
+
+
+@pytest.fixture(scope="module")
+def shared_retried_run(tmp_path_factory) -> SharedRun:
+    return drive_shared_run(tmp_path_factory, "retried_run")
+
+
+@pytest.fixture(scope="module")
+def shared_escalated_run(tmp_path_factory) -> SharedRun:
+    return drive_shared_run(tmp_path_factory, "escalated_run")
+
+
+def copy_of_run(shared: SharedRun, tmp_path: Path, shape: str) -> Path:
+    """A run directory of this test's own, under its `tmp_path`.
+
+    `symlinks=True` carries the directory as it is, so the copy holds exactly
+    the files the run wrote — including an escalated run's archived attempts
+    — and a test that writes into it, appends to it or deletes from it
+    reaches only its copy.
+    """
+    copy = tmp_path / shape.replace("_", "-")
+    shutil.copytree(shared.run_dir, copy, symlinks=True)
+    return copy
 
 
 @pytest.fixture
-def retried_run(target_root, harness_root) -> Path:
-    runner = FakeRunner(target_root, [FAIL, PASS])
-    assert story_coordinator.run_story(
-        "story-001", harness_root, target_root, runner) == 0
-    return run_dir_of(target_root)
+def completed_run(shared_completed_run, tmp_path) -> Path:
+    return copy_of_run(shared_completed_run, tmp_path, "completed_run")
 
 
 @pytest.fixture
-def escalated_run(target_root, harness_root) -> Path:
-    runner = FakeRunner(target_root, [FAIL, FAIL, FAIL])
-    assert story_coordinator.run_story(
-        "story-001", harness_root, target_root, runner) == 2
-    return run_dir_of(target_root)
+def retried_run(shared_retried_run, tmp_path) -> Path:
+    return copy_of_run(shared_retried_run, tmp_path, "retried_run")
+
+
+@pytest.fixture
+def escalated_run(shared_escalated_run, tmp_path) -> Path:
+    return copy_of_run(shared_escalated_run, tmp_path, "escalated_run")
+
+
+@pytest.fixture
+def completed_target_root(shared_completed_run) -> Path:
+    """The repository the shared completed run committed into.
+
+    Only ever read, with `git log`, by the two completion-commit tests below:
+    the commit they assert on is the one that run made, which a copy of the
+    run directory does not carry.
+    """
+    return shared_completed_run.target_root
 
 
 # --------------------------------------------------------------------------
@@ -896,17 +966,17 @@ def commit_message(target_root: Path, revision: str = "HEAD") -> str:
 
 
 def test_a_completed_runs_commit_holds_the_message_the_contract_names(
-    completed_run, target_root,
+    completed_run, completed_target_root,
 ):
     """Read off the repository a real run committed into, not off the function
     that composes it."""
     assert completion_commit_problems(
-        commit_message(target_root), story_id="story-001",
+        commit_message(completed_target_root), story_id="story-001",
         title=STORY_TITLE) == []
 
 
 def test_the_composed_message_and_the_committed_one_are_the_same_message(
-    completed_run, target_root,
+    completed_run, completed_target_root,
 ):
     """The composition the coordinator exposes is what reaches git, so the
     pre-flight that recognizes a completion commit and the code that writes one
@@ -914,7 +984,7 @@ def test_the_composed_message_and_the_committed_one_are_the_same_message(
     state = story_coordinator.RunState(story_id="story-001",
                                        branch="story/story-001")
     composed = story_coordinator.completion_commit_message(state, STORY_TITLE)
-    assert commit_message(target_root).rstrip("\n") == composed
+    assert commit_message(completed_target_root).rstrip("\n") == composed
     assert completion_commit_problems(
         composed, story_id="story-001", title=STORY_TITLE) == []
 

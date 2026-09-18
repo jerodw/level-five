@@ -2967,7 +2967,7 @@ COPIED_TREES = ("orchestration", "schemas", "workflows", "prompts", "rules",
 COPIED_TESTS = ("conftest.py", "machine_load.py", MODULE_NAME)
 
 
-def harness_copy(tmp_path: Path) -> Path:
+def build_harness_copy(root: Path) -> Path:
     """A real, runnable copy of the parts of this harness a proof needs.
 
     Copied rather than symlinked: every module here resolves its own root as
@@ -2975,7 +2975,6 @@ def harness_copy(tmp_path: Path) -> Path:
     straight back to this repository, which would make every mutation below
     invisible.
     """
-    root = tmp_path / "throwaway-harness"
     ignore = shutil.ignore_patterns("__pycache__")
     for directory in COPIED_TREES:
         shutil.copytree(REPO_ROOT / directory, root / directory, ignore=ignore)
@@ -2985,6 +2984,33 @@ def harness_copy(tmp_path: Path) -> Path:
     (root / "tests").mkdir()
     for name in COPIED_TESTS:
         shutil.copy2(TESTS_DIR / name, root / "tests" / name)
+    return root
+
+
+@pytest.fixture(scope="session")
+def harness_copy_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The tree above, built once per session and only ever copied from.
+
+    Every mutation case below needs a copy of its own, because each edits the
+    coordinator source in it, and the copy each one built for itself was the
+    same copy every time until it was edited. So the tree is built once —
+    under `-n auto`, once per worker — and `harness_copy` copies it per test.
+    That is the one saving this module's shape admits: its proofs each build
+    a different configuration and so cannot share a run, the way the contract
+    module's readers can.
+
+    Nothing runs pytest in the template and nothing edits it: `apply_mutation`
+    is handed the copy, and the pristine control runs its proofs in a copy.
+    """
+    root = tmp_path_factory.mktemp("throwaway-harness-template") / "throwaway-harness"
+    return build_harness_copy(root)
+
+
+@pytest.fixture
+def harness_copy(tmp_path: Path, harness_copy_template: Path) -> Path:
+    """A copy of the template at the path the per-test build always used."""
+    root = tmp_path / "throwaway-harness"
+    shutil.copytree(harness_copy_template, root, symlinks=True)
     return root
 
 
@@ -3009,14 +3035,14 @@ def run_nodes(root: Path, *nodes: str) -> subprocess.CompletedProcess:
         cwd=root, capture_output=True, text=True)
 
 
-def test_the_pristine_copy_runs_every_proof_green(tmp_path):
+def test_the_pristine_copy_runs_every_proof_green(harness_copy):
     """The positive control the whole mutation control rests on.
 
     Each case below asserts that a mutated copy goes red. That means nothing
     unless an unmutated copy goes green for the right reason, so every proof
     node runs here in a copy with nothing changed.
     """
-    root = harness_copy(tmp_path)
+    root = harness_copy
     result = run_nodes(root, *sorted(
         proof.node_id for proof in KEY_PROOFS.values()))
     assert result.returncode == 0, result.stdout + result.stderr
@@ -3025,7 +3051,7 @@ def test_the_pristine_copy_runs_every_proof_green(tmp_path):
 
 @pytest.mark.parametrize("key", sorted(KEY_PROOFS))
 def test_the_proof_for_each_key_goes_red_when_that_key_stops_being_read(
-        key, tmp_path):
+        key, harness_copy):
     """For every declared key, not for a sample of them.
 
     This is the assertion that makes the proofs above mean something. A proof
@@ -3033,7 +3059,7 @@ def test_the_proof_for_each_key_goes_red_when_that_key_stops_being_read(
     satisfy the coverage checks, satisfy the no-default check, and pass in a
     copy that no longer reads the key at all — and only this reports it.
     """
-    root = harness_copy(tmp_path)
+    root = harness_copy
     apply_mutation(root, key)
     node = KEY_PROOFS[key].node_id
     result = run_nodes(root, node)

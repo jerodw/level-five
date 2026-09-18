@@ -197,6 +197,34 @@ VIOLATIONS = {
 }
 
 
+#: Every contract test some violation below names, once each. The control runs
+#: exactly these rather than the whole file: what it has to establish is that
+#: each test a mutation case expects to go red is green without the mutation,
+#: and the tests no case names say nothing about that attribution.
+CONTRACT_TESTS_THE_VIOLATIONS_NAME = tuple(sorted(
+    {name for _, expected in VIOLATIONS.values() for name in expected}))
+
+#: The contract tests about what a run directory holds, what its events log
+#: looks like and what its state file carries — the three shapes a run that
+#: gains an artifact and an event could disturb. The case below runs these
+#: rather than the whole file, since a summary or a commit-message contract has
+#: nothing to say about an extra artifact.
+RUN_DIRECTORY_EVENTS_AND_STATE_TESTS = (
+    "test_a_completed_run_produces_the_artifacts_it_must",
+    "test_every_events_log_line_matches_the_frozen_format",
+    "test_state_json_holds_the_fields_run_state_declares",
+)
+
+
+@pytest.mark.parametrize("name", sorted(
+    set(CONTRACT_TESTS_THE_VIOLATIONS_NAME) | set(RUN_DIRECTORY_EVENTS_AND_STATE_TESTS)))
+def test_every_name_a_narrowed_run_selects_is_a_test_the_contract_file_defines(name):
+    """A `-k` expression naming a test that no longer exists selects the rest
+    and says nothing, so each name the two narrowed runs pass is held to the
+    contract file's own definitions."""
+    assert name in top_level_names(CONTRACT_FILE.read_text(encoding="utf-8")), name
+
+
 @pytest.fixture(scope="session")
 def control_repo(tmp_path_factory) -> Path:
     """An unmutated copy, to show the harness itself is not what fails."""
@@ -204,9 +232,18 @@ def control_repo(tmp_path_factory) -> Path:
 
 
 def test_the_contract_file_passes_against_an_unmutated_coordinator(control_repo):
-    """Attribution: every failure below is the mutation, not the harness."""
-    code, output = run_contract(control_repo)
+    """Attribution: every failure below is the mutation, not the harness.
+
+    Narrowed with `-k` to the union of the tests the violations name, the way
+    each mutation case narrows to its own, so the control costs what the cases
+    cost rather than a whole run of the contract file.
+    """
+    code, output = run_contract(control_repo, CONTRACT_TESTS_THE_VIOLATIONS_NAME)
     assert code == 0, output
+    assert "no tests ran" not in output, f"the control selected nothing\n{output}"
+    # A selection matching nothing deselects everything and passes nothing,
+    # so something passed is what says the names still select tests.
+    assert " passed" in output, f"the control selected nothing\n{output}"
 
 
 @pytest.mark.parametrize("violation", sorted(VIOLATIONS))
@@ -232,7 +269,11 @@ def test_the_contract_holds_when_a_run_gains_an_artifact_and_an_event(tmp_path):
     """The permission the story exists to grant, driven from the coordinator
     rather than from a file the test drops into the run directory: story-012
     adds retry-history.json and story-014 adds clean-clone-result.json, and
-    neither may fail an assertion about artifacts it has nothing to do with."""
+    neither may fail an assertion about artifacts it has nothing to do with.
+
+    Narrowed with `-k` to the contract tests about the run directory, the
+    events log and the state file, which are the three shapes an extra
+    artifact and an extra event could disturb."""
     root = mutant_repo(tmp_path, [(
         '(run_dir / "completion-report.md").write_text(report, encoding="utf-8")',
         '(run_dir / "completion-report.md").write_text(report, encoding="utf-8")\n'
@@ -240,8 +281,10 @@ def test_the_contract_holds_when_a_run_gains_an_artifact_and_an_event(tmp_path):
         '        "{}\\n", encoding="utf-8")\n'
         '    append_event(run_dir, "a later story wrote its artifact", kind="note")',
     )])
-    code, output = run_contract(root)
+    code, output = run_contract(root, RUN_DIRECTORY_EVENTS_AND_STATE_TESTS)
     assert code == 0, output
+    assert "no tests ran" not in output, f"the case selected nothing\n{output}"
+    assert " passed" in output, f"the case selected nothing\n{output}"
 
 
 # --------------------------------------------------------------------------
