@@ -1,0 +1,133 @@
+story:
+  id: story-164
+  title: A finding about the story's own change is repaired unless the verdict says why it was not
+  description: |
+    Planned from the brief filed under 211, which also covers and supersedes
+    the work filed as #187.
+
+    The verifier declines findings it has the reach to repair, and the prompt
+    is why. story-163's inspection routed two findings to the verifier, both
+    small, both in tests/, both about code the story had just written, and the
+    verdict recorded zero blocking, zero correctable and zero repairable:
+    neither was declined on the merits, because neither was raised. Three
+    passages of prompts/story-verifier.md tell the verifier that declining is
+    legitimate, the correctable and repairable paragraphs each close on "a
+    blocking issue if it matters and nothing if it does not", and no passage
+    says what declining costs. A repair pass is one stage invocation and a
+    clean-clone suite run; a finding that reaches the backlog costs a planning
+    interview, a whole story run, a review, a merge and a cleanup — the brief
+    puts the two an order of magnitude apart for the same defect, and the
+    prompt makes the expensive path the easiest one.
+
+    This story inverts the default where the verdict is decided, in both
+    verifier prompts so the refactor workflow does not keep the old bias: a
+    finding routed to the story is corrected or repaired unless there is a
+    reason not to, the verdict says what the reason was, and the prompt states
+    the cost of declining in one sentence. The verdict schema gains an optional
+    declined_findings array, each entry naming the routed finding's slug and
+    the reason, so a declined finding is recorded rather than silent. The
+    accounting the coordinator already writes after the verdict carries, for
+    each routed finding the verdict left, the reason the verdict gave or the
+    fact that it gave none, and says so in the events log — which enforces
+    nothing and stops no run, but makes a silent decline visible where a
+    reader of the run looks first. The repairable paragraph also gains the
+    bound the correctable paragraph beside it already carries and it lacked:
+    a finding may not name the approved story artifact, because nothing
+    rewrites that mid-run.
+
+    The verifier's right to decline, the repair-pass budget, what the
+    Inspector reports and how findings are routed are deliberately unchanged.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/story-verifier.md and prompts/refactor-verifier.md, restate the correctable and repairable passages and the inspection slot so that a finding routed to this story is corrected or repaired unless there is a reason not to, the verdict records that reason, and declining is stated once as a right rather than three times as the fallback; remove "and nothing if it does not" as the closing offer of both routes.
+  - In both verifier prompts, add one sentence stating the cost asymmetry the verifier cannot infer — a declined routed finding becomes a brief, a planning interview, a whole story run, a review and a merge, where a repair pass spends no retry, archives no attempt and leaves the verdict recorded as passed.
+  - In both verifier prompts, add to the repairable-findings paragraph the bound the correctable-findings paragraph already carries — do not record a finding against the approved story artifact, because nothing rewrites it mid-run and the stage entered is instructed to leave it alone.
+  - Add an optional declined_findings array to schemas/verification-result.schema.json, each entry requiring slug and reason, with a description saying it is presence-as-signal like its siblings, that nothing routes on it, and that the coordinator's accounting still files an unnamed slug as a brief whether or not it is declined here.
+  - Extend the accounting the coordinator writes after the verdict in orchestration/story_inspection.py so the accounting artifact carries, for each routed finding the verdict left, the reason the verdict's declined_findings gave for its slug or a marker that no reason was given, and the inspection-accounted event says how many of the left findings were declined with a reason and how many silently.
+  - Write the tests that hold both prompts and the schema to the new wording and shape, and hold the accounting to recording reasons and silence.
+  - Record the inverted default and the reason for it in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - Both prompts/story-verifier.md and prompts/refactor-verifier.md state that a finding routed to this story is corrected or repaired unless there is a reason not to, and that the verdict records the reason in declined_findings.
+  - Both verifier prompts carry one sentence stating that a declined routed finding costs a brief, a planning interview, a story run, a review and a merge, and that a repair pass spends no retry, archives no attempt and leaves the verdict recorded as passed.
+  - Neither verifier prompt closes the correctable or the repairable paragraph with "nothing if it does not", and the right to decline a finding as too small is stated in each prompt rather than in three passages.
+  - The repairable-findings paragraph of both verifier prompts says a finding may not be recorded against the approved story artifact, in the terms the correctable-findings paragraph beside it already uses.
+  - The correctable, repairable and inspection-slot passages are identical between the two verifier prompts, so the refactor workflow carries the same default.
+  - schemas/verification-result.schema.json declares an optional declined_findings array whose items require slug and reason; a verdict carrying an entry with both validates, a verdict carrying an entry missing reason is refused, and every verdict shape the schema accepted before this story still validates.
+  - The accounting artifact written after a verdict carries, for each routed finding the verdict left, the reason its declined_findings entry gave or a marker that none was given, and the inspection-accounted event in events.log says how many of the left findings were declined with a reason and how many without one.
+  - A verdict that declines a routed finding with a reason still leaves that finding in the remainder, and the finding is still filed as a brief at the run's completion exactly as it was before this story.
+  - A verdict carrying no declined_findings is accounted exactly as before, with every left finding recorded as declined without a reason, and no run is stopped or escalated by anything this story adds.
+  - The verifier's right to decline, the repair_pass budget in the workflow definitions, the Inspector prompt and the routing of findings to the verifier are unchanged.
+  - .harness/docs/ARCHITECTURE.md records the inverted default, the cost ratio attributed to the brief as its source, the declined_findings field and what the accounting now says, and the story-artifact bound on repairable findings.
+
+technical_plan:
+  implementation_steps:
+    - Rewrite the correctable and repairable paragraphs of prompts/story-verifier.md (lines 82-134) so they open on the default — a routed finding is acted on unless there is a reason not to — state the right to decline once, name declined_findings as where the reason goes, carry the cost sentence, and give the repairable paragraph the story-artifact bound; reword the inspection slot (around line 297) so it no longer repeats the too-small rule and instead points at the passages above and at declined_findings.
+    - Make the identical edits to prompts/refactor-verifier.md, keeping the passages character-for-character the same as the story verifier's so the parity assertion holds.
+    - Add declined_findings to schemas/verification-result.schema.json beside repairable_findings, items requiring slug and reason, with the description in the shape the sibling arrays use.
+    - In orchestration/story_inspection.py, read declined_findings off the verdict in the accounting path, map each remainder slug to its reason where one was given, write the mapping into the accounting artifact beside remainder_slugs, and extend the inspection-accounted line and its event fields with the declined-with-reason and declined-silently counts. file_at_completion keeps reading remainder_slugs unchanged.
+    - Write the tests, then update the architecture document.
+  likely_file_changes:
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: Inverted default, cost sentence, single statement of the right to decline, story-artifact bound on repairable findings, reworded inspection slot.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same passages, kept identical to the story verifier's so the refactor workflow does not keep the old bias.
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: New optional declined_findings array with slug and reason required per entry.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The accounting artifact and event carry the reason each left finding was declined with, or that none was given.
+    - file: tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      stage: tester
+      reason: New module holding both prompts, the schema and the accounting to the story's criteria.
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: tester
+      reason: Existing accounting assertions may need the new artifact fields and event wording; adjusted only where the story's change to the event line or artifact forces it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the inverted default, its cost argument attributed to the brief, declined_findings and the accounting's new record.
+
+scope:
+  modify:
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - schemas/verification-result.schema.json
+    - orchestration/story_inspection.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/inspector.md
+    - workflows/
+    - orchestration/story_coordinator.py
+    - orchestration/inspection.py
+    - schemas/inspection-findings.schema.json
+    - schemas/story-brief.schema.json
+
+verification_requirements:
+  - Read both verifier prompts and confirm the inverted default, the cost sentence, the single statement of the right to decline and the story-artifact bound on repairable findings are present in both, and that the passages agree between the two prompts.
+  - Confirm the schema accepts a verdict with declined_findings entries carrying slug and reason, refuses an entry missing reason, and still accepts a verdict carrying none of the optional arrays.
+  - Confirm through a coordinator run with a fake runner that a verdict declining a routed finding with a reason produces an accounting artifact and event carrying that reason, that a verdict carrying no declined_findings is recorded as declining without a reason, and that in both cases the finding is still filed at completion and the run is not stopped.
+  - Confirm the repair_pass budgets in both workflow definitions, prompts/inspector.md and the routing of findings to the verifier are unchanged.
+  - Confirm every existing test passes without any assertion weakened, and the new tests fail on the previous wording of the prompts and on a schema lacking declined_findings.
+
+constraints:
+  - The verifier keeps the right to decline a routed finding; nothing this story adds refuses, escalates or stops a run because a finding was declined, with or without a reason.
+  - The repair_pass budget of two in the workflow definitions is not raised or lowered.
+  - What the Inspector reports and how findings are routed to the verifier are unchanged; the defect being fixed is in what the verdict does with them.
+  - declined_findings is optional and presence-as-signal, like the sibling arrays; a verdict without it is valid and is accounted as before, with silence recorded as silence.
+  - The two verifier prompts carry identical text in the passages this story changes.
+  - Deterministic coordinator logic is covered by tests that invoke no model, per the testing standards.
+  - The story artifact is not edited by any stage.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 09:33:57
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 211
