@@ -1,0 +1,135 @@
+story:
+  id: story-174
+  title: The planner's backstop decides from the tests directory it is told and both applies_when statements name the same distinction
+  description: |
+    Planned from the brief filed under 235, which replaced #232 and #233.
+
+    story-172 made the deciding fact of the planner's backstop a stage confined
+    to the tests directory, and left two of the backstop's inputs short of that
+    fact.
+
+    First, the planner is never told which directory the question is about.
+    prompts/planner.md asks whether any injected restriction confines a stage
+    to the tests directory, and the restriction lines carry the prefix as the
+    workflow declares it. scripts/l5-plan builds the planner's context from the
+    schema, workflow, standards and prose contexts only, so the {{tests_dir}}
+    placeholder the stage prompts already render never reaches the planner. On
+    this repository the guess is easy; on a target declaring spec/ the planner
+    has no basis for recognising a confinement, and the backstop fires or fails
+    to fire for the wrong reason. The existing assertion does not see this
+    because backstop_refuses in tests/test_planner_receives_the_standards.py
+    takes the directory from the configuration rather than from the rendered
+    context the planner sees.
+
+    Second, the two applies_when strings name one distinction in two
+    vocabularies. refactor-workflow.json says the workflow has no stage whose
+    work is to write an assertion, so one written under it would be written by
+    the stage whose own change it validates -- a confinement. story-workflow.json
+    still closes with "this is the workflow with a stage that may write that
+    assertion" -- a permission, the framing story-172 removed from its sibling
+    because the declarations contradict it. Read side by side, the story string
+    implies the refactor workflow has no stage that may write one, which is the
+    misclassification story-172 exists to stop.
+
+    This story renders {{tests_dir}} into the planner's context through the
+    same config_context call the stage prompts receive and has the backstop
+    read the directory from that line; has backstop_refuses take the directory
+    from the rendered context it reads the restrictions from; rewords the story
+    workflow's closing clause to say from its side what the refactor clause
+    says from the other -- that it declares a stage confined to the tests
+    directory whose work is validation, so the assertion is written by a stage
+    other than the one whose change it validates -- with a sibling wording
+    assertion holding it to that vocabulary; and rebounds the byte-for-byte pin
+    on story-workflow.json to the new baseline as part of the work.
+  workflow: story-workflow
+
+tasks:
+  - In scripts/l5-plan, add the target's config_context to the planner's context, through the same context_assembler.config_context call build_context makes, so {{tests_dir}} resolves in the planner template to what the target configures.
+  - In prompts/planner.md, add a line under [Workflow facts] naming the target's tests directory as {{tests_dir}}, and have the backstop paragraph in [Process] read the tests directory from that line rather than asking the planner to recognise it from a restriction's prefix. Say what an absent value (rendered as None) means: no confinement to the tests directory can be recognised, so the backstop refuses.
+  - In workflows/story-workflow.json, replace the closing clause of applies_when so it says from its side what the refactor clause says from the other: this workflow declares a stage confined to the tests directory whose work is validation, so the assertion is written by a stage other than the one whose change it validates. The statement must still begin with the text the base commit carried; no other key changes.
+  - In tests/test_planner_receives_the_standards.py, adapt the pin that holds story-workflow.json byte for byte to where story-172 started: it now holds that the working tree's story-workflow.json differs from that revision in applies_when and in no other key, with the same control that the revision read is neither the baseline nor the working tree.
+  - In tests/test_planner_receives_the_standards.py, have rendered_facts merge config_context over the repository's configuration, and have backstop_refuses take the tests directory from the rendered tests_dir value rather than from a separate argument read off the configuration, so both of the test's inputs are what the planner sees. Add a control that a rendering whose tests_dir is absent is refused whatever restrictions it carries.
+  - In tests/test_planner_receives_the_standards.py, add a wording assertion beside the refactor one holding the story statement to the same vocabulary: that it says a stage is confined to the tests directory, that the stage's work is validation, and that the assertion is written by a stage other than the one whose change it validates; and that it no longer says a stage "may write" the assertion.
+  - In tests/test_planner_injection.py, have the end-to-end l5-plan test assert that the session prompt names the configured tests directory, and add a template-level assertion that prompts/planner.md carries the {{tests_dir}} placeholder and names no tests directory literally.
+  - Record in .harness/docs/ARCHITECTURE.md that the planner's context now carries the target's config facts through config_context, alongside the schema, workflow and standards contexts.
+
+acceptance_criteria:
+  - The prompt scripts/l5-plan hands to the planning session names the target's configured tests directory, rendered from the tests_dir key of the target's configuration through context_assembler.config_context and not from any literal in prompts/planner.md.
+  - prompts/planner.md carries {{tests_dir}} and its backstop paragraph refers to the tests directory named under [Workflow facts] rather than leaving the planner to recognise it from a restriction's prefix; the template names no stage, restricted prefix or tests directory literally, so tests/test_planner_injection.py's detectors stay green.
+  - workflows/story-workflow.json's applies_when still begins with the text the base commit carried, says this workflow declares a stage confined to the tests directory whose work is validation and that the assertion is written by a stage other than the one whose change it validates, and no longer says a stage "may write" the assertion. Every other key of the file is byte-identical to the revision story-172 started from.
+  - workflows/refactor-workflow.json is unchanged.
+  - backstop_refuses in tests/test_planner_receives_the_standards.py decides from the tests_dir value in the rendered context it reads the restrictions from; it still refuses the refactor workflow, admits the story workflow, and refuses a rendering whose tests_dir is absent.
+  - A wording assertion holds the story statement to the confinement vocabulary the refactor assertion holds its statement to, and the byte-for-byte pin on story-workflow.json is rebounded so that the file differs from where story-172 started in applies_when only.
+  - The end-to-end l5-plan test asserts the session prompt names the tests directory the test's project configuration declares.
+  - Every existing test passes unchanged except the pin this story deliberately rebounds; no existing assertion is weakened or skipped.
+
+technical_plan:
+  implementation_steps:
+    - Add context.update(context_assembler.config_context(config)) to the planner context assembly in scripts/l5-plan, with a comment saying why the planner is told the tests directory rather than left to recognise it from a prefix.
+    - Add the tests-directory line to prompts/planner.md under [Workflow facts] and reword the backstop paragraph in [Process] to read it from there; state what a None value means.
+    - Rewrite the closing clause of applies_when in workflows/story-workflow.json in the confinement vocabulary, keeping the base-commit text as its start.
+    - Adapt test_story_172_changed_only_the_refactor_statement_and_nothing_of_the_story_workflow in tests/test_planner_receives_the_standards.py so it holds story-workflow.json to differ from story-172's start in applies_when only; this is forced by the definition change and is the implementer's edit.
+    - Tester: change rendered_facts to merge config_context(conftest.repository_config()), change backstop_refuses to read tests_dir off the rendering, update every call site, add the absent-tests_dir control, add the story-statement wording assertion, and extend tests/test_planner_injection.py as the tasks describe.
+    - Documenter: one sentence in .harness/docs/ARCHITECTURE.md on the planner receiving config_context.
+  likely_file_changes:
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: Add config_context to the planner's context so {{tests_dir}} resolves.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Name the tests directory under [Workflow facts] and have the backstop read it from there.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Reword the closing clause of applies_when into the confinement vocabulary the refactor clause uses.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: implementer
+      reason: Rebound the byte-for-byte pin on story-workflow.json, which the deliberate applies_when change breaks.
+      reverting_breaks_the_suite: The pin at the end of the module holds story-workflow.json byte for byte to where story-172 started; this story changes that file's applies_when on purpose, so with the pin's adaptation reverted the suite is red on that assertion. The edit is forced by the definition change and nothing else in it.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: Make backstop_refuses read tests_dir from the rendered context, add the absent-tests_dir control and the story-statement wording assertion.
+    - file: tests/test_planner_injection.py
+      stage: tester
+      reason: Assert the end-to-end session prompt names the configured tests directory and that the template carries the placeholder rather than a literal.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record that the planner's context carries the target's config facts.
+
+scope:
+  modify:
+    - scripts/l5-plan
+    - prompts/planner.md
+    - workflows/story-workflow.json
+    - tests/test_planner_receives_the_standards.py
+    - tests/test_planner_injection.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/refactor-workflow.json
+    - any restriction key (may_not_create, may_only_change) on either workflow definition
+    - orchestration/
+    - .harness/config.yaml
+    - prompts/ other than planner.md
+    - schemas/
+
+verification_requirements:
+  - Confirm the prompt l5-plan hands the session names the tests directory the target configures, and that prompts/planner.md carries {{tests_dir}} with no literal directory name.
+  - Confirm workflows/story-workflow.json differs from the revision story-172 started from in applies_when only, that the statement still starts with the base-commit text, and that it carries the confinement vocabulary and not the "may write" permission.
+  - Confirm workflows/refactor-workflow.json is byte-identical to the base commit.
+  - Confirm backstop_refuses reads tests_dir from the rendered context and that the refusal, admission and absent-value cases are each asserted.
+  - Confirm the full suite passes with the new tests, and that the only existing assertion that changed is the rebounded pin.
+
+constraints:
+  - The planner is told the tests directory by rendering a placeholder; no prompt, script or test names the directory as a literal.
+  - The restriction declarations on both workflow definitions stand as story-070 made them.
+  - The refactor workflow's applies_when is story-172's and is the vocabulary the story string is brought to; it is not edited.
+  - The coordinator, context_assembler and harness_config are not changed; the planner reuses config_context as it exists.
+  - No existing assertion is weakened, deleted or skipped; the rebounded pin holds a strictly stated replacement claim.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 13:58:28
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 235
