@@ -17,10 +17,16 @@ implementation. The subjects are kept apart deliberately:
     whole answer, "which of them it was" is.
 
   * **the process group.** A fixture command that backgrounds a child which
-    outlives it, killed at the timeout, and the child observed gone. The
-    control beside it kills the leader alone and observes the same child
-    survive and write its marker, so the marker's absence is a fact about
-    the kill rather than about a child that was never going to write.
+    outlives it, killed at the timeout. The kill is decided by the process
+    table: the child's recorded pid is polled out of it, so a kill that
+    lands in a millisecond costs a millisecond. The marker the child would
+    have written after its sleep is then checked once, with nothing waited
+    for, because a child that finished its sleep on its own also leaves the
+    process table and leaves the marker behind -- the absence of both is
+    what says "killed" rather than "finished". The control beside it kills
+    the leader alone and observes the same child still there and then
+    writing its marker, so both absences are facts about the kill rather
+    than about a child that was never going to write.
 
   * **what the command is handed.** stdin as JSON and `L5_SYNC_KEY` in the
     environment, captured by a fixture command that writes both to files the
@@ -126,8 +132,12 @@ PATIENCE_SECONDS = 20.0
 SPAWN_BOUND_SECONDS = 5.0
 
 #: How long the child sleeps before it writes its marker. Longer than the
-#: moment its leader is killed, so a marker that appears can only have been
-#: written by a child that outlived the leader.
+#: bound its leader is killed at, so a child killed with the group never
+#: reaches the write. That is what lets the marker separate a child that was
+#: killed from one that finished its sleep: both leave the process table, and
+#: only the second leaves the marker behind. Nothing waits this long any more
+#: -- the kill case decides by the pid and reads the marker once, and only the
+#: control, which waits for the marker to *appear*, sits through the sleep.
 CHILD_SLEEP_SECONDS = 8
 
 
@@ -251,9 +261,10 @@ def spawns_a_child(directory: Path, child_pid: Path, marker: Path,
     """A command that backgrounds a child which would outlive it.
 
     The child's pid is recorded so the test can ask the operating system
-    whether it is still there, and the marker it writes after sleeping is the
-    other half of the same question: a child that survived its leader writes
-    it, and a child killed with the group never does.
+    whether it is still there, which is what the kill case decides by. The
+    marker it writes after sleeping is what separates the two ways of leaving
+    the process table: a child that survived its leader writes it, and a
+    child killed with the group never does.
     """
     return fixture_command(
         directory, name,
@@ -609,9 +620,14 @@ def test_the_kill_reaches_the_process_group_and_not_only_the_command(
     assert wait_until(lambda: not alive(pid)), (
         f"the child {pid} the command spawned was still running once the "
         f"transport had returned")
-    # And it never got to do its work: the marker it writes after sleeping is
-    # what a surviving child leaves behind.
-    time.sleep(CHILD_SLEEP_SECONDS)
+    # The pid leaving the process table is what says the kill reached the
+    # group rather than only the leader. On its own it does not say "killed":
+    # a child that finished its sleep leaves the table too, and leaves the
+    # marker behind on its way out. So the marker is checked once, now, with
+    # nothing waited for -- the child whose pid is gone cannot write anything
+    # later, so a wait here would prove nothing more -- and the absence of
+    # both is what separates a child killed with its group from one that
+    # finished on its own.
     assert not marker.exists()
 
 
@@ -619,11 +635,23 @@ def test_the_same_child_survives_when_only_the_leader_is_killed(tmp_path):
     """The control for the absence above, constructed rather than argued.
 
     A marker that never appears is also what a child that was never going to
-    write one leaves behind. So the same fixture command is spawned in the same
-    way and its *leader alone* is killed — which is what `process.kill()` does
-    and what spawning into a new session exists to improve on — and the child
-    must then outlive it and write the marker the assertion above requires to
-    be absent.
+    write one leaves behind, and a pid that is gone is also what a child that
+    was never spawned looks like. So the same fixture command is spawned in the
+    same way and its *leader alone* is killed — which is what `process.kill()`
+    does and what spawning into a new session exists to improve on — and the
+    child must then be seen outliving it, and write the marker the assertion
+    above requires to be absent.
+
+    The first of those is the predicate the kill case negates, shown holding
+    for a group whose child was not killed. The kill case asserts the pid gone
+    *and* the marker absent, so what is asserted here once the leader is gone
+    is the exact negation — the child still in the process table, or already
+    finished and its marker left behind. Written as that disjunction rather
+    than as `alive` alone because the child's sleep is a duration and not a
+    hold: a machine slow enough that the sleep ran out between the kill and
+    this line has a child that finished, which is not a kill and not a
+    fact about this control. What neither side of it admits is the one
+    thing a kill leaves — a child gone with nothing written.
     """
     commands = tmp_path / "control-commands"
     child_pid = tmp_path / "control-child.pid"
@@ -638,6 +666,12 @@ def test_the_same_child_survives_when_only_the_leader_is_killed(tmp_path):
         process.kill()
         process.wait(timeout=PATIENCE_SECONDS)
         pid = int(child_pid.read_text(encoding="utf-8").strip())
+        # The leader is gone and its child is not: the predicate the kill case
+        # negates, holding here because only the leader was killed.
+        assert alive(pid) or marker.exists(), (
+            f"the child {pid} was gone with nothing written once only its "
+            f"leader had been killed, which is what a group kill leaves and "
+            f"what this control exists to show a leader-only kill does not")
         # What this control needs is the word the child writes, not the path it
         # writes into: the child's redirect creates and truncates the marker
         # before `echo` puts anything in it, so a read taken the moment the path

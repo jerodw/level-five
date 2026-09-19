@@ -22,7 +22,9 @@ than merely be written down:
     stopped seeing skips at all.
 
   * **each converted site, missed deliberately.** A command that never
-    backgrounds a child, a child whose source never announces itself, a session
+    backgrounds a child — at the transport, and at the two seams whose kill
+    cases took the transport's pid-based form and whose helper the fetch
+    module borrows — a child whose source never announces itself, a session
     that exits without writing, a drain against a child that never exits, and
     the two configured-bound landing halves driven with a command that sleeps
     past the bound. Each is constructed here and each is shown reporting
@@ -53,8 +55,11 @@ import pytest
 
 import machine_load
 import outbox
+import test_a_planned_story_is_published_onto_its_item as item_module
+import test_brief_fetch as fetch_module
 import test_command_transport as transport_module
 import test_config_keys_are_obeyed as config_module
+import test_filed_query as query_module
 import test_plan_commit as plan_module
 import test_pty_drain as pty_module
 from machine_load import INCONCLUSIVE_PREFIX, MAX_INCONCLUSIVE
@@ -102,18 +107,33 @@ CARRIES_PRECONDITIONS = "carries a precondition reported through the helper"
 #: than inferred, so that a module which quietly acquires a wall-clock claim is
 #: a module whose classification a human had to write down.
 CLASSIFICATION = {
-    # Elapsed after a kill, and a generous poll for a marker to appear: the
-    # command was asked to run far longer than the bound, so a return inside
-    # the ceiling can only be the kill, and a loaded machine makes that more
-    # true rather than less.
-    "test_a_planned_story_is_published_onto_its_item.py": BOUNDS_ONLY_SLOWNESS,
+    # Elapsed after a kill, for the timing cases: the command was asked to run
+    # far longer than the bound, so a return inside the ceiling can only be the
+    # kill, and a loaded machine makes that more true rather than less. The
+    # process-group kill case decides by the child's recorded pid polled out
+    # of the process table -- an absence load makes more certain, not less --
+    # and then reads the marker once with nothing waited for, since a child
+    # that finished its sleep also leaves the table and leaves the marker
+    # behind, so both absences together are what say "killed". What it cannot
+    # decide is a run whose leader was killed before it had backgrounded the
+    # child at all: no pid was recorded, and that is the precondition reported
+    # through the helper under the spawn bound rather than passed on nothing.
+    # The control waits for a marker to appear, which is what a poll is for.
+    "test_a_planned_story_is_published_onto_its_item.py": CARRIES_PRECONDITIONS,
     # A reset time handed to a fake capacity stop, never compared against a
     # real elapsed interval.
     "test_a_run_commits_the_history_it_writes.py": BOUNDS_ONLY_SLOWNESS,
-    # Elapsed measured after a kill: the command was asked to run far longer
-    # than the bound, so a return inside it can only be the kill. A loaded
-    # machine makes that more true rather than less.
-    "test_brief_fetch.py": BOUNDS_ONLY_SLOWNESS,
+    # Elapsed measured after a kill, for the timing cases: the command was
+    # asked to run far longer than the bound, so a return inside it can only be
+    # the kill, and a loaded machine makes that more true rather than less. The
+    # fetch's process-group kill case takes the pid-based form its dedupe-query
+    # sibling in test_filed_query.py takes, through the fixture and helpers it
+    # borrows from there: the child's pid polled out of the process table, the
+    # marker read once because a child that finished also leaves the table and
+    # leaves the marker behind, and a leader killed before it had backgrounded
+    # the child reported through the borrowed `spawned_child_pid` -- which is
+    # how this module reaches the helper without naming it.
+    "test_brief_fetch.py": CARRIES_PRECONDITIONS,
     # Reset times composed for a fake capacity stop, and the bound a pause is
     # held to, compared against nothing the machine does.
     "test_capacity_pause.py": BOUNDS_ONLY_SLOWNESS,
@@ -132,8 +152,19 @@ CLASSIFICATION = {
     # same subject's output under the short bound, which the descendant holds
     # far past. Load makes both more true rather than less.
     "test_branch_base.py": BOUNDS_ONLY_SLOWNESS,
-    # Elapsed after a kill, and a generous poll for a marker to appear.
-    "test_filed_query.py": BOUNDS_ONLY_SLOWNESS,
+    # Elapsed after a kill, for the timing cases: the command was asked to run
+    # far longer than the bound, so a return inside the ceiling can only be the
+    # kill, and a loaded machine makes that more true rather than less. The
+    # process-group kill case decides by the child's recorded pid polled out
+    # of the process table -- an absence load makes more certain, not less --
+    # and then reads the marker once with nothing waited for, since a child
+    # that finished its sleep also leaves the table and leaves the marker
+    # behind, so both absences together are what say "killed". What it cannot
+    # decide is a run whose leader was killed before it had backgrounded the
+    # child at all: no pid was recorded, and that is the precondition reported
+    # through the helper under the spawn bound rather than passed on nothing.
+    # The control waits for a marker to appear, which is what a poll is for.
+    "test_filed_query.py": CARRIES_PRECONDITIONS,
     "test_no_test_bounds_the_machine.py": CARRIES_PRECONDITIONS,
     "test_plan_commit.py": CARRIES_PRECONDITIONS,
     "test_pty_drain.py": CARRIES_PRECONDITIONS,
@@ -147,12 +178,14 @@ CLASSIFICATION = {
 }
 
 #: The shared helpers that report through `machine_load` on a caller's behalf —
-#: one waiting on a path a caller knows, and one waiting on a path only the
-#: planning worktree's name completes. A module reaching the route this way
-#: names the helper rather than the module, and these are the only other
-#: spellings the rule below admits.
+#: one waiting on a path a caller knows, one waiting on a path only the
+#: planning worktree's name completes, and one reading the pid a spawned child
+#: recorded, which test_brief_fetch.py borrows from test_filed_query.py. A
+#: module reaching the route this way names the helper rather than the module,
+#: and these are the only other spellings the rule below admits.
 SHARED_ROUTES = ("wait_for_the_session_to_write",
-                 "wait_for_the_planning_session_to_write")
+                 "wait_for_the_planning_session_to_write",
+                 "spawned_child_pid")
 
 
 def enumeration_problems(found, classified) -> list[str]:
@@ -379,6 +412,38 @@ def test_a_command_that_backgrounds_no_child_is_inconclusive(tmp_path):
     recorded = tmp_path / "recorded.pid"
     recorded.write_text("4242\n", encoding="utf-8")
     assert transport_module.spawned_child_pid(recorded) == 4242
+
+
+@pytest.mark.parametrize("module", [query_module, fetch_module, item_module],
+                         ids=lambda module: module.__name__)
+def test_a_command_that_backgrounds_no_child_is_inconclusive_for_each_seam(
+        module, tmp_path):
+    """The same precondition, missed deliberately, at each seam whose kill
+    case took the transport's form.
+
+    Each module's `spawned_child_pid` is driven against a pid file nothing
+    wrote, which is what a leader killed before it reached its first line
+    leaves behind, and the report is required to name the spawn bound that
+    module declares -- so a reader of a run that reported it is told which
+    precondition the machine did not let happen. The fetch module borrows the
+    query module's helper today, and it is driven as itself rather than
+    through the module it borrows from: whatever it reaches the route through
+    is what gets driven, so the borrowing is asserted here rather than
+    described, and a helper of the fetch module's own would be held to the
+    same report the moment it appeared.
+    """
+    with pytest.raises(pytest.skip.Exception) as raised:
+        module.spawned_child_pid(tmp_path / "never-written.pid")
+    reason = reported(raised)
+    assert "backgrounded" in reason
+    assert f"{module.SPAWN_BOUND_SECONDS:g}s" in reason
+
+    # The control the report needs: the same helper, against a pid file that
+    # was written, hands back the pid. So the report above is the precondition
+    # being missed rather than a helper that reports whatever it is given.
+    recorded = tmp_path / "recorded.pid"
+    recorded.write_text("4242\n", encoding="utf-8")
+    assert module.spawned_child_pid(recorded) == 4242
 
 
 def test_a_child_that_never_announces_itself_is_inconclusive():

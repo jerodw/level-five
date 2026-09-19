@@ -37,7 +37,14 @@ implementation. The subjects are kept apart deliberately:
     timeout and the process-group kill are driven past through the fetch, and
     each is required to come back saying what the dedupe query says about the
     same command -- which is what makes "one run" checkable rather than
-    asserted.
+    asserted. The kill is decided the way `tests/test_filed_query.py` decides
+    it, through the fixture and helpers borrowed from there: the child's
+    recorded pid polled out of the process table, and the marker it would
+    have written checked once with nothing waited for, since a child that
+    finished its sleep also leaves the table and leaves the marker behind. A
+    run whose leader was killed before it had backgrounded the child reports
+    through the same borrowed `spawned_child_pid` rather than passing on
+    nothing.
 
   * **the query's own totality.** `filed_query.query` is driven over the same
     failing commands and required to return an answer on every one, so the
@@ -79,7 +86,12 @@ Every absence asserted here carries a demonstration that it can fail:
     rendering of one of them with the marker changed, which the same
     extraction reports;
   * "an item carrying no payload answers with no brief" sits beside the same
-    item with its payload marker intact, which answers with the brief.
+    item with its payload marker intact, which answers with the brief;
+  * "the backgrounded child is gone, and wrote nothing" sits beside the same
+    child spawned by a command that answers normally, which is seen still in
+    the process table once its leader has answered -- the predicate the kill
+    case negates, holding where the group was not killed -- and which then
+    writes its marker.
 
 Every command driven as a `filed_query_command` here is a file this module or
 `tests/test_filed_query.py` wrote, and `fixture_command_problems` is what makes
@@ -108,8 +120,10 @@ from test_filed_query import (  # noqa: F401 - shared fixtures and idioms
     PATIENCE_SECONDS,
     QUERY_JOB,
     REPO_ROOT,
+    SPAWN_BOUND_SECONDS,
     SYNC_JOB,
     TEMPLATE_SCRIPT,
+    alive,
     bodies,
     branch_source,
     declared_marker,
@@ -124,9 +138,11 @@ from test_filed_query import (  # noqa: F401 - shared fixtures and idioms
     reference_script,
     sleeps_forever,
     sources_importing,
+    spawned_child_pid,
     spawns_a_child,
     stub_tracker,
     unlaunchable,
+    wait_until,
     waited_for,
 )
 
@@ -653,37 +669,79 @@ def test_the_fetchs_kill_reaches_the_children_the_command_spawned(tmp_path,
     """The command is killed as a process group here too, so its children go
     with it.
 
+    Decided by the process table rather than by waiting, the way the dedupe
+    query's own case is: the child's pid is polled out of it, so a kill that
+    lands in a millisecond costs a millisecond, and a slower machine only
+    makes the pid's absence more certain rather than less. The bound is the
+    spawn bound rather than the kill bound the timeout case above uses,
+    because this case needs the command to have backgrounded its child before
+    the kill arrives, and a run in which it had not reports inconclusive
+    through the borrowed `spawned_child_pid` rather than deciding on nothing.
+
     The absence is controlled below rather than beside itself: the same child,
-    spawned by a command that is not killed, does write its marker -- so a
-    marker that never appears is a fact about the kill rather than about a
-    child that was never going to write one.
+    spawned by a command that is not killed, is seen still running once its
+    leader has answered, and does write its marker -- so a pid that is gone
+    and a marker that never appears are facts about the kill rather than about
+    a child that was never going to be there or to write.
     """
     marker = tmp_path / "the-child-survived"
+    child_pid = tmp_path / "child.pid"
     command = spawns_a_child(
         tmp_path / "killed", marker, name="killed-leader.sh",
-        then=f"sleep {LONGER_THAN_ANY_BOUND}\n")
+        then=f"sleep {LONGER_THAN_ANY_BOUND}\n", child_pid=child_pid)
 
     answer = fetched(command, tmp_path, harness,
-                     **{TIMEOUT_KEY: str(KILL_BOUND_SECONDS)})
+                     **{TIMEOUT_KEY: str(SPAWN_BOUND_SECONDS)})
 
     assert refused(answer)
-    assert not waited_for(marker, CHILD_SLEEP_SECONDS * 2), \
-        "a child of the killed command outlived it"
+    pid = spawned_child_pid(child_pid)
+    assert wait_until(lambda: not alive(pid)), (
+        f"the child {pid} of the killed command was still running once the "
+        f"fetch had come back")
+    # The pid leaving the process table is what says the kill reached the
+    # group rather than only the leader. On its own it does not say "killed":
+    # a child that finished its sleep leaves the table too, and leaves the
+    # marker behind on its way out. So the marker is checked once, now, with
+    # nothing waited for -- the child whose pid is gone cannot write anything
+    # later -- and the absence of both is what separates a child killed with
+    # its group from one that finished on its own.
+    assert not marker.exists(), "a child of the killed command outlived it"
 
 
 def test_the_same_child_writes_its_marker_when_its_leader_answers(tmp_path,
                                                                   harness):
-    """The control for the absence above."""
+    """The control for the absences above.
+
+    The leader answers and exits normally, and its child is then seen still in
+    the process table: the predicate the kill case negates, shown holding for
+    a group that was not killed. Asserted as the exact negation of the kill
+    case's conjunction -- the child still there, or already finished with its
+    marker left behind -- rather than as `alive` alone, because the child's
+    sleep is a duration and not a hold: a machine slow enough that the sleep
+    ran out between the leader's exit and this line has a child that
+    finished, which is not a kill. What neither side admits is the one thing
+    a kill leaves, a child gone with nothing written. The marker is then
+    waited for as before, which is what a poll is for: a presence.
+    """
     marker = tmp_path / "the-child-survived"
+    child_pid = tmp_path / "child.pid"
     document = fixture_file(tmp_path / "surviving", "answer.document",
                             json.dumps({"brief": a_brief()}), executable=False)
     command = spawns_a_child(
         tmp_path / "surviving", marker, name="surviving-leader.sh",
-        then=f'cat "{document}"\n')
+        then=f'cat "{document}"\n', child_pid=child_pid)
 
     answer = fetched(command, tmp_path, harness)
 
     assert answer.fetched is True, answer.reason
+    # Read rather than reported through `spawned_child_pid`: the leader ran to
+    # its answer, so a pid it did not record is a failure and not a
+    # precondition the machine withheld.
+    pid = int(child_pid.read_text(encoding="utf-8").strip())
+    assert alive(pid) or marker.exists(), (
+        f"the child {pid} was gone with nothing written once its leader had "
+        f"answered and exited, which is what a group kill leaves and what "
+        f"this control exists to show a normal answer does not")
     assert waited_for(marker, PATIENCE_SECONDS), \
         "the child never writes its marker, so its absence above proves nothing"
 

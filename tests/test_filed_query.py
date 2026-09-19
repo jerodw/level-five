@@ -32,7 +32,15 @@ implementation. The subjects are kept apart deliberately:
 
   * **the kill.** A command that never exits is observed being killed — by
     the wall-clock time the call took, not by the arguments it was handed —
-    and the child it backgrounded is observed gone.
+    and the child it backgrounded is observed gone from the process table,
+    by the pid the fixture recorded, polled so a kill that lands in a
+    millisecond costs a millisecond. The marker the child would have written
+    after its sleep is then checked once, with nothing waited for: a child
+    that finished its sleep also leaves the process table and leaves the
+    marker behind, so the absence of both is what says "killed" rather than
+    "finished". A run in which the leader was killed before it had
+    backgrounded the child has no pid to decide by and reports through
+    `machine_load.inconclusive` rather than passing on nothing.
 
   * **the shape.** `schemas/filed-items.schema.json` is a live harness
     artifact and is the subject of the assertions that name it: a conforming
@@ -112,8 +120,11 @@ Every absence asserted here carries a demonstration that it can fail:
     command said rather than about a reader that finds nothing;
   * "the excess was not truncated silently" sits beside the same answer's
     `excluded`, which must name the bound and the count;
-  * "the backgrounded child is gone" sits beside the same child spawned by a
-    command that exits normally, where the marker it writes does appear;
+  * "the backgrounded child is gone, and wrote nothing" sits beside the same
+    child spawned by a command that exits normally, which is seen still in the
+    process table once its leader has answered — the predicate the kill case
+    negates, holding where the group was not killed — and where the marker it
+    writes does then appear;
   * "`filed_query.py` is the only source that reads the command key" and "no
     source imports it" each sit beside a throwaway root with a second reader
     and an importer planted in it, which the same scans report;
@@ -176,6 +187,7 @@ import conftest
 import filed_query
 import harness_config
 import harness_source
+import machine_load
 import schema_validator
 
 REPO_ROOT = Path(filed_query.__file__).resolve().parents[1]
@@ -447,12 +459,50 @@ LONGER_THAN_ANY_BOUND = 45
 KILL_BOUND_SECONDS = 1.0
 KILL_CEILING_SECONDS = 20.0
 
+#: The bound the process-group kill case gives the command it kills. Larger
+#: than the one above because it is asked for something more: that case
+#: requires the command to have *got somewhere* — to have started an
+#: interpreter and backgrounded a child — before the kill arrives, where a
+#: bound that only has to be exceeded is satisfied by a command that never
+#: started at all. The suite runs its workers in parallel and each one spawns
+#: processes of its own, so a second is not reliably enough for an interpreter
+#: to reach its first line on a loaded machine. The headroom is not
+#: load-bearing: a run in which the child was not backgrounded in time reports
+#: inconclusive through `spawned_child_pid` below rather than failing, so this
+#: number decides how often that is reported rather than whether the suite is
+#: red. The other timing cases keep the one-second bound: a kill they only
+#: have to observe happening is made more certain by load, not less.
+SPAWN_BOUND_SECONDS = 5.0
+
 #: How long the child a fixture backgrounds sleeps before writing its marker,
-#: and how long the tests wait for that marker to appear or fail to. Longer
-#: than the moment its leader is killed, so a marker that appears can only
-#: have been written by a child that outlived the leader.
-CHILD_SLEEP_SECONDS = 3
+#: and how long the tests wait for a process to disappear or a marker to
+#: appear. The sleep is longer than the bound its leader is killed at, so a
+#: child killed with the group never reaches the write — which is what lets
+#: the marker separate a child that was killed from one that finished its
+#: sleep: both leave the process table, and only the second leaves the marker
+#: behind. Nothing waits out the sleep to prove an absence: the kill case
+#: decides by the pid and reads the marker once, and only the control, which
+#: waits for the marker to *appear*, sits through it.
+CHILD_SLEEP_SECONDS = 8
 PATIENCE_SECONDS = 20.0
+
+
+def test_the_bounds_the_process_group_tests_rest_on_are_ordered():
+    """The ordering the separately declared bounds above have to keep.
+
+    The process-group pair is decided by where the kill lands between the two
+    sleeps, and nothing else states that arrangement: the child's sleep has to
+    outlast the spawn bound or a child that finished would be indistinguishable
+    from one that was killed, and the leader's has to outlast both or the
+    command would finish rather than be killed. Written here so that retuning
+    one of them reddens this rather than quietly turning the kill case into
+    one that fails for another reason.
+    """
+    assert KILL_BOUND_SECONDS < SPAWN_BOUND_SECONDS
+    assert SPAWN_BOUND_SECONDS < CHILD_SLEEP_SECONDS < LONGER_THAN_ANY_BOUND
+    # And the control waits for a marker the child writes after that sleep,
+    # so its patience has to outlast the sleep it is waiting through.
+    assert CHILD_SLEEP_SECONDS < PATIENCE_SECONDS
 
 
 # --------------------------------------------------------------------------
@@ -573,17 +623,21 @@ def sleeps_forever(directory: Path) -> Path:
 
 
 def spawns_a_child(directory: Path, marker: Path, *, name: str,
-                   then: str) -> Path:
+                   then: str, child_pid: Path) -> Path:
     """A command that backgrounds a child which would outlive it.
 
-    The marker the child writes after sleeping is the question asked twice:
-    a child that survived its leader writes it, and a child killed with the
-    group never does. `then` is what the leader does afterwards — sleeping
-    past every bound, or answering and exiting.
+    The child's pid is recorded to `child_pid` so the test can ask the
+    operating system whether it is still there, which is what the kill case
+    decides by. The marker it writes after sleeping is what separates the two
+    ways of leaving the process table: a child that survived its leader writes
+    it, and a child killed with the group never does. `then` is what the
+    leader does afterwards — sleeping past every bound, or answering and
+    exiting — and it runs only once the pid is on disk.
     """
     return fixture_command(
         directory, name,
         f'sh -c \'sleep {CHILD_SLEEP_SECONDS}; echo survived > "{marker}"\' &\n'
+        f'echo $! > "{child_pid}"\n'
         + then)
 
 
@@ -975,47 +1029,130 @@ def test_a_command_that_never_exits_is_killed_at_the_configured_bound(tmp_path):
     assert elapsed < LONGER_THAN_ANY_BOUND
 
 
-def waited_for(marker: Path, seconds: float) -> bool:
-    deadline = time.monotonic() + seconds
+def wait_until(predicate, patience: float = PATIENCE_SECONDS) -> bool:
+    """Poll `predicate` until it holds or the patience runs out.
+
+    A poll rather than a sleep: a fast machine pays for none of this, and a
+    slow one is given the patience rather than held to a number.
+    """
+    deadline = time.monotonic() + patience
     while time.monotonic() < deadline:
-        if marker.exists():
+        if predicate():
             return True
         time.sleep(0.05)
-    return marker.exists()
+    return predicate()
+
+
+def waited_for(marker: Path, seconds: float) -> bool:
+    """`wait_until` for the one predicate the controls wait on: a presence."""
+    return wait_until(marker.exists, seconds)
+
+
+def alive(pid: int) -> bool:
+    """Whether a process this test did not parent is still there."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def spawned_child_pid(child_pid: Path) -> int:
+    """The pid the fixture command recorded, or an inconclusive report.
+
+    Whether the command got as far as backgrounding its child before the
+    query's bound expired is a precondition of the question below rather than
+    the question: a machine loaded enough that an interpreter has not reached
+    its first line inside `SPAWN_BOUND_SECONDS` has told this test nothing
+    about process groups either way. Widening the bound would only move the
+    load at which the same thing happens, so what it reports instead is that
+    the run could not be conducted. This is the one route the testing
+    standard allows for that, and the reason names the bound so a reader of
+    a run that reported it is told which precondition the machine did not
+    let happen.
+    """
+    if not child_pid.exists():
+        machine_load.inconclusive(
+            f"the command was killed at the {SPAWN_BOUND_SECONDS:g}s bound "
+            f"before it had backgrounded the child this test is about, so "
+            f"nothing could be established about the group")
+    return int(child_pid.read_text(encoding="utf-8").strip())
 
 
 def test_the_kill_reaches_the_children_the_command_spawned(tmp_path):
     """The command is killed as a process group, so its children go with it.
 
+    Decided by the process table rather than by waiting: the child's pid is
+    polled out of it, so a kill that lands in a millisecond costs a
+    millisecond, and a slower machine only makes the pid's absence more
+    certain rather than less.
+
     The absence is controlled below rather than beside itself: the same child,
-    spawned by a command that is *not* killed, does write its marker — so a
-    marker that never appears is a fact about the kill rather than about a
-    child that was never going to write one.
+    spawned by a command that is *not* killed, is seen still running once its
+    leader has answered, and does write its marker — so a pid that is gone
+    and a marker that never appears are facts about the kill rather than about
+    a child that was never going to be there or to write.
     """
     marker = tmp_path / "the-child-survived"
+    child_pid = tmp_path / "child.pid"
     command = spawns_a_child(
         tmp_path / "killed", marker, name="killed-leader.sh",
-        then=f"sleep {LONGER_THAN_ANY_BOUND}\n")
+        then=f"sleep {LONGER_THAN_ANY_BOUND}\n", child_pid=child_pid)
 
-    answer = asked(command, tmp_path, **{TIMEOUT_KEY: str(KILL_BOUND_SECONDS)})
+    answer = asked(command, tmp_path, **{TIMEOUT_KEY: str(SPAWN_BOUND_SECONDS)})
     assert knows_nothing(answer)
 
-    assert not waited_for(marker, CHILD_SLEEP_SECONDS * 2), \
-        "a child of the killed command outlived it"
+    pid = spawned_child_pid(child_pid)
+    assert wait_until(lambda: not alive(pid)), (
+        f"the child {pid} of the killed command was still running once the "
+        f"query had come back")
+    # The pid leaving the process table is what says the kill reached the
+    # group rather than only the leader. On its own it does not say "killed":
+    # a child that finished its sleep leaves the table too, and leaves the
+    # marker behind on its way out. So the marker is checked once, now, with
+    # nothing waited for -- the child whose pid is gone cannot write anything
+    # later -- and the absence of both is what separates a child killed with
+    # its group from one that finished on its own.
+    assert not marker.exists(), "a child of the killed command outlived it"
 
 
 def test_the_same_child_writes_its_marker_when_its_leader_is_not_killed(
         tmp_path):
-    """The control for the absence above."""
+    """The control for the absences above.
+
+    The leader answers and exits normally, and its child is then seen still in
+    the process table: the predicate the kill case negates, shown holding for
+    a group that was not killed. The kill case asserts the pid gone *and* the
+    marker absent, so what is asserted here once the leader is gone is the
+    exact negation — the child still there, or already finished with its
+    marker left behind. The disjunction rather than `alive` alone because the
+    child's sleep is a duration and not a hold: a machine slow enough that the
+    sleep ran out between the leader's exit and this line has a child that
+    finished, which is not a kill and not a fact about this control. What
+    neither side admits is the one thing a kill leaves — a child gone with
+    nothing written. The marker is then waited for as before, which is what
+    a poll is for: a presence.
+    """
     marker = tmp_path / "the-child-survived"
+    child_pid = tmp_path / "child.pid"
     document_path = fixture_file(tmp_path / "surviving", "answer.document",
                                  document(), executable=False)
     command = spawns_a_child(
         tmp_path / "surviving", marker, name="surviving-leader.sh",
-        then=f'cat "{document_path}"\n')
+        then=f'cat "{document_path}"\n', child_pid=child_pid)
 
     answer = asked(command, tmp_path)
     assert answer.answered is True
+    # Read rather than reported through `spawned_child_pid`: the leader ran to
+    # its answer, so a pid it did not record is a failure and not a
+    # precondition the machine withheld.
+    pid = int(child_pid.read_text(encoding="utf-8").strip())
+    assert alive(pid) or marker.exists(), (
+        f"the child {pid} was gone with nothing written once its leader had "
+        f"answered and exited, which is what a group kill leaves and what "
+        f"this control exists to show a normal exit does not")
     assert waited_for(marker, PATIENCE_SECONDS), \
         "the child never writes its marker, so its absence above proves nothing"
 
