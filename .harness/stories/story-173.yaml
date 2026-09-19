@@ -1,0 +1,136 @@
+story:
+  id: story-173
+  title: Every long operation says how long it is expected to take, from what it has taken before
+  description: |
+    Planned from the brief filed under 162.
+
+    Every long step in a run announces itself before it starts and says what
+    the wait is worth, and today what it says is self-referential: the
+    inspection "takes about as long as a stage", the suite reruns "as long
+    as a suite run", the census "a census of the suite twice". Each tells a
+    reader the step is long and nothing about how long. A stage start says
+    nothing about its wait at all.
+
+    The harness measures stage durations on every stage-completed entry and
+    throws them away with the run directory; it does not measure the checks
+    or the inspection at all. This story keeps every measurement in a new
+    durable log under the history directory, times the operations that are
+    untimed today, and reads an estimate off the log at the moment a step
+    announces itself: per operation, the median of a bounded window of the
+    most recent observations. Where too few exist the step says exactly what
+    it says today, so a fresh target announces nothing invented.
+
+    The estimate is a report to a person and never a bound. No timeout reads
+    it, no check compares against it, and a step that runs past it is a
+    step, running. No completion time is printed; every line is already
+    stamped with its write time.
+
+    With an estimate, an announcement reads, for example,
+    "implementer stage started (Estimated run time: 12 minutes)" or
+    "re-running the suite in a fresh clone with the story committed, to
+    check that it still passes where the code ships (Estimated run time:
+    4 minutes)". Whole minutes, or whole seconds when the estimate is under
+    a minute.
+  workflow: story-workflow
+
+tasks:
+  - Declare a new log, duration-log.jsonl, in schemas/cross-run-history.schema.json beside the four declared today. One record per timed operation per occurrence, carrying story_id, operation, duration_seconds and timestamp; its event enum names the completion kinds of every timed operation so the existing schema-driven projection in append_history_records routes them with no condition added to the coordinator. Where a kind is thereby named in two logs' enums (the inspection's completion, already routed to inspection-log.jsonl), update the prose in the inspection log's declaration that says no other log names its kinds.
+  - Add an operation keyword to append_event, projected like the other flat keyword fields (absent when None), and set it beside duration_seconds on every timed operation's completion entry. The operation names are the stage's own name for a stage (implementer, tester, documenter, verifier) and a fixed name for each check and the inspection (clean-clone, suite-run, revert-check, suite-census, inspection); declare the field in schemas/execution-history.schema.json.
+  - Time the operations that are untimed today and carry the elapsed seconds on their completion entry, the way stage-completed already does: the clean-clone check, the declared suite run (suite_run_check), the revert check's whole-suite fallthrough (not the nomination selector, which takes seconds), the suite census, and the post-story inspection (inspection-completed, in orchestration/story_inspection.py, alongside its cost). Where an operation has no completion event kind today — the census and the declared suite run — add one, declared in execution-history.schema.json's enum and spelled as a literal by exactly one emitter, on the terms _suite_rerun_started's docstring states.
+  - Establish per-operation estimates once per run from the startup read of the history that already happens (read_history at run start), in the module-global idiom set_history_past_bound uses, so no announcing site re-reads the history and no keyword argument a call site omits can drop the figure. The log is located through history_log_declarations — the declaration whose record shape carries operation and duration_seconds — never by filename.
+  - Compute the estimate as the median of that operation's ten most recent observations ordered by record timestamp (DURATION_ESTIMATE_WINDOW = 10), present only when at least three exist (DURATION_ESTIMATE_MINIMUM = 3). Both are module constants, not configuration. A record whose duration_seconds is not a number, or whose timestamp cannot be read, is not an observation and stops nothing.
+  - Render the estimate through _announcement, which stays the single home of the convention. With an estimate the line is the message followed by a space and "(Estimated run time: N minutes)" — whole minutes, "1 minute" singular — or "(Estimated run time: N seconds)" when the median is under sixty seconds. Without one the line is exactly what it renders today, cost clause and separator unchanged. Apply this at every announcing site that names a timed operation: the suite-rerun announcements for the clean-clone check, the declared suite run, the revert check's whole-suite fallthrough and the census; the inspection's announcement; and the stage-started line, which gains the parenthesised estimate when one exists and stays bare otherwise. The outbox sweep, the suite-turn wait and the nomination selector keep the clauses they have, because each states a bound rather than a guess.
+  - Write the standing assertion in tests/ that an operation with enough history announces a figure derived from that history and that one without announces today's wording, so the fallback is exercised rather than assumed.
+  - Record the new log and the estimate convention in .harness/docs/ARCHITECTURE.md beside the cross-run history and the announcement convention.
+
+acceptance_criteria:
+  - A run against a target whose history holds at least three duration records for an operation announces that operation with the parenthesised estimate, and the figure equals the median of that operation's window, rendered as whole minutes or whole seconds under a minute, exactly in the form "(Estimated run time: 3 minutes)".
+  - A run against a target with no history, or with fewer than three observations of an operation, announces that operation character for character as it does today, and its stage-started lines carry no parenthesised clause.
+  - The window is bounded at ten: an eleventh, older observation of an operation does not move the figure a run announces.
+  - The window is the most recent ten by record timestamp rather than by file order, demonstrated with observations split across segments whose names do not sort in time order.
+  - Every timed operation — each stage, the clean-clone check, the declared suite run, the revert check's whole-suite fallthrough, the census and the post-story inspection — leaves exactly one record per occurrence in the declared duration log, carrying story_id, operation, duration_seconds as a number and timestamp, and no field the declaration does not name; no entry of any other kind reaches that log.
+  - The revert check's nomination selector runs, the outbox sweep and the suite-turn wait leave no duration record and announce the clauses they announce today.
+  - Two identical runs, one over a seeded duration log and one over none, reach the same stage sequence, retry count, exit code and recorded status and make the same model calls; only the announcement text differs.
+  - A seeded duration record whose duration_seconds is not a number, or whose timestamp is unreadable, is not counted as an observation and does not refuse or stop the run.
+  - _announcement still raises on an empty cost clause, and every announcement in the module still renders through it.
+  - No timeout, bound, check or routing decision reads the estimate; no module under orchestration/ names the new log by its filename; the coordinator still makes no model call.
+  - The new log is declared in schemas/cross-run-history.schema.json, the operation field and any new completion kinds are declared in schemas/execution-history.schema.json, and schemas/manifest.json and the existing schema inventory tests still pass.
+
+technical_plan:
+  implementation_steps:
+    - Declare duration-log.jsonl in schemas/cross-run-history.schema.json with the four record fields and an event enum naming stage-completed, clean-clone-passed, clean-clone-failed, revert-check-permitted, revert-check-reverted, inspection-completed and the completion kinds added for the census and the declared suite run; update the inspection log's prose about exclusive enums.
+    - Add operation to append_event's flat keyword fields and to execution-history.schema.json; set it with duration_seconds on stage-completed and on each check's and the inspection's completion entry, timing each check and the inspection with time.monotonic around the work the announcement precedes.
+    - Add a module-global estimates table established beside set_history_past_bound from read_history's parsed files, with DURATION_ESTIMATE_WINDOW and DURATION_ESTIMATE_MINIMUM as constants and a small pure function computing the per-operation median that the tester can drive directly.
+    - Extend _announcement to take the estimate, rendering the parenthesised form when present and the unchanged line otherwise; route the stage-started line and the inspection announcement through it with their operation's estimate; pass the operation name through _suite_rerun_started's call sites.
+    - Tester writes the standing module under tests/ covering the criteria above, driving runs with the fake runner and seeded history files, in the shape tests/test_cross_run_history.py and tests/test_a_run_announces_what_it_is_waiting_on.py already use.
+    - Documenter records the log and the convention in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declare duration-log.jsonl, its record shape and the kinds routed to it; adjust the inspection log's exclusivity prose.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: Declare the operation field and the completion kinds added for the census and the declared suite run.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Time the untimed operations, carry operation on completion entries, establish estimates from the startup read, and render them through _announcement at every announcing site including stage-started.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Time the post-story inspection and carry its duration and operation on inspection-completed; announce with the inspection's estimate.
+    - file: tests/test_an_operation_announces_what_it_has_taken_before.py
+      stage: tester
+      reason: The standing assertion that an operation with enough history announces a figure derived from it and one without announces today's wording, plus the log, window and no-routing criteria.
+    - file: tests/test_a_run_announces_what_it_is_waiting_on.py
+      stage: tester
+      reason: The character-for-character checks of the existing clauses may need the operation argument threaded through the composer's new signature; the lines they assert stay unchanged.
+      reverting_breaks_the_suite: If the composer's signature or the announcing functions gain a required estimate argument, the existing direct calls in this module stop matching and the suite reddens with the adaptation reverted; the asserted output lines are not changed.
+    - file: tests/test_cross_run_history.py
+      stage: tester
+      reason: The declaration-driven tests enumerate the declared logs and seed required fields per log; a fifth log with a required numeric field enters those enumerations.
+      reverting_breaks_the_suite: The tests that hold every declared log to its declaration seed every log from DECLARATIONS, so a new declared log whose required fields they seed as strings is either accommodated here or reddens the suite when reverted.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the duration log beside the other cross-run logs and the estimate beside the announcement convention.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - schemas/cross-run-history.schema.json
+    - schemas/execution-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/harness-config.schema.json (no new configuration; the window and minimum are module constants)
+    - orchestration/run_status.py
+    - orchestration/agent_runner.py
+    - orchestration/command_transport.py
+    - workflows/
+    - prompts/
+    - Any timeout, bound or check threshold the coordinator already declares
+
+verification_requirements:
+  - All existing tests pass unchanged in what they assert; the character-for-character announcement tests in tests/test_a_run_announces_what_it_is_waiting_on.py still hold for the no-history case.
+  - The new test module demonstrates both halves of the standing claim against runs driven with the fake runner: a figure derived from seeded history, and today's wording where the history is absent or too thin.
+  - A run over a seeded duration log and one over none are shown to make identical routing decisions and identical model calls.
+  - Every timed operation is shown to leave exactly one duration record per occurrence, and no other kind is shown to reach the log.
+  - The schema inventory and the cross-run history declaration tests pass with the fifth log declared.
+
+constraints:
+  - The Story Coordinator stays deterministic and makes no model call; the inspection remains a total function that may not block, delay or refuse a run, so a timing or announcement that cannot be written costs the announcement and never the run.
+  - History is evidence, never state: the estimate is read once from the startup read, is never consulted by any routing decision, timeout, bound or check, and the log is never rewritten by a run.
+  - _announcement remains the single home of the announcement convention and still refuses an empty cost clause; no site composes its own line.
+  - Every announcement and every duration record goes through append_event, the coordinator's one write path.
+  - Each new event kind is declared in execution-history.schema.json and spelled as a literal by exactly one emitter.
+  - No module under orchestration/ names a cross-run log by filename; the log is found through its declaration.
+  - No completion time is printed, and no new configuration key is introduced.
+  - Standard library only; type hints on public functions; kebab-case artifact names.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 14:06:43
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 162
