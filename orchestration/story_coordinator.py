@@ -24,6 +24,18 @@ directory, records what it did, and the run continues. What still stops a run
 is a check that reached no verdict — nothing was proved, so nothing may be
 undone — and a file *created* under a governed path, against whose absence no
 suite has ever been run.
+
+A permission has a third disposition beside the two above, and it belongs to
+the restriction rather than to the check. The check asks whether an edit was
+needed; whether the stage was entitled to make it is a different question,
+answered per sense by the table beside `_SENSES`. A stage confined by
+`may_only_change` whose outside edit the suite needs has done another stage's
+work: the edits are undone by the same restore the refusal uses, kept under
+the same discarded directory, and recorded as permitted with a `routed` key
+naming the confinement, under an event kind of their own. The tree then lacks
+work it needs, which is what the next suite run turns red on and delivers to
+the verifier to route. A create-restricted stage's necessary modification is
+still permitted and left standing exactly as before.
 """
 from __future__ import annotations
 
@@ -495,6 +507,23 @@ class StageRestriction:
         """
         return f"{self.stage} {_SENSES[self.sense]} {self.prefix}"
 
+    @property
+    def routes_necessary_edits(self) -> bool:
+        """Whether a governed edit the revert check finds necessary is routed
+        rather than permitted.
+
+        The check asks whether an edit was needed; whether the stage was
+        entitled to make it is a different question, and the answer depends on
+        the sense. A confinement says the stage's work is what lies inside its
+        prefixes, so a necessary edit outside them is another stage's work
+        that this stage did — needed by the tree, and not this stage's to
+        leave standing. A create restriction says only what the stage may not
+        add; a modification it was forced into is maintenance of something it
+        may own, and stands. Read off `_ROUTES_NECESSARY_EDITS` so no call
+        site compares the sense; adding a sense is adding a row there.
+        """
+        return _ROUTES_NECESSARY_EDITS[self.sense]
+
 
 #: How each sense reads in prose, keyed by the workflow key that declares it.
 #: The one place a restriction's words are written; `StageRestriction.wording`
@@ -502,6 +531,15 @@ class StageRestriction:
 _SENSES = {
     CREATE_RESTRICTION: "may not create files under",
     CONFINEMENT: "may only change files under",
+}
+
+#: Whether a necessary edit under each sense is routed rather than permitted,
+#: keyed as `_SENSES` is. `StageRestriction.routes_necessary_edits` is its
+#: only reader, and a sense declared in one table and not the other fails
+#: loudly there rather than falling through to either disposition.
+_ROUTES_NECESSARY_EDITS = {
+    CREATE_RESTRICTION: False,
+    CONFINEMENT: True,
 }
 
 
@@ -4815,11 +4853,24 @@ class GovernedEdits:
     read off a bare prefix. It carries a default because a caller with nothing
     to report constructs an empty set of edits, which has no restriction to
     word.
+
+    `routed` is the wording of each matched restriction whose necessary edits
+    are routed rather than permitted, at the same whole-set granularity the
+    check decides at: the set is routed when any restriction that matched
+    routes, because the check reverts and decides on the whole set and cannot
+    tell which path a permission belonged to. Empty when nothing that matched
+    routes, which is what every create-restricted stage's edits carry.
     """
 
     paths: tuple[str, ...]
     prefixes: tuple[str, ...]
     wordings: tuple[str, ...] = ()
+    routed: tuple[str, ...] = ()
+
+    @property
+    def routes(self) -> bool:
+        """Whether a permission over this set is routed rather than left."""
+        return bool(self.routed)
 
 
 def governed_edits(
@@ -4837,7 +4888,9 @@ def governed_edits(
     restriction's do. A path a grant covers is skipped, so it is exempt from
     this check exactly as it is exempt from the ownership check, and by the
     same decision — grant_covers, which both read. Sorted, so the record and
-    what the check reports are deterministic.
+    what the check reports are deterministic. Whether a permission over the
+    set is routed is the matched restrictions' answer, carried on the set, so
+    the call site asks the edits rather than any restriction's sense.
     """
     changed = json.loads((run_dir / record_name).read_text(encoding="utf-8"))
     paths, matched = set(), set()
@@ -4853,6 +4906,8 @@ def governed_edits(
         tuple(sorted(paths)),
         tuple(sorted(restriction.prefix for restriction in matched)),
         tuple(sorted(restriction.wording for restriction in matched)),
+        tuple(sorted(restriction.wording for restriction in matched
+                     if restriction.routes_necessary_edits)),
     )
 
 
@@ -5224,6 +5279,20 @@ class RevertCheckResult:
     two are therefore no longer the same question, which is why the call site
     escalates on a check that reached no verdict rather than on one that did
     not run.
+
+    The record carries one of three dispositions. `permitted` true alone: the
+    suite failed with the edits reverted, so they were needed and they stand.
+    `permitted` false with a `reverted` block: the suite passed without them,
+    so they were undone and the block names what was restored, what was
+    removed and where the stage's own versions were kept. `permitted` true
+    with a `reverted` block *and* a `routed` key: the edits were needed, and
+    were undone anyway because the restriction that governs them says they
+    are another stage's work — `routed` carries that restriction's wording as
+    `StageRestriction.wording` composes it. The tree the run carries on with
+    then lacks work it needs, which is what delivers the edit to the stage
+    that owns it rather than leaving it where it was written. The two
+    undoings are told apart by `permitted`, and the routed permission from
+    the standing one by `routed`.
     """
 
     result: CleanCloneResult
@@ -5232,6 +5301,7 @@ class RevertCheckResult:
     baseline: str | None = None
     nomination: Nomination | None = None
     reverted: RevertedEdits | None = None
+    routed: str | None = None
 
     def as_record(self) -> dict:
         record = {"ran": self.result.ran, "paths": list(self.paths)}
@@ -5246,6 +5316,8 @@ class RevertCheckResult:
             record["nomination"] = self.nomination.as_record()
         if self.reverted is not None:
             record["reverted"] = self.reverted.as_record()
+        if self.routed is not None:
+            record["routed"] = self.routed
         return record
 
 
@@ -5705,6 +5777,39 @@ def _revert_check_reverted(
         stage=stage_name,
         artifacts=[artifact],
         **_timing(REVERT_CHECK_OPERATION, duration_seconds),
+    )
+
+
+def _revert_check_routed(
+    run_dir: Path,
+    stage_name: str,
+    artifact: str,
+    edits: GovernedEdits,
+    reverted: RevertedEdits,
+) -> None:
+    """Say that a confined stage's necessary outside edits were undone.
+
+    Shaped like `_revert_check_reverted` and distinct from it on purpose: a
+    reader of the log alone has to be able to see that a confined stage wrote
+    outside its confinement, that the tree needed what it wrote, and that the
+    work was undone to reach the stage that owns it rather than because it
+    was unneeded.
+    """
+    undone = ", ".join(edits.paths)
+    where = (
+        f", the stage's own versions kept under {reverted.discarded}"
+        if reverted.discarded
+        else ""
+    )
+    append_event(
+        run_dir,
+        f"{stage_name} edits governed by {'; '.join(edits.routed)} were needed "
+        f"— the suite fails with {undone} reverted — but are another stage's "
+        f"work, so they were reverted in the working tree{where} and routed "
+        f"rather than permitted",
+        kind="revert-check-routed",
+        stage=stage_name,
+        artifacts=[artifact],
     )
 
 
@@ -10480,7 +10585,7 @@ def run_story(
                     stage_name=name,
                     nomination=nominated_test(run_dir, record_name),
                 )
-                # Two dispositions, and they answer different questions.
+                # Three dispositions, and they answer different questions.
                 #
                 # A check that reached no verdict escalates: nothing was
                 # proved, so nothing may be undone. That is not the same
@@ -10498,6 +10603,18 @@ def run_story(
                 # discarded, and the run continues. A stopped run over a case
                 # the harness has proved harmless is the failure; the record
                 # beside the stage's own attestation is the correction.
+                #
+                # A permission is left standing or routed, and the edits say
+                # which: the check answers whether they were needed, and
+                # whether the stage was entitled to make them is the matched
+                # restriction's answer, carried on the set. Routed edits are
+                # undone by the same restore the refusal uses, kept under the
+                # same discarded directory, and recorded as permitted with a
+                # `routed` key beside the reverted block, so the tree carries
+                # on lacking work that belongs to another stage — which is what
+                # the suite run after the authoring stage, and the clean-clone
+                # check after the verifier, turn red on and deliver to the
+                # verifier to route. No sense is compared here.
                 if decided.permitted is None:
                     return _escalate(
                         run_dir,
@@ -10525,6 +10642,26 @@ def run_story(
                     _revert_check_reverted(
                         run_dir, name, revert_artifact, edits, reverted,
                         decided.result.duration_seconds,
+                    )
+                elif edits.routes:
+                    reverted = revert_refused_edits(
+                        run_dir,
+                        target_root,
+                        edits.paths,
+                        baseline_dir,
+                        declaration.get("discarded"),
+                    )
+                    _record_revert_check(
+                        run_dir,
+                        revert_artifact,
+                        replace(
+                            decided,
+                            reverted=reverted,
+                            routed="; ".join(edits.routed),
+                        ),
+                    )
+                    _revert_check_routed(
+                        run_dir, name, revert_artifact, edits, reverted
                     )
                 else:
                     _revert_check_permitted(

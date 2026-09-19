@@ -37,6 +37,7 @@
           "clean-clone-failed",
           "revert-check-permitted",
           "revert-check-reverted",
+          "revert-check-routed",
           "claim-support-checked",
           "correction-pass-routed",
           "correction-pass-recorded",

@@ -439,13 +439,18 @@ def test_the_same_run_with_one_path_moved_outside_is_decided(target,
 
 
 # --------------------------------------------------------------------------
-# A modification outside it stands exactly when reverting it breaks the suite
+# A modification outside it is undone either way, and the record says which
 # --------------------------------------------------------------------------
 
 
-def test_an_edit_outside_the_confinement_that_the_suite_needs_is_permitted(
+def test_an_edit_outside_the_confinement_that_the_suite_needs_is_routed(
     target, harness_root,
 ):
+    """The suite needs the edit, so the check finds it necessary — and a
+    confined stage's necessary edit outside its confinement is another
+    stage's work, so it is undone anyway and recorded as routed rather than
+    left standing. The record still says the tree needed it (`permitted`
+    true), which is what tells this undoing apart from the refusal below."""
     code, runner = run(target, harness_root, forced_edit_outside)
 
     assert code == 0
@@ -454,18 +459,30 @@ def test_an_edit_outside_the_confinement_that_the_suite_needs_is_permitted(
     assert record["ran"] is True
     assert record["permitted"] is True
     assert record["exit_code"] != 0          # the suite failed without it
-    # The file keeps the stage's content.
+    (wording,) = [restriction.wording for restriction
+                  in story_coordinator.stage_restrictions(WORKFLOW["stages"])]
+    assert record["routed"] == wording
+    assert record["reverted"]["restored"] == [f"{SOURCE_DIR}app.py"]
+    assert record["reverted"]["discarded"] == DECLARATION["discarded"]
+    # The tree holds what the stage found; the stage's version is kept.
     assert (tree_of(target) / SOURCE_DIR / "app.py").read_text(
-        encoding="utf-8") == APP_WITH_HELPER
+        encoding="utf-8") == APP_AT_HEAD
+    assert (run_dir_of(target) / DECLARATION["discarded"] / SOURCE_DIR
+            / "app.py").read_text(encoding="utf-8") == APP_WITH_HELPER
+    # The stage's own in-lane work stays.
+    assert (tree_of(target) / CONFINED_TO / "test_shout.py").read_text(
+        encoding="utf-8") == TEST_SHOUT
 
 
 def test_the_same_edit_with_nothing_needing_it_is_refused(target, harness_root):
-    """The control for the permission above, and the difference is the suite.
+    """The control for the routed undoing above, and the difference is the
+    suite.
 
     The identical edit to the identical path by the identical stage, with the
     coverage that needed it left out. Reverting it now costs nothing, so it is
     refused — and undone, which is the disposition
-    `tests/test_refused_edit_is_reverted.py` is about.
+    `tests/test_refused_edit_is_reverted.py` is about. Both undoings leave the
+    same tree; the record is what tells them apart.
     """
     code, _ = run(target, harness_root, unforced_edit_outside)
 
@@ -473,6 +490,7 @@ def test_the_same_edit_with_nothing_needing_it_is_refused(target, harness_root):
     record = record_of(target)
     assert record["ran"] is True
     assert record["permitted"] is False
+    assert "routed" not in record
     assert record["exit_code"] == 0
     assert (tree_of(target) / SOURCE_DIR / "app.py").read_text(
         encoding="utf-8") == APP_AT_HEAD

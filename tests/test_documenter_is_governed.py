@@ -111,12 +111,13 @@ ROUTES = VERIFIER_STAGE["on_failure"]["retry_routing"]
 (DOCUMENTING_CATEGORY,) = [category for category, route in ROUTES.items()
                            if route["stage"] == DOCUMENTING]
 
-#: The events the grant and the two revert dispositions append, as the
+#: The events the grant and the revert check's dispositions append, as the
 #: execution-history schema enumerates them.
 GRANT_EVENT = "correction-pass-grant-applied"
 STORY_GRANT_EVENT = "stage-exception-applied"
 REVERTED_EVENT = "revert-check-reverted"
 PERMITTED_EVENT = "revert-check-permitted"
+ROUTED_EVENT = "revert-check-routed"
 
 VERDICT_SCHEMA = schema_validator.load_schema("verification-result")
 CORRECTION_SCHEMA = schema_validator.load_schema("correction-pass")
@@ -691,27 +692,48 @@ def test_a_module_edit_the_suite_is_green_without_is_undone_and_recorded(target)
     assert runner.calls[-1] == VERIFYING
 
 
-def test_a_module_edit_the_suite_is_red_without_is_kept_and_permitted(target):
+def test_a_module_edit_the_suite_is_red_without_is_routed_not_kept(target):
     """The control for the refusal above: the identical edit to the identical
     path, with a test that needs it. The test is granted by the story so it
     is not what the check decides; the module edit is, and reverting it alone
-    turns the suite red."""
+    turns the suite red — so the check finds it necessary. Since story-175 a
+    confined stage's necessary edit outside its confinement is another
+    stage's work: it is undone anyway, recorded as permitted *and* routed,
+    and the tree the run carries on with lacks it. The documenter declares no
+    suite run, so what turns red on the missing work is the clean-clone check
+    after the verifier, which reroutes the retry; the verdicts here are what
+    lets that route run to the ceiling rather than run out of answers."""
     append_to_story(target, story_grant(NEW_TEST))
 
-    code, runner, run_dir = drive(target, [PASS], [forced_module_edit])
+    code, runner, run_dir = drive(target, [PASS, PASS, PASS],
+                                  [forced_module_edit])
 
-    assert code == 0, runner.calls
     record = read_json(run_dir / ARTIFACT)
     assert record["ran"] is True
     assert record["paths"] == [APP]
     assert record["permitted"] is True
     assert record["exit_code"] != 0
-    assert content(run_dir, APP) == APP_WITH_HELPER
-    (event,) = documenter_events(run_dir, PERMITTED_EVENT)
+    loaded = next(s for s in runner.stages if s["name"] == DOCUMENTING)
+    (confinement,) = [restriction for restriction
+                      in story_coordinator.restrictions_on(loaded)
+                      if restriction.sense == story_coordinator.CONFINEMENT]
+    assert record["routed"] == confinement.wording
+    assert record["reverted"]["restored"] == [APP]
+    # The tree holds what the stage found, and the stage's version is kept.
+    assert content(run_dir, APP) == APP_AT_HEAD
+    assert (run_dir / DECLARATION["discarded"] / APP).read_text(
+        encoding="utf-8") == APP_WITH_HELPER
+    (event,) = documenter_events(run_dir, ROUTED_EVENT)
     assert APP in event["message"]
+    assert documenter_events(run_dir, PERMITTED_EVENT) == []
     assert documenter_events(run_dir, REVERTED_EVENT) == []
-    (granted,) = documenter_events(run_dir, STORY_GRANT_EVENT)
+    (granted, *_) = documenter_events(run_dir, STORY_GRANT_EVENT)
     assert NEW_TEST in granted["message"]
+    # The missing work reaches the verifier through the clean-clone check
+    # rather than standing in the tree, so the run does not complete.
+    assert events_of_kind(run_dir, "clean-clone-failed")
+    assert code != 0, runner.calls
+    assert not (run_dir / "completion-report.md").exists()
 
 
 def test_a_documenter_naming_only_the_documents_is_unaffected(target):
