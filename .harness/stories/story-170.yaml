@@ -1,0 +1,154 @@
+story:
+  id: story-170
+  title: A test that proves a killed process wrote nothing decides it by the process being gone
+  description: |
+    Planned from the brief filed under 159.
+
+    Four tests prove that a kill reached a process group by waiting out the
+    very child they killed. Each drives a fixture command that backgrounds a
+    child which sleeps and then writes a marker; the subject kills the group
+    at its bound, and the test then waits long enough to be sure the marker
+    never appeared. `tests/test_command_transport.py:614` is the plain form,
+    `time.sleep(CHILD_SLEEP_SECONDS)` with the constant at 8, and it sleeps
+    even though the assertion above it has already polled the child's pid out
+    of the process table. The kill cases in
+    `tests/test_a_planned_story_is_published_onto_its_item.py:643`,
+    `tests/test_filed_query.py:987` and `tests/test_brief_fetch.py:651` never
+    record the child's pid at all, so a six-second poll for the marker's
+    absence is the only thing they can decide by. Across the family that is
+    about a minute of serial time per suite run, spent proving an absence by
+    the slowest available route, and proving it only on a machine quiet enough
+    for the absence to mean anything.
+
+    The claim each case makes does not need the wait. What it establishes is
+    that the kill reached the group rather than only the leader, and the
+    process table answers that immediately: the descendant's pid is gone.
+    story-149 already made this conversion once, in the other direction, for
+    the escaped-descendant case in `tests/test_branch_base.py`, and recorded
+    the property it buys in `tests/test_no_test_bounds_the_machine.py`: load
+    makes the assertion more true rather than less.
+
+    This story decides each kill case on the descendant's absence from the
+    process table, polled so a kill that lands in a millisecond costs a
+    millisecond, and then on the marker's absence checked once and at once
+    rather than waited for. The marker check stays for a reason a reader
+    should be told: a child that finished its sleep on its own also leaves the
+    process table, and it leaves the marker behind, so the absence of both is
+    what says "killed" rather than "finished". The three modules that do not
+    record the pid have their fixture record it, the way the transport
+    module's already does; `tests/test_brief_fetch.py` borrows that fixture
+    from `tests/test_filed_query.py`, so converting one converts the other.
+
+    Deciding by the pid exposes a case the marker form passed vacuously: a
+    leader killed before it had backgrounded the child leaves no pid file and
+    no marker, and the test has nothing to decide. The testing standard names
+    the only honest report of that, `machine_load.inconclusive`, and the
+    transport module already reaches it through `spawned_child_pid`. The three
+    converted modules reach it the same way, and because a one-second bound is
+    not reliably enough for an interpreter to reach its first line under the
+    parallel suite, their kill cases run under a spawn bound matching the
+    transport module's five seconds rather than the one-second kill bound the
+    modules' other timing cases keep. The bound decides how often the report
+    is made, not whether the suite is red; a suite that fails for load is what
+    story-149 and story-167 were spent removing, so five seconds is preferred
+    to one.
+
+    The positive controls keep their marker waits: a presence is what a poll
+    is for. Each control also gains the assertion story-149 wrote beside its
+    conversion, that the converted case still fails when the kill reaches only
+    the leader. Here that is the control reading the same pid file and
+    observing the descendant still in the process table once its leader has
+    gone, which is the predicate the kill case negates, shown holding for a
+    group whose child was not killed.
+
+    Nothing about what the harness does when it kills a process group changes.
+    The subject under test is correct; what is wrong is how the tests
+    establish it.
+  workflow: story-workflow
+
+tasks:
+  - In tests/test_command_transport.py, remove the time.sleep(CHILD_SLEEP_SECONDS) from test_the_kill_reaches_the_process_group_and_not_only_the_command, keeping the polled assertion that the child's pid has left the process table and the immediate assertion that the marker is absent, and say in a comment why the marker check remains without the sleep.
+  - In tests/test_command_transport.py, have test_the_same_child_survives_when_only_the_leader_is_killed assert the descendant is still alive once the leader-only kill has been waited out, before its existing marker wait.
+  - In tests/test_filed_query.py and tests/test_a_planned_story_is_published_onto_its_item.py, extend spawns_a_child to record the backgrounded child's pid to a path the caller names, before the leader does whatever `then` says.
+  - In tests/test_filed_query.py, tests/test_brief_fetch.py and tests/test_a_planned_story_is_published_onto_its_item.py, decide the kill case on the descendant's pid leaving the process table, polled within the existing patience, and then on the marker's absence checked once without a wait; report through machine_load.inconclusive when the pid file was never written, and run those kill cases under a five-second spawn bound declared beside the modules' existing bounds with the reason the transport module gives for its own.
+  - In those same three modules, have the positive control read the same pid file and assert the descendant is still alive once the leader has answered and exited, before its existing marker wait, so the predicate the kill case negates is shown holding where the group was not killed.
+  - In tests/test_no_test_bounds_the_machine.py, reclassify tests/test_a_planned_story_is_published_onto_its_item.py, tests/test_brief_fetch.py and tests/test_filed_query.py as CARRIES_PRECONDITIONS, and rewrite the comment on each entry so it argues the pid-based form the kill cases now take and the reason the marker check remains.
+  - Update the module docstrings and the comments on CHILD_SLEEP_SECONDS and the spawn fixtures in the four modules so they describe the pid as what the kill case decides by and the marker as what separates a killed child from one that finished.
+
+acceptance_criteria:
+  - No kill case in the four named modules sleeps for CHILD_SLEEP_SECONDS or polls for a marker to fail to appear; each asserts the descendant's pid has left the process table, polled within the module's existing patience, and then asserts the marker is absent in a single check with no wait before it.
+  - Each kill case's marker check is accompanied by prose saying why it remains - that a child which finished its sleep also leaves the process table and leaves the marker behind, so both absences together are what establish a kill.
+  - spawns_a_child in tests/test_filed_query.py and tests/test_a_planned_story_is_published_onto_its_item.py records the backgrounded child's pid to a caller-named path, and tests/test_brief_fetch.py's kill case and control use the recorded pid through the shared fixture rather than a fixture of their own.
+  - In the three modules whose fixture is extended, a kill case whose pid file was never written reports through machine_load.inconclusive with a reason naming the spawn bound, and does not pass or fail.
+  - The kill cases in those three modules run under a spawn bound of five seconds declared beside the modules' existing bounds with prose saying why it is larger than the one-second kill bound; the modules' other timing cases keep KILL_BOUND_SECONDS unchanged.
+  - Each positive control in the four modules asserts the descendant is still alive once its leader has gone - killed alone in tests/test_command_transport.py, exited normally in the other three - before its existing marker wait, and the marker waits in the controls are unchanged in what they wait for and how long.
+  - test_the_bounds_the_process_group_tests_rest_on_are_ordered in tests/test_command_transport.py still holds and still relates SPAWN_BOUND_SECONDS, CHILD_SLEEP_SECONDS, LONGER_THAN_ANY_BOUND and PATIENCE_SECONDS; the transport module's constants keep their values.
+  - tests/test_no_test_bounds_the_machine.py classifies tests/test_a_planned_story_is_published_onto_its_item.py, tests/test_brief_fetch.py and tests/test_filed_query.py as CARRIES_PRECONDITIONS, each with a comment arguing the pid-based kill case, the retained marker check and the precondition reported, and tests/test_branch_base.py's entry and kind are unchanged.
+  - The assertion count of each converted module does not fall - the census that refuses a stage whose count fell passes.
+  - tests/test_branch_base.py, orchestration/ and every file outside tests/ carry no change from this story.
+
+technical_plan:
+  implementation_steps:
+    - Read the transport module's kill pair at tests/test_command_transport.py:598-661, its alive, wait_until and spawned_child_pid helpers at :559-595, and its spawns_a_child at :249, so the idiom the other three modules adopt is the one already in the suite rather than a new one.
+    - In test_the_kill_reaches_the_process_group_and_not_only_the_command, delete the time.sleep and keep both assertions; replace the comment above the marker check with one saying the marker distinguishes a child killed with the group from one that finished its sleep and exited on its own. In the control, after process.wait, read the pid and assert alive(pid) before the marker wait, with a comment saying this is the predicate the kill case negates.
+    - In tests/test_filed_query.py, extend spawns_a_child with a child_pid parameter and emit echo $! > "{child_pid}" after the backgrounding line and before `then`; add alive and a pid-gone poll in the module's own idiom (waited_for is a marker poll, so either generalize it to a predicate or add a sibling), and a spawned_child_pid that reports machine_load.inconclusive when the file is absent, importing machine_load. Declare SPAWN_BOUND_SECONDS = 5.0 beside KILL_BOUND_SECONDS with the transport module's reasoning. Convert test_the_kill_reaches_the_children_the_command_spawned and extend test_the_same_child_writes_its_marker_when_its_leader_is_not_killed.
+    - In tests/test_brief_fetch.py, import the new helpers and bound from test_filed_query alongside the existing imports, and convert test_the_fetchs_kill_reaches_the_children_the_command_spawned and extend test_the_same_child_writes_its_marker_when_its_leader_answers the same way.
+    - In tests/test_a_planned_story_is_published_onto_its_item.py, which has its own spawns_a_child and waited_for, make the same fixture and helper changes and convert test_the_kill_reaches_the_children_the_command_spawned and extend test_the_same_child_writes_its_marker_when_its_leader_is_not_killed.
+    - In tests/test_no_test_bounds_the_machine.py, change the three entries to CARRIES_PRECONDITIONS and rewrite their comments; the elapsed-after-a-kill argument for the modules' other timing cases stays in the comment, extended by the pid-based argument and the precondition now reported.
+    - Update each module's docstring and the CHILD_SLEEP_SECONDS and fixture comments so they no longer say the marker's absence is what a kill case decides by.
+  likely_file_changes:
+    - file: tests/test_command_transport.py
+      stage: tester
+      reason: Holds the plain-form sleep being removed and the leader-only-kill control gaining the alive assertion.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: Holds the shared spawns_a_child fixture being extended to record the pid, the helpers and spawn bound the pid-based form needs, and one kill pair being converted.
+    - file: tests/test_brief_fetch.py
+      stage: tester
+      reason: Holds a kill pair converted through the fixture and helpers it borrows from test_filed_query.
+    - file: tests/test_a_planned_story_is_published_onto_its_item.py
+      stage: tester
+      reason: Holds its own spawns_a_child and waited_for, extended the same way, and one kill pair being converted.
+    - file: tests/test_no_test_bounds_the_machine.py
+      stage: tester
+      reason: Holds the classification entries for the three modules that now report a precondition, whose kind and argument change.
+
+scope:
+  modify:
+    - tests/test_command_transport.py
+    - tests/test_filed_query.py
+    - tests/test_brief_fetch.py
+    - tests/test_a_planned_story_is_published_onto_its_item.py
+    - tests/test_no_test_bounds_the_machine.py
+  do_not_modify:
+    - orchestration/
+    - scripts/
+    - templates/
+    - tests/test_branch_base.py, which story-149 has already converted
+    - tests/machine_load.py, whose route and ceiling are reused rather than changed
+    - The marker waits in the positive controls, which wait for a presence and keep doing so
+    - The other timing cases in the four modules, which keep KILL_BOUND_SECONDS and their elapsed-after-a-kill argument
+
+verification_requirements:
+  - Confirm by reading each of the four kill cases that no sleep for CHILD_SLEEP_SECONDS and no poll for a marker's absence remains, that the descendant's pid is polled out of the process table, and that the marker check follows with no wait and with prose saying why it remains.
+  - Confirm each positive control asserts the descendant alive once its leader has gone, before a marker wait that is unchanged, so the converted case is shown to fail under a leader-only kill.
+  - Confirm the three converted modules report machine_load.inconclusive when the pid file is absent, run their kill cases under a five-second spawn bound declared with its reason, and leave KILL_BOUND_SECONDS and the cases that use it unchanged.
+  - Confirm tests/test_no_test_bounds_the_machine.py classifies the three modules as CARRIES_PRECONDITIONS with comments arguing the new form, and that its enumeration, classification and single-route checks pass.
+  - Confirm the census reports no fallen assertion count for any converted module.
+  - Confirm tests/test_branch_base.py, orchestration/ and every path outside tests/ carry no change from this story, and that the suite passes.
+
+constraints:
+  - No test changed by this story may bound how slow the machine is allowed to be; every wait it keeps is a poll for something to happen, and a machine that is slower makes each kill assertion more true rather than less.
+  - The harness's process-group kill and every bound it ships are unchanged; this story changes what tests assert, not what the harness does.
+  - The one route for an unmet precondition is machine_load.inconclusive; no module added a skip of its own for a load reason.
+  - Existing helpers, constants and idioms in the four modules are reused where they fit; the transport module's alive, wait_until and spawned_child_pid are the shape the others adopt.
+  - Docstrings and comments carry the argument for why each case is sound, in the voice the surrounding cases use, so a later reader can weigh the claim without reconstructing it.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 23:28:15
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 159
