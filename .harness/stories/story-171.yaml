@@ -1,0 +1,146 @@
+story:
+  id: story-171
+  title: The planner decides with the standards every judged stage is judged against, and a workflow that cannot finish the work is refused before the interview
+  description: |
+    Planned from the brief filed under 229.
+
+    The planner decides the shape of a change with less in front of it than
+    any stage that will be judged for building that shape. The target's
+    standards are read whole by the context assembler and rendered into
+    every judged stage's prompt as repository_standards, but the planner's
+    context is built separately in scripts/l5-plan and the standards are
+    not in it; what the planner gets is one process line telling it to go
+    and read them. story-170's approved plan wrote a shape the standards
+    forbid — one fact spelled in four modules — and no stage after planning
+    could undo it: the Inspector filed it and the verifier correctly
+    declined it as what the story asked for.
+
+    The second half is the workflow proposal. The brief assumed the planner
+    proposes the workflow; it does not. On the no-brief path a one-turn
+    classifier rendered against prompts/workflow-selector.md proposes it,
+    and on the brief path the Inspector names it in the brief's workflow
+    field. Both decide from the same text and nothing else: each workflow's
+    applies_when string, rendered as workflow_candidates. story-169 came in
+    on the brief path under refactor-workflow, ended by making a new
+    standing claim ("this is now the only place X happens"), and that
+    workflow has no stage that may write the assertion holding the claim,
+    so the brief was the run's only exit. Nothing tests, at proposal time,
+    whether the proposed workflow can finish the work.
+
+    This story does both, on the terms agreed at planning. The standards
+    reach the planner whole, through one shared reader the assembler, the
+    Inspector and l5-plan all call, rendered into prompts/planner.md under
+    the heading every stage prompt uses. The finishing test — will the
+    finished work assert something nothing asserts today? — is written into
+    the applies_when strings of both workflow definitions, which is the one
+    place both proposers read, and the planner prompt gains a backstop for
+    every path: before the interview, where the answer is yes and no stage
+    of the settled workflow may create under the tests directory, the
+    planner says so and names the workflow to rerun l5-plan under, rather
+    than proceeding into an interview whose artifact cannot finish.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/context_assembler.py, extract the reading of the target's standards directory into a public standards_context(target_root, config) function that returns the repository_standards and testing_standards placeholders in the shape config_context returns its pair, with a target that declares no standards directory yielding None for both, and have build_context take those two values from it rather than reading the directory inline.
+  - In orchestration/inspection.py, remove the private _standards reader and take repository_standards from context_assembler.standards_context, so the standards directory is globbed in one module.
+  - In scripts/l5-plan, add context_assembler.standards_context(target_root, config) to the context the planner template is rendered against, beside schema_context and workflow_context.
+  - In prompts/planner.md, add a "Repository standards:" heading with the {{repository_standards}} placeholder beneath it, and change process step 1 from an instruction to read the standards in .harness/standards/ into a statement that the standards are rendered below; the architecture_docs instruction is unchanged.
+  - In workflows/refactor-workflow.json, extend applies_when to say in the workflow's own words that work which ends by making a new standing claim — that something is now the only place a thing happens — is not this workflow's work, because the claim needs an assertion this workflow has no stage to write; in workflows/story-workflow.json, extend applies_when to say it is the workflow for such work even where behaviour is unchanged. Change nothing else in either definition.
+  - In prompts/planner.md, add the backstop: before the interview begins, the planner asks whether the finished work will assert something nothing asserts today, reads from the injected stage restrictions whether any stage of the settled workflow may create files under the tests directory, and where the answer is yes and no stage may, tells the developer first, names the workflow to rerun l5-plan --workflow under, and does not proceed into the interview.
+  - Write tests/test_planner_receives_the_standards.py holding the properties in the acceptance criteria, and adapt any existing test whose expectation the shared reader or the applies_when wording changes.
+  - Update .harness/docs/ARCHITECTURE.md where it describes the planner's context and the reading of the standards directory.
+
+acceptance_criteria:
+  - The prompt scripts/l5-plan hands to claude --append-system-prompt carries the text of every *.md file in the target's standards directory verbatim, captured through a fake claude on PATH the way tests/test_planner_injection.py captures the rendered prompt.
+  - For a target that declares no standards directory, the rendered planner prompt carries no leftover placeholder and l5-plan still starts the session.
+  - The standards directory glob appears in exactly one function in the orchestration package, context_assembler.standards_context, and build_context, inspection's context and l5-plan's planner context all resolve repository_standards through it; inspection.py defines no _standards function.
+  - prompts/planner.md contains a "Repository standards:" heading immediately followed by {{repository_standards}}, and its process list no longer instructs the planner to read the standards in .harness/standards/.
+  - prompts/planner.md still instructs the planner to read the architecture documents the target's configuration names under architecture_docs.
+  - workflows/refactor-workflow.json's applies_when states that work ending in a new standing claim is not its work because the claim needs an assertion it has no stage to write, and workflows/story-workflow.json's applies_when states it is the workflow for such work even where behaviour is unchanged; the stages, escalation_rules and cost ceilings of both definitions are byte-identical to the base commit's.
+  - prompts/workflow-selector.md and prompts/inspector.md are unchanged from the base commit.
+  - prompts/planner.md instructs the planner, before the interview, to ask whether the finished work will assert something nothing asserts today, and where no stage of the settled workflow may create files under the tests directory, to tell the developer and name the workflow to rerun l5-plan --workflow under rather than proceeding.
+  - Every existing test that pins repository_standards in a stage's or the Inspector's context passes without its assertions being weakened.
+  - tests/test_planner_receives_the_standards.py holds each of the properties above that concerns rendered output, prompt text or workflow definitions, with a control for the verbatim-standards property that renders a copy of the template with the placeholder removed and asserts the same check fails.
+
+technical_plan:
+  implementation_steps:
+    - Add standards_context to orchestration/context_assembler.py beside config_context; move the standards_dir resolution, the sorted glob and the _read_files call into it, return both placeholders, and have build_context merge its result. Keep the "--- name ---" section rendering _read_files already does, since the Inspector's reader produced the same shape.
+    - Replace inspection.py's _standards with a call to context_assembler.standards_context and take repository_standards from the result; keep the "or None" the call site has.
+    - In scripts/l5-plan, after context.update(context_assembler.workflow_context(workflow, rules)), add context.update(context_assembler.standards_context(target_root, config)), with a comment saying the planner is held to the standards on the terms every judged stage is.
+    - Edit prompts/planner.md as the tasks state. Place the "Repository standards:" heading after the [Story artifact format] section and before [Workflow facts], and place the backstop at the top of [Process], since it decides whether the interview starts.
+    - Extend both applies_when strings, keeping each a single string and keeping the two distinct from one another, which tests/test_workflow_proposal.py already asserts.
+    - Write the test module in the tester stage; adapt existing tests only where the shared reader or the wording changes an expectation.
+    - Update .harness/docs/ARCHITECTURE.md in the documenter stage.
+  likely_file_changes:
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: standards_context becomes the one reader of the standards directory, and build_context calls it.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: its private _standards reader is replaced by a call to the shared one.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: the planner's context gains the standards through the shared reader.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: renders the standards under the shared heading, states them as below rather than to be read, and carries the pre-interview backstop.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: applies_when states that work ending in a new standing claim is not this workflow's.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: applies_when states it is the workflow for such work even where behaviour is unchanged.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: the standing module holding this story's properties.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the planner's context list and the shared standards reader are described there.
+
+scope:
+  modify:
+    - orchestration/context_assembler.py
+    - orchestration/inspection.py
+    - scripts/l5-plan
+    - prompts/planner.md
+    - workflows/refactor-workflow.json
+    - workflows/story-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/workflow-selector.md
+    - prompts/inspector.md
+    - prompts/story-implementer.md
+    - prompts/story-verifier.md
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+    - schemas/
+    - the stages, escalation_rules and cost ceilings of either workflow definition
+    - orchestration/workflow_selection.py
+    - orchestration/story_coordinator.py
+
+verification_requirements:
+  - Confirm the rendered planner prompt carries the target's standards verbatim, through the captured invocation rather than by reading the template.
+  - Confirm the standards directory is globbed in one function in the orchestration package and that inspection.py no longer defines its own reader.
+  - Confirm both applies_when strings state the new-claim test and that nothing else in either workflow definition changed.
+  - Confirm prompts/workflow-selector.md and prompts/inspector.md are unchanged.
+  - Confirm prompts/planner.md carries the standards heading, no longer instructs a reading of .harness/standards/, still instructs the architecture_docs reading, and carries the pre-interview backstop.
+  - Confirm the full suite passes with the new module included and no existing assertion weakened.
+
+constraints:
+  - The standards reach the planner whole, as every judged stage receives them; no bounded or excerpted reading is introduced.
+  - The standards directory is read by one function; neither l5-plan nor inspection.py acquires a reader of its own.
+  - The stage lists of both workflows are unchanged; the refactor workflow having no stage that authors validation is the fact the finishing test reads.
+  - What the Inspector looks for, how findings are routed and the verifier's right to decline are unchanged.
+  - The architecture_docs instruction in the planner prompt is unchanged; their injection is a separate question.
+  - The planner cannot change the workflow the session was rendered against; the backstop tells the developer to abort and rerun rather than writing an artifact naming another workflow.
+  - Python 3.10+, standard library only; the coordinator makes no model calls.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 07:43:53
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 229
