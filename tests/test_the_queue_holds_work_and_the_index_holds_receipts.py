@@ -44,6 +44,9 @@ Every absence asserted here carries a demonstration that it can fail:
     queue, where the same sweep reports them poisoned;
   * "a poisoned file contributes no key" sits beside the same two directories
     without it, where the same read reports the same two keys;
+  * "an inspection before a sweep left the pre-split landed entry's bytes
+    unchanged" sits beside the same comparison over a failed entry in the same
+    place, which the same Inspector does overwrite;
   * "the two configured artifacts are unchanged by this story" sits beside the
     same diff over the module the split rewrote, which is not empty;
   * "the harness configuration declares what it declared" sits beside the
@@ -273,8 +276,10 @@ def test_the_two_directories_answer_one_rule_for_both_readers(tmp_path):
     """`local_index` and `local_state` agree about every state, which is what
     "one derivation" means where a reader can observe it.
 
-    Each of the three is driven to its own target, because two of them are
-    states of one key and a single target could only hold one at a time.
+    Each placement is driven to its own target, because several of them are
+    states of one key and a single target could only hold one at a time. The
+    fourth placement is the pre-split one — a landed entry still in the queue —
+    which both readers must answer for the same way as the receipt above it.
     """
     landed_target = tmp_path / "answers-landed"
     landed_key = landed_receipt(landed_target)
@@ -301,6 +306,19 @@ def test_the_two_directories_answer_one_rule_for_both_readers(tmp_path):
     # makes the finding it carries get another chance rather than be lost.
     assert failed_index.landed == frozenset()
     assert failed_index.queued == frozenset()
+
+    # A landed entry the sweep has not yet relocated: held in the queue, with
+    # no receipt index at all, and landed to both readers all the same.
+    pre_split_target = tmp_path / "answers-landed-from-the-queue"
+    pre_split_key = landed_in_the_queue(pre_split_target)
+    outbox.receipts_dir(pre_split_target).rmdir()
+    assert not outbox.receipts_dir(pre_split_target).exists()
+    assert outbox.local_state(pre_split_target, pre_split_key) == LANDED
+    pre_split_index = outbox.local_index(pre_split_target)
+    assert pre_split_index.read is True
+    assert pre_split_index.landed == frozenset({pre_split_key})
+    assert pre_split_index.queued == frozenset()
+    assert pre_split_index.failed == frozenset()
 
     # And a key neither directory holds is the empty string rather than a state.
     assert outbox.local_state(landed_target, "zzz-a-key-nothing-holds") == ""
@@ -506,17 +524,18 @@ def test_a_landed_entry_the_sweep_meets_in_the_queue_is_relocated_and_counted(
         tmp_path):
     """The whole of the migration, and both halves of what it must not change.
 
-    Before the sweep the index does not answer for the entry, which is what
-    makes the relocation observable rather than a move between two places that
-    already agreed. After it the entry is in the index, gone from the queue,
-    and counted as landed in the summary that sweep returned — the same tally
-    it produced before the split.
+    Before the sweep the entry is held landed from the queue, so both readers
+    already answer for it; the relocation is observable because the entry
+    moves from the queue to the index. After it the entry is in the index, gone
+    from the queue, and counted as landed in the summary that sweep returned —
+    the same tally it produced before the split.
     """
     target = tmp_path / "a-pre-split-deployment"
     queue, receipts = outbox.queue_dir(target), outbox.receipts_dir(target)
     key = landed_in_the_queue(target)
 
-    assert outbox.local_index(target).landed == frozenset()
+    assert outbox.local_index(target).landed == frozenset({key}), \
+        "the index reads a landed entry the sweep has not yet relocated"
     assert outbox.local_state(target, key) == LANDED, \
         "the single-key read answers from the queue as well as the index"
 
@@ -552,6 +571,64 @@ def test_a_receipt_seeded_in_the_old_location_still_suppresses_after_a_sweep(
     assert known["slug"] in found.detail(ALREADY_FILED_LOCALLY)
     assert found.report.local_index.landed == frozenset({key})
     assert found.filed_slugs == [fresh["slug"]]
+
+
+def entry_bytes(target: Path, key: str) -> bytes:
+    """The bytes a key's queue entry holds, read off the disk rather than
+    parsed, so "unchanged" is a claim about the file and not about a reading
+    of it that two different files could satisfy."""
+    return outbox.entry_path(outbox.queue_dir(target), key).read_bytes()
+
+
+def test_an_inspection_before_a_sweep_leaves_a_pre_split_landed_entry_alone(
+        tmp_path):
+    """The Inspector's own path, on the shape an upgrade meets first.
+
+    No sweep runs here, which is what a standalone inspection after an upgrade
+    looks like: the landed entry is still in the queue, and the receipt index
+    does not exist. The finding whose key that entry holds is reported as
+    already filed, nothing is enqueued over it, and the entry's file is byte
+    for byte what it was — reference included — so the next sweep has nothing
+    to file a second time.
+
+    Two controls, both in this test. The finding beside the match is filed by
+    the same inspection, so the suppression is about the match rather than
+    about an inspection that stopped filing. And the same byte comparison is
+    made over a failed entry in the same place, which the same Inspector *does*
+    overwrite with a pending one — so "unchanged" above is the reader holding
+    the entry landed rather than a comparison that cannot see a rewrite.
+    """
+    target = producer.target_repository(tmp_path, name="upgraded-not-yet-swept")
+    known = producer.brief(slug="the-one-filed-before-the-upgrade")
+    fresh = producer.brief(slug="the-one-nobody-has-filed")
+    key = planted_in_the_old_location(target, known)
+    outbox.receipts_dir(target).rmdir()
+    assert not outbox.receipts_dir(target).exists()
+    before = entry_bytes(target, key)
+    assert b"reference" in before, "the fixture's landed entry carries no receipt"
+
+    found = producer.inspecting(tmp_path, target=target,
+                                act=producer.writes(known, fresh))
+
+    assert known["slug"] in found.detail(ALREADY_FILED_LOCALLY)
+    assert found.dropped(ALREADY_QUEUED) == ()
+    assert found.report.local_index.landed == frozenset({key})
+    assert found.report.local_index.queued != frozenset({key})
+    assert found.filed_slugs == [fresh["slug"]]
+    assert entry_bytes(target, key) == before
+    assert not outbox.entry_path(outbox.receipts_dir(target), key).is_file()
+    assert names_in(outbox.queue_dir(target)) == sorted(
+        [entry_name(key)] + [entry_name(one.key) for one in found.report.filed])
+    assert outbox.local_state(target, key) == LANDED
+
+    control = producer.target_repository(tmp_path, name="holds-it-failed")
+    failed_key = producer.planted(control, known, FAILED)
+    failed_before = entry_bytes(control, failed_key)
+    overwritten = producer.inspecting(tmp_path, target=control,
+                                      act=producer.writes(known))
+    assert overwritten.filed_slugs == [known["slug"]]
+    assert entry_bytes(control, failed_key) != failed_before
+    assert outbox.local_state(control, failed_key) == PENDING
 
 
 def test_a_relocation_that_cannot_be_made_costs_the_migration_and_nothing_else(

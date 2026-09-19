@@ -602,10 +602,12 @@ def read_entry(path: Path, harness_root: Path | None = None):
 # --------------------------------------------------------------------------
 #
 # One derivation, two readers. After the split the question has three answers
-# coming from two places — landed from the index, pending and failed from the
-# queue — and that rule is written once here rather than reached for separately
-# by an Inspector and a filing path, which would then have two chances to
-# disagree about it.
+# coming from two places — landed from the index and from the queue, pending
+# and failed from the queue alone — and that rule is written once here rather
+# than reached for separately by an Inspector and a filing path, which would
+# then have two chances to disagree about it. The queue is read for landed
+# entries because a pre-split landed entry sits there until a sweep relocates
+# it, and a reader that missed it would let the Inspector overwrite a receipt.
 
 
 @dataclass(frozen=True)
@@ -625,6 +627,11 @@ class LocalIndex:
     not run even where this was read successfully. Since the index is
     gitignored it does not survive a fresh clone either, so a clone knows
     nothing here until it files again.
+
+    `landed` is every key held landed in either directory: the receipt index,
+    where a landed entry now lives, and the queue, where a landed entry the
+    sweep has not yet relocated still sits and counts as landed. `queued` and
+    `failed` come from the queue alone.
 
     `read` false is a directory that could not be listed, with `reason` saying
     which one and why; that costs this tier and costs nothing else.
@@ -687,8 +694,14 @@ def local_index(target_root: Path,
                 harness_root: Path | None = None) -> LocalIndex:
     """The keys this harness holds, by the state their entries are in.
 
-    Landed comes from the receipt index and pending from the queue, which is
-    the split: a landed entry is a receipt and a pending one is still work.
+    The receipt index is where a landed entry now lives, and the queue is read
+    for pending and failed entries and for the landed entries a sweep has not
+    yet relocated — an entry written by a harness older than the split, which
+    is landed wherever it sits. `local_state` already answered LANDED for such
+    an entry; a reader here that missed it would tell the Inspector the key is
+    unfiled, and the Inspector enqueues directly at `<key>.json`, overwriting
+    the landed entry, reference and all, with a pending one the next sweep
+    files a second time. So the two readers read every state in both places.
 
     A failed entry suppresses nothing, deliberately, and that rule is unchanged
     by its keys being reported. It is terminal: no later sync will file it, so
@@ -700,8 +713,8 @@ def local_index(target_root: Path,
     that third set, held as evidence so a report can say so; nothing that
     decides whether a finding is filed reads it.
 
-    The queue is listed once for both the pending and the failed keys, so a
-    file in it that cannot be read as an entry contributes no key to either and
+    The queue is listed once for the pending, failed and landed keys, so a file
+    in it that cannot be read as an entry contributes no key to any of them and
     is counted once.
 
     Read once for a whole inspection rather than once per scope, because
@@ -711,7 +724,8 @@ def local_index(target_root: Path,
     receipts, landed_unreadable, landed_problem = _keys_in(
         receipts_dir(target_root), "receipt index", {LANDED}, harness_root)
     queue, queued_unreadable, queued_problem = _keys_in(
-        queue_dir(target_root), "queue", {PENDING, FAILED}, harness_root)
+        queue_dir(target_root), "queue", {PENDING, FAILED, LANDED},
+        harness_root)
 
     problems = [problem for problem in (landed_problem, queued_problem)
                 if problem]
@@ -720,7 +734,7 @@ def local_index(target_root: Path,
 
     return LocalIndex(
         read=True,
-        landed=frozenset(receipts[LANDED]),
+        landed=frozenset(receipts[LANDED] | queue[LANDED]),
         queued=frozenset(queue[PENDING]),
         failed=frozenset(queue[FAILED]),
         unreadable=landed_unreadable + queued_unreadable,
