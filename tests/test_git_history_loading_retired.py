@@ -52,6 +52,17 @@ import worktrees
 from conftest import (BASE_BRANCH_FALLBACK, BASELINE, ENDPOINT,
                       function_source, init_repository, repository_file_at,
                       story_commit_range)
+#: Which flags put a clone on git's directory-copy path is one fact with one
+#: home, `tests/test_clean_clone_check.py`, where `_build_clone`'s own guard
+#: reads it. The guard on `copy_repository` below reads the same names over
+#: the same spy rather than restating them, so a flag added to the list beside
+#: one guard is read by the other. `clone_argv` is a fixture, so it is
+#: imported for pytest rather than for a name this module spells.
+from test_clean_clone_check import (  # noqa: F401
+    DIRECTORY_COPY_FLAGS,
+    TRANSPORT,
+    clone_argv,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -1394,47 +1405,40 @@ def test_a_copy_of_a_main_checkout_carries_what_it_carried_before(tmp_path):
     assert not (copy / "left-behind").exists()
 
 
-#: The flag that makes a clone negotiate a pack over a pipe, and the flags
-#: that make it walk the source's object store as a directory tree instead.
-#: `--no-hardlinks` is a directory copy with its own object files; `--local`
-#: and `-l` are the directory copy git already defaults to for a path.
-NORMAL_TRANSPORT = "--no-local"
-DIRECTORY_COPY_FLAGS = ("--no-hardlinks", "--local", "-l")
+# The flag that makes a clone negotiate a pack over a pipe, and the flags that
+# make it walk the source's object store as a directory tree instead, are
+# `TRANSPORT` and `DIRECTORY_COPY_FLAGS`, read from
+# `tests/test_clean_clone_check.py` at the top of this module rather than
+# spelled a second time here. Two spellings of the one fact story-157 exists
+# to make two clones agree on were the defect: a flag added beside
+# `_build_clone`'s guard left this guard admitting it with nothing red.
 
 
-def test_the_copy_is_cloned_over_the_normal_transport(tmp_path, monkeypatch):
+def test_the_copy_is_cloned_over_the_normal_transport(tmp_path, clone_argv):
     """Asserted against the argument list `subprocess.run` was handed during a
     real call of `copy_repository`, not against the module's text: the spawn
-    is intercepted on this module's own `subprocess`, in the shape
-    `tests/test_clean_clone_check.py`'s `clone_argv` uses for `_build_clone`,
-    so what is recorded is what the operating system was asked to do.
+    is intercepted by `clone_argv`, the same fixture `_build_clone`'s own
+    guard in `tests/test_clean_clone_check.py` reads — not one in its shape —
+    so what is recorded is what the operating system was asked to do, and
+    both guards record it on one instrument.
 
-    Exactly one clone is made, it carries `--no-local`, and it carries none of
-    the flags that would make git enumerate and copy or hardlink the source's
-    `.git/objects` — the path `_build_clone`'s docstring records failing in CI
-    while a multi-pack index was being written.
+    Exactly one clone is made, it carries `TRANSPORT`, and it carries none of
+    `DIRECTORY_COPY_FLAGS` — the flags that would make git enumerate and copy
+    or hardlink the source's `.git/objects`, the path `_build_clone`'s
+    docstring records failing in CI while a multi-pack index was being
+    written. Both names are the ones that guard reads, from their one home.
     """
     origin = tmp_path / "origin"
     origin.mkdir()
     (origin / "kept.txt").write_text("tracked\n", encoding="utf-8")
     init_repository(origin)
 
-    seen: list[list[str]] = []
-    original = subprocess.run
-
-    def spy(args, *rest, **kwargs):
-        if isinstance(args, (list, tuple)) and list(args[:2]) == ["git", "clone"]:
-            seen.append([str(argument) for argument in args])
-        return original(args, *rest, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", spy)
     copy = copy_repository(tmp_path / "copy", source=origin)
-    monkeypatch.undo()
 
     assert (copy / "kept.txt").exists(), "the copy was not made"
-    assert len(seen) == 1, seen
-    argv = seen[0]
-    assert NORMAL_TRANSPORT in argv, argv
+    assert len(clone_argv) == 1, clone_argv
+    argv = clone_argv[0]
+    assert TRANSPORT in argv, argv
     for flag in DIRECTORY_COPY_FLAGS:
         assert flag not in argv, argv
 

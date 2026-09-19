@@ -1827,7 +1827,10 @@ from test_revert_baseline import (  # noqa: E402
 
 #: The flag that makes git negotiate a pack over a pipe, and the flags that
 #: put it back on the directory-copy path. `-l` is git's short form of
-#: `--local`; none of the three may appear.
+#: `--local`; none of the three may appear. This is the one home of that fact
+#: since story-169: `tests/test_git_history_loading_retired.py` imports both
+#: names and the `clone_argv` fixture below to guard `copy_repository`, so a
+#: flag added to this list is read by both clone guards.
 TRANSPORT = "--no-local"
 DIRECTORY_COPY_FLAGS = ("--no-hardlinks", "--local", "-l")
 
