@@ -1,0 +1,138 @@
+story:
+  id: story-175
+  title: An out-of-confinement edit the revert check finds necessary is routed rather than permitted
+  description: |
+    Planned from the brief filed under key 119.
+
+    A stage confined by may_only_change can author another stage's work,
+    have it accepted, and the run says so nowhere. On story-136 the tester,
+    confined to the tests directory, edited orchestration/inspection.py and
+    wrote the implementation fix the story existed for. The revert check
+    recorded permitted true, because reverting a correct fix always breaks
+    the test that needed it, and the run completed with nothing in
+    events.log, the completion report or the verifier's verdict saying a
+    confined stage wrote outside its confinement. The check asks whether an
+    edit was necessary; whether the stage was entitled to make it is a
+    different question, and the check's own docstring assigns that audit to
+    the verifier while the verifier's prompt hands it back to the check.
+
+    Since story-137 there is somewhere to send such an edit. This story adds
+    a third disposition to the revert check, for a confined stage only: when
+    the check finds the stage's outside edits necessary, the coordinator
+    undoes them anyway, by the same restore-from-baseline the refusal uses,
+    keeps the stage's own versions under the declared discarded directory,
+    records on the revert-check record that the edits were necessary and
+    routed, and says so in events.log under its own event kind. The stage's
+    own in-lane work stays. The tree is then missing work that belongs to
+    another stage, so the declared suite run after the tester comes back red
+    and story-137's carry-forward delivers it to the verifier, which routes
+    it on the retry_routing table it already reads; the documenter, which
+    declares no suite run, is covered by the clean-clone check after the
+    verifier. No new judgement source, no new category and no new state
+    field is added: the coordinator records a fact and the verifier judges
+    it.
+
+    The verifier's prompt is repaired in the same story, because it is the
+    other half of the loop. The tester_changed_files slot describes what the
+    record can actually hold rather than assuming only test files, and the
+    revert-check passage presents permitted true as a fact to judge, with
+    the routed case spelled out, rather than as a question already closed.
+
+    The implementer's may_not_create restriction is a different shape of
+    rule and is left as it is: a create-restricted stage's necessary
+    modification is still permitted exactly as today. The revert check's
+    whole-set granularity is unchanged, and story-136's fix is not
+    revisited.
+  workflow: story-workflow
+
+tasks:
+  - Give StageRestriction a per-sense answer to whether a necessary edit it governs is routed rather than permitted, held in a table beside _SENSES so no call site branches on the sense; the confinement sense routes and the create sense does not.
+  - Carry that answer on GovernedEdits, so the revert-check call site can ask the set of edits whether any matched restriction routes, at the same whole-set granularity the check already decides at.
+  - At the revert-check call site, when the check permits the edits and the set is routed, undo them with revert_refused_edits, rewrite the record with permitted true, the reverted block and a routed key carrying the wording of the confinement that made them another stage's work, and append an event of kind revert-check-routed naming the stage, the paths undone and where the stage's own versions were kept.
+  - Extend the coordinator's module docstring and the RevertCheckResult docstring so they state the third disposition beside the two they describe today.
+  - Adapt tests/test_confined_stage_edits.py where it asserts a permitted out-of-confinement edit leaves the stage's content in the tree, so the test states the new disposition for a confined stage.
+  - Rewrite the tester_changed_files slot description in prompts/story-verifier.md to describe the record as every repository file the tester touched, with a path outside the tester's confinement answered by the revert-check record rather than treated as an expected test addition.
+  - Rewrite the revert-check passage in prompts/story-verifier.md so permitted true is a fact to judge, a permitted record carrying routed means the edits were needed and were undone because they belong to another stage so the tree being judged lacks that work, and the verdict and category are the verifier's to decide off the injected routing table.
+  - Write a test module holding the new disposition, with the permitted-and-standing create-restricted case and the refused confined case as its controls.
+  - Record the third disposition in .harness/docs/ARCHITECTURE.md beside the two it already describes.
+
+acceptance_criteria:
+  - After a stage confined by may_only_change modifies a path outside its confinement and the revert check finds the suite fails with that path reverted, the path holds the content the stage baseline captured, the stage's own version is kept under the directory the stage's revert_check declaration names as discarded, and the run advances to the next stage rather than escalating.
+  - The revert-check record for that case carries permitted true, a reverted block naming the restored path and where the stage's version was kept, and a routed key whose value is the confinement's wording as StageRestriction.wording composes it.
+  - events.log for that case carries an event of kind revert-check-routed naming the stage, the paths undone and the discarded directory, so a reader of the log alone can see a confined stage wrote outside its confinement and what became of the edit.
+  - The stage's own changed-files record is byte-identical to what the stage wrote; the correction sits beside it on the revert-check record, as the refused disposition already does.
+  - The same necessary modification by a stage restricted with may_not_create under the same prefix is still permitted and left standing in the tree, with no reverted block and no routed key, so the new disposition is the confinement's and not the check's.
+  - The same out-of-confinement modification with nothing in the suite needing it is still refused and undone with permitted false and no routed key, so the two undoings are told apart by the record.
+  - A modification by the confined stage inside its confinement is not put to the revert check at all, unchanged from today.
+  - A granted path outside the confinement is exempt from the new disposition exactly as it is exempt from the ownership and revert checks today, because it never reaches governed_edits.
+  - No call site in orchestration/story_coordinator.py compares a restriction's sense to CONFINEMENT or CREATE_RESTRICTION to decide routing; the decision is read off a per-sense table beside _SENSES through StageRestriction, so adding a sense means adding a table row.
+  - The tester_changed_files slot in prompts/story-verifier.md no longer describes the record as test files nor instructs the verifier to treat its entries as expected additions of a later stage; it describes every repository file the tester touched and points a path outside the tester's confinement at the revert-check record.
+  - The revert-check passage in prompts/story-verifier.md states that a permitted record carrying routed means the edits were needed and were undone because they belong to another stage, so the tree being judged lacks that work, and leaves the verdict and its category to the verifier off the injected routing table rather than saying such edits stand.
+  - Every existing test passes unchanged except the adaptation in tests/test_confined_stage_edits.py, which restates the permitted-confined case as the routed disposition and deletes no assertion the census counts.
+
+technical_plan:
+  implementation_steps:
+    - Add a per-sense table beside _SENSES in orchestration/story_coordinator.py stating whether a necessary edit under that sense is routed; expose it as a property on StageRestriction, with a docstring saying why a confinement's necessary edit is another stage's work and a create restriction's is not.
+    - Have governed_edits carry on GovernedEdits whether any matched restriction routes, keeping the whole-set granularity and the sorted, deterministic record.
+    - At the call site after revert_check returns permitted true, branch on the set's routed answer: when routed, call revert_refused_edits with the same paths, baseline and discarded directory the refusal uses, rewrite the record through _record_revert_check with reverted set and a routed key added to RevertCheckResult.as_record, and append the revert-check-routed event through a helper shaped like _revert_check_reverted; when not routed, the existing permitted event is unchanged.
+    - Update the module docstring's account of the check's dispositions and RevertCheckResult's docstring to describe the routed record.
+    - Adapt tests/test_confined_stage_edits.py at the permitted-confined test so it asserts the routed disposition; keep every other test there as it is.
+    - Rewrite the two passages in prompts/story-verifier.md named in the tasks; leave the rest of the prompt unchanged.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The per-sense routing table, the routed answer on GovernedEdits, the third disposition at the revert-check call site, the routed key on the record, the new event kind, and the docstrings that describe them.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The tester_changed_files slot description and the revert-check passage, so the verifier is told what the record can hold and that permitted true is a fact to judge.
+    - file: tests/test_confined_stage_edits.py
+      stage: implementer
+      reason: The test at the permitted-confined case asserts the stage's content stays in the tree, which this story deliberately changes for a confined stage.
+      reverting_breaks_the_suite: The test asserts the exact behaviour this story replaces, that a confined stage's necessary outside edit is left standing, so with the coordinator change in place and this adaptation reverted the suite fails on that assertion.
+    - file: tests/test_a_necessary_edit_outside_the_confinement_is_routed.py
+      stage: tester
+      reason: The new standing assertion, with its controls, that a confined stage's necessary outside edit is undone, recorded as routed and announced, while a create-restricted stage's is still permitted and an unneeded one is still refused.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The revert check's dispositions are described there and this story adds a third.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - prompts/story-verifier.md
+    - tests/test_confined_stage_edits.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/
+    - schemas/
+    - orchestration/plan_validation.py
+    - orchestration/agent_runner.py
+    - scripts/
+
+verification_requirements:
+  - Confirm a confined stage's necessary out-of-confinement modification is undone in the tree, kept under the discarded directory, recorded with permitted true, a reverted block and a routed key, and announced under revert-check-routed, and that the run advances.
+  - Confirm the same modification by a create-restricted stage is still permitted and left standing with no reverted block and no routed key.
+  - Confirm the unneeded out-of-confinement modification is still refused with permitted false and no routed key.
+  - Confirm the stage's changed-files record is unchanged by the routed disposition.
+  - Confirm no call site in orchestration/story_coordinator.py branches on a restriction's sense to decide routing.
+  - Confirm the two passages in prompts/story-verifier.md read as the acceptance criteria state, and that no other passage of the prompt changed.
+  - Confirm the suite census reports no stage whose assertion count fell.
+
+constraints:
+  - The revert check's granularity is unchanged; it decides over the whole set of governed paths in one run and the routed disposition applies to the whole set.
+  - The implementer's may_not_create restriction is unchanged in every respect; a create-restricted stage's necessary modification is still permitted and left standing.
+  - The refused disposition is unchanged; an unneeded edit is still undone and recorded with permitted false.
+  - No new state field is added to RunState and no new routing category is added to any workflow; the routed edit reaches the verifier through the record, the event and the red suite story-137 already carries forward.
+  - The coordinator makes no model call and every routing decision remains reconstructable from state.json and events.log.
+  - Workflow definitions and schemas are not changed; the revert-check record's new key is optional by absence, as permitted and reverted already are.
+  - Circular evidence, where the stage authored both the test and the code, is not detected by this story; it is a separate rule.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 14:05:34
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 119
