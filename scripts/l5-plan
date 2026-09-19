@@ -294,6 +294,15 @@ def main() -> None:
     # and is held to the standards on the terms every stage judged for building
     # that shape is, rather than being told to go and read them.
     context.update(context_assembler.standards_context(target_root, config))
+    # The target's own configured facts, through the same call every stage
+    # prompt's context is built from, so {{tests_dir}} resolves in the planner
+    # template to what the target configures. The planner's backstop decides
+    # from whether a stage is confined to the tests directory, and it is told
+    # that directory outright rather than left to recognise it from the
+    # prefix of a rendered restriction: on this repository the guess is easy,
+    # and on a target declaring spec/ the planner would have no basis for it
+    # and the backstop would fire, or fail to fire, for the wrong reason.
+    context.update(context_assembler.config_context(config))
     # The name the injected facts came from, so the planner can record in the
     # artifact the workflow the session was started for. It is the name
     # load_workflow was given rather than a second reading of the definition,

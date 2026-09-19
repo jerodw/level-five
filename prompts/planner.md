@@ -29,8 +29,12 @@ here on, that a shape is defined once — is only true while an assertion holds
 it, and the assertion is a test file nothing yet contains. Then read the stage
 restrictions injected under [Workflow facts] and ask whether any restriction
 confines a stage of the workflow this session was started for to the tests
-directory — a stage that exists to write validation. Where the answer to the
-first question is yes and no restriction does, this workflow cannot finish the
+directory — the directory the same section names as the target's tests
+directory, not one you recognise from the prefix a restriction happens to
+carry; a stage confined there exists to write validation. Where that directory
+is rendered as None the target declares no tests directory, so no confinement
+to it can be recognised and the answer is no. Where the answer to the first
+question is yes and no restriction does, this workflow cannot finish the
 work as this harness holds it: a new assertion would be written by the stage
 whose own change it validates, so the artifact you would write here cannot be
 completed by the run it describes. Say so to the developer first, before
@@ -146,6 +150,14 @@ artifact naming any other is refused when the session ends, because the
 facts you were given here are not that workflow's.
 
 {{workflow_name}}
+
+The target's tests directory, taken from its own configuration rather than
+from anything this template says: the directory a restriction below names
+where it confines a stage to it or stops a stage creating under it, and the
+one the question above the interview reads. It renders as None where the
+target declares no tests directory:
+
+{{tests_dir}}
 
 Every likely_file_changes entry names a stage. These are the stages the
 workflow defines, and a plan must not name any other:

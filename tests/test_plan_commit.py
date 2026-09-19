@@ -1254,12 +1254,21 @@ def test_the_argument_list_handed_to_claude_is_what_the_exec_passed(
                          after["argv"][after["argv"].index(
                              "--append-system-prompt") + 1])
     assert reserved, "the planner was not told the id it is planning"
+    # story-174 gave the planner the target's tests directory, which the old
+    # script does not resolve either: it renders `{{tests_dir}}` as the literal
+    # None where today's script renders the configured directory. Subtracted in
+    # the same shape as the name above, read off the target's configuration
+    # rather than written down, and replaced only where it stands on a line of
+    # its own — the form the placeholder renders in, and one a restriction line
+    # naming the same directory never takes.
+    tests_dir = harness_config.load_config(planning.root)["tests_dir"]
     prompt_at = after["argv"].index("--append-system-prompt") + 1
     without_prose = list(after["argv"])
     without_prose[prompt_at] = (
         without_prose[prompt_at]
         .replace(prose, "None")
         .replace(f"\n{name}\n", "\nNone\n")
+        .replace(f"\n{tests_dir}\n", "\nNone\n")
         # The two places the id is injected, rather than every occurrence of
         # the string: an id like `story-001` also appears inside the schema
         # descriptions this prompt carries, and those are not this render.

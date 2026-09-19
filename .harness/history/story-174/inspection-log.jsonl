@@ -1,0 +1,4 @@
+{"story_id": "story-174", "mode": "narrow", "cost_usd": 2.3834660000000008, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-19 14:26:42", "findings": 2, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-174", "timestamp": "2026-09-19 14:29:31", "filed": 0, "dropped": 0, "routed": 2, "acted_on": 1}
+{"story_id": "story-174", "mode": "narrow", "cost_usd": 2.0630285, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-19 14:45:48", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-174", "timestamp": "2026-09-19 14:49:22", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 0}

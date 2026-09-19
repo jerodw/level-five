@@ -26,6 +26,15 @@ rule, applied to what l5-plan renders" holds that with an assertion rather
 than with wording: both shipped definitions are rendered through the function
 l5-plan renders them with, and the rule is applied to the result.
 
+story-174 closed the two inputs that section still read from elsewhere. The
+planner is now told the tests directory as `{{tests_dir}}`, rendered through
+`config_context` beside the workflow facts, and the rule here reads it off
+the same rendering it reads the restrictions from — so a rendering that names
+no directory is refused whatever it carries. And the story workflow's
+`applies_when` now says from its side what story-172 made the refactor one
+say from the other: a stage confined to the tests directory whose work is
+validation, rather than a stage that "may write" the assertion.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -92,6 +101,11 @@ UNTOUCHED_PROMPTS = ("prompts/workflow-selector.md", "prompts/inspector.md")
 STANDARDS_HEADING = "Repository standards:"
 STANDARDS_PLACEHOLDER = "{{repository_standards}}"
 TESTING_PLACEHOLDER = "{{testing_standards}}"
+
+#: The placeholder `config_context` resolves to the target's tests directory,
+#: which since story-174 the planner template carries under [Workflow facts].
+#: Derived nowhere, for the reason the two above are not.
+TESTS_DIR_PLACEHOLDER = "{{tests_dir}}"
 
 PLACEHOLDER = re.compile(r"\{\{[a-z_]+\}\}")
 
@@ -581,6 +595,39 @@ def test_the_backstop_decides_from_the_injected_restrictions():
     assert "cannot change the workflow" in head
 
 
+def workflow_facts_section(template: str) -> str:
+    """The text between the [Workflow facts] heading and the next bracketed
+    one, or the end of the template."""
+    match = re.search(r"\[Workflow facts\]\n(.*?)(?:\n\[|\Z)", template, re.DOTALL)
+    assert match is not None, "the template has no [Workflow facts] section"
+    return match.group(1)
+
+
+def test_the_backstop_reads_the_tests_directory_from_the_workflow_facts():
+    """Since story-174 the planner is told the tests directory rather than
+    left to recognise it from a restriction's prefix: the [Workflow facts]
+    section carries the placeholder beneath a line naming it as the target's
+    tests directory, and the backstop paragraph says it reads that directory
+    from there, says not to take it from a prefix, and says what None means
+    — that no confinement can be recognised. The control is the baseline
+    template, which carried none of this."""
+    facts = workflow_facts_section(planner_template())
+    assert TESTS_DIR_PLACEHOLDER in facts
+    assert re.search(r"tests\s+directory", facts[: facts.index(TESTS_DIR_PLACEHOLDER)])
+    assert planner_template().count(TESTS_DIR_PLACEHOLDER) == 1
+
+    head = before_the_numbered_steps(process_section(planner_template()))
+    assert re.search(r"the same section names as the target's tests\s+directory",
+                     head)
+    assert re.search(r"not one you recognise from the prefix", head)
+    assert re.search(r"rendered as None", head)
+    assert re.search(r"no confinement\s+to it can be recognised", head)
+
+    before = baseline_planner_template()
+    assert TESTS_DIR_PLACEHOLDER not in before
+    assert "rendered as None" not in process_section(before)
+
+
 def test_the_baseline_template_carried_no_backstop():
     """Control: none of the backstop's phrases were in the process section
     before this story, so their presence is the story's and not the prose's."""
@@ -598,9 +645,13 @@ def test_the_baseline_template_carried_no_backstop():
 # render each through the function l5-plan renders them with and apply the
 # rule mechanically to the rendered lines. Nothing here spells a stage name,
 # a prefix or a sense: the rendered lines are read back into facts through
-# the wording `StageRestriction.wording` composes, the tests directory is the
-# repository's configured one, and the two rules below are the backstop's own
-# question and the question it replaced.
+# the wording `StageRestriction.wording` composes, the tests directory is
+# read off the rendering's own `tests_dir` — the line the planner is told it
+# by since story-174 — and the two rules below are the backstop's own
+# question and the question it replaced. A rendering for another target's
+# configuration loads the shipped definition against that configuration, so
+# it is the rendering that target gets and not this repository's declarations
+# beside another directory.
 # --------------------------------------------------------------------------
 
 
@@ -616,11 +667,41 @@ def sense_phrase(sense: str) -> str:
     return StageRestriction(stage="", prefix="", sense=sense, prefixes=()).wording.strip()
 
 
-def rendered_facts(workflow: dict) -> dict:
+def rendered_facts(workflow: str | dict, config: dict | None = None) -> dict:
     """What l5-plan hands the planner about a workflow, rendered the same way:
-    `context_assembler.workflow_context` against the shipped rules."""
-    return context_assembler.workflow_context(
-        workflow, harness_config.load_rules(REPO_ROOT))
+    `context_assembler.workflow_context` against the shipped rules, with the
+    target's own facts merged over it through `config_context` — since
+    story-174 the planner is told the tests directory as `tests_dir` rather
+    than left to recognise it from a restriction's prefix.
+
+    A shipped definition is passed by name and loaded here, through
+    `harness_config.load_workflow` against the same configuration the facts
+    are rendered from, so its `{{tests_dir}}` declarations resolve to what
+    that configuration names — the rendering a target with that
+    configuration actually gets, not this repository's declarations beside
+    another target's directory. A definition built in a test is passed as
+    the dict it was built as; its prefixes are literals and resolve against
+    nothing. The configuration defaults to this repository's."""
+    config = conftest.repository_config() if config is None else config
+    definition = (harness_config.load_workflow(REPO_ROOT, workflow, config)
+                  if isinstance(workflow, str) else workflow)
+    rendered = context_assembler.workflow_context(
+        definition, harness_config.load_rules(REPO_ROOT))
+    rendered.update(context_assembler.config_context(config))
+    return rendered
+
+
+#: A directory no target of this repository configures, for rendering what a
+#: target that declares it would see.
+PROBE_TESTS_DIR = "zzz-spec/"
+
+
+def configuration_without_a_tests_directory() -> dict:
+    """This repository's configuration with its `tests_dir` removed: a
+    target declaring everything else and no tests directory, so a rendering
+    from it still carries restrictions and names no directory."""
+    return {key: value for key, value in conftest.repository_config().items()
+            if key != "tests_dir"}
 
 
 def dashed_items(rendered: str | None) -> list[str]:
@@ -649,20 +730,29 @@ def restriction_facts(rendered: dict) -> list[tuple[str, str, str]]:
     return facts
 
 
-def backstop_refuses(rendered: dict, tests_dir: str) -> bool:
+def backstop_refuses(rendered: dict) -> bool:
     """The backstop's rule as prompts/planner.md states it, applied to the
     rendered facts: where the finished work will assert something new, refuse
-    unless some restriction confines a stage to the tests directory."""
+    unless some restriction confines a stage to the tests directory — the
+    directory the rendering itself names as `tests_dir`, which is the only
+    place the planner is told it. A rendering naming none (the value is None)
+    admits no confinement to it, so the rule refuses whatever restrictions
+    the rendering carries."""
+    tests_dir = rendered["tests_dir"]
+    if tests_dir is None:
+        return True
     return not any(sense == CONFINEMENT and prefix == tests_dir
                    for _, sense, prefix in restriction_facts(rendered))
 
 
-def some_stage_may_create_under(rendered: dict, tests_dir: str) -> bool:
+def some_stage_may_create_under(rendered: dict) -> bool:
     """The rule story-171 wrote and story-172 replaced: may any stage of the
     workflow create files under the tests directory? Decided with the
     coordinator's own `governs` predicate over the rendered facts, so a stage
     is free there exactly when no restriction of its own governs that path —
-    and a stage the rendering names under no restriction at all is free."""
+    and a stage the rendering names under no restriction at all is free. The
+    directory is read off the rendering, as the backstop's own rule reads it."""
+    tests_dir = rendered["tests_dir"]
     facts = restriction_facts(rendered)
     restrictions = [
         StageRestriction(stage, prefix, sense, tuple(
@@ -698,34 +788,92 @@ def test_the_reader_recovers_the_facts_the_coordinator_derives():
         derived = [(r.stage, r.sense, r.prefix)
                    for r in story_coordinator.stage_restrictions(workflow["stages"])]
         assert derived, name
-        assert restriction_facts(rendered_facts(workflow)) == derived
-        assert dashed_items(rendered_facts(workflow)["workflow_stages"]) == [
+        assert restriction_facts(rendered_facts(name)) == derived
+        assert dashed_items(rendered_facts(name)["workflow_stages"]) == [
             stage["name"] for stage in workflow["stages"]]
 
 
 def test_the_backstop_refuses_the_refactor_workflow_and_admits_the_story_workflow():
     """The assertion the brief named as missing: the refusal for the refactor
     workflow and the interview for story-workflow, held by applying the rule
-    to what l5-plan renders rather than by the wording of either statement."""
-    assert backstop_refuses(rendered_facts(shipped("refactor-workflow")),
-                            configured_tests_dir())
-    assert not backstop_refuses(rendered_facts(shipped("story-workflow")),
-                                configured_tests_dir())
+    to what l5-plan renders rather than by the wording of either statement.
+    Both of the rule's inputs — the restrictions and the tests directory —
+    are read off the same rendering, so this is decided from what the planner
+    sees and nothing read off the configuration beside it."""
+    assert backstop_refuses(rendered_facts("refactor-workflow"))
+    assert not backstop_refuses(rendered_facts("story-workflow"))
+
+
+def test_the_rendering_names_the_tests_directory_the_declarations_resolved_against():
+    """Control for the comparison inside the rule: the `tests_dir` the
+    rendering carries is this repository's configured one, and it is the
+    prefix the story workflow's confinement resolved to — so an equality
+    between the two is a directory named twice from one configuration, not
+    a value that could not have differed."""
+    rendered = rendered_facts("story-workflow")
+    assert rendered["tests_dir"] == configured_tests_dir()
+    assert rendered["tests_dir"] in {
+        prefix for _, sense, prefix in restriction_facts(rendered)
+        if sense == CONFINEMENT}
+    # And both move together: rendered for a target configuring another
+    # directory, the declarations resolve to that directory and the rendering
+    # names it, so the confinement is still to what the rendering names.
+    elsewhere = rendered_facts("story-workflow", {"tests_dir": PROBE_TESTS_DIR})
+    assert elsewhere["tests_dir"] == PROBE_TESTS_DIR
+    assert elsewhere["tests_dir"] != configured_tests_dir()
+    assert {prefix for _, sense, prefix in restriction_facts(elsewhere)
+            if sense == CONFINEMENT} == {PROBE_TESTS_DIR}
+    assert configured_tests_dir() not in {
+        prefix for _, _, prefix in restriction_facts(elsewhere)}
+
+
+def test_under_another_directory_the_shipped_workflows_are_decided_the_same_way():
+    """What a target declaring another tests directory gets: its rendering
+    of each shipped definition carries that directory both as `tests_dir`
+    and as the prefix the story workflow's confinement resolved to, so the
+    rule admits story-workflow and refuses refactor-workflow there exactly
+    as it does here. The directory is one nothing in this repository
+    configures, so an admission is the two resolving together and not this
+    repository's directory read twice."""
+    assert PROBE_TESTS_DIR != configured_tests_dir()
+    assert not backstop_refuses(
+        rendered_facts("story-workflow", {"tests_dir": PROBE_TESTS_DIR}))
+    assert backstop_refuses(
+        rendered_facts("refactor-workflow", {"tests_dir": PROBE_TESTS_DIR}))
+
+
+def test_a_rendering_naming_no_tests_directory_is_refused_whatever_it_carries():
+    """The absent case the template states: rendered for a target that
+    declares no tests directory, `tests_dir` is None and the backstop refuses
+    — for the story workflow, which the rule admits when the directory is
+    named, and for the refactor workflow, whose restrictions the rule already
+    refuses. The configuration is this repository's less its `tests_dir`, so
+    the rendering still carries restrictions and the refusal is the absent
+    directory and not an empty rendering. The story-workflow half is the
+    control: the same definition is admitted a line above and refused here,
+    so the refusal is the absent directory and not the restrictions."""
+    for name in SHIPPED_DEFINITIONS:
+        absent = rendered_facts(name, configuration_without_a_tests_directory())
+        assert absent["tests_dir"] is None, name
+        assert absent["stage_path_restrictions"] is not None, name
+        assert backstop_refuses(absent), name
+    assert not backstop_refuses(rendered_facts("story-workflow"))
 
 
 def test_the_distinguishing_fact_is_a_confinement_to_the_tests_directory():
     """What the rule read: story-workflow's rendering carries a confinement
-    to the configured tests directory, and the refactor workflow's carries
-    restrictions — it is not empty — and no such confinement among them."""
-    confinements_to_tests = {
-        name: [stage for stage, sense, prefix
-               in restriction_facts(rendered_facts(shipped(name)))
-               if sense == CONFINEMENT and prefix == configured_tests_dir()]
-        for name in SHIPPED_DEFINITIONS
-    }
+    to the tests directory the rendering names, and the refactor workflow's
+    carries restrictions — it is not empty — and no such confinement among
+    them."""
+    confinements_to_tests = {}
+    for name in SHIPPED_DEFINITIONS:
+        rendered = rendered_facts(name)
+        confinements_to_tests[name] = [
+            stage for stage, sense, prefix in restriction_facts(rendered)
+            if sense == CONFINEMENT and prefix == rendered["tests_dir"]]
     assert len(confinements_to_tests["story-workflow"]) == 1
     assert confinements_to_tests["refactor-workflow"] == []
-    assert restriction_facts(rendered_facts(shipped("refactor-workflow"))) != []
+    assert restriction_facts(rendered_facts("refactor-workflow")) != []
 
 
 def built_without_a_validation_stage() -> dict:
@@ -747,11 +895,19 @@ def test_a_built_definition_with_no_stage_confined_to_the_tests_directory_is_ref
     else about the rendering."""
     tests_dir = configured_tests_dir()
     refused = built_without_a_validation_stage()
-    assert backstop_refuses(rendered_facts(refused), tests_dir)
+    assert backstop_refuses(rendered_facts(refused))
 
     admitted = conftest.build_workflow(
         *refused["stages"], conftest.workflow_stage(may_only_change=[tests_dir]))
-    assert not backstop_refuses(rendered_facts(admitted), tests_dir)
+    assert not backstop_refuses(rendered_facts(admitted))
+    # The mismatch control, on a definition whose prefix is a literal and so
+    # resolves against nothing: rendered for a target naming another
+    # directory, the confinement still says the directory it was built with
+    # while the rendering names the other, and the rule refuses — it compares
+    # against what the rendering names and not against what the test built.
+    # A shipped definition is not this control: its declarations resolve to
+    # whatever directory it is rendered for, and the rule admits it there.
+    assert backstop_refuses(rendered_facts(admitted, {"tests_dir": PROBE_TESTS_DIR}))
 
 
 def test_the_old_rule_answers_yes_for_both_shipped_workflows():
@@ -760,8 +916,7 @@ def test_the_old_rule_answers_yes_for_both_shipped_workflows():
     shipped workflows say yes, because neither verifier is restricted — so a
     backstop deciding on that question fired under neither workflow."""
     for name in SHIPPED_DEFINITIONS:
-        assert some_stage_may_create_under(rendered_facts(shipped(name)),
-                                           configured_tests_dir()), name
+        assert some_stage_may_create_under(rendered_facts(name)), name
 
 
 def test_the_old_rule_can_answer_no_and_still_disagrees_with_the_new_one():
@@ -775,11 +930,11 @@ def test_the_old_rule_can_answer_no_and_still_disagrees_with_the_new_one():
         conftest.workflow_stage(may_not_create=[tests_dir]),
         conftest.workflow_stage(may_only_change=["docs/zzz-elsewhere/"]),
     )
-    assert not some_stage_may_create_under(rendered_facts(closed), tests_dir)
+    assert not some_stage_may_create_under(rendered_facts(closed))
 
     wrong_case = rendered_facts(built_without_a_validation_stage())
-    assert some_stage_may_create_under(wrong_case, tests_dir)
-    assert backstop_refuses(wrong_case, tests_dir)
+    assert some_stage_may_create_under(wrong_case)
+    assert backstop_refuses(wrong_case)
 
 
 # --------------------------------------------------------------------------
@@ -803,6 +958,40 @@ def test_the_story_statement_claims_such_work_even_where_behaviour_is_unchanged(
     assert "only place" in statement
     assert "even where behaviour is unchanged" in statement
     assert "assertion" in statement
+
+
+def test_the_story_statement_says_from_its_side_what_the_refactor_statement_says():
+    """The sibling of the refactor assertion above, holding the story
+    statement to the same vocabulary since story-174: a stage confined to
+    the tests directory, whose work is validation, so the assertion is
+    written by a stage other than the one whose change it validates. Not the
+    permission story-172 removed from the refactor statement — that a stage
+    "may write" the assertion — which read beside its sibling implied the
+    refactor workflow had no stage that may write one."""
+    statement = raw_definition("story-workflow")["applies_when"].lower()
+    assert re.search(r"declares a stage confined to the tests directory", statement)
+    assert "whose work is validation" in statement
+    assert ("written by a stage other than the one whose change it validates"
+            in statement)
+    assert "may write" not in statement
+    # The control for that absence: the revision story-172 started from
+    # carried the permission, and the same search finds it there.
+    started = json.loads(definition_where_story_172_started("story-workflow"))
+    assert "may write" in started["applies_when"].lower()
+    assert "confined to the tests directory" not in started["applies_when"].lower()
+
+
+def test_the_two_statements_name_the_confinement_from_opposite_sides():
+    """Read side by side: both say the assertion's author is decided by
+    whether a stage confined to the tests directory exists, the refactor
+    statement that it has no such stage and the story statement that it
+    declares one — the one distinction the backstop decides from."""
+    refactor = raw_definition("refactor-workflow")["applies_when"].lower()
+    story = raw_definition("story-workflow")["applies_when"].lower()
+    assert "written by the stage whose own change it validates" in refactor
+    assert "written by a stage other than the one whose change it validates" in story
+    for statement in (refactor, story):
+        assert "may write" not in statement
 
 
 @pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
@@ -842,19 +1031,22 @@ def definition_where_story_172_started(name: str) -> str:
                               validation_file=Path(__file__), bound=ENDPOINT)
 
 
-def test_story_172_changed_only_the_refactor_statement_and_nothing_of_the_story_workflow():
-    """The definitions stand as story-070 declared them: story-workflow.json
-    is byte for byte what story-172 started from, and refactor-workflow.json
-    differs from it in applies_when and in no other key."""
-    assert (WORKFLOWS / "story-workflow.json").read_text(encoding="utf-8") == (
-        definition_where_story_172_started("story-workflow"))
-    assert raw_definition("story-workflow") == json.loads(
-        definition_where_story_172_started("story-workflow"))
+def test_since_story_172_started_only_the_two_statements_changed():
+    """The definitions stand as story-070 declared them: each shipped
+    definition differs from where story-172 started in applies_when and in
+    no other key. story-172 reworded the refactor statement; story-174
+    reworded the story statement to match it, so the byte-for-byte pin that
+    held story-workflow.json to that revision is rebounded here to the same
+    claim its sibling was already held to."""
+    for name in SHIPPED_DEFINITIONS:
+        started = json.loads(definition_where_story_172_started(name))
+        after = raw_definition(name)
+        assert set(started) == set(after), name
+        assert {key for key in after if after[key] != started[key]} == {
+            "applies_when"}, name
 
     started = json.loads(definition_where_story_172_started("refactor-workflow"))
     after = raw_definition("refactor-workflow")
-    assert set(started) == set(after)
-    assert {key for key in after if after[key] != started[key]} == {"applies_when"}
     assert "no stage that may write" in started["applies_when"]
     assert "no stage that may write" not in after["applies_when"]
 
@@ -863,13 +1055,13 @@ def test_the_start_of_story_172_is_neither_the_baseline_nor_the_working_tree():
     """Control for the identity above: the revision it reads is a third one.
     It differs from this module's BASELINE, where story-171 had not yet
     written the finishing test into either statement, and it differs from the
-    working tree on the one key story-172 changed — so an equal reading of
-    story-workflow is two revisions agreeing, not one revision read twice."""
+    working tree on the one key each of story-172 and story-174 changed — so
+    the equality above on every other key is two revisions agreeing, not one
+    revision read twice."""
     for name in SHIPPED_DEFINITIONS:
         started = json.loads(definition_where_story_172_started(name))
         assert started["applies_when"] != baseline_definition(name)["applies_when"]
-    assert (json.loads(definition_where_story_172_started("refactor-workflow"))
-            ["applies_when"] != raw_definition("refactor-workflow")["applies_when"])
+        assert started["applies_when"] != raw_definition(name)["applies_when"]
 
 
 def test_the_two_statements_still_differ_and_still_load_as_candidates():

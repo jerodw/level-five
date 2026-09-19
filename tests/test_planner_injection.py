@@ -700,6 +700,63 @@ def test_the_template_carries_the_three_workflow_placeholders():
         assert placeholder in text, placeholder
 
 
+#: The placeholder `config_context` resolves to the target's tests directory.
+#: Since story-174 the planner template carries it beside the three above, so
+#: the backstop is told the directory rather than left to recognise it from a
+#: restriction's prefix. Derived nowhere, for the same reason as the others.
+TESTS_DIR_PLACEHOLDER = "{{tests_dir}}"
+
+#: A tests directory no template of this repository could name by accident,
+#: for the renders below: "the directory reached the prompt" then means it was
+#: injected rather than already in the prose.
+PROBE_TESTS_DIR = "zzz-spec/"
+
+
+def names_on_its_own_line(rendered: str, value: str) -> bool:
+    """Whether the rendered prompt carries `value` as a line of its own — the
+    form the standalone placeholder renders in, and one a restriction line
+    (which names the directory after its stage and its sense) never takes.
+    Reading it this way is what lets a prompt whose restrictions also resolve
+    to the directory show whether the fact line is there."""
+    return re.search(rf"^{re.escape(value)}$", rendered, re.MULTILINE) is not None
+
+
+def test_the_template_carries_the_tests_dir_placeholder_and_no_literal_directory():
+    """The template names the directory by placeholder only: rendered against
+    a configuration declaring a probe directory, the prompt carries it on a
+    line of its own; with the placeholder stripped, the same render carries
+    it nowhere — so the line is the injection's and not the prose's. The
+    stripped template also names neither the probe nor this repository's own
+    configured directory anywhere."""
+    text = planner_template()
+    assert text.count(TESTS_DIR_PLACEHOLDER) == 1
+    context = full_context()
+    context.update(context_assembler.config_context(
+        {"tests_dir": PROBE_TESTS_DIR}))
+    rendered = context_assembler.render(text, context)
+    assert names_on_its_own_line(rendered, PROBE_TESTS_DIR)
+
+    stripped = text.replace(TESTS_DIR_PLACEHOLDER, "")
+    assert stripped != text
+    rendered = context_assembler.render(stripped, context)
+    assert PROBE_TESTS_DIR not in rendered
+    prose = PLACEHOLDER.sub("", text)
+    assert PROBE_TESTS_DIR not in prose
+    assert conftest.repository_config()["tests_dir"] not in prose
+
+
+def test_config_context_renders_an_absent_tests_directory_as_none():
+    """The optional-placeholder convention the template's fact line says it
+    follows: a target declaring no tests directory renders the line as None,
+    and leaves no placeholder behind."""
+    context = full_context()
+    context.update(context_assembler.config_context({}))
+    assert context["tests_dir"] is None
+    rendered = context_assembler.render(planner_template(), context)
+    assert PLACEHOLDER.search(rendered) is None
+    assert names_on_its_own_line(rendered, "None")
+
+
 #: What the restrictions placeholder was called before a second sense of
 #: restriction arrived. The field name rather than the braced form, because a
 #: snapshot of a *template* carries it braced and a snapshot of a module
@@ -982,12 +1039,49 @@ def test_l5_plan_injects_the_workflow_facts_into_the_session_prompt(
     assert missing_stage_names(prompt, deployed_names) == set()
     assert missing_restrictions(prompt, deployed_restrictions) == set()
     assert missing_blocked_paths(prompt) == set()
+    # Since story-174 the prompt also names the tests directory the project
+    # configures, on a line of its own — the restriction lines above resolve
+    # to the same directory, which is why it is read as a line rather than as
+    # a substring. The value is the project's configured one, read back off
+    # its configuration rather than restated.
+    assert names_on_its_own_line(
+        prompt, harness_config.load_config(project)["tests_dir"])
     assert PLACEHOLDER.search(prompt) is None
     schema_text = (REPO_ROOT / "schemas" / "story.schema.json").read_text(
         encoding="utf-8"
     )
     assert schema_text in prompt
     assert argv[-1] == "Story request: a story request"
+
+
+def test_l5_plan_names_the_tests_directory_the_target_configures(
+    plan_capture, tmp_path
+):
+    """End to end against a target whose tests directory this repository's
+    template and configuration could not have supplied: the session prompt
+    names it on a line of its own, and the deployed restrictions resolve to
+    the same directory — so the planner's backstop is told the directory the
+    restrictions are about, rather than left to guess it. The control is the
+    assertion above on the template: with the placeholder stripped the
+    directory reaches no line of its own."""
+    project = tmp_path / "project"
+    (project / ".harness").mkdir(parents=True)
+    (project / ".harness" / "config.yaml").write_text(
+        f"workflow: story-workflow\ntests_dir: {PROBE_TESTS_DIR}\n",
+        encoding="utf-8")
+    conftest.init_repository(project)
+
+    result, argv = plan_capture(project)
+    assert result.returncode == 0, result.stderr
+    assert argv is not None
+    prompt = argv[argv.index("--append-system-prompt") + 1]
+    assert names_on_its_own_line(prompt, PROBE_TESTS_DIR)
+    deployed = harness_config.load_workflow(
+        REPO_ROOT, "story-workflow", harness_config.load_config(project))
+    deployed_restrictions = story_coordinator.stage_restrictions(deployed["stages"])
+    assert PROBE_TESTS_DIR in {r.prefix for r in deployed_restrictions}
+    assert missing_restrictions(prompt, deployed_restrictions) == set()
+    assert PLACEHOLDER.search(prompt) is None
 
 
 def test_l5_plan_without_a_target_repository_exits_nonzero_and_starts_no_session(
