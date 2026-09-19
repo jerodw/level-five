@@ -1,0 +1,170 @@
+story:
+  id: story-168
+  title: Two runs pruning the history at once rewrite only what each of them owns
+  description: |
+    Planned from the brief filed under 218.
+
+    story-165 gave every writer of the cross-run history its own segment file,
+    so two runs never append to the same file and their branches merge without
+    conflict. That guarantee covers the append only. The prune that bounds the
+    history by history_retention_days still runs inside every story run, at
+    run-directory creation, and rewrites every file of every log it drops a
+    record from — the root-level files and every other story's segment. Two
+    story branches that both ran under a retention bound therefore both edit
+    the same tracked files, and merging them conflicts in exactly the shape
+    story-165 removed. Nothing meets it today because this deployment leaves
+    history_retention_days unset, and the limit is written down only as prose
+    in the architecture document.
+
+    A lock would not settle it: the two runs need not overlap in time, because
+    the contention is between two branches that each committed a rewrite of
+    the same file, not between two processes writing at once. What settles it
+    is that a story run never rewrites the history at all. Pruning is
+    store-wide maintenance and belongs on the base branch, outside any run.
+
+    So a run keeps reading every history file at startup and keeps refusing on
+    a line it cannot parse, but it deletes nothing. When the bound is set it
+    counts the records past it and, at the end of the run, reports them in
+    one event naming the files, the counts and the command to run — repeated
+    by every run until the prune happens, because a command nobody is
+    reminded to run never runs. The rewrite moves to a new command, l5-prune,
+    run by a person on the repository's default branch: the same prune code,
+    the same refusal, the same rule that a record whose timestamp cannot be
+    read is kept, followed by a commit of the rewritten files. The prune stays
+    the only reader and the only rewriter of a log; only the place it is
+    invoked from moves.
+
+    Deliberately left alone: the append path and the segment layout, the
+    root-level log files, the refusal on a malformed line, and the rule that
+    an unreadable timestamp keeps a record.
+  workflow: story-workflow
+
+tasks:
+  - Split the in-run prune into a read that judges and a rewrite that drops. At run-directory creation the coordinator still reads every file of every declared log, still refuses the run on a line that is not valid JSON or on a history_retention_days that is not a non-negative number, and now rewrites nothing whatever the bound says. When the bound is set it records, for this run, how many records in each file are older than the bound, keyed by the file's path relative to the history directory as the prune already keys what it dropped.
+  - Report what is past the bound at the end of the run. On completion and on escalation, when at least one record was counted past the bound, append one note event through append_event naming history_retention_days and its value, each file with its count, and the instruction to run l5-prune on the default branch; put the same sentence in the completion report's Next Step section. When nothing was counted, or the bound is unset, append nothing, so a run under this deployment's configuration leaves an events.log and a completion report identical to today's. A pause appends nothing, because a pause is not an end. The event is a note rather than a new kind in schemas/execution-history.schema.json.
+  - Remove the in-run "cross-run history pruned" announcement, since a run no longer drops anything, and keep prune_history as the one function that rewrites a log, now called from l5-prune alone.
+  - Add scripts/l5-prune as a thin entry point that finds the target repository by walking up from the current directory to the nearest .harness/config.yaml, the way l5-run does, and hands control to orchestration. The orchestration side refuses when the current branch is not the repository's default branch, refuses through the existing bad-history refusal on a malformed line or an unusable bound, says so and exits 0 when the bound is unset or nothing is past it, and otherwise runs prune_history, prints each file and the count dropped from it, and commits the rewritten files with a message naming the bound. It does not push.
+  - Rewrite the descriptions that say where the prune runs. In schemas/cross-run-history.schema.json the top-level sentence that the only read of a log is the prune that bounds it by history_retention_days now says that a run reads and reports and that the rewrite happens only through l5-prune on the default branch, so two runs never rewrite the same file. In schemas/harness-config.schema.json the history_retention_days description says the same. The comment above the unset key in .harness/config.yaml and templates/config.yaml says how a set bound is applied. README.md's command table gains an l5-prune row.
+  - Adapt tests/test_cross_run_history_retention.py to the run no longer dropping: the cases that ran a story under a bound and asserted the older record was gone now assert it is still there and that the run's end reported it; the refusal cases, the unset-bound case and the unreadable-timestamp case are unchanged in what they hold. Adapt the two prune cases in tests/test_two_runs_merge_without_contending.py that call prune_history directly, which keep holding the rewrite as a property of that function.
+  - Add the tests that hold the new behaviour. Two stories completed from one base on two branches with history_retention_days set and records older than the bound planted at the root and in an earlier story's segment merge with no conflict, read off git's exit status and git ls-files -u, and the merged tree still holds every planted record. A run that counted records past the bound ends with exactly one note naming each file and its count and naming l5-prune, on completion and on escalation, and its control is a run with the same history and the bound unset that appends no such note. l5-prune on the default branch drops the older records, leaves the newer ones byte for byte, and leaves a commit carrying exactly the rewritten files; on a branch that is not the default it refuses with nothing rewritten and nothing committed; on a malformed line it refuses naming the file and the line with nothing rewritten. The existing source-scan holds still pass: no module under orchestration/ names a log file outside the two resolvers, and the append path opens every log for appending and never for writing.
+  - Record the change in .harness/docs/ARCHITECTURE.md as a section after "Two runs in flight at once merge without contending", and amend that section's "What this does not settle" paragraph to point at it.
+
+acceptance_criteria:
+  - A story run under a configured history_retention_days with records older than the bound in a root-level file and in another story's segment completes with every one of those records still present, byte for byte, in the file that held it, and with no file under the history directory rewritten by the run.
+  - Such a run's events.log carries exactly one note, appended at the run's end, that names history_retention_days and its configured value, each file relative to the history directory with the count of records past the bound in it, and the command l5-prune; its completion-report.md carries the same sentence under Next Step.
+  - A run that escalates under the same conditions appends the same note before the commit the escalation leaves.
+  - A run with the same history and history_retention_days unset appends no such note, and a run under a bound that nothing is older than appends no such note; the run's events.log and completion report are then identical to what a run appends today.
+  - A run's startup still refuses, with nothing rewritten, on a history line that is not valid JSON, naming the file and the line number, and on a history_retention_days that is not a non-negative number, through the same refusal it uses today.
+  - A run never announces that it pruned the cross-run history, because it no longer does; the in-run announcement of a drop is gone.
+  - scripts/l5-prune, run from within a target repository standing on its default branch with a configured bound, drops every record older than the bound from whichever file holds it, leaves every newer record and every record whose timestamp cannot be read byte for byte, prints each rewritten file's path relative to the history directory with the count dropped from it, and leaves a commit on the default branch whose changed files are exactly the rewritten ones.
+  - scripts/l5-prune on a branch other than the repository's default branch refuses, naming the branch it is on and the default branch, and rewrites and commits nothing; on a malformed line it refuses through the bad-history refusal naming the file and the line with nothing rewritten; with the bound unset or nothing past it, it reports that and exits 0 with no commit.
+  - scripts/l5-prune does not push.
+  - Two stories completed from one base on two branches, both under a configured bound and both with records past the bound planted at the root and in an earlier story's segment, merge with no conflict as read from git's exit status and an empty git ls-files -u, and the merged history holds every planted record and every record either run wrote, nothing twice.
+  - prune_history remains the only function under orchestration/ that opens a history log for writing, and no module under orchestration/ names a log file outside history_log_files and history_segment; the existing source-scan tests that hold those two properties pass unchanged.
+  - The top-level description of schemas/cross-run-history.schema.json and the history_retention_days description in schemas/harness-config.schema.json say that a run reads and reports and that the rewrite happens only through l5-prune on the default branch; neither schema changes any property, enum, required list or field description of what a record carries.
+  - README.md's command table has a row for l5-prune.
+  - .harness/docs/ARCHITECTURE.md has a section recording the change and the reasoning above, and the "What this does not settle" paragraph of "Two runs in flight at once merge without contending" no longer states the prune contention as open.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_coordinator.py, separate the read from the rewrite. The read — every file of every declared log through history_log_files, parsed before anything else happens, refusing on json.JSONDecodeError and on an unusable bound — becomes a function the run calls at run-directory creation; with the bound set it returns the count of records past the bound per file, keyed as prune_history keys dropped, judged by _record_is_older so an unreadable timestamp is not counted. prune_history keeps its name and its contract as the whole-store rewrite and becomes a caller of the same read.
+    - Hold the run's count in coordinator module state established once per run beside _history_dir, in the shape set_history_dir uses, so no terminal path can be handed a count by a keyword argument that a call site omits.
+    - In _complete and in _escalate, when the held count is non-empty, append the note through append_event before the commit each path leaves, so the note is committed with the run's records; compose the sentence in one helper so the completion report and the two events say the same thing. Delete the in-run announcement of a drop at the prune's call site in run_story.
+    - Add the orchestration-side entry for l5-prune: resolve the target root and configuration, refuse off the default branch using the same resolution of the default branch the run's --base check uses, call prune_history, print what it dropped, and commit the rewritten files by path.
+    - Add scripts/l5-prune as a thin entry point in the shape of scripts/l5-run, with a docstring saying what it does and why it belongs on the default branch.
+    - Rewrite the two schema descriptions, the two config comments and the README row.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Split the in-run read from the rewrite, hold the count, append the end-of-run note on completion and escalation, remove the in-run drop announcement, and add the orchestration side of l5-prune.
+    - file: scripts/l5-prune
+      stage: implementer
+      reason: New thin entry point for the whole-store prune on the default branch.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: The top-level description says where the rewrite now happens and that a run only reads and reports.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The history_retention_days description says the bound is applied by l5-prune and reported by runs.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: The comment above the unset history_retention_days says how a set bound is applied.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The same comment in the template l5-init installs.
+    - file: README.md
+      stage: implementer
+      reason: A row for l5-prune in the command table.
+    - file: tests/test_cross_run_history_retention.py
+      stage: tester
+      reason: The cases that ran a story under a bound and asserted a drop now assert the record survives and the run reported it; new cases hold the note in both directions and on escalation.
+      reverting_breaks_the_suite: The run no longer drops records, so the assertions that the older record is gone after a run fail against the new coordinator until they are adapted.
+    - file: tests/test_two_runs_merge_without_contending.py
+      stage: tester
+      reason: The two direct prune_history cases follow the function's changed shape, and the new case plants old records under a bound on two branches and holds the merge conflict-free.
+      reverting_breaks_the_suite: The direct prune_history cases call the function whose read is now factored out; they are adapted to the new shape and fail unadapted if the shape changed.
+    - file: tests/test_l5_prune.py
+      stage: tester
+      reason: New module holding l5-prune's cases — drops and commits on the default branch, refuses off it, refuses on a malformed line, reports and exits 0 with nothing to do, never pushes.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A new section recording the change, and the "What this does not settle" paragraph of the story-165 section amended.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - scripts/l5-prune
+    - schemas/cross-run-history.schema.json
+    - schemas/harness-config.schema.json
+    - .harness/config.yaml
+    - templates/config.yaml
+    - README.md
+    - tests/test_cross_run_history_retention.py
+    - tests/test_two_runs_merge_without_contending.py
+    - tests/test_l5_prune.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/harness_config.py
+    - orchestration/plan_mandate.py
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - schemas/execution-history.schema.json
+    - schemas/story.schema.json
+    - workflows/
+    - prompts/
+    - scripts/l5-run
+    - scripts/l5-plan
+    - scripts/l5-inspect
+    - tests/test_cross_run_history.py
+    - tests/test_a_run_commits_the_history_it_writes.py
+
+verification_requirements:
+  - Confirm, by running a story under a configured bound with old records planted at the root and in another story's segment, that every planted record survives the run byte for byte and no file under the history directory was rewritten.
+  - Confirm the end-of-run note is appended exactly once on completion and on escalation with the files, counts, bound and command named, and that the same run with the bound unset appends no such note and leaves an events.log identical to today's.
+  - Confirm a run still refuses on a malformed history line and on an unusable bound with nothing rewritten, through the same refusal as before.
+  - Confirm scripts/l5-prune on the default branch drops the older records and commits exactly the rewritten files, refuses on another branch and on a malformed line with nothing rewritten or committed, and does not push.
+  - Confirm two stories completed from one base under a bound with old records planted merge with no conflict, read from git's exit status and git ls-files -u rather than from the absence of an exception, and that the merged history holds every record once.
+  - Confirm the source-scan tests holding that only the prune rewrites a log and that no module names a log outside the resolvers still pass.
+  - Confirm the whole existing suite passes with no existing assertion weakened or skipped.
+
+constraints:
+  - The prune stays the only reader and the only rewriter of a history log; l5-prune invokes prune_history rather than carrying a second copy of the rewrite, and the run's startup read is the same read rather than a second parser.
+  - The prune refuses rather than repairs: a line that is not valid JSON stops it naming the file and the line number, nothing is discarded or rewritten around, and every file is parsed before any is rewritten.
+  - A record whose timestamp cannot be read is kept, and is not counted as past the bound.
+  - The append path and the segment layout story-165 shipped are untouched: append_history_records still opens each log for appending and never for writing, and history_segment and history_log_files are unchanged.
+  - The root-level log files are neither moved nor migrated into segments.
+  - History stays evidence, never state: nothing added here is read back to make a routing decision, and the count held for the end-of-run note routes nothing.
+  - A run under this deployment's configuration, which leaves history_retention_days unset, appends no new event and leaves a completion report identical to today's.
+  - The end-of-run note is a note kind and adds no kind to schemas/execution-history.schema.json.
+  - Every terminal path that appends the note does so before the commit that path leaves, as every terminal path already does for its own record.
+  - No existing test assertion is weakened or skipped; the retention cases change what they assert only because the behaviour they held was deliberately changed, and the census holds their assertion counts.
+  - Python 3.10+, standard library only; scripts/l5-prune stays a thin entry point and the logic lives under orchestration/.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 23:24:16
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 218
