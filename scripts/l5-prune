@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Prune the cross-run history to history_retention_days, on the default branch.
+
+Usage: l5-prune
+The target repository is found by walking up from the current directory
+to the nearest .harness/config.yaml.
+
+A story run never rewrites the history. It reads every file of every
+declared log at startup, refuses on a line it cannot parse, and — when
+history_retention_days is set — counts the records past the bound and
+reports them at its end, naming the files, the counts and this command,
+on every run until the prune happens. Pruning is store-wide maintenance:
+a run that rewrote every file holding an old record would leave two
+story branches both rewriting the same files, and merging them would
+conflict in exactly the shape per-writer segments removed for the append.
+So the rewrite belongs here, on the repository's default branch, outside
+any run.
+
+This refuses when the tree is not standing on that branch — resolved the
+way a run resolves the base a story branches from — refuses on a malformed
+line or an unusable bound with nothing rewritten, says so and exits 0 when
+the bound is unset or nothing is past it, and otherwise drops every record
+older than the bound from whichever file holds it, keeps every newer
+record and every record whose timestamp cannot be read byte for byte,
+prints each rewritten file with the count dropped from it, and commits
+exactly the rewritten files with a message naming the bound. It does not
+push.
+"""
+import sys
+from pathlib import Path
+
+HARNESS_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
+
+import harness_config  # noqa: E402
+import story_coordinator  # noqa: E402
+
+
+def main() -> int:
+    if sys.argv[1:]:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+    target_root = harness_config.find_target_root(Path.cwd())
+    return story_coordinator.prune_store(target_root)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

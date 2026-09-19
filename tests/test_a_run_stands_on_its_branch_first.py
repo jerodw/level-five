@@ -625,7 +625,8 @@ CHECKOUT = "worktrees.add("
 ACTS = (
     "run_dir.mkdir(",
     "set_history_dir(",
-    "prune_history(",
+    "read_history(",
+    "set_history_past_bound(",
     "archive_attempt(",
     "move_entry_artifacts(",
     "resume_from_capacity(",

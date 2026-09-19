@@ -28,7 +28,14 @@ What this module validates:
     are, and a run leaves the root-level file byte for byte as it found it;
   * the prune drops from whichever file holds the record and rewrites only
     those, rewrites nothing with the bound unset, and refuses on a malformed
-    line in a segment naming the file and line with nothing rewritten;
+    line in a segment naming the file and line with nothing rewritten — and
+    since story-168 the read it drops by is the run's own startup read, which
+    counts exactly what the prune drops and rewrites nothing;
+  * two stories completed from one base under a configured retention bound,
+    with records past the bound planted at the root and in an earlier story's
+    segment, merge with no conflict and the merged history holds every
+    planted record — the contention story-165 left open, which story-168
+    closed by moving the rewrite out of the run and into `l5-prune`;
   * the reader-side resolver names the root-level file first and the segments
     in sorted order, and names only files that exist.
 
@@ -455,6 +462,117 @@ def test_two_runs_from_one_base_merge_without_conflict_and_keep_both_histories(
     assert {r["story_id"] for r in after[OUTCOME_LOG]} == set(STORIES)
 
 
+#: A story that ran before either of the two here, whose segment carries a
+#: record past the bound; under the in-run prune both runs would have
+#: rewritten its file.
+EARLIER_STORY = "story-000"
+
+
+def plant_past_the_bound(target: Path) -> dict[str, str]:
+    """Configure a bound on the base and plant, at the root and in an earlier
+    story's segment, one record past it and one not, committed on the base so
+    both branches below are cut carrying them. Returns each planted file's
+    text keyed by its path relative to the history directory."""
+    config = target / ".harness" / "config.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + f"{story_coordinator.HISTORY_RETENTION_KEY}: {RETENTION_DAYS}\n",
+        encoding="utf-8")
+    fresh = now_stamp()
+    planted = {
+        OUTCOME_LOG: outcome_line(EARLIER_STORY, OLD_STAMP)
+                     + outcome_line(EARLIER_STORY, fresh),
+        f"{EARLIER_STORY}/{OUTCOME_LOG}": outcome_line(EARLIER_STORY, OLD_STAMP)
+                                          + outcome_line(EARLIER_STORY, fresh),
+    }
+    directory = target / HISTORY_DIR
+    for relative, text in planted.items():
+        path = directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    conftest.commit_setup(target, "a bound, and records past it")
+    return planted
+
+
+@pytest.fixture
+def two_completed_under_a_bound(target_root, harness_root):
+    planted = plant_past_the_bound(target_root)
+    base = git_out(target_root, "rev-parse", "HEAD").strip()
+    first = complete(target_root, harness_root, FIRST_STORY, [FAIL_ONCE, PASS])
+    second = complete(target_root, harness_root, SECOND_STORY, [PASS])
+    return target_root, base, first, second, planted
+
+
+def test_two_runs_under_a_bound_merge_without_conflict_and_keep_every_planted_record(
+        two_completed_under_a_bound):
+    """The contention story-165 left open, closed.
+
+    Both runs are under a configured bound and both start from files holding
+    records past it, at the root and in an earlier story's segment. Neither
+    run rewrites those files — each branch's commits touch only the run's own
+    segment — so merging the second branch into the first has nothing to
+    reconcile, read off git's exit status and an empty `ls-files -u`, and the
+    merged history holds every planted record byte for byte and every record
+    either run wrote, nothing twice. Each run reported what it counted rather
+    than dropping it. The control for the no-conflict reading is
+    `test_the_merge_check_reports_the_contention_the_layout_removes`, and the
+    control for "reported" is the retention module's run with the bound unset.
+    """
+    target, base, first, second, planted = two_completed_under_a_bound
+    history_prefix = HISTORY_DIR.rstrip("/") + "/"
+    for story in STORIES:
+        touched = {path for path in files_changed_since(
+            target, base, branch_of(target, story))
+            if path.startswith(history_prefix)}
+        assert touched, f"{story} committed no history at all"
+        assert all(path.startswith(f"{history_prefix}{story}/")
+                   for path in touched), touched
+        events = (conftest.run_dir_for(target, story) / "events.log").read_text(
+            encoding="utf-8")
+        notes = [line for line in events.splitlines()
+                 if story_coordinator.HISTORY_RETENTION_KEY in line]
+        assert len(notes) == 1, events
+        assert story_coordinator.PRUNE_COMMAND in notes[0]
+        for relative in planted:
+            assert f"{relative}: 1" in notes[0], notes[0]
+
+    before = {story: gathered_logs(tree)
+              for story, tree in ((FIRST_STORY, first), (SECOND_STORY, second))}
+    code, unmerged = merge_outcome(first, branch_of(target, SECOND_STORY))
+    assert code == 0
+    assert unmerged == []
+    assert git_out(first, "status", "--porcelain", "--untracked-files=no",
+                   "--", HISTORY_DIR) == ""
+
+    for relative, text in planted.items():
+        assert (first / HISTORY_DIR / relative).read_text(encoding="utf-8") == text
+        assert git_out(first, "show", f"HEAD:{history_prefix}{relative}") == text
+
+    after = gathered_logs(first)
+    for log in DECLARATIONS:
+        # Every record either branch holds, once: the planted records are in
+        # both branches' gathers and in the merged one exactly once.
+        planted_in = [r for r in before[FIRST_STORY][log]
+                      if r["story_id"] == EARLIER_STORY]
+        expected = before[FIRST_STORY][log] + [
+            r for r in before[SECOND_STORY][log] if r["story_id"] != EARLIER_STORY]
+        assert len(after[log]) == len(expected), log
+        for record in expected:
+            assert record in after[log], (log, record)
+        assert [r for r in after[log] if r["story_id"] == EARLIER_STORY] == \
+            planted_in, log
+    assert [r["story_id"] for r in after[OUTCOME_LOG]
+            if r["story_id"] == EARLIER_STORY] == [EARLIER_STORY] * 4
+    assert {r["story_id"] for r in after[OUTCOME_LOG]} == \
+        {EARLIER_STORY, *STORIES}
+    # The control for "left alone": the merged tree still holds exactly the
+    # records the bound would drop, so both runs had something to rewrite and
+    # neither did.
+    reading = story_coordinator.read_history(
+        history_dir_of(first), harness_config.load_config(first))
+    assert reading.past_bound == {relative: 1 for relative in planted}
+
+
 def test_the_merge_check_reports_the_contention_the_layout_removes(tmp_path):
     """The control: two branches appending to one root-level log conflict.
 
@@ -685,14 +803,24 @@ def snapshot(directory: Path) -> dict[str, bytes]:
 
 def test_the_prune_drops_from_whichever_file_holds_the_record_and_rewrites_only_those(
         tmp_path):
+    """The rewrite, held as a property of `prune_history` alone: since
+    story-168 no run calls it. The read the run does make, `read_history`, is
+    shown first counting exactly what the prune then drops — keyed the same
+    way — and rewriting nothing."""
     directory = tmp_path / "history"
     before = build_history(directory)
+    config = {story_coordinator.HISTORY_RETENTION_KEY: RETENTION_DAYS}
 
-    pruned = story_coordinator.prune_history(
-        directory, {story_coordinator.HISTORY_RETENTION_KEY: RETENTION_DAYS})
+    reading = story_coordinator.read_history(directory, config)
+    assert reading.problems == []
+    assert reading.past_bound == {OUTCOME_LOG: 1, f"{FIRST_STORY}/{OUTCOME_LOG}": 1}
+    assert snapshot(directory) == before
+
+    pruned = story_coordinator.prune_history(directory, config)
 
     assert pruned.problems == []
-    assert pruned.dropped == {OUTCOME_LOG: 1, f"{FIRST_STORY}/{OUTCOME_LOG}": 1}
+    assert pruned.dropped == reading.past_bound
+    assert story_coordinator.read_history(directory, config).past_bound == {}
     after = snapshot(directory)
     assert set(after) == set(before)
     for relative in pruned.dropped:
@@ -710,6 +838,14 @@ def test_the_prune_with_the_bound_unset_reads_every_file_and_rewrites_none(
         tmp_path):
     directory = tmp_path / "history"
     before = build_history(directory)
+    reading = story_coordinator.read_history(directory, {})
+    assert reading.problems == [] and reading.past_bound == {}
+    assert reading.cutoff is None
+    # Every file was read: the parsed lines the read hands the prune name each
+    # file the resolver names, so "counted nothing" is the bound being unset
+    # rather than nothing having been opened.
+    assert {p.relative_to(directory).as_posix() for p in reading.files} == \
+        set(before)
     pruned = story_coordinator.prune_history(directory, {})
     assert pruned == story_coordinator.HistoryPrune([], {})
     assert snapshot(directory) == before

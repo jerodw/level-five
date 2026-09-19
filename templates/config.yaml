@@ -148,6 +148,12 @@ test_command: {test_command}
 # so a value that is not a positive integer switches it off and is named in the
 # record rather than refusing anything.
 # inspect_after_story_max_files: 60
+# How long a cross-run history record is kept, in days. Unset keeps the whole
+# history. Set, a run rewrites nothing: it counts the records past the bound
+# at its start and reports them at its end, naming the files and the counts,
+# until l5-prune — run by a person on the default branch — drops them and
+# commits the rewritten files.
+# history_retention_days: 90
 # Where this repository's tests live, as a path prefix ending in a slash. It is
 # what the workflow's {{tests_dir}} token resolves to: the stage restricted from
 # creating tests is restricted here, and the stage that writes them is told to

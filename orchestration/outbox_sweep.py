@@ -313,9 +313,11 @@ def worth_saying(summary: outbox.Summary) -> bool:
     A sweep of a queue that holds nothing and met no problem did nothing, and
     saying so on every run of every target — almost all of which file nothing
     — would put a line in every run's events.log that is only ever the same
-    line. That is the rule the history prune beside it already follows, where
-    only an actual drop is announced, and the suite census, where a target
-    configuring no census command announces nothing.
+    line. That is the rule the end-of-run history note already follows, where
+    a run appends a note about records past history_retention_days only when
+    its startup read counted something past the bound and nothing otherwise,
+    and the suite census, where a target configuring no census command
+    announces nothing.
     """
     return bool(
         summary.landed or summary.pending or summary.failed

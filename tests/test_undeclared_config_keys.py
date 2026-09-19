@@ -944,7 +944,7 @@ def test_the_same_scan_reports_a_tie_planted_under_orchestration(tmp_path):
     assert [f.path for f in findings] == ["orchestration/planted.py"]
 
 
-def test_permanent_mentions_holds_thirteen_and_none_is_harness_config():
+def test_permanent_mentions_holds_fourteen_and_none_is_harness_config():
     """Read off the list the other module owns, because this story's edit to
     it is one of its acceptance criteria.
 
@@ -962,10 +962,12 @@ def test_permanent_mentions_holds_thirteen_and_none_is_harness_config():
     a-stage-can-check-its-own-outputs moved it by two, and one of those is the
     first `hooks/` entry since the Bash guard: the turn-end check is a hook
     rather than an entry point, and the entry point it shares a checker with is
-    the other. Both are the same growth as the four before them.
+    the other. Both are the same growth as the four before them, and story-168's
+    `scripts/l5-prune` — the whole-store prune moved out of the run and onto the
+    default branch — is the same growth once more.
     """
     mentions = stack_module.PERMANENT_MENTIONS
-    assert len(mentions) == 13, sorted(mentions)
+    assert len(mentions) == 14, sorted(mentions)
     assert not [path for path, _ in mentions
                 if path == "orchestration/harness_config.py"]
     # The control for that absence: the same comprehension over the same list

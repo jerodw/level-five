@@ -1041,11 +1041,43 @@ HISTORY_RETENTION_KEY = "history_retention_days"
 #: outside any run, gets.
 _history_dir: Path | None = None
 
+#: How many records each history file holds past the configured retention
+#: bound, as this run's startup read counted them, keyed by the file's path
+#: relative to the history directory. Established once per run beside
+#: `_history_dir` and in the same shape, so no terminal path can be handed a
+#: count by a keyword argument a call site omits. Empty is "nothing past the
+#: bound, or no bound at all", and then the run's end reports nothing. It
+#: routes nothing: the run never rewrites the history, and what it holds here
+#: is only what the end-of-run note says.
+_history_past_bound: dict[str, int] = {}
+
+#: The configured bound those counts were taken against, as the configuration
+#: spells it, so the end-of-run note can name the value without a terminal
+#: path having to be handed the configuration.
+_history_retention_bound: object = None
+
 
 def set_history_dir(directory: Path | None) -> None:
-    """Establish where this run's cross-run records go, for the whole run."""
+    """Establish where this run's cross-run records go, for the whole run.
+
+    Establishing a directory is the start of a run's dealings with the
+    history, so whatever an earlier run in this process counted past the
+    bound is void here: the counts are cleared until this run's own read
+    establishes them, and a caller establishing none — a hand-built run
+    directory outside any run — owes no end-of-run note.
+    """
     global _history_dir
     _history_dir = directory
+    set_history_past_bound({})
+
+
+def set_history_past_bound(counts: dict[str, int], bound: object = None) -> None:
+    """Establish what this run's startup read counted past the bound, and the
+    bound it counted against, for the whole run.
+    """
+    global _history_past_bound, _history_retention_bound
+    _history_past_bound = dict(counts)
+    _history_retention_bound = bound
 
 
 def history_log_declarations(harness_root: Path | None = None) -> dict[str, dict]:
@@ -1122,7 +1154,9 @@ def append_history_records(
 
     Opened for appending and never for writing: a record already written is
     never rewritten by an append, and the single point at which a log is
-    rewritten is the prune below, which announces itself.
+    rewritten is `prune_history` below, invoked only by `l5-prune` on the
+    default branch, which prints each file it dropped from. A run itself only
+    reads and, at its end, reports what a set bound would drop.
     """
     segment: Path | None = None
     written: list[Path] = []
@@ -1171,7 +1205,9 @@ def _append_history_records(run_dir: Path, entry: dict, history: list[dict]) -> 
 
 @dataclass(frozen=True)
 class HistoryPrune:
-    """What one run's prune did: what stopped it, and what it dropped."""
+    """What one prune of the whole store did: what stopped it, and what it
+    dropped, keyed by the file's path relative to the history directory.
+    """
 
     problems: list[str]
     dropped: dict[str, int]
@@ -1194,29 +1230,43 @@ def _record_is_older(record: object, cutoff: float) -> bool:
     return when < cutoff
 
 
-def prune_history(directory: Path, config: dict) -> HistoryPrune:
-    """Bound the cross-run history by history_retention_days, or refuse.
+@dataclass(frozen=True)
+class HistoryReading:
+    """What one read of the whole history found: what stopped it, what it
+    counted past the bound, and the parsed lines the prune rewrites from.
 
-    This is the only thing that reads a log and the only thing that rewrites
-    one, which is what confines the rewrite of a committed record to a single
-    announced point and leaves the append path itself append-only.
+    `past_bound` is keyed by the file's path relative to the history directory,
+    exactly as `HistoryPrune.dropped` keys what the prune dropped, so the
+    end-of-run note and the prune's announcement name a file the same way.
+    `cutoff` is None where the bound is unset, and then `past_bound` is empty.
+    """
+
+    problems: list[str]
+    past_bound: dict[str, int]
+    cutoff: float | None
+    files: dict[Path, list[tuple[str, object]]]
+
+
+def read_history(directory: Path, config: dict) -> HistoryReading:
+    """Read and judge every file of every declared log, rewriting nothing.
+
+    This is the read that both a run's startup and the prune make, and it is
+    the only reader of a log: the run calls it to refuse on a history it cannot
+    parse and to count what a configured bound would drop, and `prune_history`
+    calls it to know what to rewrite. One parser rather than two, so the run's
+    refusal and the prune's refusal are one fact.
 
     It refuses rather than repairs. A line that is not valid JSON stops the
-    prune and refuses the run, naming the file and the line number: a store
-    that discards what it cannot parse and carries on is not append-only. Every
-    log is read and parsed *before* any is rewritten, so a malformed line in a
-    later log cannot leave an earlier one already rewritten, and the malformed
-    line and every other line are still there afterwards.
+    read naming the file and the line number: a store that discards what it
+    cannot parse and carries on is not append-only. Every file is read and
+    parsed before anything is judged, so a caller that goes on to rewrite has
+    parsed every file first. A `history_retention_days` that is not a
+    non-negative number is refused the same way rather than ignored.
 
-    An unset bound keeps everything: nothing is dropped and no log is
-    rewritten. The logs are still read, because a corrupted record is worth
-    refusing on whether or not this deployment prunes.
-
-    A log is every file the reader-side resolver names for it — the root-level
-    file and each segment's — read and judged alike, and a record is dropped
-    from whichever file holds it. What was dropped is keyed by the file
-    relative to the history directory, so the announcement names the file that
-    was rewritten.
+    An unset bound counts nothing, and the files are still read, because a
+    corrupted record is worth refusing on whether or not this deployment
+    prunes. A record whose timestamp cannot be read is not counted as past the
+    bound, by the same judgement (`_record_is_older`) the prune drops by.
     """
     parsed: dict[Path, list[tuple[str, object]]] = {}
     for name in history_log_declarations():
@@ -1228,32 +1278,71 @@ def prune_history(directory: Path, config: dict) -> HistoryPrune:
                 try:
                     lines.append((line, json.loads(line)))
                 except json.JSONDecodeError as error:
-                    return HistoryPrune(
+                    return HistoryReading(
                         [f"{path}, line {number}: is not valid JSON ({error.msg})"],
-                        {},
+                        {}, None, {},
                     )
             parsed[path] = lines
 
     configured = config.get(HISTORY_RETENTION_KEY)
     if configured is None:
-        return HistoryPrune([], {})
+        return HistoryReading([], {}, None, parsed)
     try:
         days = float(configured)
     except (TypeError, ValueError):
         days = -1.0
     if days < 0 or days != days:  # NaN compares unequal to itself
-        return HistoryPrune(
+        return HistoryReading(
             [
                 f"{HISTORY_RETENTION_KEY} is {configured!r}, which is not a "
                 f"non-negative number of days"
             ],
-            {},
+            {}, None, {},
         )
 
     cutoff = time.time() - days * 86400
-    dropped: dict[str, int] = {}
+    past_bound: dict[str, int] = {}
     for path, lines in parsed.items():
-        kept = [line for line, record in lines if not _record_is_older(record, cutoff)]
+        older = sum(1 for _, record in lines if _record_is_older(record, cutoff))
+        if older:
+            past_bound[path.relative_to(directory).as_posix()] = older
+    return HistoryReading([], past_bound, cutoff, parsed)
+
+
+def prune_history(directory: Path, config: dict) -> HistoryPrune:
+    """Bound the cross-run history by history_retention_days, or refuse.
+
+    This is the only thing that rewrites a log, and it reads through the one
+    read above, which is what confines the rewrite of a committed record to a
+    single point and leaves the append path itself append-only. Since story-168
+    that point is outside any run: a story run reads and reports, and the
+    rewrite happens only through `l5-prune` on the repository's default branch,
+    so two story branches never both rewrite the same file and their merge has
+    nothing to reconcile.
+
+    It refuses rather than repairs, on the read's terms: a line that is not
+    valid JSON stops it naming the file and the line number, and every file is
+    parsed *before* any is rewritten, so a malformed line in a later log cannot
+    leave an earlier one already rewritten, and the malformed line and every
+    other line are still there afterwards.
+
+    An unset bound keeps everything: nothing is dropped and no log is
+    rewritten. A log is every file the reader-side resolver names for it — the
+    root-level file and each segment's — judged alike, and a record is dropped
+    from whichever file holds it. What was dropped is keyed by the file
+    relative to the history directory, so the announcement names the file that
+    was rewritten.
+    """
+    reading = read_history(directory, config)
+    if reading.problems:
+        return HistoryPrune(list(reading.problems), {})
+    if reading.cutoff is None:
+        return HistoryPrune([], {})
+
+    dropped: dict[str, int] = {}
+    for path, lines in reading.files.items():
+        kept = [line for line, record in lines
+                if not _record_is_older(record, reading.cutoff)]
         if len(kept) == len(lines):
             continue
         dropped[path.relative_to(directory).as_posix()] = len(lines) - len(kept)
@@ -1263,15 +1352,132 @@ def prune_history(directory: Path, config: dict) -> HistoryPrune:
     return HistoryPrune([], dropped)
 
 
-def _refuse_bad_history(directory: Path, problems: list[str]) -> int:
-    """Refuse a run whose cross-run history could not be bounded."""
+#: The command that rewrites the history, named in the end-of-run note and in
+#: the completion report so a reader is told what to run rather than only that
+#: something is past the bound.
+PRUNE_COMMAND = "l5-prune"
+
+
+def history_past_bound_sentence(bound: object, counts: dict[str, int]) -> str:
+    """The one sentence a run reports a history past the bound with.
+
+    Composed once so the end-of-run note and the completion report's Next Step
+    say the same thing: the bound and its value, each file relative to the
+    history directory with the count of records past the bound in it, and the
+    command to run. Repeated by every run until the prune happens, because a
+    command nobody is reminded to run never runs.
+    """
+    named = ", ".join(
+        f"{name}: {count}" for name, count in sorted(counts.items())
+    )
+    return (
+        f"the cross-run history holds records past "
+        f"{HISTORY_RETENTION_KEY}={bound} ({named}); run {PRUNE_COMMAND} on "
+        f"the default branch to prune them"
+    )
+
+
+def _history_past_bound_report() -> str:
+    """The sentence this run owes at its end, or "" when it owes none."""
+    if not _history_past_bound:
+        return ""
+    return history_past_bound_sentence(_history_retention_bound, _history_past_bound)
+
+
+def _report_history_past_bound(run_dir: Path) -> None:
+    """Append the end-of-run note, when this run counted anything past the
+    bound; nothing otherwise, so a deployment leaving the bound unset appends
+    no event here. Called by each terminal path before the commit it leaves —
+    completion and escalation, and not a pause, which is not an end.
+    """
+    sentence = _history_past_bound_report()
+    if sentence:
+        # A note, which is append_event's default kind: one kind is spelled
+        # in one function, and `note` is already run_story's to spell.
+        append_event(run_dir, sentence)
+
+
+def _refuse_bad_history(
+    directory: Path, problems: list[str], *, then: str = "run the story again"
+) -> int:
+    """Refuse a run — or a prune — whose cross-run history could not be read.
+
+    `then` is what the caller asks the person to do once the line is repaired:
+    a run says to run the story again, and l5-prune says to run it again.
+    """
     return refuse(
-        f"The cross-run history under {directory} could not be pruned:",
+        f"The cross-run history under {directory} could not be read:",
         problems,
         "Nothing was discarded, rewritten or dropped around: a store that "
         "repairs what it cannot parse is not append-only. Repair the named "
-        "line by hand, then run the story again.",
+        f"line by hand, then {then}.",
     )
+
+
+def prune_store(target_root: Path) -> int:
+    """The orchestration side of l5-prune: rewrite the history on the default
+    branch, and commit what was rewritten.
+
+    The prune is store-wide maintenance and belongs on the base branch outside
+    any run: a story run reads and reports and rewrites nothing, because two
+    story branches that both rewrote the same file would conflict on merge in
+    exactly the shape per-writer segments removed for the append. So this
+    refuses when the tree is not standing on the repository's default branch —
+    resolved the way the run's own --base check resolves it — refuses through
+    the same bad-history refusal a run makes on a malformed line or an unusable
+    bound, says so and exits 0 when the bound is unset or nothing is past it,
+    and otherwise prunes, prints each rewritten file with the count dropped
+    from it, and commits exactly the rewritten files with a message naming the
+    bound. It does not push.
+    """
+    config = harness_config.load_config(target_root)
+    default = resolve_base(target_root, config, None)
+    standing = worktrees.standing_branch(target_root)
+    if standing != default:
+        where = f"branch {standing}" if standing else "a detached HEAD"
+        return refuse(
+            f"{PRUNE_COMMAND} rewrites the cross-run history and belongs on "
+            f"the repository's default branch:",
+            [f"this tree is standing on {where}, and the default branch is "
+             f"{default}"],
+            "Nothing was rewritten and nothing was committed. Check out "
+            f"{default} and run {PRUNE_COMMAND} again.",
+        )
+
+    directory = harness_config.history_dir(target_root, config)
+    pruned = prune_history(directory, config)
+    if pruned.problems:
+        return _refuse_bad_history(
+            directory, pruned.problems, then=f"run {PRUNE_COMMAND} again")
+    configured = config.get(HISTORY_RETENTION_KEY)
+    if configured is None:
+        print(f"{HISTORY_RETENTION_KEY} is unset; nothing to prune.")
+        return 0
+    if not pruned.dropped:
+        print(f"Nothing in the cross-run history is past "
+              f"{HISTORY_RETENTION_KEY}={configured}; nothing to prune.")
+        return 0
+
+    for name, count in sorted(pruned.dropped.items()):
+        print(f"{name}: dropped {count} record(s)")
+    relative = directory.relative_to(target_root)
+    paths = [str(relative / name) for name in sorted(pruned.dropped)]
+    added = _git(target_root, "add", "--", *paths)
+    if added.returncode != 0:
+        print(f"The rewritten files could not be staged: "
+              f"{added.stderr.strip()}", file=sys.stderr)
+        return 1
+    committed = _git(
+        target_root, "commit", "-m",
+        f"Prune the cross-run history to {HISTORY_RETENTION_KEY}={configured}",
+        "--", *paths,
+    )
+    if committed.returncode != 0:
+        print(f"The rewritten files could not be committed: "
+              f"{committed.stderr.strip()}", file=sys.stderr)
+        return 1
+    print(f"Committed the rewritten files on {default}; not pushed.")
+    return 0
 
 
 def append_event(
@@ -7978,6 +8184,11 @@ def _escalate(
     state.harness_revision = _revision(harness_root)
     state.status = "escalated"
     save_state(run_dir, state)
+    # What the startup read counted past the retention bound, said before the
+    # escalation's own entry so the history still ends with that entry, and
+    # before the commit below so the note is inside it, as every record this
+    # path writes is; nothing when nothing was counted.
+    _report_history_past_bound(run_dir)
     append_event(
         run_dir,
         f"escalated: {reason}",
@@ -8196,6 +8407,14 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     # having passed validation, so a missing title is a loud failure rather
     # than a silently empty report.
     title = story["story"]["title"]
+    # The same sentence the end-of-run note carries, under Next Step, when the
+    # startup read counted records past the retention bound; the report is
+    # byte-for-byte what it was otherwise.
+    past_bound = _history_past_bound_report()
+    next_step = (
+        "Review the branch and merge it when you accept the story."
+        + (f" Also: {past_bound}." if past_bound else "")
+    )
     report = (
         f"# {state.story_id} Completion Report\n\n"
         f"## Story\n{title}\n\n"
@@ -8210,7 +8429,7 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
         f"- test-results.json\n"
         f"- verification/iteration-{state.verification_iterations}.json (passed)\n"
         f"- documentation-report.md\n\n"
-        f"## Next Step\nReview the branch and merge it when you accept the story.\n"
+        f"## Next Step\n{next_step}\n"
     )
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
     _git(target_root, "add", "-A")
@@ -8232,6 +8451,11 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     # remove, so it is accepted. append_event is the only writer of the history
     # logs and nothing later in the run stages anything, so a completion
     # appended after the commit is a completion whose own record is untracked.
+    #
+    # The end-of-run note about records past the retention bound goes first,
+    # for the same reason and so the completion entry stays the last thing the
+    # history says; it appends nothing when the startup read counted nothing.
+    _report_history_past_bound(run_dir)
     append_event(
         run_dir,
         f"story completed on branch {state.branch}",
@@ -8912,35 +9136,28 @@ def run_story(
     # be omitted at one call site and silently drop a record, which is the one
     # failure mode an append-only store cannot have.
     #
-    # The prune runs here, at run-directory creation and above this run's first
-    # append, because that confines the only rewrite of a log to a single
-    # announced point and leaves the append path itself append-only. It refuses
-    # rather than repairs: a line it cannot parse stops it and refuses the run,
-    # with nothing discarded and nothing rewritten around.
+    # The history is read here, at run-directory creation and above this run's
+    # first append, and it is read only: every file of every declared log is
+    # parsed, a line that cannot be parsed refuses the run with nothing
+    # discarded and nothing rewritten around, and a configured bound counts
+    # what is past it. The run rewrites nothing whatever the bound says. Until
+    # story-168 the whole-store rewrite itself ran at this same point,
+    # and two story branches that both ran under a bound then both rewrote
+    # every file holding an old record, so merging them conflicted in exactly
+    # the shape per-writer segments removed for the append. Pruning is
+    # store-wide maintenance and belongs on the base branch outside any run,
+    # which is `l5-prune`; what a run does with the count is report it at its
+    # end, on every run until the prune happens.
     #
-    # Below the checkout, so the file it reads and rewrites is the story
-    # branch's own rather than the base's. That follows from the move rather
-    # than being a second decision: what the prune does is unchanged, and only
-    # where it runs moved.
+    # Below the checkout, so the files it reads are the story branch's own
+    # rather than the base's.
     history_directory = harness_config.history_dir(target_root, config)
     set_history_dir(history_directory)
-    pruned = prune_history(history_directory, config)
-    if pruned.problems:
-        return _refuse_bad_history(history_directory, pruned.problems)
-    if pruned.dropped:
-        # A rewrite of a committed record is never silent. Only an actual drop
-        # is announced, so a deployment that prunes nothing — every deployment
-        # leaving history_retention_days unset — says nothing here.
-        append_event(
-            run_dir,
-            "cross-run history pruned to "
-            f"{HISTORY_RETENTION_KEY}={config[HISTORY_RETENTION_KEY]}: "
-            + ", ".join(
-                f"{name} dropped {count} record(s)"
-                for name, count in sorted(pruned.dropped.items())
-            ),
-            kind="note",
-        )
+    history_read = read_history(history_directory, config)
+    if history_read.problems:
+        return _refuse_bad_history(history_directory, history_read.problems)
+    set_history_past_bound(
+        history_read.past_bound, config.get(HISTORY_RETENTION_KEY))
 
     if state and state.status == "paused":
         # A resume of a run that paused because capacity ran out, which is the

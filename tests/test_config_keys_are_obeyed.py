@@ -2672,12 +2672,16 @@ def test_history_dir_is_where_the_cross_run_records_are_written(tmp_path):
 
 
 def test_history_retention_days_is_the_bound_the_prune_applies(tmp_path):
-    """The configured bound decides both halves, observed rather than read.
+    """The configured bound decides what the run reports, observed rather than
+    read.
 
-    A seeded record older than the bound is dropped and one newer than it is
-    kept, so the number itself is what is being obeyed. A harness that had
-    stopped reading the key would fall back to keeping everything and leave the
-    older record where it was.
+    Since story-168 a run rewrites nothing: a seeded record older than the
+    bound and one newer than it both survive the run byte for byte, and what
+    the bound decides is the note the run ends with — naming the bound's value,
+    the file holding the older record and the count past the bound in it. A
+    harness that had stopped reading the key would fall back to an unset bound
+    and end with no such note, which is the half that separates the configured
+    value from the fallback.
     """
     values = fixture_config()
     directory = str(values["history_dir"])
@@ -2696,12 +2700,18 @@ def test_history_retention_days_is_the_bound_the_prune_applies(tmp_path):
     assert code == 0, runner.calls
     for log in HISTORY_LOGS:
         surviving = history_markers(target, directory, log)
-        assert "older-record" not in surviving, log
+        assert "older-record" in surviving, log
         assert "newer-record" in surviving, log
-    # The rewrite announced itself, so a committed record was never dropped in
-    # silence.
-    assert f"history_retention_days={RETENTION_DAYS}" in (
-        run_dir / "events.log").read_text(encoding="utf-8")
+    # The run reported what the bound would drop, naming the bound's value,
+    # each file and the count past the bound in it, and the command that
+    # prunes — one note, at the run's end.
+    events = (run_dir / "events.log").read_text(encoding="utf-8")
+    notes = [line for line in events.splitlines()
+             if f"history_retention_days={RETENTION_DAYS}" in line]
+    assert len(notes) == 1, events
+    assert story_coordinator.PRUNE_COMMAND in notes[0]
+    for log in HISTORY_LOGS:
+        assert f"{log}: 1" in notes[0], notes[0]
 
 
 def test_standards_dir_is_where_the_injected_standards_are_read_from(tmp_path):

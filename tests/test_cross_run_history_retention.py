@@ -1,19 +1,28 @@
-"""story-081 validation: the cross-run history is bounded, and never repaired.
+"""story-081 and story-168 validation: the cross-run history is bounded, never
+repaired, and never rewritten by a run.
 
-Pruning is the only thing that reads a log and the only thing that rewrites
-one. It runs once per run, at run-directory creation and above that run's first
-append, which confines the only rewrite of a committed record to a single
-announced point and leaves the append path itself append-only.
+The prune is the only thing that reads a log and the only thing that rewrites
+one. Since story-168 a run makes the read only: at run-directory creation and
+above that run's first append it parses every file of every declared log,
+refuses on a line it cannot parse, and — under a configured bound — counts
+what is past the bound and reports the count at its end, naming the files and
+the command that prunes. The rewrite happens only through `l5-prune` on the
+default branch, whose cases are `tests/test_l5_prune.py`'s subject, so two
+story branches never both rewrite the same file.
 
-What this module validates: that a configured `history_retention_days` drops
-records older than the bound and leaves newer ones, that an unset bound prunes
-nothing, that this repository's own configuration leaves it unset, that a
-record whose timestamp cannot be read is kept rather than dropped, that a prune
-which drops something announces itself and one which drops nothing says
-nothing, and — the property Chapter 19's silent-repair hazard is about — that a
-line which is not valid JSON stops the prune and refuses the run, naming the
-file and the line, with the malformed line and every other line still present
-and unaltered afterwards.
+What this module validates: that a run under a configured
+`history_retention_days` leaves every record — older than the bound or not —
+byte for byte where it found it and ends with exactly one note naming the
+bound, each file with its count past the bound and the command to run, on
+completion and on escalation and inside the commit each leaves; that an unset
+bound, or one nothing is older than, leaves a run appending no such note and a
+completion report identical to a run's today; that this repository's own
+configuration leaves the bound unset; that a record whose timestamp cannot be
+read is kept by the prune rather than dropped; that the run announces no
+drop, because it makes none; and — the property Chapter 19's silent-repair
+hazard is about — that a line which is not valid JSON stops the read and
+refuses the run, naming the file and the line, with the malformed line and
+every other line still present and unaltered afterwards.
 
 The records themselves, the projection that writes them and the blocked-path
 and versioning decisions around them are the subject of
@@ -26,7 +35,9 @@ this repository deploys: retention is a property of the harness, and the stage
 list is an input to it. Every absence asserted here carries a control that
 constructs the violation. Nothing invokes a model.
 """
+import ast
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -49,15 +60,32 @@ TIMESTAMP_FORMAT = story_coordinator.HISTORY_TIMESTAMP_FORMAT
 HISTORY_DIR = harness_config.DEFAULT_HISTORY_DIR
 
 #: The bound these runs are configured with, and two ages either side of it. A
-#: record older than the bound is dropped and one newer is kept, so the number
-#: itself is what is being obeyed rather than merely something non-zero.
+#: record older than the bound is counted and reported and one newer is not,
+#: so the number itself is what is being obeyed rather than merely something
+#: non-zero.
 RETENTION_DAYS = 30
 OLDER_THAN_THE_BOUND = RETENTION_DAYS + 11
 NEWER_THAN_THE_BOUND = RETENTION_DAYS - 11
 
+#: The command the end-of-run note tells a reader to run, resolved from the
+#: one place the harness spells it.
+PRUNE_COMMAND = story_coordinator.PRUNE_COMMAND
+
 STORY_ID = "story-001"
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
+#: A verdict the verifier asks an escalation for, which takes no retry.
+ESCALATE = {
+    "status": "failed",
+    "blocking_issues": [{
+        "severity": "high",
+        "issue": "the sample behavior is missing",
+        "location": "src/app.py",
+        "required_behavior": "the sample behavior exists",
+    }],
+    "unverified": [],
+    "retry_recommended": False,
+}
 
 
 # --------------------------------------------------------------------------
@@ -98,10 +126,15 @@ def harness_root(tmp_path: Path) -> Path:
 
 
 class Runner:
-    """A fake agent runner that carries each stage's declared artifacts."""
+    """A fake agent runner that carries each stage's declared artifacts.
 
-    def __init__(self, target_root: Path):
+    `verdict` is what the verifying stage says, so the same run can be made to
+    complete or to escalate and the history it leaves read either way.
+    """
+
+    def __init__(self, target_root: Path, verdict: dict = PASS):
         self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
+        self.verdict = verdict
         self.calls: list[str] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
@@ -113,7 +146,7 @@ class Runner:
             (self.run_dir / conftest.IMPLEMENTATION_SUMMARY).write_text(
                 "Did the work.\n", encoding="utf-8")
         elif stage == VERIFYING:
-            _write(self.run_dir / conftest.VERIFICATION_RESULT, PASS)
+            _write(self.run_dir / conftest.VERIFICATION_RESULT, self.verdict)
         return AgentResult(ok=True, result_text=f"{stage} done")
 
 
@@ -164,7 +197,7 @@ def history_dir_of(target_root: Path) -> Path:
 
 
 def seed_history(target_root: Path, lines: dict[str, list[str]]) -> None:
-    """Put a history in place for the next run to prune.
+    """Put a history in place for the next run to read.
 
     In the tree that run will work in — and creating that tree as the run
     would, because a plain directory at its path is exactly what the run's
@@ -231,15 +264,62 @@ def prepared(target_root: Path, *, retention: object | None,
     return target_root
 
 
-def run(target_root: Path, harness_root: Path) -> tuple[int, Runner]:
-    runner = Runner(target_root)
+def run(target_root: Path, harness_root: Path,
+        verdict: dict = PASS) -> tuple[int, Runner]:
+    runner = Runner(target_root, verdict)
     return (story_coordinator.run_story(
         STORY_ID, harness_root, target_root, runner), runner)
 
 
+def run_dir_of(target_root: Path) -> Path:
+    return conftest.run_dir_for(target_root, STORY_ID)
+
+
 def events_of(target_root: Path) -> str:
-    return (conftest.run_dir_for(target_root, STORY_ID) / "events.log").read_text(
-        encoding="utf-8")
+    return (run_dir_of(target_root) / "events.log").read_text(encoding="utf-8")
+
+
+def messages_of(events: str) -> list[str]:
+    """The events.log lines with their timestamps taken off, so two runs' logs
+    compare on what they said rather than on when."""
+    return [line.split("] ", 1)[1] for line in events.splitlines() if line]
+
+
+def notes_in(events: str) -> list[str]:
+    """The lines of an events.log that name the retention bound: the end-of-run
+    note when the run counted anything past it, and nothing otherwise."""
+    return [line for line in events.splitlines() if RETENTION_KEY in line]
+
+
+def committed_events_of(target_root: Path) -> str:
+    """The events.log as the commit the run left carries it, so a note the run
+    appended after its commit — untracked, and lost to the branch — is told
+    apart from one inside it."""
+    tree = conftest.run_root_for(Path(target_root), STORY_ID)
+    relative = (run_dir_of(target_root) / "events.log").relative_to(tree)
+    return conftest._git(tree, "show", f"HEAD:{relative.as_posix()}").stdout
+
+
+def seeded_files(target_root: Path) -> dict[str, bytes]:
+    """Every root-level file of the history directory, byte for byte: the
+    files a seeded history is written to, and the ones a run leaves alone
+    because it writes only under its own segment."""
+    directory = history_dir_of(target_root)
+    return {path.name: path.read_bytes()
+            for path in sorted(directory.iterdir()) if path.is_file()}
+
+
+def assert_reported_once(events: str, counts: dict[str, int]) -> str:
+    """Exactly one note, naming the bound's value, each named log with the
+    count past the bound in it, and the command to run; returns the note."""
+    notes = notes_in(events)
+    assert len(notes) == 1, events
+    note = notes[0]
+    assert f"{RETENTION_KEY}={RETENTION_DAYS}" in note
+    assert PRUNE_COMMAND in note
+    for log, older in counts.items():
+        assert f"{log}: {older}" in note, note
+    return note
 
 
 # --------------------------------------------------------------------------
@@ -247,34 +327,50 @@ def events_of(target_root: Path) -> str:
 # --------------------------------------------------------------------------
 
 
-def test_a_configured_bound_drops_older_records_and_leaves_newer_ones(
+def test_a_configured_bound_leaves_every_record_and_reports_the_older_ones(
     target_root, harness_root,
 ):
+    """The story's whole subject on the run's side.
+
+    A record older than the bound and one newer, in every declared log, and
+    the run completes with both still there byte for byte — no file the
+    history was seeded into is rewritten — and ends with exactly one note
+    naming the bound's value, each file with its count past the bound and the
+    command that prunes. The control is the unset bound below: the same
+    history and the same run append no such note.
+    """
     seeded = {log: aged_lines(log) for log in DECLARATIONS}
     prepared(target_root, retention=RETENTION_DAYS, lines=seeded)
+    before = seeded_files(target_root)
     code, runner = run(target_root, harness_root)
 
     assert code == 0 and runner.calls == [WRITING, VERIFYING]
     for log in DECLARATIONS:
         surviving = markers(target_root, log)
-        assert "old-record" not in surviving, log
+        assert "old-record" in surviving, log
         assert "new-record" in surviving, log
-        # The surviving line is the line that was written, byte for byte: a
-        # prune that re-serialized what it kept would be rewriting records it
-        # was not asked to touch.
-        assert seeded[log][1] + "\n" in log_text(target_root, log), log
+    # Every seeded file is the file that was written, byte for byte: the run
+    # rewrites nothing whatever the bound says, and appends only under its
+    # own segment.
+    assert seeded_files(target_root) == before
+    assert_reported_once(events_of(target_root),
+                         {log: 1 for log in DECLARATIONS})
 
 
-def test_an_unset_bound_prunes_nothing(target_root, harness_root):
-    """The control for the assertion above, and the criterion in its own right.
+def test_an_unset_bound_leaves_every_record_and_reports_nothing(
+    target_root, harness_root,
+):
+    """The control for the note above, and the criterion in its own right.
 
     The same seeded history, the same run, and only the configured bound
-    differs: with it set the older record is dropped, and with it unset both
-    records are still there. So the drop is the bound deciding rather than
-    anything else about a run.
+    differs: with it set the run ends with the note, and with it unset it
+    appends no line naming the bound or the command. Both records are still
+    there either way, which is what separates this from the story-081 run
+    that dropped the older one.
     """
     seeded = {log: aged_lines(log) for log in DECLARATIONS}
     prepared(target_root, retention=None, lines=seeded)
+    before = seeded_files(target_root)
     code, _ = run(target_root, harness_root)
 
     assert code == 0
@@ -282,8 +378,9 @@ def test_an_unset_bound_prunes_nothing(target_root, harness_root):
         surviving = markers(target_root, log)
         assert "old-record" in surviving, log
         assert "new-record" in surviving, log
-        assert log_text(target_root, log).startswith(
-            "".join(f"{line}\n" for line in seeded[log])), log
+    assert seeded_files(target_root) == before
+    assert notes_in(events_of(target_root)) == []
+    assert PRUNE_COMMAND not in events_of(target_root)
 
 
 def test_a_bound_far_enough_back_drops_nothing_it_was_not_asked_to(
@@ -291,9 +388,9 @@ def test_a_bound_far_enough_back_drops_nothing_it_was_not_asked_to(
 ):
     """The bound pinned from the other side.
 
-    The same two records and a bound older than both: neither is dropped, so
-    the earlier drop was the *number* being obeyed rather than merely the key
-    being present.
+    The same two records and a bound older than both: neither is counted and
+    no note is appended, so the note above was the *number* being obeyed
+    rather than merely the key being present.
     """
     seeded = {log: aged_lines(log) for log in DECLARATIONS}
     prepared(target_root, retention=OLDER_THAN_THE_BOUND + 100, lines=seeded)
@@ -302,11 +399,12 @@ def test_a_bound_far_enough_back_drops_nothing_it_was_not_asked_to(
     assert code == 0
     for log in DECLARATIONS:
         # The seeded lines, byte for byte and in order, ahead of whatever the
-        # run itself went on to append after the prune had finished.
+        # run itself went on to append after the read had finished.
         assert log_text(target_root, log).startswith(
             "".join(f"{line}\n" for line in seeded[log])), log
         assert markers(target_root, log)[:len(seeded[log])] == [
             "old-record", "new-record"], log
+    assert notes_in(events_of(target_root)) == []
 
 
 def test_this_repositorys_own_configuration_leaves_the_retention_unset():
@@ -352,33 +450,136 @@ def test_a_record_whose_timestamp_cannot_be_read_is_kept(tmp_path):
     assert kept == ["unreadable", "no-timestamp-at-all"]
 
 
+def test_the_read_counts_exactly_what_the_prune_drops_and_rewrites_nothing(
+    tmp_path,
+):
+    """The split the story made, held on the two functions directly.
+
+    The read a run makes counts, per file, what the prune would drop — judged
+    by the same rule, so a record whose timestamp cannot be read is not
+    counted — and leaves every file byte for byte. The prune then drops
+    exactly that, and the same read afterwards counts nothing, which is the
+    control: a read that counted nothing before the prune would be
+    indistinguishable from one that cannot see the older record.
+    """
+    directory = tmp_path / "history"
+    directory.mkdir()
+    config = {RETENTION_KEY: RETENTION_DAYS}
+    logs = list(DECLARATIONS)
+    first, second = logs[0], logs[1]
+    unreadable = json.dumps({**json.loads(seeded_record(first, "unreadable", "x")),
+                             "timestamp": "not-a-timestamp"})
+    (directory / first).write_text(
+        "".join(f"{line}\n" for line in (*aged_lines(first), unreadable)),
+        encoding="utf-8")
+    (directory / second).write_text(
+        seeded_record(second, "new-record", stamp(NEWER_THAN_THE_BOUND)) + "\n",
+        encoding="utf-8")
+    before = {name: (directory / name).read_bytes() for name in (first, second)}
+
+    reading = story_coordinator.read_history(directory, config)
+    assert reading.problems == []
+    assert reading.past_bound == {first: 1}
+    assert {name: (directory / name).read_bytes() for name in (first, second)} \
+        == before
+
+    pruned = story_coordinator.prune_history(directory, config)
+    assert pruned.dropped == reading.past_bound
+    assert (directory / second).read_bytes() == before[second]
+    assert [json.loads(line)["story_id"] for line in
+            (directory / first).read_text(encoding="utf-8").splitlines()] == [
+        "new-record", "unreadable"]
+    assert story_coordinator.read_history(directory, config).past_bound == {}
+    # And with the bound unset the same read parses and counts nothing, so
+    # the count is the bound deciding.
+    (directory / first).write_bytes(before[first])
+    assert story_coordinator.read_history(directory, {}).past_bound == {}
+    assert story_coordinator.read_history(directory, {}).problems == []
+
+
 # --------------------------------------------------------------------------
-# A rewrite of a committed record is never silent
+# What is past the bound is reported at the run's end, and only then
 # --------------------------------------------------------------------------
 
 
-def test_a_prune_that_dropped_records_announces_what_it_dropped(
+def test_the_note_is_appended_at_the_runs_end_and_inside_the_completion_commit(
     target_root, harness_root,
 ):
-    prepared(target_root, retention=RETENTION_DAYS,
-             lines={log: aged_lines(log) for log in DECLARATIONS})
+    """The note is an end-of-run note and not a startup announcement.
+
+    It comes after every stage has run and immediately before the completion
+    entry, so the history still ends with that entry; it is inside the commit
+    completion leaves rather than appended after it, as every record a
+    terminal path writes is; and the completion report carries the same
+    sentence under Next Step. The in-run announcement of a drop is gone: the
+    only line naming the bound is this one, and it is at the end.
+    """
+    seeded = {log: aged_lines(log) for log in DECLARATIONS}
+    prepared(target_root, retention=RETENTION_DAYS, lines=seeded)
     code, _ = run(target_root, harness_root)
 
     assert code == 0
-    announced = events_of(target_root)
-    assert f"{RETENTION_KEY}={RETENTION_DAYS}" in announced
-    for log in DECLARATIONS:
-        assert log in announced, log
+    events = events_of(target_root)
+    note = assert_reported_once(events, {log: 1 for log in DECLARATIONS})
+    lines = events.splitlines()
+    position = lines.index(note)
+    assert position == len(lines) - 2, lines
+    assert "story completed" in lines[-1]
+    stage_lines = [i for i, line in enumerate(lines)
+                   if WRITING in line or VERIFYING in line]
+    assert stage_lines and max(stage_lines) < position, lines
+
+    assert note in committed_events_of(target_root)
+
+    report = (run_dir_of(target_root) / "completion-report.md").read_text(
+        encoding="utf-8")
+    sentence = note.split("] ", 1)[1]
+    next_step = report.split("## Next Step\n", 1)[1]
+    assert sentence in next_step, report
+    assert PRUNE_COMMAND in next_step
 
 
-def test_a_prune_that_dropped_nothing_announces_nothing(
+def test_an_escalating_run_appends_the_same_note_inside_the_escalation_commit(
     target_root, harness_root,
 ):
-    """The control for the announcement, and the reason it is conditional.
+    """An escalation is an end too, and the note goes before the commit it
+    leaves. The control is the escalation below with the bound unset."""
+    seeded = {log: aged_lines(log) for log in DECLARATIONS}
+    prepared(target_root, retention=RETENTION_DAYS, lines=seeded)
+    before = seeded_files(target_root)
+    code, runner = run(target_root, harness_root, ESCALATE)
+
+    assert code == 2 and runner.calls == [WRITING, VERIFYING]
+    assert seeded_files(target_root) == before
+    events = events_of(target_root)
+    note = assert_reported_once(events, {log: 1 for log in DECLARATIONS})
+    lines = events.splitlines()
+    assert lines.index(note) == len(lines) - 2, lines
+    assert lines[-1].split("] ", 1)[1].startswith("escalated")
+    assert note in committed_events_of(target_root)
+
+
+def test_an_escalating_run_with_the_bound_unset_appends_no_note(
+    target_root, harness_root,
+):
+    seeded = {log: aged_lines(log) for log in DECLARATIONS}
+    prepared(target_root, retention=None, lines=seeded)
+    code, _ = run(target_root, harness_root, ESCALATE)
+
+    assert code == 2
+    assert notes_in(events_of(target_root)) == []
+    assert PRUNE_COMMAND not in events_of(target_root)
+    assert "escalated" in events_of(target_root).splitlines()[-1]
+
+
+def test_a_run_with_nothing_past_the_bound_appends_no_note(
+    target_root, harness_root,
+):
+    """The control for the note, and the reason it is conditional.
 
     Every deployment leaving the bound unset would otherwise gain a new event
     on every run saying nothing happened. The bound here is set and the history
-    holds only a record newer than it, so the prune ran and dropped nothing.
+    holds only a record newer than it, so the read ran and counted nothing.
     """
     seeded = {log: [seeded_record(log, "new-record", stamp(NEWER_THAN_THE_BOUND))]
               for log in DECLARATIONS}
@@ -387,11 +588,52 @@ def test_a_prune_that_dropped_nothing_announces_nothing(
 
     assert code == 0
     assert RETENTION_KEY not in events_of(target_root)
+    assert PRUNE_COMMAND not in events_of(target_root)
     for log in DECLARATIONS:
         # The seeded line still leading, byte for byte, ahead of whatever the
-        # run itself appended after the prune.
+        # run itself appended after the read.
         assert log_text(target_root, log).startswith(seeded[log][0] + "\n"), log
         assert markers(target_root, log)[:1] == ["new-record"], log
+
+
+def test_a_run_that_reports_nothing_leaves_the_log_and_report_a_run_leaves_today(
+    tmp_path, target_template, harness_root,
+):
+    """A deployment leaving the bound unset — this one — gets no new event and
+    no new sentence.
+
+    Two runs from two copies of the same target: one with the bound unset and
+    old records seeded, one under the bound with nothing older than it. Their
+    events.logs say the same things, timestamps aside, and their completion
+    reports are byte for byte the same file — and neither says anything a run
+    under a bound with records past it says, which is the control: the run
+    above shows the same reader finding the note when there is one.
+    """
+    logs: dict[str, str] = {}
+    reports: dict[str, str] = {}
+    for name, retention, lines in (
+        ("unset", None, {log: aged_lines(log) for log in DECLARATIONS}),
+        ("nothing-older", RETENTION_DAYS,
+         {log: [seeded_record(log, "new-record", stamp(NEWER_THAN_THE_BOUND))]
+          for log in DECLARATIONS}),
+    ):
+        target = tmp_path / name / "sample-target"
+        shutil.copytree(target_template, target, symlinks=True)
+        prepared(target, retention=retention, lines=lines)
+        assert run(target, harness_root)[0] == 0
+        logs[name] = events_of(target)
+        reports[name] = (run_dir_of(target) / "completion-report.md").read_text(
+            encoding="utf-8")
+
+    assert messages_of(logs["unset"]) == messages_of(logs["nothing-older"])
+    assert reports["unset"] == reports["nothing-older"]
+    for name in logs:
+        assert RETENTION_KEY not in logs[name], name
+        assert PRUNE_COMMAND not in logs[name], name
+        assert PRUNE_COMMAND not in reports[name], name
+        assert reports[name].endswith(
+            "## Next Step\nReview the branch and merge it when you accept "
+            "the story.\n"), reports[name]
 
 
 # --------------------------------------------------------------------------
@@ -466,8 +708,9 @@ def test_the_same_history_without_the_malformed_line_runs_to_completion(
     """The control for the two refusals above.
 
     The same seeded records, the same bound, the same run — with the one
-    unparseable line removed — and the run completes and prunes. So the refusal
-    is that line deciding rather than anything else about a seeded history.
+    unparseable line removed — and the run completes, keeps both records and
+    reports the older one. So the refusal is that line deciding rather than
+    anything else about a seeded history.
     """
     log = next(iter(DECLARATIONS))
     seeded = [line for line in malformed_lines(log) if line != MALFORMED]
@@ -478,7 +721,10 @@ def test_the_same_history_without_the_malformed_line_runs_to_completion(
     assert runner.calls == [WRITING, VERIFYING]
     surviving = markers(target_root, log)
     assert "third-record" in surviving
-    assert "first-record" not in surviving
+    assert "first-record" in surviving
+    assert log_text(target_root, log).startswith(
+        "".join(f"{line}\n" for line in seeded))
+    assert_reported_once(events_of(target_root), {log: 1})
 
 
 def test_a_malformed_line_in_one_log_leaves_every_other_log_unrewritten(
@@ -555,3 +801,49 @@ def test_a_bound_that_is_not_a_number_refuses_the_run_rather_than_ignoring_it(
     assert runner.calls == []
     assert RETENTION_KEY in refusal
     assert "not-a-number" in refusal
+
+
+# --------------------------------------------------------------------------
+# The rewrite is invoked from l5-prune alone
+# --------------------------------------------------------------------------
+
+ORCHESTRATION = REPO_ROOT / "orchestration"
+
+
+def callers_of(source: str, callee: str) -> set[str]:
+    """The top-level functions in `source` whose body calls `callee`, read off
+    the syntax tree so a comment that names the call is not a call."""
+    found = set()
+    for node in ast.parse(source).body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) \
+                    and inner.func.id == callee:
+                found.add(node.name)
+    return found
+
+
+def test_prune_history_is_called_from_the_store_prune_alone_and_never_by_a_run():
+    """A run no longer drops anything, so nothing on a run's path calls the
+    rewrite: across every module under orchestration/ the only caller of
+    `prune_history` is the function `l5-prune` hands control to, and
+    `run_story` — which called it at run-directory creation until story-168 —
+    reads through `read_history` instead. The control plants a call in a copy
+    of `run_story` and shows the same scan reporting it."""
+    callers: dict[str, set[str]] = {}
+    for module in sorted(ORCHESTRATION.glob("*.py")):
+        found = callers_of(module.read_text(encoding="utf-8"), "prune_history")
+        if found:
+            callers[module.name] = found
+    coordinator = Path(story_coordinator.__file__).name
+    assert callers == {coordinator: {story_coordinator.prune_store.__name__}}
+
+    source = Path(story_coordinator.__file__).read_text(encoding="utf-8")
+    run_story = conftest.function_source(source, "run_story")
+    assert "read_history(" in run_story
+    planted = run_story.replace(
+        "read_history(history_directory, config)",
+        "prune_history(history_directory, config)", 1)
+    assert planted != run_story
+    assert callers_of(planted, "prune_history") == {"run_story"}

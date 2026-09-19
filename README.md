@@ -89,6 +89,7 @@ All harness capabilities are invoked through `l5-` scripts in `scripts/`:
 | `l5-check` | Report whether a stage's required outputs are present, fresh and valid — the coordinator's own check, reachable while the turn is still open. It decides nothing |
 | `l5-inspect` | Inspect a scope of the code deliberately and file what it finds as briefs |
 | `l5-sync` | Drain the outbox, reporting what landed, what is pending, and what no sweep will clear on its own |
+| `l5-prune` | Prune the cross-run history to `history_retention_days` on the default branch and commit the rewritten files; a run only reports what is past the bound |
 
 Example:
 

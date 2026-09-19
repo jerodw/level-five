@@ -65,6 +65,10 @@ inspect_after_story_max_files: 60
 # a decision rather than an oversight: unset keeps the whole of this
 # deployment's history, which is the evidence the records exist to preserve.
 # The key is proven configurable by test rather than by the shipped value.
+# Set, a run rewrites nothing: it counts the records past the bound at its
+# start and reports them at its end, naming the files and the counts, until
+# l5-prune — run by a person on the default branch — drops them and commits
+# the rewritten files.
 # history_retention_days: 90
 architecture_docs:
   - .harness/docs/ARCHITECTURE.md
