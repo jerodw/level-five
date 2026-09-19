@@ -1,0 +1,103 @@
+story:
+  id: story-176
+  title: The Inspector's index sees a pre-split landed entry, so an inspection before a sweep files no duplicate
+  description: |
+    Planned from the brief filed under 27.
+
+    story-107 moved local_state and local_index into orchestration/outbox.py
+    so the two readers could not disagree about which directory answers for
+    which state, and they disagree about the one case the migration exists
+    for. local_state reads both directories and returns whatever state it
+    finds, so a pre-split landed entry still sitting in .harness/outbox/
+    answers LANDED. local_index asks the receipt index for landed keys and
+    the queue for pending and failed keys only, so the same entry contributes
+    to no set.
+
+    The gap is destructive because the Inspector does not file through
+    brief_filing: it consults local_index, and a key the index does not hold
+    is enqueued directly at <key>.json, replacing the landed entry — reference
+    and all — with a fresh pending one that the next sweep files to the
+    tracker a second time. l5-inspect runs no sweep, so on any target whose
+    queue was written by a harness older than story-107, an upgrade followed
+    by a standalone inspection before the next l5-run does exactly that.
+
+    This story has local_index read the queue's landed entries too, and union
+    them into LocalIndex.landed, so the two readers agree on every state in
+    both locations and a pre-split landed entry suppresses the finding it
+    already filed. The relocation, its write-then-unlink window, and where a
+    sweep is called from are correct as written and are left alone.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/outbox.py, have local_index ask _keys_in for the queue's LANDED keys alongside its PENDING and FAILED keys, and union the queue's landed keys with the receipt index's into LocalIndex.landed.
+  - Update the docstrings of LocalIndex, local_index and the "one derivation, two readers" comment so they say a landed entry the sweep has not yet relocated is read from the queue and counts as landed, rather than saying landed comes from the receipt index alone.
+  - Flip the assertion in test_a_landed_entry_the_sweep_meets_in_the_queue_is_relocated_and_counted that pins local_index(target).landed to the empty set for a pre-split landed entry, so it asserts the entry's key is in landed, and adjust the test's docstring so it no longer says the index does not answer for the entry before the sweep.
+  - Extend test_the_two_directories_answer_one_rule_for_both_readers with a fourth placement, a landed entry in the queue, asserting local_state answers LANDED and local_index reports the key in landed and in neither queued nor failed.
+  - Add a test driving the Inspector's own path, where a finding whose key is already held landed in the queue is suppressed as already filed and the entry file on disk is byte-for-byte unchanged afterwards.
+  - Record the change in .harness/docs/ARCHITECTURE.md under "The queue holds work and the index holds receipts".
+
+acceptance_criteria:
+  - For a target whose queue holds a landed entry and whose receipt index does not exist, outbox.local_index(target).landed contains that entry's key, and queued and failed do not.
+  - For a target whose queue holds a landed entry, outbox.local_state(target, key) and outbox.local_index(target) agree that the key is landed, and the same agreement holds for the three post-split placements the existing test already drives.
+  - An inspection whose finding derives the key of a landed entry held in the queue reports that finding as already filed, enqueues nothing, and leaves the landed entry's file unchanged.
+  - A landed entry in the queue is still relocated into the receipt index by the next sweep and counted as landed in that sweep's summary, exactly as before this story.
+  - The existing assertion count in tests/test_the_queue_holds_work_and_the_index_holds_receipts.py does not fall, and no assertion is removed to make the suite pass; the one flipped assertion asserts the new answer.
+  - orchestration/inspection.py, orchestration/outbox_sweep.py and scripts/l5-inspect are unchanged.
+
+technical_plan:
+  implementation_steps:
+    - In local_index, pass {PENDING, FAILED, LANDED} as the queue's states to _keys_in, and build LocalIndex.landed from receipts[LANDED] | queue[LANDED]; leave queued and failed as they are.
+    - Rewrite the sentence in local_index's docstring that says landed comes from the receipt index and pending from the queue, so it says the receipt index is where a landed entry now lives and the queue is read for the landed entries a sweep has not yet relocated, and say why a reader that missed them would let the Inspector overwrite one.
+    - Bring the "One derivation, two readers" comment above LocalIndex and LocalIndex's own docstring into agreement with that rule.
+    - In tests/test_the_queue_holds_work_and_the_index_holds_receipts.py, change the pre-sweep assertion in test_a_landed_entry_the_sweep_meets_in_the_queue_is_relocated_and_counted from an empty landed set to a set holding the key, and adjust its docstring, which currently says the relocation is observable because the index does not answer before the sweep; it remains observable because the entry moves from the queue to the index.
+    - The tester adds the fourth placement to test_the_two_directories_answer_one_rule_for_both_readers using the existing landed_in_the_queue helper, and adds an Inspector-path test that builds a landed entry in the queue with the identity a finding derives, runs the inspection path with a fake runner, and asserts the finding is reported already filed and the entry file's bytes are unchanged.
+    - The documenter adds a paragraph to the "The queue holds work and the index holds receipts" section of .harness/docs/ARCHITECTURE.md saying the index reads landed entries from both directories until the sweep relocates them, and that this is what keeps an inspection before a sweep from overwriting a receipt.
+  likely_file_changes:
+    - file: orchestration/outbox.py
+      stage: implementer
+      reason: local_index reads the queue's landed keys and unions them into LocalIndex.landed; docstrings and the section comment say so.
+    - file: tests/test_the_queue_holds_work_and_the_index_holds_receipts.py
+      stage: implementer
+      reason: The assertion that pins local_index(target).landed to the empty set for a pre-split landed entry asserts the defect and goes red with the fix; it flips to assert the key is landed.
+      reverting_breaks_the_suite: The flipped assertion at the pre-sweep check in test_a_landed_entry_the_sweep_meets_in_the_queue_is_relocated_and_counted pins the old answer; with local_index now reading the queue's landed entries, reverting the flip makes that test fail, so the edit is forced by the deliberate change in outbox.py rather than a change of the test's own.
+    - file: tests/test_the_queue_holds_work_and_the_index_holds_receipts.py
+      stage: tester
+      reason: The fourth placement in test_the_two_directories_answer_one_rule_for_both_readers and the new Inspector-path test asserting suppression and an unchanged entry file.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the index reads a pre-split landed entry from the queue until the sweep relocates it, and why.
+
+scope:
+  modify:
+    - orchestration/outbox.py
+    - tests/test_the_queue_holds_work_and_the_index_holds_receipts.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/inspection.py
+    - orchestration/brief_filing.py
+    - orchestration/outbox_sweep.py
+    - scripts/l5-inspect
+    - schemas/
+
+verification_requirements:
+  - Confirm local_index reads the queue for landed entries and that LocalIndex.landed is the union of the receipt index's landed keys and the queue's.
+  - Confirm the two readers agree for a landed entry in the queue, and that the existing three-placement agreement test still passes with a fourth placement added.
+  - Confirm an inspection meeting a key held landed in the queue suppresses the finding and leaves the entry file unchanged, driven without a model.
+  - Confirm the sweep still relocates a landed entry from the queue to the index and counts it as landed.
+  - Confirm no file outside scope.modify changed, and that the only assertion changed in the existing test file is the flipped pre-sweep landed check.
+
+constraints:
+  - Python 3.10+, standard library only.
+  - The coordinator, the sweep and the relocation are not changed; the fix is a reader change in outbox.py alone.
+  - local_index remains a read through entry_files and read_entry with no transport, subprocess or configuration key.
+  - failed entries continue to suppress nothing; only landed keys are added to the suppression set.
+  - Deterministic logic is covered by tests that never invoke a model.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 14:13:35
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 27
