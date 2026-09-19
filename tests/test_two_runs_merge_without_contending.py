@@ -358,14 +358,19 @@ def merge_outcome(root: Path, branch: str) -> tuple[int, list[str]]:
 
 def confer(tree: Path, story_id: str) -> plan_mandate.Commit:
     """Write and commit the mandate record l5-plan writes for `story_id`, in
-    the story's own worktree, before the run — the order l5-plan leaves."""
+    the story's own worktree, before the run — the order l5-plan leaves.
+
+    The stamp is the run's own clock, in the format l5-plan stamps with, so
+    the record stays inside the retention bound whenever the test runs: a
+    literal calendar date here is overtaken by the bound as time passes, and
+    the mandate then joins the planted OLD_STAMP records past it."""
     config = harness_config.load_config(tree)
     mandate = plan_mandate.Mandate(
         path=tree / ".harness" / "stories" / f"{story_id}.yaml",
         story_id=story_id,
         source_kind=conftest.MANDATE_SOURCE_KIND,
         conferred_by=conftest.MANDATE_IDENTITY,
-        conferred_at="2026-09-18 09:00:00",
+        conferred_at=time.strftime(plan_mandate.TIMESTAMP_FORMAT),
         stamped=True,
         detail="",
     )

@@ -12,7 +12,19 @@ story-171's subject, in two halves:
   today? — is written into both shipped `applies_when` statements, which is
   the one place both proposers read, and the planner prompt carries a
   backstop that tells the developer, before the interview, when no stage of
-  the settled workflow may write the assertion the claim needs.
+  the settled workflow has writing that assertion as its work.
+
+story-172 corrected what that backstop decides from. story-171's wording asked
+whether any stage *may* create under the tests directory, and asked of the
+injected restrictions the answer is yes under both shipped workflows, because
+neither verifier carries a restriction at all -- so the backstop fired under
+neither. What actually distinguishes the workflows is a stage confined to the
+tests directory, a stage whose work is validation; the story-workflow declares
+one and the refactor workflow does not. The definitions stayed as story-070
+declared them and the prose moved toward them, and the section "The backstop's
+rule, applied to what l5-plan renders" holds that with an assertion rather
+than with wording: both shipped definitions are rendered through the function
+l5-plan renders them with, and the rule is applied to the result.
 
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
@@ -41,14 +53,16 @@ from pathlib import Path
 import pytest
 
 import conftest
-from conftest import BASELINE, repository_file_at, story_diff
+from conftest import BASELINE, ENDPOINT, repository_file_at, story_diff
 
 import context_assembler
 import filed_query
 import harness_config
 import inspection
 import schema_validator
+import story_coordinator
 import story_parser
+from story_coordinator import CONFINEMENT, CREATE_RESTRICTION, StageRestriction
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATION = REPO_ROOT / "orchestration"
@@ -115,7 +129,7 @@ ARCHITECTURE_DOCS_KEY = "architecture_docs"
 #: for: the question, the fact it is decided against, the remedy, and the
 #: refusal to proceed. The fact is a pattern, since the template wraps it.
 BACKSTOP_QUESTION = "assert something nothing asserts today"
-BACKSTOP_FACT = r"may create files under the tests\s+directory"
+BACKSTOP_FACT = r"confines a stage[^.]*to the tests\s+directory"
 BACKSTOP_REMEDY = "l5-plan --workflow"
 BACKSTOP_REFUSAL = "do not proceed into the interview"
 
@@ -557,8 +571,8 @@ def test_the_backstop_is_asked_before_the_interview_begins():
 
 
 def test_the_backstop_decides_from_the_injected_restrictions():
-    """It reads whether any stage may create under the tests directory from
-    the stage restrictions the workflow injects, and tells the developer
+    """It reads whether any restriction confines a stage to the tests
+    directory from the stage restrictions the workflow injects, and tells the developer
     rather than writing an artifact naming another workflow."""
     head = before_the_numbered_steps(process_section(planner_template()))
     assert re.search(r"stage\s+restrictions", head)
@@ -577,6 +591,198 @@ def test_the_baseline_template_carried_no_backstop():
 
 
 # --------------------------------------------------------------------------
+# The backstop's rule, applied to what l5-plan renders
+#
+# The backstop is a prompt rule read off facts the assembler injects, so the
+# only way to hold that it decides correctly for the shipped workflows is to
+# render each through the function l5-plan renders them with and apply the
+# rule mechanically to the rendered lines. Nothing here spells a stage name,
+# a prefix or a sense: the rendered lines are read back into facts through
+# the wording `StageRestriction.wording` composes, the tests directory is the
+# repository's configured one, and the two rules below are the backstop's own
+# question and the question it replaced.
+# --------------------------------------------------------------------------
+
+
+#: The two senses a rendered restriction line can carry, in the coordinator's
+#: vocabulary. The reader below tries them in this order.
+SENSES = (CREATE_RESTRICTION, CONFINEMENT)
+
+
+def sense_phrase(sense: str) -> str:
+    """The words a rendered line carries for one sense, taken from the wording
+    the coordinator composes rather than restated: a probe restriction with an
+    empty stage and prefix leaves exactly the phrase between them."""
+    return StageRestriction(stage="", prefix="", sense=sense, prefixes=()).wording.strip()
+
+
+def rendered_facts(workflow: dict) -> dict:
+    """What l5-plan hands the planner about a workflow, rendered the same way:
+    `context_assembler.workflow_context` against the shipped rules."""
+    return context_assembler.workflow_context(
+        workflow, harness_config.load_rules(REPO_ROOT))
+
+
+def dashed_items(rendered: str | None) -> list[str]:
+    """The items of a rendered dash-prefixed list; None renders nothing."""
+    items = []
+    for line in (rendered or "").splitlines():
+        assert line.startswith("- "), line
+        items.append(line[2:])
+    return items
+
+
+def restriction_facts(rendered: dict) -> list[tuple[str, str, str]]:
+    """The rendered stage_path_restrictions read back into (stage, sense,
+    prefix) facts — what a reader of the prompt can know about who may write
+    where, and nothing the definition itself was consulted for."""
+    facts = []
+    for item in dashed_items(rendered["stage_path_restrictions"]):
+        for sense in SENSES:
+            phrase = f" {sense_phrase(sense)} "
+            if phrase in item:
+                stage, prefix = item.split(phrase, 1)
+                facts.append((stage, sense, prefix))
+                break
+        else:
+            raise AssertionError(f"no sense wording in the rendered line {item!r}")
+    return facts
+
+
+def backstop_refuses(rendered: dict, tests_dir: str) -> bool:
+    """The backstop's rule as prompts/planner.md states it, applied to the
+    rendered facts: where the finished work will assert something new, refuse
+    unless some restriction confines a stage to the tests directory."""
+    return not any(sense == CONFINEMENT and prefix == tests_dir
+                   for _, sense, prefix in restriction_facts(rendered))
+
+
+def some_stage_may_create_under(rendered: dict, tests_dir: str) -> bool:
+    """The rule story-171 wrote and story-172 replaced: may any stage of the
+    workflow create files under the tests directory? Decided with the
+    coordinator's own `governs` predicate over the rendered facts, so a stage
+    is free there exactly when no restriction of its own governs that path —
+    and a stage the rendering names under no restriction at all is free."""
+    facts = restriction_facts(rendered)
+    restrictions = [
+        StageRestriction(stage, prefix, sense, tuple(
+            other_prefix for other_stage, other_sense, other_prefix in facts
+            if other_stage == stage and other_sense == sense))
+        for stage, sense, prefix in facts
+    ]
+    return any(
+        not any(restriction.stage == stage and restriction.governs(tests_dir)
+                for restriction in restrictions)
+        for stage in dashed_items(rendered["workflow_stages"])
+    )
+
+
+def configured_tests_dir() -> str:
+    """The value the shipped declarations' `{{tests_dir}}` resolves to, from
+    this repository's own configuration, as tests/test_refactor_workflow.py
+    reads it."""
+    return conftest.repository_config()["tests_dir"]
+
+
+def shipped(name: str) -> dict:
+    return conftest.shipped_workflow(REPO_ROOT, name)
+
+
+def test_the_reader_recovers_the_facts_the_coordinator_derives():
+    """Control for every reading below: for each shipped definition, the facts
+    read back off the rendered lines are the restrictions the coordinator
+    derived from the definition, one for one and in order — so a rule
+    applied to the rendering is applied to what the definition declares."""
+    for name in SHIPPED_DEFINITIONS:
+        workflow = shipped(name)
+        derived = [(r.stage, r.sense, r.prefix)
+                   for r in story_coordinator.stage_restrictions(workflow["stages"])]
+        assert derived, name
+        assert restriction_facts(rendered_facts(workflow)) == derived
+        assert dashed_items(rendered_facts(workflow)["workflow_stages"]) == [
+            stage["name"] for stage in workflow["stages"]]
+
+
+def test_the_backstop_refuses_the_refactor_workflow_and_admits_the_story_workflow():
+    """The assertion the brief named as missing: the refusal for the refactor
+    workflow and the interview for story-workflow, held by applying the rule
+    to what l5-plan renders rather than by the wording of either statement."""
+    assert backstop_refuses(rendered_facts(shipped("refactor-workflow")),
+                            configured_tests_dir())
+    assert not backstop_refuses(rendered_facts(shipped("story-workflow")),
+                                configured_tests_dir())
+
+
+def test_the_distinguishing_fact_is_a_confinement_to_the_tests_directory():
+    """What the rule read: story-workflow's rendering carries a confinement
+    to the configured tests directory, and the refactor workflow's carries
+    restrictions — it is not empty — and no such confinement among them."""
+    confinements_to_tests = {
+        name: [stage for stage, sense, prefix
+               in restriction_facts(rendered_facts(shipped(name)))
+               if sense == CONFINEMENT and prefix == configured_tests_dir()]
+        for name in SHIPPED_DEFINITIONS
+    }
+    assert len(confinements_to_tests["story-workflow"]) == 1
+    assert confinements_to_tests["refactor-workflow"] == []
+    assert restriction_facts(rendered_facts(shipped("refactor-workflow"))) != []
+
+
+def built_without_a_validation_stage() -> dict:
+    """The case the old rule got wrong: a definition whose first stage carries
+    no create restriction and none of whose stages is confined to the tests
+    directory. One stage is confined elsewhere and one is unrestricted, so the
+    rendering is not empty and the second stage is free to create anywhere."""
+    return conftest.build_workflow(
+        conftest.workflow_stage(),
+        conftest.workflow_stage(may_only_change=["docs/zzz-elsewhere/"]),
+        conftest.workflow_stage(),
+    )
+
+
+def test_a_built_definition_with_no_stage_confined_to_the_tests_directory_is_refused():
+    """Control: the rule reads a confinement and not a create permission. The
+    same definition with one stage confined to the tests directory added is
+    admitted, so the refusal is the absence of that confinement and nothing
+    else about the rendering."""
+    tests_dir = configured_tests_dir()
+    refused = built_without_a_validation_stage()
+    assert backstop_refuses(rendered_facts(refused), tests_dir)
+
+    admitted = conftest.build_workflow(
+        *refused["stages"], conftest.workflow_stage(may_only_change=[tests_dir]))
+    assert not backstop_refuses(rendered_facts(admitted), tests_dir)
+
+
+def test_the_old_rule_answers_yes_for_both_shipped_workflows():
+    """Why the rule changed, held rather than remembered: asked whether any
+    stage may create under the tests directory, the rendered facts of both
+    shipped workflows say yes, because neither verifier is restricted — so a
+    backstop deciding on that question fired under neither workflow."""
+    for name in SHIPPED_DEFINITIONS:
+        assert some_stage_may_create_under(rendered_facts(shipped(name)),
+                                           configured_tests_dir()), name
+
+
+def test_the_old_rule_can_answer_no_and_still_disagrees_with_the_new_one():
+    """Control for the yes above: the old rule is not stuck on yes. Over a
+    definition whose every stage is either kept out of the tests directory or
+    confined elsewhere it answers no, while over the definition the old rule
+    got wrong — no validation stage, a stage free to create anywhere — it
+    answers yes where the backstop's rule refuses."""
+    tests_dir = configured_tests_dir()
+    closed = conftest.build_workflow(
+        conftest.workflow_stage(may_not_create=[tests_dir]),
+        conftest.workflow_stage(may_only_change=["docs/zzz-elsewhere/"]),
+    )
+    assert not some_stage_may_create_under(rendered_facts(closed), tests_dir)
+
+    wrong_case = rendered_facts(built_without_a_validation_stage())
+    assert some_stage_may_create_under(wrong_case, tests_dir)
+    assert backstop_refuses(wrong_case, tests_dir)
+
+
+# --------------------------------------------------------------------------
 # The applies_when statements carry the finishing test, and nothing else moved
 # --------------------------------------------------------------------------
 
@@ -586,7 +792,8 @@ def test_the_refactor_statement_says_a_new_standing_claim_is_not_its_work():
     assert "new standing claim" in statement
     assert "only place" in statement
     assert "not this workflow's work" in statement
-    assert re.search(r"no stage that may write", statement)
+    assert re.search(r"no stage whose work is to write", statement)
+    assert "written by the stage whose own change it validates" in statement
     assert "assertion" in statement
 
 
@@ -620,6 +827,49 @@ def test_everything_but_the_statement_is_byte_identical_to_the_base_commit(name)
         assert key in before
         assert after[key] == before[key], key
     assert {key for key in after if after[key] != before[key]} == {"applies_when"}
+
+
+def definition_where_story_172_started(name: str) -> str:
+    """A shipped definition's text at the commit story-172 started from.
+
+    This module's own range is story-171's, and its ENDPOINT — the commit that
+    added this module, which is the commit story-171 finished with — is
+    exactly where story-172 began. Read through the shared resolution rather
+    than as `HEAD`, which would go vacuously green the moment this story
+    commits.
+    """
+    return repository_file_at(f"workflows/{name}.json",
+                              validation_file=Path(__file__), bound=ENDPOINT)
+
+
+def test_story_172_changed_only_the_refactor_statement_and_nothing_of_the_story_workflow():
+    """The definitions stand as story-070 declared them: story-workflow.json
+    is byte for byte what story-172 started from, and refactor-workflow.json
+    differs from it in applies_when and in no other key."""
+    assert (WORKFLOWS / "story-workflow.json").read_text(encoding="utf-8") == (
+        definition_where_story_172_started("story-workflow"))
+    assert raw_definition("story-workflow") == json.loads(
+        definition_where_story_172_started("story-workflow"))
+
+    started = json.loads(definition_where_story_172_started("refactor-workflow"))
+    after = raw_definition("refactor-workflow")
+    assert set(started) == set(after)
+    assert {key for key in after if after[key] != started[key]} == {"applies_when"}
+    assert "no stage that may write" in started["applies_when"]
+    assert "no stage that may write" not in after["applies_when"]
+
+
+def test_the_start_of_story_172_is_neither_the_baseline_nor_the_working_tree():
+    """Control for the identity above: the revision it reads is a third one.
+    It differs from this module's BASELINE, where story-171 had not yet
+    written the finishing test into either statement, and it differs from the
+    working tree on the one key story-172 changed — so an equal reading of
+    story-workflow is two revisions agreeing, not one revision read twice."""
+    for name in SHIPPED_DEFINITIONS:
+        started = json.loads(definition_where_story_172_started(name))
+        assert started["applies_when"] != baseline_definition(name)["applies_when"]
+    assert (json.loads(definition_where_story_172_started("refactor-workflow"))
+            ["applies_when"] != raw_definition("refactor-workflow")["applies_when"])
 
 
 def test_the_two_statements_still_differ_and_still_load_as_candidates():
