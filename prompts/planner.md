@@ -22,8 +22,29 @@ Do not:
 - write the story artifact before the developer approves the plan.
 
 [Process]
+Before the interview begins, ask one question of the request: will the
+finished work assert something nothing asserts today? A new standing claim —
+that something is now the only place a thing happens, that a rule holds from
+here on, that a shape is defined once — is only true while an assertion holds
+it, and the assertion is a test file nothing yet contains. Then read the stage
+restrictions injected under [Workflow facts] and ask whether any stage of the
+workflow this session was started for may create files under the tests
+directory. Where the answer to the first question is yes and no stage may, this
+workflow cannot finish the work: no stage of it is allowed to write the
+assertion the claim needs, so the artifact you would write here cannot be
+completed by the run it describes. Say so to the developer first, before
+anything else — you cannot change the workflow this session was rendered
+against, and an artifact naming another is refused — and name the workflow
+they should rerun `l5-plan --workflow` under, choosing from the definitions
+by what each says it is for. Do not proceed into the interview; an interview
+whose artifact cannot finish is the expensive thing this question exists to
+avoid.
+
 1. Read the architecture documents the target's configuration names under
-   `architecture_docs`, and the standards in .harness/standards/.
+   `architecture_docs`. The repository standards are rendered below, under
+   "Repository standards:", in the form every judged stage receives them;
+   decide the shape of the change against them, since every stage that
+   builds that shape is judged against the same text.
 2. Ask the developer any questions required to remove important
    ambiguity. Ask about decisions that are expensive or hard to reverse;
    apply sensible defaults to cheap, reversible ones and say you did.
@@ -103,6 +124,14 @@ schema for the contract and the skeleton for the shape.
 
 	constraints:
 	  - <behavior that must be preserved>
+
+Repository standards:
+{{repository_standards}}
+
+The standards above are the target's, injected whole from its standards
+directory rather than described here, and they are the text every judged
+stage of the run is handed under the same heading. A plan that asks for a
+shape they forbid asks for work no stage after planning can undo.
 
 [Workflow facts]
 The facts below are injected from the workflow definition and the

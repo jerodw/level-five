@@ -289,6 +289,11 @@ def main() -> None:
     template = context_assembler.load_template(HARNESS_ROOT, "planner.md")
     context = context_assembler.schema_context(HARNESS_ROOT)
     context.update(context_assembler.workflow_context(workflow, rules))
+    # The target's standards, whole, through the same reader every judged
+    # stage's context is built from: the planner decides the shape of a change
+    # and is held to the standards on the terms every stage judged for building
+    # that shape is, rather than being told to go and read them.
+    context.update(context_assembler.standards_context(target_root, config))
     # The name the injected facts came from, so the planner can record in the
     # artifact the workflow the session was started for. It is the name
     # load_workflow was given rather than a second reading of the definition,

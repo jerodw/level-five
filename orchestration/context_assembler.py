@@ -168,6 +168,31 @@ def config_context(config: dict) -> dict[str, str | None]:
     }
 
 
+def standards_context(target_root: Path, config: dict) -> dict[str, str | None]:
+    """Map the target's standards directory to its two injectable placeholders.
+
+    {{repository_standards}} is every *.md file the directory holds, whole and
+    in name order, each under a "--- name ---" heading; {{testing_standards}}
+    is the one file the testing stage is pointed at by name. This is the one
+    place the standards directory is globbed: build_context calls it for every
+    judged stage, the Inspector calls it for its own prompt, and l5-plan calls
+    it for the planner, so the planner decides the shape of a change with the
+    same standards in front of it that every stage judged for building that
+    shape is held to. A target that declares no standards directory yields
+    None for both, the optional-placeholder convention, in the shape
+    config_context returns its pair.
+    """
+    standards_dir = target_root / config.get("standards_dir", ".harness/standards")
+    if not standards_dir.is_dir():
+        return {"repository_standards": None, "testing_standards": None}
+    return {
+        "repository_standards": _read_files(
+            standards_dir, sorted(p.name for p in standards_dir.glob("*.md"))
+        ),
+        "testing_standards": _read(standards_dir / "testing.md"),
+    }
+
+
 def output_check_command(
     harness_root: Path, run_dir: Path, stage: str | None
 ) -> str | None:
@@ -256,10 +281,6 @@ def build_context(
     inspection_findings: str | None = None,
     stage: str | None = None,
 ) -> dict[str, str | None]:
-    standards_dir = target_root / config.get("standards_dir", ".harness/standards")
-    standards = _read_files(
-        standards_dir, sorted(p.name for p in standards_dir.glob("*.md"))
-    ) if standards_dir.is_dir() else None
     doc_paths = config.get("architecture_docs", [])
 
     # A stage receiving a retry is told it is on one, and since story-028 why:
@@ -289,7 +310,6 @@ def build_context(
         "stage_exceptions": _exception_lines(story.get("stage_exceptions")),
         "blocked_paths": _dashed_lines(rules.get("blocked_paths")),
         "test_command": config.get("test_command"),
-        "repository_standards": standards,
         "architecture_docs": _read_files(target_root, doc_paths),
         "architecture_doc_paths": "\n".join(f"- {p}" for p in doc_paths) or None,
         "run_dir": str(run_dir),
@@ -367,7 +387,6 @@ def build_context(
         # rendered before.
         "suite_run_result": suite_run_result,
         "retry_state": retry_state,
-        "testing_standards": _read(standards_dir / "testing.md"),
         # The command this stage may run to ask about its own required
         # outputs, resolved here so the harness-layer partial can carry it.
         # Absent stage name renders None, which is what a caller that omits
@@ -391,6 +410,10 @@ def build_context(
     # the argument existed; every other configured fact this renders comes off
     # the config the caller already passed.
     context.update(config_context({**config, "allowed_tools": allowed_tools}))
+    # The target's standards, read by the one function that globs the
+    # directory, so a judged stage, the Inspector and the planner are all
+    # handed the same body.
+    context.update(standards_context(target_root, config))
 
     # Two-pass render: resolve the shared harness-layer partial (including its
     # own {{blocked_paths}} placeholder) against the assembled context before

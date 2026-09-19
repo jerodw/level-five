@@ -2557,6 +2557,18 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "rather than inputs to the test — together with the one end-to-end "
         "case that drives l5-plan, which resolves this repository as its own "
         "harness root and so can only be compared against what is deployed",
+    "test_planner_receives_the_standards.py":
+        "what it resolves live is what story-171's criteria are about and "
+        "could not be anything else: the planner template this repository "
+        "ships, because the criterion is that it renders the standards under "
+        "the shared heading and carries the backstop; the two shipped workflow "
+        "definitions, because the criterion is what their applies_when "
+        "statements say and that nothing else in them moved; the shipped "
+        "Inspector template, rendered to show the standards reach it through "
+        "the shared reader; and scripts/l5-plan driven end to end, which "
+        "resolves this repository as its own harness root. Every target it "
+        "plans in or reads standards from is built under tmp_path, and the "
+        "workflow its in-process renders inject is one it builds",
     "test_planning_runs_on_its_own_worktree.py":
         "the three things it resolves live are what story-117's criteria are "
         "about and could not be anything else: prompts/planner.md, because the "
@@ -3245,6 +3257,18 @@ DECLARED_HISTORY_READERS = {
         "the story that removed it and absent at that story's baseline, and "
         "the archived copy is asserted still to hold what it held. That is a "
         "claim about this repository's own history of the defect",
+    "test_planner_receives_the_standards.py":
+        "its subject includes what story-171 itself changed and left alone: "
+        "that prompts/workflow-selector.md and prompts/inspector.md carry no "
+        "diff across that story's own range, that each shipped applies_when "
+        "extends the statement the base commit carried while every other key "
+        "of both definitions is byte-identical to it, and that the planner "
+        "template and inspection.py at that baseline still carried the "
+        "instruction, the private reader and none of the backstop — the "
+        "controls for the absences the module asserts today. Each is a claim "
+        "about this repository's own change, which no constructed repository "
+        "can answer; the control that the resolution still reports a story "
+        "that touched those prompts is built under tmp_path",
     "test_refactor_workflow.py":
         "its subject includes what story-070 itself changed and left alone: "
         "that no prompt which existed before it was touched, that "

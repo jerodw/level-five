@@ -766,25 +766,6 @@ def findings_paths(target_root: Path, config: dict):
     return logs / FINDINGS_ARTIFACT, logs / INSPECTION_LOG
 
 
-def _standards(target_root: Path, config: dict) -> str:
-    """Whatever the target declares as standards, as one undifferentiated body.
-
-    Globbed, never looked for by name: the harness declares no required
-    document set, so a target with one standards file and a target with twelve
-    are read identically, and a target with none is read as declaring none.
-    """
-    directory = target_root / config.get("standards_dir", ".harness/standards")
-    if not directory.is_dir():
-        return ""
-    parts = []
-    for path in sorted(directory.glob("*.md")):
-        try:
-            parts.append(f"--- {path.name} ---\n{path.read_text(encoding='utf-8')}")
-        except OSError:
-            continue
-    return "\n\n".join(parts)
-
-
 def _already_filed_block(answer) -> str:
     """The items the query reported, rendered as data for the Inspector.
 
@@ -851,7 +832,15 @@ def _render(harness_root: Path, target_root: Path, config: dict, scope: Scope,
     # the template unset.
     context["framing"] = scope.framing
     context["scope_paths"] = "\n".join(paths) or "(this scope tracks no files)"
-    context["repository_standards"] = _standards(target_root, config) or None
+    # Whatever the target declares as standards, as one undifferentiated body,
+    # read by the shared reader every judged stage's context is built from —
+    # globbed there, never looked for by name, so a target with one standards
+    # file and one with twelve are read identically and one with none is read
+    # as declaring none. Reading it here a second time would be a second
+    # answer to what the standards say.
+    context["repository_standards"] = context_assembler.standards_context(
+        target_root, config
+    )["repository_standards"] or None
     context["already_filed"] = _already_filed_block(answer)
     context["severity_floor"] = _severity_floor_block(min_severity)
     context["findings_path"] = str(artifact)
