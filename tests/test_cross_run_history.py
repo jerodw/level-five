@@ -105,6 +105,21 @@ CONFERRAL_LOG = next(name for name, shape in DECLARATIONS.items()
 INSPECTION_LOG = next(name for name, shape in DECLARATIONS.items()
                       if "findings" in shape["properties"])
 
+#: The fifth, since story-173: told apart by the pair of fields only an
+#: observation of how long an operation took carries. Its own subject is
+#: `tests/test_an_operation_announces_what_it_has_taken_before.py`; here it is
+#: one more declared log every declaration-driven assertion holds to its
+#: declaration.
+DURATION_LOG = next(name for name, shape in DECLARATIONS.items()
+                    if "operation" in shape["properties"]
+                    and "duration_seconds" in shape["properties"])
+
+#: The record fields the projection derives — from the run directory's name,
+#: the event kind and the run's own history — rather than reads off the entry.
+#: Named so a reader asking whether an entry carries what a log requires asks
+#: only about what the entry itself has to carry.
+DERIVED_FIELDS = {"story_id", "status", "retry_count"}
+
 
 
 def projected(log: str) -> set[str]:
@@ -410,14 +425,19 @@ def records(target_root: Path, log: str, story_id: str = "story-001") -> list[di
 
 
 def routed_entries(run_dir: Path, log: str) -> list[dict]:
-    """The run's own history entries whose kind the log's declaration names.
+    """The run's own history entries the log's declaration selects.
 
     Selection read off the declaration, so this counts what *should* reach a
-    log without re-implementing the projection that puts it there.
+    log without re-implementing the projection that puts it there. Since
+    story-173 the declaration selects in two halves: the kind must be one the
+    enum names, and the entry must carry every field the log requires that
+    the projection does not derive — which is what keeps an occurrence of a
+    named kind that was not timed out of the duration log.
     """
     kinds = kinds_routed_to(log)
+    asked = set(DECLARATIONS[log]["required"]) - DERIVED_FIELDS
     return [entry for entry in story_coordinator.load_history(run_dir)
-            if entry.get(EVENT) in kinds]
+            if entry.get(EVENT) in kinds and asked <= set(entry)]
 
 
 @pytest.fixture
@@ -474,11 +494,12 @@ def test_the_schema_is_shipped_valid_and_named_in_the_manifest():
 
 
 def test_each_declared_log_names_the_kinds_it_records_and_the_fields_it_carries():
-    derived = {OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG, INSPECTION_LOG}
+    derived = {OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG, INSPECTION_LOG,
+               DURATION_LOG}
     assert set(DECLARATIONS) == derived
-    # Each was told apart by a field of its own, so four derivations that
-    # collapsed onto one log would be reported here rather than silently
-    # asserting the same log four times.
+    # Each was told apart by a field of its own, so derivations that collapsed
+    # onto one log would be reported here rather than silently asserting the
+    # same log more than once.
     assert len(derived) == len(DECLARATIONS)
     for log, shape in DECLARATIONS.items():
         assert log.endswith(".jsonl"), log
@@ -488,13 +509,21 @@ def test_each_declared_log_names_the_kinds_it_records_and_the_fields_it_carries(
         # Every required field is one the record carries, so a log cannot
         # require the property that only selects into it.
         assert set(shape["required"]) <= projected(log), log
-    # The enums are pairwise disjoint, so no entry is a record in two logs by
-    # declaration — which is what makes "exactly one record" a statement about
-    # the run rather than about which log was looked at first.
+    # Two logs that name one kind record different facts about it, and the
+    # required list is what keeps one occurrence from being a record in both
+    # by accident: the two logs require different fields, so an occurrence
+    # carrying only what one of them requires reaches that one alone. That is
+    # what keeps "exactly one record" a statement about the run rather than
+    # about which log was looked at first, now that the enums are no longer
+    # pairwise disjoint — the duration log names the completion kinds of every
+    # timed operation, one of which the inspection log names too.
     for one in DECLARATIONS:
         for other in DECLARATIONS:
-            if one != other:
-                assert not set(kinds_routed_to(one)) & set(kinds_routed_to(other))
+            if one == other:
+                continue
+            if set(kinds_routed_to(one)) & set(kinds_routed_to(other)):
+                assert set(DECLARATIONS[one]["required"]) != \
+                    set(DECLARATIONS[other]["required"]), (one, other)
 
 
 def test_the_reader_returns_exactly_what_the_schema_declares():
@@ -761,9 +790,9 @@ def test_an_entry_whose_kind_no_declaration_names_projects_nowhere():
     assert unrouted, "every declared event kind is routed; there is nothing to check"
 
     for kind in unrouted:
-        entry = {"sequence": 1, "timestamp": "2026-08-28 12:00:00",
-                 EVENT: kind, "message": "an entry no log declares"}
         for log in DECLARATIONS:
+            entry = {**carrying_what_is_required(log),
+                     EVENT: kind, "message": "an entry no log declares"}
             assert story_coordinator.history_record(
                 entry, [], "story-001", DECLARATIONS[log]) is None, (kind, log)
 
@@ -771,11 +800,43 @@ def test_an_entry_whose_kind_no_declaration_names_projects_nowhere():
     # returns a record, so the None above is the selection deciding rather
     # than the projection being unable to produce anything.
     for log in DECLARATIONS:
-        entry = {"sequence": 1, "timestamp": "2026-08-28 12:00:00",
+        entry = {**carrying_what_is_required(log),
                  EVENT: kinds_routed_to(log)[0], "message": "a routed entry"}
         record = story_coordinator.history_record(
             entry, [], "story-001", DECLARATIONS[log])
         assert record is not None and record["story_id"] == "story-001"
+
+
+def carrying_what_is_required(log: str) -> dict:
+    """A constructed entry carrying every field `log` requires of the entry
+    itself, so a projection control is refused by its kind alone and not by
+    a missing field — the second half of the selection, which
+    `test_a_named_kind_missing_a_required_field_projects_nowhere` holds on
+    its own."""
+    entry = {"sequence": 1, "timestamp": "2026-08-28 12:00:00"}
+    for name in set(DECLARATIONS[log]["required"]) - DERIVED_FIELDS:
+        entry.setdefault(name, 1.5 if "seconds" in name else f"a {name}")
+    return entry
+
+
+def test_a_named_kind_missing_a_required_field_projects_nowhere():
+    """The required list is the second half of the selection: an entry of a
+    named kind that lacks a field the log requires of it writes no record,
+    and the same entry carrying it does. Over every log that requires a field
+    of the entry — asserted to be at least one, so the loop is not vacuous."""
+    demanding = [log for log in DECLARATIONS
+                 if set(DECLARATIONS[log]["required"]) - DERIVED_FIELDS
+                 - {"timestamp"}]
+    assert demanding, "no log requires a field of the entry itself"
+    for log in demanding:
+        whole = {**carrying_what_is_required(log),
+                 EVENT: kinds_routed_to(log)[0], "message": "a routed entry"}
+        assert story_coordinator.history_record(
+            whole, [], "story-001", DECLARATIONS[log]) is not None, log
+        for name in set(DECLARATIONS[log]["required"]) - DERIVED_FIELDS - {"timestamp"}:
+            lacking = {key: value for key, value in whole.items() if key != name}
+            assert story_coordinator.history_record(
+                lacking, [], "story-001", DECLARATIONS[log]) is None, (log, name)
 
 
 @pytest.mark.parametrize("shape", ["completed", "retried_twice"])

@@ -636,10 +636,18 @@ class Run:
 
     @property
     def log_records(self) -> list[dict]:
-        """Every record the cross-run inspection log holds, of either kind."""
+        """Every record the cross-run inspection log holds, of either kind.
+
+        Since story-173 the inspection's kind reaches a second log — the
+        duration log, holding how long every timed operation took — so the
+        paths the commit stages are narrowed to the inspection log, resolved
+        by which declaration names the kind first, and never by a filename.
+        """
         found: list[dict] = []
         for relative in story_inspection.record_paths(self.tree, {}, STORY_ID):
             path = self.tree / relative
+            if path.name != INSPECTION_LOG:
+                continue
             if path.is_file():
                 found += [json.loads(line) for line
                           in path.read_text(encoding="utf-8").splitlines()

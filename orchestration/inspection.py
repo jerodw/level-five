@@ -1261,6 +1261,16 @@ def record_paths(target_root: Path, config: dict, *, story_id: str = "",
     passes that `segment` in. A caller naming neither is refused rather than
     answered with a guess, because a path staged by a guess is a path nothing
     wrote.
+
+    The projection is asked with an entry carrying every field each log's
+    declaration requires, so the answer is which logs this kind *can* reach
+    rather than which it reached on one occurrence: since story-173 a log may
+    require a field only some occurrences of a kind carry — the duration log
+    requires the seconds an inspection that made its invocation took — and a
+    probe carrying only what every occurrence carries would leave the file the
+    real record went to unstaged. What is then staged is narrowed to the files
+    the segment holds, because an occurrence that carried less wrote to fewer
+    of them and `git add` of a path that is not there refuses the whole set.
     """
     import story_coordinator
 
@@ -1277,11 +1287,14 @@ def record_paths(target_root: Path, config: dict, *, story_id: str = "",
         log for log, declaration in
         story_coordinator.history_log_declarations().items()
         if story_coordinator.history_record(
-            {"event": INSPECTION_EVENT, "timestamp": ""}, [], "", declaration
+            {"event": INSPECTION_EVENT, "timestamp": "",
+             **{field: "" for field in declaration.get("required", [])}},
+            [], "", declaration,
         ) is not None
     ]
     return tuple(sorted(
         str((segment / log).relative_to(target_root)) for log in logs
+        if (segment / log).is_file()
     ))
 
 

@@ -826,6 +826,17 @@ def test_the_logs_description_says_what_it_now_holds():
         SCHEMA["properties"][OUTCOME_LOG]["description"]
 
 
+def carrying_what_the_log_requires(log: str) -> dict:
+    """Every field `log` requires of the entry itself, seeded with a value of
+    the declared type, so a projection is refused by its kind alone and not
+    by a missing field — since story-173 a log's required list is the second
+    half of its selection, and the duration log requires a numeric duration
+    and an operation the projection does not derive."""
+    derived = {"story_id", "status", "retry_count"}
+    return {name: 1.5 if "seconds" in name else f"a {name}"
+            for name in set(DECLARATIONS[log].get("required", [])) - derived}
+
+
 def test_every_routed_kind_projects_a_record_of_the_same_shape():
     """Adding kinds did not reshape the records the existing kinds carry.
 
@@ -840,7 +851,8 @@ def test_every_routed_kind_projects_a_record_of_the_same_shape():
     for log in DECLARATIONS:
         for kind in kinds_routed_to(log):
             entry = {"sequence": 1, "timestamp": "2026-08-28 12:00:00",
-                     EVENT: kind, "message": "a routed entry"}
+                     EVENT: kind, "message": "a routed entry",
+                     **carrying_what_the_log_requires(log)}
             record = story_coordinator.history_record(
                 entry, [], STORY_ID, DECLARATIONS[log])
             assert record is not None, (log, kind)

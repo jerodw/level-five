@@ -847,10 +847,14 @@ def test_every_declared_log_is_reachable_through_the_explicit_directory(
     run directory appends through exactly this path.
     """
     directory = tmp_path / "history-outside-a-run"
-    story_coordinator.append_history_records(
-        directory,
-        {"event": a_kind_of(log), "timestamp": "2026-08-28 09:00:00"},
-        "story-900", [])
+    # The entry carries every field the log requires of the entry itself —
+    # since story-173 a log's required list is the second half of its
+    # selection, and a declaration may require a field the projection does
+    # not derive — so what is exercised here is the seam and not the refusal.
+    entry = {"event": a_kind_of(log), "timestamp": "2026-08-28 09:00:00"}
+    for name in set(declared_logs()[log].get("required", [])) - {"story_id"}:
+        entry.setdefault(name, 1.5 if "seconds" in name else f"a {name}")
+    story_coordinator.append_history_records(directory, entry, "story-900", [])
     # Under the story's own segment of that directory, which is where a record
     # for a story goes since story-165.
     segment = harness_config.history_segment(directory, "story-900")

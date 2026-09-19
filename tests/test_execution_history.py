@@ -653,6 +653,9 @@ OPTIONAL_FIELDS = {
     "findings", "filed", "dropped",
     "mode", "cost_usd", "scope_files", "invocations", "dedupe_ran",
     "routed", "acted_on",
+    # Which timed operation an entry completes, beside its duration_seconds;
+    # the key the cross-run duration log records an observation under.
+    "operation",
 }
 
 

@@ -35,6 +35,7 @@ import json
 import re
 import shlex
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -1069,6 +1070,7 @@ def set_history_dir(directory: Path | None) -> None:
     global _history_dir
     _history_dir = directory
     set_history_past_bound({})
+    set_duration_estimates({})
 
 
 def set_history_past_bound(counts: dict[str, int], bound: object = None) -> None:
@@ -1078,6 +1080,168 @@ def set_history_past_bound(counts: dict[str, int], bound: object = None) -> None
     global _history_past_bound, _history_retention_bound
     _history_past_bound = dict(counts)
     _history_retention_bound = bound
+
+
+# --------------------------------------------------------------------------
+# How long a long step is expected to take
+#
+# Every long step announces itself before it starts and says what the wait is
+# worth. What it said was self-referential — "as long as a suite run", "about
+# as long as a stage" — which tells a reader the step is long and nothing
+# about how long. The harness measured stage durations on every
+# stage-completed entry and threw them away with the run directory. Now every
+# timed operation leaves one record in the declared duration log, and a run
+# reads an estimate off that log at the moment a step announces itself: per
+# operation, the median of a bounded window of the most recent observations.
+#
+# The estimate is a report to a person and never a bound. No timeout reads it,
+# no check compares against it, and a step that runs past it is a step,
+# running. Where too few observations exist the step says exactly what it said
+# before, so a fresh target announces nothing invented.
+
+#: How many of an operation's most recent observations an estimate is the
+#: median of. A module constant rather than configuration: the window decides
+#: how quickly the figure follows a change in the machine or the suite, which
+#: is a judgement about the estimate and not about any target.
+DURATION_ESTIMATE_WINDOW = 10
+
+#: How many observations an operation needs before a figure is announced at
+#: all. Below it the step announces what it announced before this existed.
+DURATION_ESTIMATE_MINIMUM = 3
+
+#: The fixed operation names for the checks and the inspection. A stage's
+#: operation is its own name, so it is not spelled here.
+CLEAN_CLONE_OPERATION = "clean-clone"
+SUITE_RUN_OPERATION = "suite-run"
+REVERT_CHECK_OPERATION = "revert-check"
+SUITE_CENSUS_OPERATION = "suite-census"
+INSPECTION_OPERATION = "inspection"
+
+#: The per-operation estimates this run announces with, in seconds, keyed by
+#: operation. Established once per run from the startup read of the history,
+#: in the shape `_history_past_bound` takes and for its reason: a keyword
+#: argument a call site omits would silently drop the figure, and module state
+#: established once cannot be omitted. Empty means no operation has enough
+#: history, and then every announcement renders exactly what it rendered
+#: before. Nothing routes on it.
+_duration_estimates: dict[str, float] = {}
+
+
+def set_duration_estimates(estimates: dict[str, float]) -> None:
+    """Establish the per-operation estimates this run announces with."""
+    global _duration_estimates
+    _duration_estimates = dict(estimates)
+
+
+def duration_estimate(operation: str | None) -> float | None:
+    """The estimate this run holds for `operation`, in seconds, or None where
+    it holds none — too few observations, or no history read at all.
+    """
+    if operation is None:
+        return None
+    return _duration_estimates.get(operation)
+
+
+def duration_log_name(declarations: dict[str, dict]) -> str | None:
+    """The declared log whose record shape carries an operation and a duration.
+
+    Located through the declaration and never by filename: the log is the one
+    whose `properties` declare both `operation` and `duration_seconds`, so a
+    deployment that named the file differently would still be read.
+    """
+    for name, declaration in declarations.items():
+        fields = declaration.get("properties", {})
+        if "operation" in fields and "duration_seconds" in fields:
+            return name
+    return None
+
+
+def _observation(record: object) -> tuple[float, str, float] | None:
+    """One record read as an observation: (when, operation, seconds), or None.
+
+    A record whose duration is not a number, whose operation is not a string,
+    or whose timestamp cannot be read is not an observation and stops nothing —
+    the same treatment `_record_is_older` gives a timestamp it cannot judge.
+    """
+    if not isinstance(record, dict):
+        return None
+    seconds = record.get("duration_seconds")
+    operation = record.get("operation")
+    stamp = record.get("timestamp")
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        return None
+    if not isinstance(operation, str) or not isinstance(stamp, str):
+        return None
+    try:
+        when = time.mktime(time.strptime(stamp, HISTORY_TIMESTAMP_FORMAT))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return when, operation, float(seconds)
+
+
+def duration_estimates(records: Iterable[object]) -> dict[str, float]:
+    """Per-operation estimates from the duration log's parsed records.
+
+    Pure over its input. For each operation the observations are ordered by
+    their record timestamp — never by file order, since a log is gathered from
+    segments whose names do not sort in time order — the most recent
+    `DURATION_ESTIMATE_WINDOW` are kept, and where at least
+    `DURATION_ESTIMATE_MINIMUM` exist their median is the estimate. An
+    operation with fewer has no entry, and a record that is not an observation
+    contributes nothing.
+    """
+    by_operation: dict[str, list[tuple[float, float]]] = {}
+    for record in records:
+        observed = _observation(record)
+        if observed is None:
+            continue
+        when, operation, seconds = observed
+        by_operation.setdefault(operation, []).append((when, seconds))
+    estimates: dict[str, float] = {}
+    for operation, observations in by_operation.items():
+        recent = sorted(observations)[-DURATION_ESTIMATE_WINDOW:]
+        if len(recent) < DURATION_ESTIMATE_MINIMUM:
+            continue
+        estimates[operation] = float(statistics.median(seconds for _, seconds in recent))
+    return estimates
+
+
+def history_duration_records(reading: "HistoryReading") -> list[object]:
+    """Every parsed record of the duration log the startup read found.
+
+    The log is located through `duration_log_name` over the declarations the
+    read itself walked; a declaration set carrying no such log yields nothing,
+    and then no estimate is established.
+    """
+    log = duration_log_name(history_log_declarations())
+    if log is None:
+        return []
+    return [record for path, lines in reading.files.items()
+            if path.name == log for _, record in lines]
+
+
+def estimated_run_time(seconds: float) -> str:
+    """The parenthesised clause an estimate is announced in.
+
+    Whole minutes, or whole seconds when the estimate is under a minute, each
+    singular at one — exactly the form "(Estimated run time: 3 minutes)". No
+    completion time is printed: every line is already stamped with its write
+    time. This is the one spelling of the form; `_announcement` renders it for
+    the steps that announce and the stage-started line renders it for a stage.
+    """
+    if seconds < 60:
+        count, unit = max(0, round(seconds)), "second"
+    else:
+        count, unit = max(1, round(seconds / 60)), "minute"
+    plural = "" if count == 1 else "s"
+    return f"(Estimated run time: {count} {unit}{plural})"
+
+
+def _with_estimate(message: str, estimate: float | None) -> str:
+    """`message`, followed by the estimate's clause where there is one."""
+    if estimate is None:
+        return message
+    return f"{message} {estimated_run_time(estimate)}"
 
 
 def history_log_declarations(harness_root: Path | None = None) -> dict[str, dict]:
@@ -1114,6 +1278,17 @@ def history_record(
     caller — it is not made by a run and has no story to name — and an empty
     string there would be a value every reader of the log would have to know to
     discount.
+
+    The declaration's `required` list is the second half of the selection. A
+    record that would lack a field the log requires is not written there at
+    all, because a line missing what every line must carry is a line every
+    reader has to know to discount. That is what lets one kind be named by two
+    logs recording different facts about it: the duration log names the
+    completion kinds of every timed operation and requires the duration, so an
+    occurrence of such a kind that was not timed — a revert check decided by its
+    nomination selector, an inspection that could not run — reaches the log
+    that records what happened and not the one that records how long it took.
+    No kind is named here; the required list is read off the declaration.
     """
     kinds = declaration["properties"][HISTORY_EVENT_PROPERTY]["enum"]
     kind = entry.get("event")
@@ -1126,11 +1301,14 @@ def history_record(
     values["retry_count"] = sum(
         1 for recorded in history if recorded.get("retry_decision") == "retry"
     )
-    return {
+    record = {
         name: values[name]
         for name in declaration["properties"]
         if name != HISTORY_EVENT_PROPERTY and name in values
     }
+    if any(name not in record for name in declaration.get("required", [])):
+        return None
+    return record
 
 
 def append_history_records(
@@ -1503,6 +1681,7 @@ def append_event(
     dedupe_ran: bool | None = None,
     routed: int | None = None,
     acted_on: int | None = None,
+    operation: str | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -1573,6 +1752,13 @@ def append_event(
         # none acted on is an answer.
         "routed": routed,
         "acted_on": acted_on,
+        # Which timed operation the entry completes, beside its
+        # duration_seconds: the stage's own name for a stage, a fixed name for
+        # a check or the inspection. It is the key the cross-run duration log
+        # records an observation under and an announcement reads an estimate
+        # under, so the two are one string. Absent on every entry that
+        # completes nothing timed.
+        "operation": operation,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)
@@ -3265,6 +3451,14 @@ class CleanCloneResult:
     serialize alike. It carries no default for the same reason: a construction
     site added later cannot omit it and have an unnarrowed run recorded by
     accident.
+
+    `duration_seconds` is the one field the written record does not carry. It
+    is how long the run took, measured by the check around the work its
+    announcement precedes, and it travels on the result to the completion
+    entry the caller appends — where the cross-run duration log reads it —
+    rather than into the artifact, which records what the run decided and not
+    how long it took to decide it. None where the run was not made or not
+    timed.
     """
 
     ran: bool
@@ -3276,6 +3470,7 @@ class CleanCloneResult:
     output_tail: str | None = None
     output_path: str | None = None
     reason: str | None = None
+    duration_seconds: float | None = None
 
     def as_record(self) -> dict:
         record: dict = {
@@ -3653,7 +3848,7 @@ OUTBOX_SWEEP_COST = (
 )
 
 
-def _announcement(message: str, cost: str) -> str:
+def _announcement(message: str, cost: str, *, estimate: float | None = None) -> str:
     """One line saying a long step has started and what the wait is worth.
 
     This is the single home of the announcement convention. Every long step
@@ -3664,18 +3859,55 @@ def _announcement(message: str, cost: str) -> str:
     carries the convention by calling this rather than by imitating a
     neighbour's f-string.
 
-    An empty cost clause raises rather than rendering the bare message, on the
+    What the wait is worth is said in one of two ways. With an `estimate` — the
+    seconds the operation has taken before, read off the cross-run duration log
+    at run start — the line is the message followed by the parenthesised
+    figure, "(Estimated run time: 4 minutes)", because a figure says how long
+    where the cost clause could only say that the step is long. Without one the
+    line is the message, the separator and the cost clause, exactly what it
+    rendered before estimates existed, so a fresh target announces nothing
+    invented. The estimate is a report and never a bound.
+
+    An empty cost clause raises whether or not an estimate is given, on the
     fail-loudly standard: a line that says a step started and not what the wait
     is worth is the line this convention exists against, and rendering it
     silently would make the omission indistinguishable from a step whose wait
-    genuinely costs nothing.
+    genuinely costs nothing. An estimate does not excuse the clause, because
+    the estimate is present only where the history happens to hold enough.
     """
     if not cost.strip():
         raise ValueError(
             "an announcement with no cost clause says a step started and not "
             f"what the wait is worth: {message!r}"
         )
+    if estimate is not None:
+        return _with_estimate(message, estimate)
     return f"{message}; {cost}"
+
+
+def _timing(operation: str, duration_seconds: float | None) -> dict:
+    """The two fields a timed operation's completion entry carries.
+
+    A completion entry built through this helper carries both fields or
+    neither: a duration with no operation could not be keyed, and an
+    operation with no duration is an occurrence that was not timed — a revert
+    check decided by its nomination selector — which must leave no duration
+    record. That is a rule for the entries built here, not for every entry:
+    an escalated entry appended in `run_story` carries the stage's elapsed
+    time without an operation, because it completes no timed operation and
+    keys no observation.
+    Splatted into `append_event` beside the entry's other fields.
+    """
+    if duration_seconds is None:
+        return {}
+    return {"duration_seconds": duration_seconds, "operation": operation}
+
+
+def _measured(started: float) -> float:
+    """Seconds elapsed since `started` on the monotonic clock, rounded as the
+    stage duration is.
+    """
+    return round(time.monotonic() - started, 3)
 
 
 def _suite_rerun_started(
@@ -3685,8 +3917,15 @@ def _suite_rerun_started(
     phrase: str,
     *,
     cost: str = "this takes as long as a suite run",
+    operation: str | None = None,
 ) -> None:
     """Announce a check that is about to re-run the configured test command.
+
+    `operation` names the timed operation the check is, when it is one, and is
+    what the estimate is read under: a check with enough history announces the
+    figure in place of its cost clause, and one without announces the clause
+    exactly as before. The nomination selector names none, because it states a
+    bound rather than a guess and is not timed.
 
     Every stage says it has started before it works. A check that re-runs the
     whole suite said nothing at all, so the console sat silent for the length
@@ -3717,7 +3956,10 @@ def _suite_rerun_started(
     """
     append_event(
         run_dir,
-        _announcement(f"re-running the suite {phrase}", cost),
+        _announcement(
+            f"re-running the suite {phrase}", cost,
+            estimate=duration_estimate(operation),
+        ),
         kind="suite-rerun-started",
         stage=stage_name,
         artifacts=[artifact],
@@ -3888,6 +4130,7 @@ def inspection_started(run_dir: Path, story_id: str, scope_files: int) -> None:
         _announcement(
             f"inspecting what {story_id} changed, over {scope_files} file(s)",
             INSPECTION_COST,
+            estimate=duration_estimate(INSPECTION_OPERATION),
         ),
         kind="inspection-started",
     )
@@ -4049,7 +4292,11 @@ def clean_clone_check(
             artifact,
             "in a fresh clone with the story committed, to check that it still "
             "passes where the code ships",
+            operation=CLEAN_CLONE_OPERATION,
         )
+        # Timed from here — after the turn and the announcement, around the
+        # work the announcement precedes — so the figure is the check's own.
+        started = time.monotonic()
         scratch = Path(tempfile.mkdtemp(prefix="l5-clean-clone-"))
         try:
             result = run_clean_clone(
@@ -4064,19 +4311,28 @@ def clean_clone_check(
             )
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+        if result.ran:
+            result = replace(result, duration_seconds=_measured(started))
     (run_dir / artifact).write_text(
         json.dumps(result.as_record(), indent=2) + "\n", encoding="utf-8"
     )
     return result
 
 
-def _clean_clone_passed(run_dir: Path, stage_name: str, artifact: str) -> None:
+def _clean_clone_passed(
+    run_dir: Path, stage_name: str, artifact: str,
+    duration_seconds: float | None = None,
+) -> None:
+    """The pass event. `duration_seconds` is the check's own, carried with the
+    operation name so the cross-run duration log records the observation.
+    """
     append_event(
         run_dir,
         "clean-clone suite passed with the story committed",
         kind="clean-clone-passed",
         stage=stage_name,
         artifacts=[artifact],
+        **_timing(CLEAN_CLONE_OPERATION, duration_seconds),
     )
 
 
@@ -4097,6 +4353,10 @@ def _clean_clone_failed(
     nests deeper, its own line contains that same indented text, and it sits
     earlier in the file, so the mutation would silently land here instead of
     where it was aimed.
+
+    `duration_seconds` is the check's own — how long the suite took in the
+    clone — not the stage's, so the entry is an observation of the clean-clone
+    operation the cross-run duration log can record.
     """
     append_event(
         run_dir,
@@ -4105,7 +4365,7 @@ def _clean_clone_failed(
         kind="clean-clone-failed",
         stage=stage["name"],
         artifacts=[artifact],
-        duration_seconds=duration_seconds,
+        **_timing(CLEAN_CLONE_OPERATION, duration_seconds),
         retry_decision="retry",
         retry_stage=destination,
         retry_reason=(
@@ -4284,7 +4544,11 @@ def suite_run_check(
             artifact,
             "in the target's own working tree, because the stage that authors "
             "the validation no longer runs it",
+            operation=SUITE_RUN_OPERATION,
         )
+        # Timed around the command alone — after the turn and the
+        # announcement — so the figure is the suite's own.
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 argv,
@@ -4319,6 +4583,7 @@ def suite_run_check(
                 output_path=_write_suite_output(
                     run_dir / suite_output_file(retained), output
                 ),
+                duration_seconds=_measured(started),
             )
     # One record, written twice with each copy's output_path repointed at the
     # output file beside it, in the shape _archive_companion_output already uses
@@ -4337,6 +4602,31 @@ def suite_run_check(
         json.dumps(retained_record, indent=2) + "\n", encoding="utf-8"
     )
     return decided
+
+
+def _suite_run_completed(
+    run_dir: Path, stage_name: str, artifact: str, ran: CleanCloneResult
+) -> None:
+    """The declared suite run's completion event, whatever it exited with.
+
+    The run had no completion kind of its own: a green suite fell through to
+    the advance and a red one to the carry-forward note, so the only thing that
+    said how long it took was the gap between two stamps. This entry carries the
+    exit code in its message and the run's own duration beside the operation
+    name, which is what the cross-run duration log records the observation
+    from. It decides nothing — the exit code is read where it always was — and
+    it is spelled by this one function on the terms `_suite_rerun_started`'s
+    docstring states.
+    """
+    append_event(
+        run_dir,
+        f"the suite the {stage_name} stage declares finished with exit code "
+        f"{ran.exit_code}",
+        kind="suite-run-completed",
+        stage=stage_name,
+        artifacts=[artifact],
+        **_timing(SUITE_RUN_OPERATION, ran.duration_seconds),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -5287,7 +5577,11 @@ def revert_check(
                 artifact,
                 f"with {', '.join(paths)} reverted, to decide whether those "
                 "edits were needed",
+                operation=REVERT_CHECK_OPERATION,
             )
+            # Timed from here, so the figure is the whole-suite fallthrough's
+            # own: the nomination's selector runs above are not timed.
+            started = time.monotonic()
             scratch = Path(tempfile.mkdtemp(prefix="l5-revert-check-"))
             try:
                 result = run_clean_clone(
@@ -5316,6 +5610,8 @@ def revert_check(
                 )
             finally:
                 shutil.rmtree(scratch, ignore_errors=True)
+            if result.ran:
+                result = replace(result, duration_seconds=_measured(started))
 
     decided = RevertCheckResult(
         result=result,
@@ -5389,7 +5685,11 @@ def _revert_check_reverted(
     artifact: str,
     edits: GovernedEdits,
     reverted: RevertedEdits,
+    duration_seconds: float | None = None,
 ) -> None:
+    """The refusal event. `duration_seconds` is the whole-suite fallthrough's
+    own, so the entry is an observation of the revert-check operation.
+    """
     undone = ", ".join(edits.paths)
     where = (
         f", the stage's own versions kept under {reverted.discarded}"
@@ -5404,12 +5704,18 @@ def _revert_check_reverted(
         kind="revert-check-reverted",
         stage=stage_name,
         artifacts=[artifact],
+        **_timing(REVERT_CHECK_OPERATION, duration_seconds),
     )
 
 
 def _revert_check_permitted(
-    run_dir: Path, stage_name: str, artifact: str, edits: GovernedEdits
+    run_dir: Path, stage_name: str, artifact: str, edits: GovernedEdits,
+    duration_seconds: float | None = None,
 ) -> None:
+    """The permission event. `duration_seconds` is the whole-suite
+    fallthrough's own and is None where the nomination decided it, so a
+    permission the selector established leaves no duration record.
+    """
     append_event(
         run_dir,
         f"{stage_name} edits governed by {'; '.join(edits.wordings)} permitted: "
@@ -5417,6 +5723,7 @@ def _revert_check_permitted(
         kind="revert-check-permitted",
         stage=stage_name,
         artifacts=[artifact],
+        **_timing(REVERT_CHECK_OPERATION, duration_seconds),
     )
 
 
@@ -5491,6 +5798,10 @@ class CensusResult:
     Optional fields are expressed by absence in the written record rather than
     by null, matching the other coordinator-written records: a census that
     could not be taken has no counts and no verdict, only a reason.
+
+    `duration_seconds` is not written into the record, on the terms
+    `CleanCloneResult`'s is not: it travels to the completion entry, where the
+    cross-run duration log reads it, and is None where no census was taken.
     """
 
     ran: bool
@@ -5501,6 +5812,7 @@ class CensusResult:
     permitted: bool | None = None
     regressions: tuple[CensusRegression, ...] = ()
     reason: str | None = None
+    duration_seconds: float | None = None
 
     def as_record(self) -> dict:
         record: dict = {"ran": self.ran, "command": self.command}
@@ -5683,8 +5995,11 @@ def suite_census_check(
         "in a clone at this stage's baseline and again in the tree as the "
         "stage left it, to compare the suite census",
         cost="this takes a census of the suite twice",
+        operation=SUITE_CENSUS_OPERATION,
     )
 
+    # Timed around both censuses, from here to the verdict.
+    started = time.monotonic()
     scratch = Path(tempfile.mkdtemp(prefix="l5-suite-census-"))
     try:
         clone = scratch / "clone"
@@ -5727,6 +6042,7 @@ def suite_census_check(
         baseline_path=str(resolved),
         permitted=not regressions,
         regressions=regressions,
+        duration_seconds=_measured(started),
     )
     return _record_census(run_dir, artifact, decided)
 
@@ -5736,6 +6052,25 @@ def _record_census(run_dir: Path, artifact: str, decided: CensusResult) -> Censu
         json.dumps(decided.as_record(), indent=2) + "\n", encoding="utf-8"
     )
     return decided
+
+
+def _suite_census_completed(
+    run_dir: Path, stage_name: str, artifact: str, census: CensusResult
+) -> None:
+    """The census's completion event, on the terms `_suite_run_completed`
+    states: the census had no completion kind of its own, this one carries the
+    verdict in its message and the census's own duration beside the operation
+    name, and it decides nothing.
+    """
+    verdict = "no regression" if census.permitted else "a regression"
+    append_event(
+        run_dir,
+        f"the suite census declared on {stage_name} found {verdict}",
+        kind="suite-census-completed",
+        stage=stage_name,
+        artifacts=[artifact],
+        **_timing(SUITE_CENSUS_OPERATION, census.duration_seconds),
+    )
 
 
 #: The pathspec naming the whole repository from its root, whatever directory
@@ -9158,6 +9493,11 @@ def run_story(
         return _refuse_bad_history(history_directory, history_read.problems)
     set_history_past_bound(
         history_read.past_bound, config.get(HISTORY_RETENTION_KEY))
+    # The per-operation estimates every announcement in this run reads, from
+    # the one startup read above and never re-read: a report to a person that
+    # no timeout, bound, check or routing decision consults.
+    set_duration_estimates(
+        duration_estimates(history_duration_records(history_read)))
 
     if state and state.status == "paused":
         # A resume of a run that paused because capacity ran out, which is the
@@ -9481,7 +9821,15 @@ def run_story(
         self_routed = False
         save_state(run_dir, state)
         stage_started_at = time.monotonic()
-        append_event(run_dir, f"{name} stage started", kind="stage-started", stage=name)
+        # Bare where the history holds too few observations of this stage, and
+        # carrying the parenthesised estimate where it holds enough; the clause
+        # is rendered by the one spelling `_announcement` also renders.
+        append_event(
+            run_dir,
+            _with_estimate(f"{name} stage started", duration_estimate(name)),
+            kind="stage-started",
+            stage=name,
+        )
 
         attempt = state.retry_count + 1
 
@@ -10175,10 +10523,14 @@ def run_story(
                         replace(decided, reverted=reverted),
                     )
                     _revert_check_reverted(
-                        run_dir, name, revert_artifact, edits, reverted
+                        run_dir, name, revert_artifact, edits, reverted,
+                        decided.result.duration_seconds,
                     )
                 else:
-                    _revert_check_permitted(run_dir, name, revert_artifact, edits)
+                    _revert_check_permitted(
+                        run_dir, name, revert_artifact, edits,
+                        decided.result.duration_seconds,
+                    )
 
         # The suite census, declared like the checks above it: one key names
         # the artifact and turns the check on, so no stage name appears here
@@ -10211,6 +10563,10 @@ def run_story(
                     harness_root=harness_root,
                     duration_seconds=elapsed(),
                 )
+            if census.ran:
+                # Its completion, said before the verdict is acted on, so how
+                # long it took is recorded whether or not it permits.
+                _suite_census_completed(run_dir, name, census_artifact, census)
             if census.permitted is False:
                 fell = "; ".join(item.describe() for item in census.regressions)
                 return _escalate(
@@ -10281,6 +10637,9 @@ def run_story(
                     harness_root=harness_root,
                     duration_seconds=elapsed(),
                 )
+            # The run's completion, said before its exit code is acted on, so
+            # how long it took is recorded whether it was green or red.
+            _suite_run_completed(run_dir, name, suite_artifact, ran)
             if ran.exit_code != 0:
                 # The failure is outstanding from the moment it happens, and it
                 # is written here — where the failure is met — rather than in a
@@ -10416,6 +10775,10 @@ def run_story(
                     stage=name,
                     artifacts=outputs,
                     duration_seconds=elapsed(),
+                    # The verifier's completion is this entry rather than a
+                    # stage-completed one, so its operation — its own name,
+                    # as every stage's is — travels here for the duration log.
+                    operation=name,
                     verifier_outcome=verdict["status"],
                 )
 
@@ -10609,14 +10972,16 @@ def run_story(
                             destination,
                             state.retry_count,
                             rules["max_retries"],
-                            elapsed(),
+                            clean.duration_seconds,
                         )
                         # A clean-clone failure carries no category: nothing
                         # chose it, the declaration names the route outright.
                         routed_category, routed_stage = None, destination
                         index = stage_names.index(destination)
                         continue
-                    _clean_clone_passed(run_dir, name, artifact)
+                    _clean_clone_passed(
+                        run_dir, name, artifact, clean.duration_seconds
+                    )
                     if state.unshadowed_suite_failure:
                         # A check that ran and exited zero is put to the same
                         # rule a green declared run is put to, on the same
@@ -10946,6 +11311,9 @@ def run_story(
                     stage=name,
                     artifacts=outputs,
                     duration_seconds=elapsed(),
+                    # As on the passing entry: the verifier's own name, so a
+                    # failed verification is an observation of the stage too.
+                    operation=name,
                     verifier_outcome=verdict.get("status"),
                     retry_decision="retry",
                     retry_reason=(
@@ -10990,6 +11358,9 @@ def run_story(
                 stage=name,
                 artifacts=stage.get("outputs", []),
                 duration_seconds=elapsed(),
+                # A stage's operation is its own name, which is what the
+                # duration log records the stage's observation under.
+                operation=name,
             )
 
         index += 1

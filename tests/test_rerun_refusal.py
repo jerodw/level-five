@@ -716,7 +716,14 @@ FIRST_RUN_EVENTS = [
     # listed rather than dropped — this stays an exact equality.
     conftest.MANDATE_NOTE,
     "implementer stage started", "implementer stage completed",
-    "tester stage started", "tester stage completed",
+    "tester stage started",
+    # story-173: the suite the tester declares now says it finished, with its
+    # exit code, so how long it took is an observation the cross-run duration
+    # log records. It sits after the announcement `stage_stream` drops and
+    # before the stage completes, and is listed rather than dropped for the
+    # reason the claim-support line below is.
+    "the suite the tester stage declares finished with exit code 0",
+    "tester stage completed",
     "documenter stage started",
     # story-051: the shipped workflow declares a claim-support check on the
     # documenter, so a run that reaches that stage records what the check saw

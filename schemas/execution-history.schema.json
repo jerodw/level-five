@@ -28,6 +28,8 @@
           "verification-passed",
           "verification-failed",
           "suite-rerun-started",
+          "suite-run-completed",
+          "suite-census-completed",
           "suite-turn-waited",
           "inspection-started",
           "outbox-sweep-started",
@@ -68,7 +70,11 @@
       },
       "duration_seconds": {
         "type": "number",
-        "description": "Elapsed seconds since the stage started, on the event that ends a stage."
+        "description": "Elapsed seconds of the operation the entry completes: since the stage started, on the event that ends a stage; and since the check or the inspection began its work, on the entry that completes a timed check or the inspection, in whichever position the loaded workflow runs it. On a stage-completed entry it is the stage's own elapsed time and is what the stage's estimate is later read from; on a check's completion entry it is the check's, measured around the work its announcement precedes and not including any wait for the suite's turn. The escalated entry carries the stage's elapsed time and no operation, because it completes no timed operation and is an observation of nothing; the self-routed, budget-stopped and capacity-paused entries carry neither field; only an entry completing a timed operation carries both."
+      },
+      "operation": {
+        "type": "string",
+        "description": "The name of the timed operation the entry completes, beside its duration_seconds: a stage's own name for a stage (implementer, tester, documenter, verifier) and a fixed name for each check and the inspection (clean-clone, suite-run, revert-check, suite-census, inspection). It is what the cross-run duration log keys an estimate by, so the name an announcement reads an estimate under and the name a completion is recorded under are one string. Present only on an entry that completes a timed operation. The escalated entry alone carries the stage's elapsed time in duration_seconds without an operation, since it completes nothing an estimate is keyed by; the self-routed, budget-stopped and capacity-paused entries carry neither field; and a revert check decided by its nomination selector alone, which runs no suite, completes with neither field."
       },
       "verifier_outcome": {
         "type": "string",

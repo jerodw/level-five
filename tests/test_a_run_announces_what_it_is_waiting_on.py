@@ -274,15 +274,24 @@ def test_neither_kind_reaches_a_cross_run_log():
     same projection against the same declaration with the kind added to its
     enum: it produces a record, so the None above is the declaration deciding
     rather than the projection being unable to produce anything at all.
+
+    Since story-173 a declaration selects in two halves — the kind, and the
+    fields the log requires of the entry — so the constructed entry carries
+    whatever the log requires, and the None above is its kind being refused
+    rather than a field being missing. The kinds are still the subject: an
+    announcement carrying a duration would be no more a record than one
+    without.
     """
     declarations = story_coordinator.history_log_declarations()
     assert declarations, "no cross-run log is declared at all"
     event = story_coordinator.HISTORY_EVENT_PROPERTY
 
-    for kind in (INSPECTION_KIND, SWEEP_KIND):
-        entry = {"sequence": 1, "timestamp": "2026-09-12 08:05:12",
-                 event: kind, "message": "a step said it had started"}
+    for kind in (INSPECTION_KIND, SWEEP_KIND, SUITE_TURN_KIND):
         for log, declaration in declarations.items():
+            entry = {"sequence": 1, "timestamp": "2026-09-12 08:05:12",
+                     event: kind, "message": "a step said it had started"}
+            for name in declaration.get("required", []):
+                entry.setdefault(name, 1.5 if "seconds" in name else f"a {name}")
             assert story_coordinator.history_record(
                 entry, [], "story-001", declaration) is None, (kind, log)
 

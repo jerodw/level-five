@@ -702,8 +702,18 @@ def test_record_paths_refuses_to_guess_a_segment_when_none_is_named(target_root)
     with pytest.raises(TypeError):
         story_inspection.record_paths(target_root, config)
     # And the story-scoped derivation is the story's segment, so the run's
-    # own producer stages what the run wrote.
+    # own producer stages what the run wrote — and only what it wrote: a
+    # segment nothing has written to names no file, because `git add` of a
+    # path that is not there refuses the whole set beside it.
+    assert inspection.record_paths(target_root, config, story_id=FIRST_STORY) == ()
+    assert story_inspection.record_paths(target_root, config, FIRST_STORY) == ()
+    written = story_coordinator.append_history_records(
+        history_dir_of(target_root),
+        {"event": inspection.INSPECTION_EVENT, "timestamp": "2026-01-01 00:00:00"},
+        FIRST_STORY, [],
+    )
     expected = segment_of(target_root, FIRST_STORY) / INSPECTION_LOG
+    assert [path for path in written] == [expected]
     assert inspection.record_paths(target_root, config, story_id=FIRST_STORY) == \
         (str(expected.relative_to(target_root)),)
     assert story_inspection.record_paths(target_root, config, FIRST_STORY) == \

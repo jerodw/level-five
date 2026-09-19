@@ -92,6 +92,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -432,7 +433,8 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
          dedupe_ran: bool | None = None,
          kind: str = INSPECTION_EVENT,
          routed: int | None = None,
-         acted_on: int | None = None) -> None:
+         acted_on: int | None = None,
+         duration_seconds: float | None = None) -> None:
     """Append the inspection's record through the coordinator's shared append.
 
     Every value goes through that one call, so events.log, the run's structured
@@ -461,8 +463,15 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
     an inspection that must not stop a run.
     """
     try:
-        from story_coordinator import append_event
+        from story_coordinator import INSPECTION_OPERATION, append_event
 
+        # The duration and the operation name travel together, or not at all:
+        # an inspection record carrying a duration is the observation the
+        # cross-run duration log records, and one carrying none — a
+        # configuration it could not obey, nothing in scope — is not.
+        timing = ({"duration_seconds": duration_seconds,
+                   "operation": INSPECTION_OPERATION}
+                  if duration_seconds is not None else {})
         append_event(
             Path(run_dir), message, kind=kind,
             findings=findings, filed=filed, dropped=dropped,
@@ -470,6 +479,7 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
             cost_usd=cost_usd, scope_files=scope_files,
             invocations=invocations, dedupe_ran=dedupe_ran,
             routed=routed, acted_on=acted_on,
+            **timing,
         )
     except Exception:  # noqa: BLE001 - reporting may not become the failure
         pass
@@ -1019,16 +1029,20 @@ def _invoke(prepared: _Preparation, run_dir: Path, target_root: Path,
     # resolved and immediately before the invocation, so the gap between it and
     # the summary is the invocation rather than the whole mechanism.
     _announce(run_dir, story_id, len(prepared.paths))
+    # Timed around the invocation alone, after the announcement, so the figure
+    # the completion record carries is the inspection's own.
+    started = time.monotonic()
     result = inspection.inspect_scope(
         scope, target_root, config, harness_root, prepared.bound, (), runner,
         inspection.local_index(target_root, harness_root),
     )
-    return scope, result
+    return scope, result, round(time.monotonic() - started, 3)
 
 
 def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
             label: str, prepared: _Preparation, report, result,
-            to_the_story: int, held: int = 0) -> None:
+            to_the_story: int, held: int = 0,
+            duration_seconds: float | None = None) -> None:
     """Say what the inspection found, in the run's own record and the log.
 
     Shared by both modes, so the notes a reader relies on — a dedupe that could
@@ -1036,6 +1050,9 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
     named no area — are written on the same terms wherever the inspection ran.
     `held` is the pre-stage mode's count of what it held for the run's
     completion; the post-story mode holds nothing and passes none.
+    `duration_seconds` is how long the invocation took, as `_invoke` measured
+    it, carried onto the completion record so the cross-run duration log holds
+    one observation of the inspection per occurrence.
     """
     findings, filed_count, dropped_count = _counts(report)
     # A failed dedupe gets a line of its own, beside the summary rather than
@@ -1107,6 +1124,7 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
         # no figure rather than saying the inspection was free.
         cost_usd=result.cost_usd, scope_files=result.scope_files,
         invocations=1,
+        duration_seconds=duration_seconds,
     )
     # Beside the stage invocations in that run's own cost.json, and never added
     # to the allowance the ceiling reads. See `record_cost` for why the two are
@@ -1201,7 +1219,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         commit_record(target_root, config, story_id)
         return
 
-    scope, result = _invoke(
+    scope, result, took = _invoke(
         prepared, run_dir, target_root, config, harness_root, story_id,
         POST_STORY_FRAMING, runner,
     )
@@ -1232,7 +1250,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         area_suggestions=tuple(result.area_suggestions),
     )
     _report(run_dir, target_root, config, story_id, label, prepared, report,
-            result, 0)
+            result, 0, duration_seconds=took)
     commit_record(target_root, config, story_id)
 
 
@@ -1331,7 +1349,7 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
                        reason=reason)
         return
 
-    scope, result = _invoke(
+    scope, result, took = _invoke(
         prepared, run_dir, target_root, config, harness_root, story_id,
         PRE_STAGE_FRAMING, runner,
     )
@@ -1362,7 +1380,7 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
         area_suggestions=tuple(result.area_suggestions),
     )
     _report(run_dir, target_root, config, story_id, label, prepared, report,
-            result, len(own), len(others))
+            result, len(own), len(others), duration_seconds=took)
     # Last, so a failure to write the record cannot cost the holding above it.
     # The findings are written as the Inspector wrote them: nothing here
     # rewrites, rates or summarises one, because what the stage is being given
