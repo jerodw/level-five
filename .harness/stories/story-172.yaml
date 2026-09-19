@@ -1,0 +1,124 @@
+story:
+  id: story-172
+  title: The refactor workflow's applies_when says what its declarations say about who writes a test, so the planner's backstop can refuse a new-claim refactor
+  description: |
+    Planned from the brief filed under key 230.
+
+    story-171 wrote the finishing test into three places -- the refactor
+    workflow's applies_when, the planner's backstop, and the architecture
+    document -- and each says the refactor workflow "has no stage that may
+    write" a new assertion. The definition says otherwise, deliberately:
+    story-070 dropped the tests-directory guard from the refactor implementer
+    so a refactor can rename, move or split a test module, and
+    tests/test_refactor_workflow.py pins that no refactor stage is governed on
+    the tests directory and that a refactor run creating a test file completes.
+    The backstop is written to decide from the injected stage restrictions, and
+    asked of those facts -- "may any stage create files under the tests
+    directory?" -- the answer is yes under the refactor workflow, and yes under
+    story-workflow too, because neither workflow's verifier carries any
+    restriction at all. So the backstop fires under neither workflow, and the
+    two proposers are told a fact the definition does not carry.
+
+    This story keeps the definitions as they are and corrects the prose to say
+    what actually distinguishes the workflows: story-workflow has a stage whose
+    work is validation -- the tester, declared by its confinement to the tests
+    directory -- and the refactor workflow has none, so a new standing claim's
+    assertion written under it would be written by the stage whose own change
+    it validates. The refactor applies_when says "no stage whose work is to
+    write one" rather than "no stage that may"; the planner backstop asks
+    whether any injected restriction confines a stage to the tests directory
+    and refuses when none does; the architecture document says the same; and a
+    test renders both shipped workflows through the same function l5-plan
+    renders them with and applies the backstop's rule to the result, so the
+    refusal for the refactor workflow and the interview for story-workflow are
+    held by an assertion rather than by wording.
+  workflow: story-workflow
+
+tasks:
+  - Rewrite the finishing-test clause at the end of workflows/refactor-workflow.json's applies_when so it says the workflow has no stage whose work is to write the assertion a new standing claim needs, and that such an assertion written under it would be written by the stage whose own change it validates. Change no other key of that definition and nothing in workflows/story-workflow.json.
+  - Rewrite the backstop paragraph at the top of the [Process] section of prompts/planner.md so its second question reads the stage restrictions injected under [Workflow facts] for whether any restriction confines a stage to the tests directory -- a stage that exists to write validation -- and refuses where the first answer is yes and no restriction does. Keep its position above the numbered steps, its remedy of rerunning l5-plan --workflow under a definition chosen by what each says it is for, and its refusal to proceed into the interview. The template still names no stage, no restricted prefix and no tests/ literal, and uses none of the normative words tests/test_planner_injection.py's detector flags.
+  - Adapt the assertions in tests/test_planner_receives_the_standards.py that pin the old wording -- the BACKSTOP_FACT pattern the backstop tests match, and the "no stage that may write" pattern the refactor applies_when test matches -- to the wording tasks 1 and 2 produce, changing nothing else those tests assert.
+  - Add the assertion the brief names as missing, in tests/test_planner_receives_the_standards.py beside the backstop tests, that renders both shipped workflows through context_assembler.workflow_context the way scripts/l5-plan does and applies the backstop's rule mechanically to the rendered stage_path_restrictions -- a line stating that a stage may only change files under the configured tests directory -- so refactor-workflow yields the refusal and story-workflow yields the interview. Add the controls that make it worth having, a definition built with tests/conftest.py's build_workflow whose implementer carries no create restriction and whose stages include none confined to the tests directory yields the refusal, which is the case the old rule got wrong, and the old rule -- whether any stage may create under the tests directory, read off the same rendered facts -- answers yes for both shipped workflows because neither verifier is restricted. Pin that no key of either shipped definition other than refactor-workflow's applies_when differs from the baseline, using the raw_definition and baseline_definition readers that module already has.
+  - Correct .harness/docs/ARCHITECTURE.md where it states the finishing test, the applies_when paragraph near line 27 and the story-171 section near lines 1030 to 1038, so it says the distinguishing fact is a stage confined to the tests directory rather than a permission to create there, no longer says the refactor workflow has no stage that may create under the tests directory, and records that this story left the definitions as story-070 declared them.
+
+acceptance_criteria:
+  - workflows/refactor-workflow.json's applies_when no longer contains the phrase "no stage that may write"; it says no stage of the workflow has writing the assertion as its work, and that an assertion written under it would validate the change of the stage that wrote it. It still says a new standing claim, one that something is now the only place a thing happens, is not this workflow's work even where behaviour is unchanged.
+  - Every key of workflows/refactor-workflow.json other than applies_when, and every key of workflows/story-workflow.json, is byte-identical to the baseline commit, and a test in tests/test_planner_receives_the_standards.py asserts it through that module's raw_definition and baseline_definition readers.
+  - The backstop in prompts/planner.md sits before the first numbered step of [Process], asks whether the finished work will assert something nothing asserts today, asks whether any injected stage restriction confines a stage to the tests directory, refuses to proceed into the interview where the first answer is yes and no restriction does, and names l5-plan --workflow as the remedy. The pattern "may create files under the tests directory" no longer appears in the template.
+  - prompts/planner.md names no stage, no restricted prefix and no tests/ literal, and tests/test_planner_injection.py's normative-prose check and its other checks on the template stay green.
+  - A test renders refactor-workflow and story-workflow through context_assembler.workflow_context against this repository's own configuration and applies the backstop's rule to the rendered stage_path_restrictions lines. It asserts refactor-workflow yields the refusal and story-workflow yields the interview, and it derives the confinement wording and the tests directory from the coordinator's own vocabulary and the repository configuration rather than spelling them.
+  - A control test builds a definition through tests/conftest.py's build_workflow whose first stage carries no create restriction and none of whose stages is confined to the tests directory, renders it the same way, and asserts the rule yields the refusal.
+  - A control test applies the old rule, whether any rendered restriction leaves some stage free to create under the tests directory, to both shipped workflows and asserts it answers yes for both, so the reason the rule changed is held rather than remembered.
+  - The assertions in tests/test_planner_receives_the_standards.py that this story adapts keep every check they made before it except the two wording patterns that tasks 1 and 2 change.
+  - .harness/docs/ARCHITECTURE.md's account of the finishing test no longer says the refactor workflow has no stage that may create under the tests directory, says the backstop reads a confinement to the tests directory off the injected restrictions, and says the definitions stand as story-070 declared them.
+  - tests/test_refactor_workflow.py is unchanged and passes.
+
+technical_plan:
+  implementation_steps:
+    - Edit the last sentence of the applies_when string in workflows/refactor-workflow.json. Keep the sentence's opening, that work ending by making a new standing claim is not this workflow's work even where behaviour is unchanged, and replace the reason so it says the claim needs an assertion nothing asserts today, this workflow has no stage whose work is to write one, and an assertion written under it would be written by the stage whose own change it validates.
+    - Edit the backstop paragraph of prompts/planner.md. Replace the sentence asking whether any stage may create files under the tests directory with one asking whether any restriction injected under [Workflow facts] confines a stage to the tests directory, and replace the consequence so it says where the answer to the first question is yes and no restriction does, a new assertion would be written by the stage whose change it validates, so the workflow cannot finish the work as this harness holds it. Keep every other sentence of the paragraph.
+    - In tests/test_planner_receives_the_standards.py, update BACKSTOP_FACT to a pattern matching the new question and update the refactor applies_when test's regex to the new reason. Do not touch the tests' other assertions or the baseline controls, which read the template and the definition at the baseline commit and go the other way.
+    - The tester adds, beside the backstop tests in that module, a reader that turns the rendered stage_path_restrictions into (stage, sense, prefix) facts using story_coordinator's CONFINEMENT and CREATE_RESTRICTION vocabulary and the wording StageRestriction.wording composes, a function applying the backstop's rule (some confinement names the configured tests directory) and one applying the old rule (some stage is left free to create there), and the tests and controls the tasks describe. The tests-directory value comes from conftest.repository_config()["tests_dir"] and the shipped definitions from conftest.shipped_workflow, as tests/test_refactor_workflow.py already does.
+    - The tester adds the baseline comparison over both definitions' keys using raw_definition and baseline_definition, and the pytest run in the tester's own turn is not attempted, since the coordinator runs the suite after the stage ends.
+    - The documenter corrects the two places in .harness/docs/ARCHITECTURE.md named in the tasks and adds a short story-172 account beside the story-171 section, saying why the declaration and the prose were reconciled toward the declaration.
+  likely_file_changes:
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: The applies_when finishing-test clause changes from "no stage that may write" to "no stage whose work is to write", the only key of the definition this story touches.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The backstop's second question changes from a create permission to a confinement to the tests directory, and the consequence is reworded to match.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: implementer
+      reason: BACKSTOP_FACT and the refactor applies_when regex pin the wording tasks 1 and 2 replace; both tests are red until adapted.
+      reverting_breaks_the_suite: This edit adapts two existing wording assertions to the deliberate rewording of the backstop and the refactor applies_when in the same story. With the edit reverted, test_the_backstop_is_asked_before_the_interview_begins, test_the_backstop_decides_from_the_injected_restrictions and test_the_refactor_statement_says_a_new_standing_claim_is_not_its_work fail against the reworded template and definition.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: The new assertion rendering both workflows through workflow_context and applying the backstop's rule, its two controls, and the baseline comparison of every other definition key.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The applies_when paragraph and the story-171 section state the finishing test in terms of a create permission the definitions do not carry; both are corrected and a story-172 account is added.
+
+scope:
+  modify:
+    - workflows/refactor-workflow.json (the applies_when string only)
+    - prompts/planner.md (the backstop paragraph at the top of [Process] only)
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json
+    - prompts/refactor-implementer.md
+    - prompts/refactor-verifier.md
+    - prompts/story-implementer.md
+    - prompts/story-tester.md
+    - orchestration/
+    - scripts/
+    - schemas/
+    - tests/test_refactor_workflow.py
+    - tests/test_planner_injection.py
+    - tests/conftest.py
+
+verification_requirements:
+  - Confirm refactor-workflow.json differs from the baseline commit only in the applies_when string, and story-workflow.json not at all, and that a test holds this.
+  - Confirm the new applies_when clause no longer matches "no stage that may write" and says the assertion would be written by the stage whose own change it validates.
+  - Confirm the planner backstop is still above the numbered steps, reads a confinement to the tests directory off the injected restrictions, and that the template names no stage, no prefix and no tests/ literal and carries no normative word tests/test_planner_injection.py flags.
+  - Confirm a test renders both shipped workflows through context_assembler.workflow_context and applies the backstop's rule to the rendered restrictions, refusing for refactor-workflow and proceeding for story-workflow, with the two controls the story names present and passing.
+  - Confirm the adapted tests in tests/test_planner_receives_the_standards.py lost no assertion other than the two wording patterns, and that the baseline controls in that module still read the baseline template and definition.
+  - Confirm .harness/docs/ARCHITECTURE.md no longer says the refactor workflow has no stage that may create under the tests directory and describes the backstop's rule as a confinement.
+  - Confirm tests/test_refactor_workflow.py is unchanged and the full suite passes.
+
+constraints:
+  - No workflow definition gains or loses a restriction key; the refactor workflow keeps the census in place of a tests-directory guard exactly as story-070 declared and tests/test_refactor_workflow.py pins.
+  - No change to orchestration/, scripts/ or schemas/; the backstop is a prompt rule read off facts the assembler already injects.
+  - prompts/planner.md names no stage, no restricted prefix and no tests/ literal, and uses none of the words required, optional or mandatory.
+  - The new tests derive the confinement wording, the tests directory and the shipped definitions from story_coordinator, the repository configuration and tests/conftest.py rather than spelling them.
+  - Existing assertions are adapted only where the story's deliberate rewording makes them false; none is weakened or removed.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 12:18:30
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 230
