@@ -1,0 +1,105 @@
+story:
+  id: story-169
+  title: The flags that put a clone on git's directory-copy path are stated once and read by both clone guards
+  description: |
+    Planned from the brief filed under 193.
+
+    story-157 left the one fact it exists to make two clones agree on stated
+    twice. tests/test_clean_clone_check.py exports TRANSPORT and
+    DIRECTORY_COPY_FLAGS and guards _build_clone with them over the
+    clone_argv fixture, a spy on subprocess.run that records every `git clone`
+    argument list. tests/test_git_history_loading_retired.py restates the same
+    two values as NORMAL_TRANSPORT and DIRECTORY_COPY_FLAGS, byte for byte
+    apart from one name, builds its own copy of the spy inline, and guards
+    copy_repository with them. Nothing ties the two spellings together, so a
+    later author who adds a flag to the list beside _build_clone's guard
+    leaves the copy's guard admitting it with nothing red — two guards for one
+    rule, disagreeing in exactly the way story-157 was filed to end.
+
+    This story gives the fact one home. The constants and the fixture already
+    exported by tests/test_clean_clone_check.py become the only statement of
+    which flags make git enumerate the source's object store; the retired
+    module imports them by name, the way it and its siblings already import
+    fixtures and constants from one another, and its guard reads the imported
+    names over the shared fixture. Both assertions keep exactly their subject
+    and their strictness; the work is only where the fact they read lives.
+
+    The membership of the flag list is not this story's question. Whether
+    `--shared`, `-s` or `--reference` belong in it is a question about the
+    clean-clone check's own guard, and this story only makes there be one
+    list to ask it of.
+  workflow: refactor-workflow
+
+tasks:
+  - In tests/test_git_history_loading_retired.py, remove the module-level NORMAL_TRANSPORT and DIRECTORY_COPY_FLAGS definitions and import TRANSPORT, DIRECTORY_COPY_FLAGS and the clone_argv fixture from test_clean_clone_check, alongside the module's existing sibling imports.
+  - Rewrite test_the_copy_is_cloned_over_the_normal_transport to take the clone_argv fixture in place of the inline spy and monkeypatch.undo() it builds today, reading the imported names, while keeping every assertion it makes today: the copy's kept.txt exists, exactly one clone was made, the transport flag is present, and no directory-copy flag is present.
+  - Update the docstring of that test and the comment above the deleted constants so they say the fact is read from tests/test_clean_clone_check.py rather than copied in its shape.
+  - Leave copy_repository's own clone command, including its `--no-local` literal, unchanged; it is the implementation the guard reads, not a second statement of the rule.
+  - Record in .harness/docs/ARCHITECTURE.md that the transport and directory-copy flags have one home in tests/test_clean_clone_check.py and that both clone guards read it, and why a second spelling was the defect.
+
+acceptance_criteria:
+  - tests/test_git_history_loading_retired.py defines no module-level constant carrying the value "--no-local" or the tuple ("--no-hardlinks", "--local", "-l"); the names NORMAL_TRANSPORT and its local DIRECTORY_COPY_FLAGS no longer appear in that module.
+  - tests/test_git_history_loading_retired.py imports TRANSPORT, DIRECTORY_COPY_FLAGS and clone_argv from test_clean_clone_check, and test_the_copy_is_cloned_over_the_normal_transport reads those imported names and takes clone_argv as a fixture parameter.
+  - Under tests/, the only function that intercepts subprocess.run to record `git clone` argument lists is the clone_argv fixture in tests/test_clean_clone_check.py; the inline spy at tests/test_git_history_loading_retired.py:1422-1430 is gone and no other copy of it appears.
+  - test_the_copy_is_cloned_over_the_normal_transport still asserts that the copy's kept.txt exists, that exactly one clone was recorded, that TRANSPORT is in its argument list, and that each flag in DIRECTORY_COPY_FLAGS is absent from it; no assertion is removed, weakened or given a new subject.
+  - test_the_harness_builds_its_clone_over_the_normal_transport, test_the_same_capture_reports_the_flag_the_previous_command_carried, OLD_COMMAND, TRANSPORT, DIRECTORY_COPY_FLAGS and clone_argv in tests/test_clean_clone_check.py are unchanged in behaviour; any edit to that module is confined to comments.
+  - The values of TRANSPORT and DIRECTORY_COPY_FLAGS are exactly what they are today: "--no-local" and ("--no-hardlinks", "--local", "-l"). No flag is added to or removed from the list.
+  - copy_repository in tests/test_git_history_loading_retired.py and _build_clone in orchestration/story_coordinator.py are unchanged.
+  - Both guards pass under the configured test_command, and the census reports no fall in assertion count for either module.
+  - .harness/docs/ARCHITECTURE.md carries a story-169 record saying where the flags live and that both guards read that one home.
+
+technical_plan:
+  implementation_steps:
+    - Read tests/test_clean_clone_check.py:1828-1832 and :1867-1885 to confirm the exported names and the fixture's shape, and tests/test_git_history_loading_retired.py:1397-1439 for what is being replaced.
+    - Add `from test_clean_clone_check import TRANSPORT, DIRECTORY_COPY_FLAGS, clone_argv` to tests/test_git_history_loading_retired.py beside its existing `from conftest import ...` block, with a noqa for the fixture import if the module's convention needs one, and a short comment saying why the names come from that module.
+    - Delete the NORMAL_TRANSPORT and DIRECTORY_COPY_FLAGS definitions and their comment at tests/test_git_history_loading_retired.py:1397-1402, replacing the comment with one that points at the home.
+    - Change test_the_copy_is_cloned_over_the_normal_transport's signature to `(tmp_path, clone_argv)`, remove the inline `seen`/`original`/`spy` and the monkeypatch.setattr/undo lines, and read `clone_argv` where `seen` was read and `TRANSPORT` where `NORMAL_TRANSPORT` was; keep the kept.txt assertion and the three assertion shapes that follow it.
+    - Revise the test's docstring so it says the spy is the same fixture the harness's own guard uses, not one in the same shape.
+    - Documenter adds the story-169 record to .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: tests/test_git_history_loading_retired.py
+      stage: implementer
+      reason: Drops its own spelling of the flags and its own spy, importing both from test_clean_clone_check, and rewrites its guard to read them.
+    - file: tests/test_clean_clone_check.py
+      stage: implementer
+      reason: Comment-only at most, to note beside TRANSPORT, DIRECTORY_COPY_FLAGS and clone_argv that the retired module now reads them; no value, fixture or assertion changes.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the clone flags have one home and both guards read it.
+
+scope:
+  modify:
+    - tests/test_git_history_loading_retired.py
+    - tests/test_clean_clone_check.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py
+    - tests/conftest.py
+    - tests/test_revert_baseline.py
+    - The clone command copy_repository runs, including its `--no-local` argument
+    - The values of TRANSPORT and DIRECTORY_COPY_FLAGS
+    - Any assertion in either clone guard, or in the story-033 control beside them
+
+verification_requirements:
+  - Confirm tests/test_git_history_loading_retired.py has no module-level definition carrying "--no-local" or ("--no-hardlinks", "--local", "-l"), and that it imports TRANSPORT, DIRECTORY_COPY_FLAGS and clone_argv from test_clean_clone_check.
+  - Confirm no function under tests/ other than clone_argv in tests/test_clean_clone_check.py monkeypatches subprocess.run to record `git clone` argument lists.
+  - Confirm test_the_copy_is_cloned_over_the_normal_transport keeps its four assertions with the same subjects: kept.txt exists, one clone recorded, transport present, each directory-copy flag absent.
+  - Confirm the diff to tests/test_clean_clone_check.py, if any, touches comments only, and that orchestration/story_coordinator.py and copy_repository are unchanged.
+  - Confirm the suite passes under the configured test_command and the census reports no fall in assertion count for either module.
+  - Confirm .harness/docs/ARCHITECTURE.md carries a story-169 record.
+
+constraints:
+  - Both guards keep exactly their subject and strictness; this is a refactor of where a fact lives, not of what is asserted.
+  - The membership of the directory-copy flag list is out of scope: no flag is added or removed, and whether `--shared`, `-s` or `--reference` belong there is not decided here.
+  - Cross-module imports follow the suite's existing shape: a sibling test module imported by its bare module name, as test_clean_clone_check already imports test_revert_baseline.
+  - No new test module or new assertion is introduced; the validation that carries across is the two existing guards.
+  - Standard library and pytest only; no new dependency.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-18 23:17:26
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 193
