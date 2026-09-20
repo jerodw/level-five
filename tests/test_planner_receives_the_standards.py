@@ -44,6 +44,18 @@ section "story-177: the consequence sweep and the reason rule" holds both on
 the prompt l5-plan hands the session, with the baseline template — which
 carried neither — as the control.
 
+story-179 made the sweep step name its places by what the target declares.
+As story-177 wrote it the step listed this harness's own layout — prompts,
+schemas, workflow definitions — as though every target had one; now it names
+the source directories under [Workflow facts], the architecture documents
+under `architecture_docs` and the tests directory under [Workflow facts], and
+the planner is told the source directories as `{{source_dirs}}`, rendered
+through `config_context` from the same key the inspection reads. The section
+"story-179: the sweep names the places the target declares" holds the step's
+wording, the placeholder on the prompt l5-plan hands the session, and the
+None case, with the baseline template — which carried none of it — as the
+control.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -115,6 +127,12 @@ TESTING_PLACEHOLDER = "{{testing_standards}}"
 #: which since story-174 the planner template carries under [Workflow facts].
 #: Derived nowhere, for the reason the two above are not.
 TESTS_DIR_PLACEHOLDER = "{{tests_dir}}"
+
+#: The placeholder `config_context` resolves to the target's source
+#: directories, which since story-179 the planner template carries under
+#: [Workflow facts] beside the one above, for the sweep step to search.
+#: Derived nowhere, for the same reason.
+SOURCE_DIRS_PLACEHOLDER = "{{source_dirs}}"
 
 PLACEHOLDER = re.compile(r"\{\{[a-z_]+\}\}")
 
@@ -206,18 +224,21 @@ def missing_standards(rendered: str, standards: dict[str, str]) -> set[str]:
     return {name for name, text in standards.items() if text not in rendered}
 
 
-def build_target(root: Path, standards: dict[str, str] | None) -> Path:
+def build_target(root: Path, standards: dict[str, str] | None,
+                 source_dirs: tuple[str, ...] = ()) -> Path:
     """A target repository l5-plan can plan in, declaring the given standards
-    or — with None — no standards directory at all.
+    or — with None — no standards directory at all, and declaring the given
+    source directories or — left empty — no `source_dirs` key at all.
 
     A repository, because since story-117 planning happens in a worktree cut
     from the base. tests_dir is what the create restriction resolves to, so
     the deployed workflow's facts render against a value rather than a token.
     """
     (root / ".harness").mkdir(parents=True)
-    (root / ".harness" / "config.yaml").write_text(
-        f"workflow: {PLANNED_WORKFLOW}\ntests_dir: tests/\n", encoding="utf-8"
-    )
+    config = f"workflow: {PLANNED_WORKFLOW}\ntests_dir: tests/\n"
+    if source_dirs:
+        config += "source_dirs:\n" + "".join(f"  - {d}\n" for d in source_dirs)
+    (root / ".harness" / "config.yaml").write_text(config, encoding="utf-8")
     if standards is not None:
         directory = root / ".harness" / "standards"
         directory.mkdir()
@@ -650,9 +671,9 @@ def test_the_baseline_template_carried_no_backstop():
 # story-177: the consequence sweep and the reason rule
 #
 # Before scope is written the planner is told to look for everywhere the rule
-# the story changes is stated — the target's prompts, schemas, workflow
-# definitions, the configured architecture documents and the tests directory
-# — and to list what it found in the draft the developer approves; and every
+# the story changes is stated — since story-179 the places the target itself
+# declares, held in that story's section below — and to list what it found in
+# the draft the developer approves; and every
 # do_not_modify entry carries the developer's reason in a closing
 # parenthetical, which l5-plan refuses an artifact for lacking. Both are held
 # on the prompt l5-plan actually hands the session, captured the way the
@@ -689,14 +710,27 @@ DRAFT_STEP = r"Present the draft plan"
 SWEEP_STEP = r"Sweep for the consequences"
 
 #: What the sweep step has to tell the planner to search, as the phrases a
-#: reader would look for. The architecture documents are named by the
-#: configuration key the earlier step already reads them under.
+#: reader would look for: each place by what the target declares it as. The
+#: source and tests directories are named by the section the planner is told
+#: them under, and the architecture documents by the configuration key the
+#: earlier step already reads them under. Since story-179; before it the
+#: tuple spelled this harness's own layout, held below as the words the step
+#: no longer says.
 SWEEP_SEARCHES = (
-    r"prompts",
-    r"schemas",
-    r"workflow\s+definitions",
+    r"source directories named under \[Workflow facts\]",
     rf"architecture documents named under `{ARCHITECTURE_DOCS_KEY}`",
     r"tests directory named under \[Workflow facts\]",
+)
+
+#: The places story-177's wording named and story-179 removed: a layout this
+#: repository happens to have, spoken of as the target's. Bounded as whole
+#: words, because the step still says "a prompt that tells a stage the rule,
+#: a schema description that declares it" when it lists the kinds of text a
+#: rule is written in, and those name kinds rather than places.
+SWEEP_NO_LONGER_SEARCHES = (
+    r"\bprompts\b",
+    r"\bschemas\b",
+    r"workflow\s+definitions",
 )
 SWEEP_LISTS_ITS_FINDINGS = r"List what the\s+sweep found in the draft the developer approves"
 SWEEP_LANDS_EACH_FILE = r"`modify` or in `do_not_modify` with a reason"
@@ -835,6 +869,232 @@ def test_the_skeleton_check_reports_a_render_with_the_parenthetical_removed(
     assert SKELETON_DO_NOT_MODIFY_ITEM.search(rendered) is None
     assert re.search(REASON_RULE_FORM, rendered), \
         "the strip took more than the skeleton item with it"
+
+
+# --------------------------------------------------------------------------
+# story-179: the sweep names the places the target declares
+#
+# The sweep step names where to search by what the target declares rather
+# than by a layout this repository has: the source directories under
+# [Workflow facts], the architecture documents under `architecture_docs`, and
+# the tests directory under [Workflow facts]. The source directories reach
+# the planner as `{{source_dirs}}`, rendered by `config_context` from the
+# same key the inspection reads, beneath a paragraph naming them and saying
+# what None means. Held on the prompt l5-plan hands the session for a target
+# built here, and on the template; the absences — the old places no longer
+# named, the baseline carrying none of this — each have a control beside
+# them, one against a copy of the template with the old wording restored and
+# the rest against the baseline this module already reads.
+# --------------------------------------------------------------------------
+
+
+#: Source directories no target of this repository configures, for rendering
+#: what a target that declares them would see: two, so "one per line" is a
+#: claim about the list and not about a single value.
+PROBE_SOURCE_DIRS = ("zzz-src/", "zzz-lib/")
+
+#: How the paragraph introducing the placeholder is recognised, and what it
+#: has to say about the absent case.
+SOURCE_DIRS_PARAGRAPH = r"target's source\s+directories"
+SOURCE_DIRS_NONE_MEANS = r"whatever it tracks\s+outside the tests directory"
+
+#: The wording story-177 gave the step's list of places, restored into a copy
+#: of the template as the control for the absence assertion: the same search
+#: that finds nothing in the shipped step has to find it here.
+STORY_177_SWEEP_PLACES = (
+    "the target's prompts, its schemas, its workflow definitions, "
+    "the architecture documents named under `architecture_docs`, and "
+    "the tests directory named under [Workflow facts]"
+)
+STORY_179_SWEEP_PLACES = re.compile(
+    r"the source directories named under \[Workflow facts\],\s+"
+    r"the architecture documents named under `architecture_docs`, and the\s+"
+    r"tests directory named under \[Workflow facts\]")
+
+
+def paragraph_and_block_beneath(section: str, paragraph: str) -> tuple[str, str]:
+    """The rest of the one paragraph matching `paragraph` in a section, and
+    the block that follows it: the text between the blank line that ends the
+    paragraph and the next blank line, which is where the template puts a
+    placeholder and so where a render puts its value. Returned as a pair so
+    a caller can ask what the paragraph says without searching the section
+    for a value — None, say — that other paragraphs also carry."""
+    found = [m for m in re.finditer(paragraph, section)]
+    assert len(found) == 1, (paragraph, len(found))
+    rest = section[found[0].end():]
+    assert "\n\n" in rest, "the paragraph is the last thing in the section"
+    paragraph_rest, after = rest.split("\n\n", 1)
+    return paragraph_rest, after.split("\n\n", 1)[0].strip()
+
+
+def old_places_named_by(step: str) -> list[str]:
+    """Which of story-177's places the sweep step still names, for the
+    absence assertion and its control to share."""
+    return [old for old in SWEEP_NO_LONGER_SEARCHES if re.search(old, step)]
+
+
+def test_the_sweep_step_no_longer_names_this_harness_layout_as_the_places(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session: none of prompts, schemas or
+    workflow definitions is named as a place to search, while the sentence
+    listing the kinds of text a rule is written in — a prompt, a schema
+    description, a document, a test — is still there."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    sweep = sweep_step_of(prompt)
+    assert old_places_named_by(sweep) == []
+    assert re.search(r"a prompt that tells a stage the rule", sweep)
+    assert re.search(r"a\s+schema description that declares it", sweep)
+    assert re.search(r"a document that records it", sweep)
+    assert re.search(r"a test\s+that holds it", sweep)
+
+
+def test_the_old_places_check_reports_a_render_with_story_177s_wording_restored(
+    tmp_path
+):
+    """Control for the absence above, needing no history: the same check over
+    a copy of the template with story-177's list put back in the step's
+    place, rendered through the same context, reports every old place — so
+    an empty result on the shipped step is the wording having changed and
+    not the word bounds having stopped seeing anything."""
+    root = build_target(tmp_path / "t", STANDARDS)
+    context = context_assembler.schema_context(REPO_ROOT)
+    context.update(context_assembler.workflow_context(
+        conftest.build_workflow(conftest.workflow_stage()),
+        harness_config.load_rules(REPO_ROOT)))
+    context.update(context_assembler.standards_context(
+        root, harness_config.load_config(root)))
+    context.update(context_assembler.config_context(
+        harness_config.load_config(root)))
+    intact = context_assembler.render(planner_template(), context)
+    assert old_places_named_by(sweep_step_of(intact)) == []
+
+    restored, count = STORY_179_SWEEP_PLACES.subn(STORY_177_SWEEP_PLACES,
+                                                  planner_template())
+    assert count == 1
+    rendered = context_assembler.render(restored, context)
+    assert old_places_named_by(sweep_step_of(rendered)) == list(
+        SWEEP_NO_LONGER_SEARCHES)
+    # And the restored step lost the declared name it replaced, so the two
+    # wordings are alternatives and the positive assertion is not vacuous.
+    assert not re.search(SWEEP_SEARCHES[0], sweep_step_of(rendered))
+
+
+def test_the_captured_prompt_lists_each_declared_source_directory_on_a_line_of_its_own(
+    plan_capture, tmp_path
+):
+    """For a target declaring source directories, the [Workflow facts]
+    section of what l5-plan hands the session carries each as a dashed line
+    of its own, beneath the paragraph naming them as the target's source
+    directories, and nowhere in the prose above that paragraph."""
+    prompt = captured_prompt(
+        plan_capture, build_target(tmp_path / "t", STANDARDS, PROBE_SOURCE_DIRS))
+    facts = workflow_facts_section(prompt)
+    paragraph, block = paragraph_and_block_beneath(facts, SOURCE_DIRS_PARAGRAPH)
+    assert dashed_items(block) == list(PROBE_SOURCE_DIRS)
+    assert re.search(SOURCE_DIRS_NONE_MEANS, paragraph)
+    for directory in PROBE_SOURCE_DIRS:
+        assert prompt.count(directory) == 1, directory
+    assert PLACEHOLDER.search(prompt) is None
+
+
+def test_a_target_declaring_no_source_directories_sees_none_beneath_the_paragraph(
+    plan_capture, tmp_path
+):
+    """The absent case, and what the paragraph says it means: None on its own
+    line beneath the same paragraph, with no placeholder left behind and no
+    probe directory anywhere — so the dashed lines above are the target's
+    declaration and not the template's."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    facts = workflow_facts_section(prompt)
+    paragraph, block = paragraph_and_block_beneath(facts, SOURCE_DIRS_PARAGRAPH)
+    assert block == "None"
+    assert re.search(r"renders as None", paragraph)
+    assert re.search(SOURCE_DIRS_NONE_MEANS, paragraph)
+    for directory in PROBE_SOURCE_DIRS:
+        assert directory not in prompt
+    assert PLACEHOLDER.search(prompt) is None
+
+
+def test_the_template_carries_the_source_dirs_placeholder_once_beneath_its_paragraph():
+    """The template side of the two renders above: the placeholder sits under
+    [Workflow facts], exactly once, as the block beneath the paragraph naming
+    the source directories, and that paragraph says what None means. The
+    sweep step points at the same section by name."""
+    template = planner_template()
+    assert template.count(SOURCE_DIRS_PLACEHOLDER) == 1
+    facts = workflow_facts_section(template)
+    paragraph, block = paragraph_and_block_beneath(facts, SOURCE_DIRS_PARAGRAPH)
+    assert block == SOURCE_DIRS_PLACEHOLDER
+    assert re.search(SOURCE_DIRS_NONE_MEANS, paragraph)
+    assert re.search(SWEEP_SEARCHES[0], sweep_step_of(template))
+    # The tests directory placeholder it sits beside is still there, once,
+    # and before it: story-179 added a paragraph and moved none.
+    assert template.count(TESTS_DIR_PLACEHOLDER) == 1
+    assert facts.index(TESTS_DIR_PLACEHOLDER) < facts.index(SOURCE_DIRS_PLACEHOLDER)
+
+
+def test_the_baseline_template_carried_none_of_the_source_directories_text():
+    """Control for the presences above: the template at this module's
+    baseline carried no source_dirs placeholder, no paragraph naming the
+    source directories, and no step naming them as a place to search — so
+    the same checks go the other way there, and green today is the text
+    having been added."""
+    before = baseline_planner_template()
+    assert SOURCE_DIRS_PLACEHOLDER not in before
+    assert re.search(SOURCE_DIRS_PARAGRAPH, before) is None
+    assert re.search(SOURCE_DIRS_NONE_MEANS, before) is None
+    assert re.search(SWEEP_SEARCHES[0], before) is None
+    # Its [Workflow facts] section is there to be searched, so the absences
+    # are of the text and not of the section.
+    assert workflow_facts_section(before)
+
+
+def test_config_context_renders_the_source_directories_as_dashed_lines():
+    """The assembler side: the key is rendered through the shared helper,
+    None when undeclared or empty, and the keys it rendered before this
+    story render exactly as before beside it."""
+    declared = context_assembler.config_context(
+        {"source_dirs": list(PROBE_SOURCE_DIRS)})
+    assert declared["source_dirs"] == context_assembler._dashed_lines(
+        list(PROBE_SOURCE_DIRS))
+    assert dashed_items(declared["source_dirs"]) == list(PROBE_SOURCE_DIRS)
+    assert context_assembler.config_context({})["source_dirs"] is None
+    assert context_assembler.config_context({"source_dirs": []})["source_dirs"] is None
+
+
+def test_config_context_still_renders_every_key_it_rendered_before_story_179():
+    """The keys the assembler rendered before — the granted tools as dashed
+    lines and the tests directory as the bare value — render unchanged, and
+    the new key joined them rather than replacing one."""
+    grants = ["Bash(grep:*)", "Bash(git show:*)"]
+    config = {"allowed_tools": grants, "tests_dir": PROBE_TESTS_DIR,
+              "source_dirs": list(PROBE_SOURCE_DIRS)}
+    rendered = context_assembler.config_context(config)
+    assert rendered["allowed_tools"] == context_assembler._dashed_lines(grants)
+    assert rendered["tests_dir"] == PROBE_TESTS_DIR
+    assert set(rendered) == {"allowed_tools", "tests_dir", "source_dirs"}
+    empty = context_assembler.config_context({})
+    assert empty == {"allowed_tools": None, "tests_dir": None, "source_dirs": None}
+
+
+def test_rendered_for_this_repository_the_source_directories_are_its_own():
+    """Where this harness is the target, nothing the step said before is lost:
+    the rendering l5-plan makes from this repository's configuration lists
+    every directory that configuration declares under source_dirs, in its
+    order — which is where prompts/, schemas/ and workflows/ now come from.
+    The subject is what this harness ships, so its configuration is read."""
+    declared = conftest.repository_config()["source_dirs"]
+    assert declared, "this repository declares no source_dirs"
+    rendered = rendered_facts("story-workflow")
+    assert dashed_items(rendered["source_dirs"]) == list(declared)
+    # The control: a configuration declaring none renders None there while
+    # still carrying restrictions, so the list above came from the key.
+    absent = rendered_facts("story-workflow", {
+        key: value for key, value in conftest.repository_config().items()
+        if key != "source_dirs"})
+    assert absent["source_dirs"] is None
+    assert absent["stage_path_restrictions"] is not None
 
 
 # --------------------------------------------------------------------------

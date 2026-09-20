@@ -159,12 +159,18 @@ def config_context(config: dict) -> dict[str, str | None]:
     drift from what is actually permitted. The same reasoning puts the test
     location here: the stage that writes tests is told where they go by the
     configuration the restriction is resolved from, so changing the config
-    changes the rendered prompt with no prompt edit. A config declaring
-    neither renders as None, the optional-placeholder convention.
+    changes the rendered prompt with no prompt edit. The source directories
+    are here for the planner: its consequence sweep searches every text that
+    states or consumes the rule a story changes, and the target already
+    declares where its source is in source_dirs, the key the inspection
+    reads for the same purpose — so the planner is told that list rather
+    than a harness layout it must go and resolve. A config declaring none of
+    the three renders each as None, the optional-placeholder convention.
     """
     return {
         "allowed_tools": _dashed_lines(config.get("allowed_tools")),
         "tests_dir": config.get("tests_dir"),
+        "source_dirs": _dashed_lines(config.get("source_dirs")),
     }
 
 

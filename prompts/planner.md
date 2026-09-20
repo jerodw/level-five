@@ -52,9 +52,9 @@ avoid.
    builds that shape is judged against the same text.
 2. Sweep for the consequences of the change before writing scope. Name the
    fact or rule the story changes, then search for every text that states
-   or consumes it: the target's prompts, its schemas, its workflow
-   definitions, the architecture documents named under `architecture_docs`,
-   and the tests directory named under [Workflow facts]. A rule is usually
+   or consumes it: the source directories named under [Workflow facts],
+   the architecture documents named under `architecture_docs`, and the
+   tests directory named under [Workflow facts]. A rule is usually
    written in more than one place — a prompt that tells a stage the rule, a
    schema description that declares it, a document that records it, a test
    that holds it — and a story that changes it in one file while it stands
@@ -182,6 +182,15 @@ one the question above the interview reads. It renders as None where the
 target declares no tests directory:
 
 {{tests_dir}}
+
+The target's source directories, taken from its own configuration rather
+than from anything this template says: the places the sweep step above
+searches for every text that states or consumes the rule a story changes,
+one per line. It renders as None where the target declares none, and None
+means the target's source is whatever it tracks outside the tests directory
+named above:
+
+{{source_dirs}}
 
 Every likely_file_changes entry names a stage. These are the stages the
 workflow defines, and a plan must not name any other:

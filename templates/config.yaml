@@ -109,7 +109,9 @@ test_command: {test_command}
 # everything git tracks minus the blocked paths and minus tests_dir. Tests are
 # inspected either way, as a scope of their own beside these: source and tests
 # are a union and not a merge, and setting this decides nothing about the
-# create restriction tests_dir governs.
+# create restriction tests_dir governs. The planner is told the same list
+# under [Workflow facts], so its sweep for every text a story's rule is
+# written in knows where this repository's source is.
 # source_dirs:
 #   - src/
 # How many briefs one whole inspection may file, across every scope it covered.
