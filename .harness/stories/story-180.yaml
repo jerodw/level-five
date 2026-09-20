@@ -1,0 +1,143 @@
+story:
+  id: story-180
+  title: Every story and every brief opens with a plain-English summary a developer can read without knowing the harness
+  description: |
+    In plain terms. When a story is planned, the developer approves it from a
+    draft the planner shows them, and when a brief is filed, the developer
+    approves it from what the assist agent shows them. Both are read in a
+    terminal by someone who is not reading the code, and both are written in
+    the harness's own vocabulary — stage names, check names, module paths,
+    field names — so a developer who does not know the harness intimately
+    cannot tell what they are approving. The same text is then read again on
+    the board, in l5-status and in the tracker, so the cost repeats at every
+    reading. The harness already tells its agents that a question put to a
+    person leads with the consequence rather than the code; nothing extends
+    that to a draft plan as a whole, or to a brief.
+
+    This story makes a story's description and a brief's body open with one
+    to three paragraphs of plain English — what is wrong or wanted, what the
+    work does about it, what it deliberately leaves alone — with paths, stage
+    names and field names kept for the paragraphs that follow. The planner
+    shows its draft in that form before anything else, so what the developer
+    approves is what they read first, and the assist agent shows a brief that
+    way before filing it. The Inspector's briefs change too, without its own
+    prompt changing: it already receives the shared prose rule and the brief
+    schema whole, and both now state the form.
+
+    It deliberately leaves alone the stories and briefs already committed or
+    filed, which are history; what l5-status and the tracker print, which
+    read the description as it is; and any check that would score whether a
+    paragraph is plain enough, because that is not decidable and the
+    developer's approval is what holds it.
+
+    Where the rule is written. It is stated once in prompts/prose-layer.md,
+    beside the neighbouring rule that a question leads with the consequence,
+    because every agent already receives that partial and a rule written in
+    four prompts is a rule that drifts. It is worded about the act — a story
+    or a brief a person will read — rather than about any agent, and it adds
+    no third worked example, because tests/test_a_question_to_the_developer_is_about_consequences.py
+    holds the layer to naming no agent by role and to exactly two indented
+    example blocks. prompts/planner.md, prompts/assist.md and
+    plugin/skills/file-a-brief/SKILL.md each carry only their own application
+    of it, and the descriptions of story.description in
+    schemas/story.schema.json and of body in schemas/story-brief.schema.json
+    declare the opening, since the schema is what a reader meets the artifact
+    under. The assertion that the rendered planner and assist prompts, the
+    two schemas and the skill carry the rule is a new test module beside
+    tests/test_planner_receives_the_standards.py, written by the tester stage.
+
+    Planned from the brief filed under 248.
+  workflow: story-workflow
+
+tasks:
+  - Add an entry to prompts/prose-layer.md, after the conversational entry and before the worked pair, stating that a story's description and a brief's body open with one to three paragraphs of plain English — what is wrong or wanted, what the work does about it, what it deliberately leaves alone — written for a developer without intimate knowledge of the harness, with paths, stage names and field names kept for the paragraphs that follow; and that whatever shows such a text to a person for approval shows it in that form first. Word the entry about the act rather than the agent, name no agent by role, and add no indented example block, because tests/test_a_question_to_the_developer_is_about_consequences.py holds the layer to both.
+  - In prompts/planner.md, make process step 4 say the draft is presented opening with those plain-English paragraphs before anything else, so what the developer approves is what they read first; and make the skeleton's description placeholder show the form — the plain paragraphs first, then the paragraphs that name paths, stages and fields. Refer to the prose layer's entry rather than restating the whole rule.
+  - In prompts/assist.md, extend the sentence describing a brief's body so the body opens with the plain-English paragraphs, and say the brief is shown to the developer in that form before it is filed. Restate rather than quote the schema: tests/test_a_brief_is_titled_for_its_end_state.py refuses a whole sentence of the schema's title description copied into the prompt or the skill.
+  - In plugin/skills/file-a-brief/SKILL.md, add the body's opening form under "The title" or a new "The body" heading, keeping the existing sentence that a defect brief opens by saying what is wrong today, and make step 2 of "Filing it" say the developer reads the plain-English opening first.
+  - Rewrite the description of story.description in schemas/story.schema.json to declare the opening — what is wrong or wanted, what the story does, what it leaves alone, written for a developer who does not know the harness — and to say the paragraphs naming paths, stages and fields follow it. Rewrite the description of body in schemas/story-brief.schema.json the same way, keeping its existing statements about file:line evidence and work that does not exist yet.
+  - Write a test module beside tests/test_planner_receives_the_standards.py asserting that the rule reaches where it is read — the prompt l5-plan renders for the planner, the prompt l5-assist appends, the two schema descriptions and the skill — each absence-check beside a control showing the same search reports a rendering with the statement removed. Render the prompts the way tests/test_a_question_to_the_developer_is_about_consequences.py already does, rather than reading the templates alone.
+
+acceptance_criteria:
+  - prompts/prose-layer.md states that a story's description and a brief's body open with plain-English paragraphs saying what is wrong or wanted, what the work does about it and what it deliberately leaves alone, readable by a developer without intimate knowledge of the harness, with paths, stage names and field names kept for the paragraphs that follow.
+  - prompts/prose-layer.md still names no agent by role and still carries exactly two indented example blocks, and every assertion in tests/test_a_question_to_the_developer_is_about_consequences.py still passes unchanged.
+  - The prompt l5-plan renders for the planner says the draft is presented opening with the plain-English paragraphs before anything else, and its skeleton's description shows that form.
+  - The prompt l5-assist appends says a brief's body opens with the plain-English paragraphs and that the brief is shown to the developer in that form before filing.
+  - plugin/skills/file-a-brief/SKILL.md states the body's opening form and its "Filing it" step says the developer reads that opening first; its existing statement that a defect brief opens by saying what is wrong today is kept.
+  - The description of story.description in schemas/story.schema.json and of body in schemas/story-brief.schema.json each declare the plain-English opening and that the paragraphs naming paths, stages and fields follow it; neither field gains a constraint beyond its description, so every committed story artifact and every previously valid brief still validates.
+  - A test module beside tests/test_planner_receives_the_standards.py asserts the rule is carried by the rendered planner prompt, the rendered assist prompt, both schema descriptions and the skill, and each assertion sits beside a control showing the same search reports the statement's absence.
+  - No document quotes a whole sentence of the brief schema's title description, and every test in tests/test_a_brief_is_titled_for_its_end_state.py and tests/test_a_brief_is_not_only_a_defect.py still passes unchanged.
+  - No code path reads a story's description or a brief's body to score, refuse or route on its prose.
+  - prompts/inspector.md is unchanged, and the rendered inspector prompt carries the new prose-layer entry and the new body description through the placeholders it already resolves.
+
+technical_plan:
+  implementation_steps:
+    - Write the prose-layer entry, placed after the conversational entry's two limiting paragraphs and before the "As it was given:" pair, so the existing ordering assertions hold.
+    - Edit planner.md's step 4 and skeleton description; edit assist.md's body sentence and the paragraph on filing; edit SKILL.md's body rule and step 2.
+    - Rewrite the two schema descriptions, changing description text only.
+    - Write the test module, rendering the planner prompt through l5-plan with a stub claude and the assist prompt through l5-assist with execvp intercepted, as the existing modules do.
+  likely_file_changes:
+    - file: prompts/prose-layer.md
+      stage: implementer
+      reason: States the rule once, beside the neighbouring rule about leading with the consequence.
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Process step 4 presents the draft in the form; the skeleton's description shows it.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: The body rule and the showing-before-filing sentence carry the form.
+    - file: plugin/skills/file-a-brief/SKILL.md
+      stage: implementer
+      reason: The body rule the skill is written by, and the show-it step.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: story.description's description declares the opening.
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: body's description declares the opening.
+    - file: tests/test_every_story_and_brief_opens_in_plain_english.py
+      stage: tester
+      reason: New module beside tests/test_planner_receives_the_standards.py asserting the rule reaches the rendered planner and assist prompts, the two schemas and the skill.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The paragraph describing what prompts/prose-layer.md says gains the new entry.
+
+scope:
+  modify:
+    - prompts/prose-layer.md
+    - prompts/planner.md
+    - prompts/assist.md
+    - plugin/skills/file-a-brief/SKILL.md
+    - schemas/story.schema.json
+    - schemas/story-brief.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - .harness/stories/ descriptions of stories already committed, and the bodies of briefs already filed (history is not rewritten; the form applies to what is written from here on)
+    - orchestration/run_status.py, scripts/l5-status and the tracker projection (they read the description as it is; the brief leaves what they print alone)
+    - orchestration/plan_validation.py and orchestration/brief_filing.py (no check scores whether a paragraph is plain enough; that is not decidable and the developer's approval holds it)
+    - prompts/inspector.md (it receives the prose layer and the brief schema whole through {{prose_layer}} and {{story_brief_schema}}, so the form reaches the Inspector without a fifth statement of the rule; its own sentence that the body opens by saying what is wrong today agrees with the form)
+    - tests/test_a_question_to_the_developer_is_about_consequences.py (its assertions on the layer's shape — no agent named by role, two example blocks, the conversational entry's statements — are the constraints the new entry is written under, not assertions to adapt)
+    - tests/test_a_brief_is_titled_for_its_end_state.py and tests/test_a_brief_is_not_only_a_defect.py (they hold the title, category and slug rules this story does not change; the new prompt text must satisfy them rather than alter them)
+
+verification_requirements:
+  - Confirm the rendered planner prompt, the rendered assist prompt, both schema descriptions and the skill carry the rule, by the new test module's assertions and their controls.
+  - Confirm every test in tests/test_a_question_to_the_developer_is_about_consequences.py, tests/test_a_brief_is_titled_for_its_end_state.py and tests/test_a_brief_is_not_only_a_defect.py passes unchanged.
+  - Confirm prompts/inspector.md is unchanged and the rendered inspector prompt carries the new prose-layer entry and the new body description.
+  - Confirm every committed story artifact under .harness/stories/ still parses and validates, and that the brief schema's required list, enums and field constraints are unchanged.
+  - Confirm no new code reads a story's description or a brief's body.
+
+constraints:
+  - prompts/prose-layer.md names no agent by role and carries exactly two indented example blocks; the count entry still precedes the conversational entry.
+  - Only description text changes in the two schemas; no field gains a constraint, and no required list or enum changes.
+  - No check scores, refuses or routes on the prose of a story's description or a brief's body.
+  - Existing story artifacts and filed briefs are not rewritten.
+  - Prompts and the skill restate the schema's rules in their own words rather than quoting a whole sentence of them.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 22:39:14
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 248
