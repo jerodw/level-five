@@ -1,0 +1,134 @@
+story:
+  id: story-179
+  title: The consequence sweep names the places a rule is stated by what the target declares, including its source directories
+  description: |
+    Planned from the brief filed under 249.
+
+    The sweep step story-177 added to prompts/planner.md tells the planner
+    where to search for every text that states or consumes the rule a story
+    changes, and the list it gives is this harness's own layout spoken of as
+    the target's: "the target's prompts, its schemas, its workflow
+    definitions", then the architecture documents named under
+    `architecture_docs` and the tests directory named under [Workflow facts].
+    The last two are resolved from the target's configuration and hold for
+    any target; the first three are directories this repository happens to
+    have. An ordinary target with `src/` and `spec/` has none of them, so a
+    planner following the step as written searches for three things that do
+    not exist and is told nothing about where a rule in that target lives.
+    What the list leaves out is the target's source, which is where two of
+    the five loose ends that motivated story-177 actually lay (in
+    orchestration/plan_mandate.py and orchestration/brief_filing.py).
+
+    The target already declares where its source is: `source_dirs` in
+    schemas/harness-config.schema.json, which the inspection reads for the
+    same purpose. This story renders that list to the planner under
+    [Workflow facts], the way `tests_dir` already is, and rewrites the step
+    to name the three places by what the target declares: the source
+    directories under [Workflow facts], the architecture documents named
+    under `architecture_docs`, and the tests directory under [Workflow
+    facts]. `config_context` in orchestration/context_assembler.py supplies
+    the placeholder from the target's configuration, so a planner on any
+    target is pointed at that target's own text rather than at a key name it
+    must go and resolve. Where this harness is the target, `source_dirs`
+    already carries prompts/, schemas/ and workflows/, so nothing the step
+    says today is lost here.
+
+    The assertion at tests/test_planner_receives_the_standards.py pins the
+    wording rather than the rule (`SWEEP_SEARCHES` requires the literal
+    words `prompts`, `schemas` and `workflow definitions`), so the tester
+    moves that pin to the declared names and holds the new placeholder on
+    the prompt l5-plan actually hands the session. The schema description
+    and the config template comment for `source_dirs`, and ARCHITECTURE.md's
+    statement that the key is read only by an inspection, each stop being
+    the whole truth and are updated to say the planner is told the list too.
+
+    Where a target declares no `source_dirs` the placeholder renders as
+    None, the optional-placeholder convention, and the introducing paragraph
+    says what that means: the target's source is whatever it tracks outside
+    the tests directory, the reading the inspection already takes.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/planner.md, add a {{source_dirs}} placeholder under the [Workflow facts] section, beneath a paragraph introducing it as the target's source directories taken from its own configuration, in the form the {{tests_dir}} paragraph takes, and saying that it renders as None where the target declares none and that None means the target's source is whatever it tracks outside the tests directory.
+  - Rewrite the sweep step's list of places to search so that it names the source directories under [Workflow facts], the architecture documents named under `architecture_docs`, and the tests directory named under [Workflow facts], and no longer names prompts, schemas or workflow definitions as places to search. The sentence giving examples of the kinds of text a rule is written in (a prompt that tells a stage the rule, a schema description that declares it, a document that records it, a test that holds it) stays, since it names kinds of text rather than a layout.
+  - In orchestration/context_assembler.py, `config_context` gains a "source_dirs" entry rendered through `_dashed_lines(config.get("source_dirs"))`, None when the key is undeclared, and its docstring says why the list is there.
+  - The `source_dirs` description in schemas/harness-config.schema.json and the commented example in templates/config.yaml each gain a sentence saying the planner is rendered the same list under [Workflow facts] so it knows where the target's source is; neither changes what the key means to an inspection.
+  - In tests/test_planner_receives_the_standards.py, replace `SWEEP_SEARCHES` so the rendered sweep step is held to the three declared names, add an assertion that the step no longer names prompts, schemas or workflow definitions as places to search, and add tests that on the prompt l5-plan hands the session a target declaring a probe source directory sees it rendered as a dashed line of its own under [Workflow facts], that the template carries the placeholder exactly once beneath a paragraph naming it as the source directories, that a target declaring no source_dirs renders None there with the paragraph saying what None means, and that the baseline template carries none of it. Update the story-177 comment block so it no longer lists prompts, schemas and workflow definitions as the sweep's places.
+  - In .harness/docs/ARCHITECTURE.md, add {{source_dirs}} to the list of placeholders the [Workflow facts] section carries, rewrite the story-177 paragraph's account of the sweep to name the declared places, and rewrite the config.yaml entry so it no longer says source_dirs is read only by an inspection.
+
+acceptance_criteria:
+  - The rendered sweep step names the source directories under [Workflow facts], the architecture documents named under `architecture_docs`, and the tests directory named under [Workflow facts], and no longer names prompts, schemas or workflow definitions as places to search.
+  - On the prompt l5-plan hands the session for a target declaring `source_dirs`, each declared directory appears as a dashed line of its own under [Workflow facts], beneath a paragraph naming them as the target's source directories; a target declaring none sees None beneath the same paragraph, and the paragraph says what None means.
+  - prompts/planner.md carries {{source_dirs}} exactly once, and the baseline template this module reads carries it nowhere.
+  - `context_assembler.config_context` returns a "source_dirs" entry rendered as dashed lines from the configuration, and None when the key is undeclared; every existing caller of config_context and build_context renders what it rendered before for every key it rendered before.
+  - The `source_dirs` description in schemas/harness-config.schema.json and the comment in templates/config.yaml say the planner is told the list, and still say what the key means to an inspection.
+  - .harness/docs/ARCHITECTURE.md no longer says `source_dirs` is read only by an inspection, lists {{source_dirs}} among the [Workflow facts] placeholders, and its account of the sweep names the declared places rather than prompts, schemas and workflow definitions.
+  - The two no-literal assertions in tests/test_planner_injection.py, test_the_template_names_no_workflow_stage_of_its_own and test_the_template_names_no_restricted_prefix_of_its_own, still pass against the changed template.
+  - The new tests go red against the baseline planner template and green against the changed one, and every existing test passes.
+
+technical_plan:
+  implementation_steps:
+    - Add the {{source_dirs}} placeholder and its introducing paragraph to the [Workflow facts] section of prompts/planner.md, directly after the {{tests_dir}} paragraph and placeholder.
+    - Rewrite the list in the sweep step (step 2 of the process) to name the three declared places.
+    - Add the "source_dirs" entry to config_context in orchestration/context_assembler.py and extend its docstring.
+    - Add one sentence to the source_dirs description in schemas/harness-config.schema.json and one to the commented example in templates/config.yaml.
+    - Tester replaces SWEEP_SEARCHES, adds the negative assertion, adds the placeholder tests following the pattern test_the_backstop_reads_the_tests_directory_from_the_workflow_facts uses for {{tests_dir}}, and updates the story-177 comment block.
+    - Documenter updates the three places in ARCHITECTURE.md.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The sweep step names the declared places, and [Workflow facts] renders the target's source directories.
+    - file: orchestration/context_assembler.py
+      stage: implementer
+      reason: config_context supplies the source_dirs placeholder from the target's configuration.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The source_dirs description says the planner is told the list, so it stops stating the inspection is the only reader.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The commented source_dirs example tells a target's author the planner is told the list too.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: SWEEP_SEARCHES moves from the literal words to the declared names, and the new placeholder is held on the rendered prompt with the baseline as control.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the placeholder, the sweep's declared places, and that source_dirs is read by the planner as well as the inspection.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - orchestration/context_assembler.py
+    - schemas/harness-config.schema.json
+    - templates/config.yaml
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/harness_source.py (widening the layout scan to catch prose of this shape is a separate judgement about what that scan is for, and the brief excludes it)
+    - orchestration/plan_validation.py (the reason rule and scope_reason_problems hold for any target as written)
+    - tests/test_config_keys_are_obeyed.py (its read-site record for source_dirs exists to break the key's proof under mutation, and the inspection read still does that, so a second reader needs no entry)
+    - prompts/inspector.md (the inspection's reading of source_dirs is unchanged; the planner reads the same key alongside it)
+    - orchestration/inspection.py (the inspection's reading of source_dirs is unchanged; the planner reads the same key alongside it)
+    - tests/test_planner_injection.py (it holds the story-069 and story-174 placeholders; the new placeholder is held in the module that holds the sweep)
+
+verification_requirements:
+  - The new tests in tests/test_planner_receives_the_standards.py go red against the baseline planner template and green against the changed one.
+  - Every existing test passes without any assertion weakened or skipped.
+  - The prompt rendered for this repository's own configuration names orchestration/, scripts/, prompts/, schemas/, workflows/, hooks/ and templates/ as dashed lines under [Workflow facts], so nothing the step said before this story is lost where this harness is the target.
+  - The two no-literal assertions in tests/test_planner_injection.py, test_the_template_names_no_workflow_stage_of_its_own and test_the_template_names_no_restricted_prefix_of_its_own, pass against the changed template.
+  - No placeholder in any prompt other than prompts/planner.md changes.
+
+constraints:
+  - The sweep step remains a numbered step of its own between the step that reads the standards and the step that asks the developer questions.
+  - The {{tests_dir}} placeholder, its paragraph and the backstop that reads it are unchanged.
+  - Restate no injected restriction more tightly than the workflow declares it.
+  - config_context adds a key and removes none; the values it rendered before this story are rendered unchanged.
+  - The story dialect is not YAML; write the artifact in the schema-directed form and do not load it with a YAML parser.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 22:39:31
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 249
