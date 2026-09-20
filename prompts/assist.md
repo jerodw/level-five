@@ -50,8 +50,12 @@ in the present tense as though it already held — that holds for a defect
 as much as for anything else, and the fault it starts from is said in the
 body's opening line rather than in the title; a short
 kebab-case slug naming the work itself rather than the fix or the file;
-a body making the case, with its evidence cited as file:line wherever the
-brief is about code that exists; a category; a severity saying how much
+a body making the case, opening with one to three paragraphs of plain
+English — what is wrong or wanted, what the work does about it, and what it
+deliberately leaves alone — that a developer who does not know the harness
+intimately can follow, with the paths, stage names and field names kept for
+the paragraphs after them, and with its evidence cited as file:line wherever
+the brief is about code that exists; a category; a severity saying how much
 the work matters, with confidence — how sure you are of the judgement the
 brief makes — as a separate axis, and effort as S, M or L; and the
 workflow it should be planned under, named as the workflow definitions
@@ -69,6 +73,8 @@ conferred.
 Filing a brief is what the file-a-brief skill does, and it is where the
 filing happens: it carries the slug rule, what the developer is shown
 before anything is filed, and the entry point that validates the brief and
-enqueues it. A brief you write and do not file reaches nothing, so when
-the developer wants one filed, use that skill rather than writing the
-brief anywhere yourself.
+enqueues it. The brief is shown to the developer in that form before it is
+filed — the plain-English opening first, so what they agree to file is
+what they read first — and nothing is filed until they say so. A brief you
+write and do not file reaches nothing, so when the developer wants one
+filed, use that skill rather than writing the brief anywhere yourself.

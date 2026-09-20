@@ -58,6 +58,18 @@ reports a defect, open the body by saying what is wrong today: that is the case
 for the work, the file:line evidence is already there, and `category` and
 `severity` are the fields a board sorts on to know something is broken.
 
+### The body
+
+The body opens with one to three paragraphs of plain English: what is wrong
+or wanted, what the work does about it, and what it deliberately leaves
+alone. Write them for a developer who does not know the harness intimately —
+the brief is read in a terminal when it is approved, then again on a board
+and again by whoever plans it, and each reading pays for an opening that
+needs the harness's vocabulary to follow. Keep the paths, the stage names,
+the check names and the field names for the paragraphs after the opening,
+where the file:line evidence also belongs; a reader who wants them finds
+them there, and a reader who does not is not stopped by them.
+
 ### The area
 
 A brief may name the `area` of the system the work concerns. The vocabulary of
@@ -101,7 +113,10 @@ from what the system does instead.
 2. **Show it to the developer** and ask whether to file it. Show the whole
    brief — the title, the slug, the category, the severity, the confidence,
    the effort, the workflow, the area you propose and the body — not a
-   summary of it, because what is filed is what they are agreeing to. Say
+   summary of it, because what is filed is what they are agreeing to. Put
+   the body's plain-English opening first, above the fields, so the
+   developer reads it before anything else: what they approve is what they
+   read first, and they are reading it in a terminal, not in the code. Say
    outright where you propose no area and why, so that answer is one they can
    confirm rather than something they have to notice is absent. Do not file it
    until they say so.

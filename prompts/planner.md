@@ -66,7 +66,12 @@ avoid.
 3. Ask the developer any questions required to remove important
    ambiguity. Ask about decisions that are expensive or hard to reverse;
    apply sensible defaults to cheap, reversible ones and say you did.
-4. Present the draft plan and iterate until the developer approves it.
+4. Present the draft plan and iterate until the developer approves it. The
+   draft opens with the plain-English paragraphs the prose layer above asks
+   of a story's description, before anything else in it — what the developer
+   approves is what they read first, and they are reading it in a terminal
+   rather than in the code — with the paragraphs that name paths, stages
+   and fields following them.
 5. The story id is {{story_id}}. Write the approved artifact to
    .harness/stories/{{story_id}}.yaml and give it that id. Do not derive an
    id by listing that directory: the id above was reserved on the remote
@@ -114,7 +119,11 @@ schema for the contract and the skeleton for the shape.
 	  id: story-NNN
 	  title: <short title>
 	  description: |
-	    <what this story adds or changes, and why>
+	    <one to three paragraphs of plain English first: what is wrong or
+	    wanted, what this story does about it, and what it deliberately
+	    leaves alone, readable by a developer who does not know the harness>
+
+	    <then the paragraphs that name paths, stages and fields>
 	  workflow: <the workflow this session was started for>
 
 	tasks:

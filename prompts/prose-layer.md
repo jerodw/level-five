@@ -38,6 +38,19 @@ plan can be built on it is worse than the question it replaced. And do not
 stop naming things: identifiers, paths and line numbers are how a person who
 asks where something is finds it, and they get the path and the line.
 
+The same altitude governs a story or a brief a person will read whole. A
+story's description and a brief's body open with one to three paragraphs of
+plain English — what is wrong or wanted, what the work does about it, and
+what it deliberately leaves alone — written for a developer who does not know
+this harness intimately, so the text can be followed without knowing its
+vocabulary. Paths, stage names, check names and field names are kept for the
+paragraphs that follow the opening, where a reader who wants them finds them.
+Whatever shows such a text to a person for their approval shows it in that
+form first, before anything else: what they approve is what they read first,
+and the same text is read again on a board, so an opening they cannot follow
+is paid for at every reading. The pair below shows
+the difference at the scale of one explanation.
+
 As it was given:
 
     Escalated: governed_edits returned three paths under the restricted

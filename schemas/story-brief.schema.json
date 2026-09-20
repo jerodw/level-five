@@ -24,7 +24,7 @@
     },
     "body": {
       "type": "string",
-      "description": "The case for the work: what is wrong or what is wanted, why it matters, and what would resolve it. Where the brief is about code that exists, the evidence for it is cited as file:line, and this is where that line-level evidence lives, because the paths above may not carry it. Work that does not exist yet has no line to cite, and a citation invented for it would be evidence of nothing; the case is then made from what the system does instead."
+      "description": "The case for the work: what is wrong or what is wanted, why it matters, and what would resolve it. It opens with one to three paragraphs of plain English — what is wrong or wanted, what the work does about it, and what it deliberately leaves alone — written for a developer who does not know the harness intimately, because the brief is read in a terminal when it is approved for filing and again on a board by whoever decides what to plan next. The paragraphs naming paths, stage names, check names and field names follow that opening; no check scores whether the opening is plain enough, and a brief filed before this form was stated is not held to it. Where the brief is about code that exists, the evidence for it is cited as file:line, and this is where that line-level evidence lives, because the paths above may not carry it. Work that does not exist yet has no line to cite, and a citation invented for it would be evidence of nothing; the case is then made from what the system does instead."
     },
     "category": {
       "type": "string",

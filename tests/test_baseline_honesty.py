@@ -2487,6 +2487,26 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "its workflow reads were converted by story-048; what remains is the "
         "retry ceiling this repository declares in rules/execution-rules.json, "
         "which a summary written *at* the ceiling is a summary about",
+    "test_every_story_and_brief_opens_in_plain_english.py":
+        "what this repository ships is the whole of its subject: the claim is "
+        "that one rule, stated in prompts/prose-layer.md, reaches every "
+        "document a story's description or a brief's body is written under — "
+        "the prompt scripts/l5-plan renders for the planner, the prompt "
+        "scripts/l5-assist appends, the render inspection.py builds for the "
+        "Inspector, the descriptions in schemas/story.schema.json and "
+        "schemas/story-brief.schema.json and the skill under plugin/ — and "
+        "that neither schema field gained a constraint. A fixture layer would "
+        "say only what the module had just written into it, and a fixture "
+        "prompt or schema would say nothing about what a writer of either "
+        "text is told. Where a prompts tree *is* an input — that the entry "
+        "arrives through the layer rather than from a template's own words, "
+        "and that each template's own application of the rule is its own — "
+        "the module mirrors the shipped tree under tmp_path with the entry "
+        "cut or the templates restored to their superseded text, and drives "
+        "the real launchers against that. Every absence it asserts of the "
+        "shipped documents is controlled against those mirrors, against the "
+        "superseded wordings carried here as literals, and against copies "
+        "with the violation planted in them",
     "test_forced_adaptation_declaration.py":
         "its plan-time half runs against a fixture workflow and fixture roots "
         "it builds, where the restricted stage and its prefix are inputs. What "
@@ -3251,6 +3271,20 @@ DECLARED_HISTORY_READERS = {
         "did carry the marker into the coordinator — a claim about where a "
         "declaration lives here and when it moved, which no constructed "
         "repository can answer",
+    "test_every_story_and_brief_opens_in_plain_english.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story stating the plain-English opening left "
+        "prompts/inspector.md alone, because the Inspector receives the rule "
+        "through the placeholders its template already resolves and a fifth "
+        "statement of it would be a rule that drifts. No constructed "
+        "repository can say what this story did not touch, and the comparison "
+        "is made through conftest.story_diff over the story's own range rather "
+        "than against HEAD, which would go vacuously green the moment the "
+        "working tree is committed. The diff of a path the story did rewrite "
+        "is asserted non-empty beside it, so an empty diff is about that one "
+        "path rather than about a resolution that has stopped seeing "
+        "anything. Everything else in the module is read from the shipped "
+        "documents as its subject or built under tmp_path",
     "test_git_history_loading_retired.py":
         "its subject is that a practice this repository retired is gone from "
         "it and stayed gone: the marker is asserted present at the endpoint of "
