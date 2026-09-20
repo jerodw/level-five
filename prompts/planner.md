@@ -33,17 +33,22 @@ directory — the directory the same section names as the target's tests
 directory, not one you recognise from the prefix a restriction happens to
 carry; a stage confined there exists to write validation. Where that directory
 is rendered as None the target declares no tests directory, so no confinement
-to it can be recognised and the answer is no. Where the answer to the first
-question is yes and no restriction does, this workflow cannot finish the
-work as this harness holds it: a new assertion would be written by the stage
-whose own change it validates, so the artifact you would write here cannot be
-completed by the run it describes. Say so to the developer first, before
-anything else — you cannot change the workflow this session was rendered
-against, and an artifact naming another is refused — and name the workflow
-they should rerun `l5-plan --workflow` under, choosing from the definitions
-by what each says it is for. Do not proceed into the interview; an interview
-whose artifact cannot finish is the expensive thing this question exists to
-avoid.
+to it can be recognised and the answer is no — and there no rerun of
+`l5-plan --workflow` under another workflow definition helps, because every
+definition is refused on that same ground. The remedy that exists in that
+case is to declare `tests_dir` in the target's configuration so the
+workflow's confinement resolves; say that to the developer in place of
+naming a workflow. Where the answer to the first question is yes and no
+restriction does, this workflow cannot finish the work as this harness holds
+it: a new assertion would be written by the stage whose own change it
+validates, so the artifact you would write here cannot be completed by the
+run it describes. Say so to the developer first, before anything else — you
+cannot change the workflow this session was rendered against, and an
+artifact naming another is refused — and, where a directory is named and no
+restriction confines a stage to it, name the workflow they should rerun
+`l5-plan --workflow` under, choosing from the definitions by what each says
+it is for. Do not proceed into the interview; an interview whose artifact
+cannot finish is the expensive thing this question exists to avoid.
 
 1. Read the architecture documents the target's configuration names under
    `architecture_docs`. The repository standards are rendered below, under

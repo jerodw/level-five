@@ -658,6 +658,52 @@ def test_the_backstop_reads_the_tests_directory_from_the_workflow_facts():
     assert "rendered as None" not in process_section(before)
 
 
+#: The configuration key the None-case remedy tells the developer to declare,
+#: as the backstop paragraph spells it: in backticks, as a key and not a path.
+TESTS_DIR_KEY = "`tests_dir`"
+
+
+def test_the_backstop_names_the_remedy_that_exists_where_the_tests_directory_is_none():
+    """Since story-182 the None case carries its own remedy rather than the
+    rerun story-171 wrote for a named directory no stage is confined to: in
+    the sentence explaining None the backstop says no rerun of `l5-plan
+    --workflow` under another definition helps, because every definition is
+    refused on the same ground, names `tests_dir` as the key to declare in
+    the target's configuration, and tells the planner to say that in place
+    of naming a workflow. The rerun remedy stays, now conditioned on a
+    directory being named. The control is the baseline template, whose
+    process section carried neither the key nor the statement that a rerun
+    does not help."""
+    head = before_the_numbered_steps(process_section(planner_template()))
+
+    none_case = head[head.index("rendered as None"):]
+    assert re.search(
+        rf"no rerun of\s+{re.escape(BACKSTOP_REMEDY)}\s+under another workflow"
+        r"\s+definition helps",
+        none_case.replace("`", ""))
+    assert re.search(r"every\s+definition is refused on that same ground",
+                     none_case)
+    assert re.search(
+        rf"declare {re.escape(TESTS_DIR_KEY)} in the target's configuration",
+        none_case)
+    assert re.search(r"in place of\s+naming a workflow", none_case)
+    # The None-case remedy sits with the explanation of None, before the
+    # paragraph turns to the yes-and-unconfined case the rerun remedy is for.
+    yes_case = none_case.index("Where the answer to the first question is yes")
+    assert none_case.index(TESTS_DIR_KEY) < yes_case
+    assert re.search(
+        r"where a directory is named and no\s+restriction confines a stage to"
+        r" it, name the workflow",
+        none_case[yes_case:])
+    # The key is named as a thing to declare, never a directory literally.
+    assert head.count(TESTS_DIR_KEY) == 1
+
+    before = process_section(baseline_planner_template())
+    assert TESTS_DIR_KEY not in before
+    assert "no rerun" not in before
+    assert "a directory is named" not in before
+
+
 def test_the_baseline_template_carried_no_backstop():
     """Control: none of the backstop's phrases were in the process section
     before this story, so their presence is the story's and not the prose's."""
