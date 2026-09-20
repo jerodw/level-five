@@ -1,0 +1,115 @@
+story:
+  id: story-181
+  title: The strictness check tells a sentence quoting a search pattern from one stating a restriction
+  description: |
+    Planned from the brief filed under 252.
+
+    l5-plan refused to commit story-179's artifact, after the developer had
+    approved it and the mandate was stamped, for two lines that state no
+    restriction. Each quoted a search pattern — the list of stage names and
+    the restricted prefix that prompts/planner.md must not contain — and
+    asserted that a grep for it over the template returns nothing. The
+    pattern contains a stage name beside a prefix by construction, and
+    strictness_problems in orchestration/plan_validation.py reads any clause
+    holding a stage name on a word boundary and a restricted prefix as a
+    substring, with no creation word, as a restatement of the workflow's
+    create restriction that tightens it. A sentence quoting a pattern is text
+    about text, not a clause about a stage; the check cannot tell the two
+    apart, and the no-literal rule the sentence held is stated in exactly
+    those words in .harness/docs/ARCHITECTURE.md, so any plan that writes the
+    rule down as the document states it is refused the same way.
+
+    This story teaches the check the difference. A span delimited by
+    backticks or by double quotes is a quoted span; where a stage name and a
+    prefix both sit inside one quoted span, that pairing is not reported;
+    where either sits outside every quoted span, the clause is reported
+    exactly as it is today. Spans are found on the whole entry before it is
+    split into clauses, so a quoted pattern that happens to contain a comma
+    or the word "and" stays one span. Single quotes are not a delimiter,
+    because apostrophes would make ordinary possessive sentences read as
+    quoted. The distinction is held by new cases in
+    tests/test_plan_time_validation.py, composed from the loaded workflow
+    rather than from literals as that file already does, and the docstring
+    says what a quoted span is and why it is not a restatement.
+
+    Left out deliberately: whether l5-plan should commit a repaired artifact
+    after a refusal without a second interview, and the no-literal rule for
+    the planner template itself, its wording in the architecture document,
+    and the two assertions in tests/test_planner_injection.py that hold it.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/plan_validation.py, make strictness_problems find the quoted spans of an entry — spans delimited by backticks or by double quotes — on the whole entry before clause splitting, and exclude a stage/prefix pairing whose stage name and prefix both sit inside one quoted span, while reporting as today a pairing where either sits outside every quoted span.
+  - Extend the strictness_problems docstring to say what a quoted span is, which delimiters bound one, why a pattern quoted inside one is text about text rather than a restatement of a restriction, and why single quotes are not a delimiter.
+  - Keep the module free of any stage name or restricted prefix literal, docstring included, so the existing no-literal assertions over orchestration/plan_validation.py keep passing.
+  - In tests/test_plan_time_validation.py, add the cases that hold the distinction, each composing its sentence from RESTRICTED_STAGE and RESTRICTED_PREFIX as the file already does, so no stage name or prefix is written as a literal.
+  - Record the quoted-span exclusion in the strictness_problems entry of .harness/docs/ARCHITECTURE.md, beside what that entry already says the check reports.
+
+acceptance_criteria:
+  - An entry of the shape "grep for `<stage>|<prefix>` over a file returns nothing", with the stage name and the restricted prefix both inside one backtick-delimited span, is reported by strictness_problems as no problem when run against the shipped workflow.
+  - The same shape with the span delimited by double quotes instead of backticks is likewise reported as no problem.
+  - An entry of the shape "the <stage> leaves <prefix> alone", with neither inside any quoted span, is still reported by strictness_problems as one problem, in the words it has always been reported with.
+  - An entry that carries a quoted span elsewhere but whose stage name and prefix both sit outside it — the shape "the <stage> leaves <prefix> alone, see `README`" — is still reported, so the exclusion is held to the quoted span and not to the presence of a quote mark anywhere in the entry.
+  - An entry with only the stage name quoted — the shape "the `<stage>` leaves <prefix> alone" — is still reported, so a pairing is excluded only when both halves sit inside one span.
+  - A quoted span containing a clause boundary — the shape "grep for `<stage>, <prefix>` over a file returns nothing" — is still reported as no problem, because spans are found on the whole entry before it is split into clauses.
+  - An entry using a single-quoted span — the shape "grep for '<stage>|<prefix>' over a file returns nothing" — is still reported, because single quotes are not a delimiter.
+  - Every new test composes its sentence from RESTRICTED_STAGE and RESTRICTED_PREFIX read off the loaded workflow; a scan of tests/test_plan_time_validation.py for a literal stage name or restricted prefix, by the same scanner the file already applies to itself, still returns nothing.
+  - The existing no-literal assertions over orchestration/plan_validation.py still pass, docstring included.
+  - The strictness_problems docstring states what a quoted span is, which delimiters bound one, and why a quoted pattern is not a restatement of a restriction.
+  - The strictness_problems entry in .harness/docs/ARCHITECTURE.md records the quoted-span exclusion and its delimiters.
+  - Every test that passed before this story still passes, and no existing assertion is weakened, removed or skipped.
+
+technical_plan:
+  implementation_steps:
+    - Add a compiled pattern for a quoted span — a backtick-delimited or double-quote-delimited run with no delimiter inside it — beside _CLAUSE_BOUNDARY and _CREATION in orchestration/plan_validation.py.
+    - In strictness_problems, before splitting an entry into clauses, find its quoted spans and blank out each span whose text contains a restricted prefix as a substring and a restricted stage name on a word boundary, so the clause splitter and the pairing test never see that span; a span holding only one half of a pairing is left as it is, so that half still counts as outside the span.
+    - Leave the clause loop, the creation-word skip, the per-entry dedupe and the message text unchanged, so a reported clause reads exactly as it did.
+    - Write the docstring paragraph on quoted spans with the stage and prefix written as <stage> and <prefix>, as the docstring already does.
+    - Add the test cases under the "The strictness check" section of tests/test_plan_time_validation.py, one function or parametrized case per criterion above, each with its control beside it as the file's docstring requires.
+    - Amend the strictness_problems entry in .harness/docs/ARCHITECTURE.md with one or two sentences on the quoted-span exclusion, the delimiters, and the story-179 refusal that motivated it.
+  likely_file_changes:
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: The quoted-span exclusion in strictness_problems and the docstring paragraph that explains it.
+    - file: tests/test_plan_time_validation.py
+      stage: tester
+      reason: The cases holding the distinction between a quoted pattern and an unquoted restatement, with controls.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The strictness_problems entry records what the check now leaves alone and why.
+
+scope:
+  modify:
+    - orchestration/plan_validation.py
+    - tests/test_plan_time_validation.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - scripts/l5-plan (whether l5-plan should commit a repaired artifact after a refusal without a second interview is a separate decision about the planning flow, not this story)
+    - prompts/planner.md (its two-line statement of the strictness rule stays true once quoted patterns are exempt, and touching the template drags in the no-literal assertions that hold it)
+    - tests/test_planner_injection.py (the two assertions holding the no-literal rule for the planner template are the rule this story's motivating sentence quoted, not the rule this story changes)
+    - the wording of the no-literal rule at .harness/docs/ARCHITECTURE.md:139 (the story makes that wording committable as a criterion; changing the wording would be solving the refusal from the wrong side)
+    - orchestration/story_coordinator.py (stage_restrictions, which supplies the stage and prefix halves, is unchanged; the change is in how a clause is read, not in what the workflow declares)
+
+verification_requirements:
+  - Confirm from the test report that each new case in tests/test_plan_time_validation.py passes against the shipped workflow, and that the file's own no-literal scan over itself and over orchestration/plan_validation.py still passes.
+  - Confirm that a quoted-pattern sentence of the story-179 shape is reported as no problem and that the same words unquoted are still reported as one problem, with the message text unchanged.
+  - Confirm that a pairing with either half outside every quoted span is still reported, including the case where a quoted span sits elsewhere in the entry.
+  - Confirm the full suite passes with no existing assertion weakened, removed or skipped, and that the census reports no stage whose assertion count fell.
+  - Confirm the strictness_problems docstring and the .harness/docs/ARCHITECTURE.md entry both describe the quoted-span exclusion and name its delimiters.
+
+constraints:
+  - strictness_problems keeps its signature, its scanned fields, its clause boundaries, its creation-word skip and its message text; the only change in what it decides is the quoted-span exclusion.
+  - Backticks and double quotes are the only delimiters of a quoted span; single quotes are not one.
+  - orchestration/plan_validation.py and tests/test_plan_time_validation.py carry no stage name and no restricted prefix as a literal, docstrings and comments included; both are read off the loaded workflow.
+  - The check remains plan-time only; nothing in l5-run's pre-flight starts calling it.
+  - No third-party runtime dependency is introduced; the standard-library re module is enough.
+  - Every new absence assertion sits beside a control showing the same check reporting the violation it exists to catch, as the file's docstring requires.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 22:49:53
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 252
