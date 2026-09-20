@@ -265,6 +265,14 @@ SLEEPS_PAST_THE_BOUND = 12
 #: against, read off the transport rather than written here.
 DEFAULT_SYNC_TIMEOUT = command_transport.DEFAULT_TIMEOUT_SECONDS
 
+#: The bound the sync proofs that are *not* about the bound configure instead
+#: of `SYNC_TIMEOUT` — the one for `sync_command` and the one for
+#: `sweep_max_entries`. The account of why the number is made irrelevant to
+#: them rather than widened is kept in one place, above
+#: `BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER`, and holds for this command
+#: exactly as it holds for the query command.
+BOUND_THE_OTHER_SYNC_PROOFS_RUN_UNDER = DEFAULT_SYNC_TIMEOUT
+
 #: How many entries the fixture allows one sweep to attempt filing. A bound no
 #: harness would pick: the default written in harness source is twenty and this
 #: repository configures none. It stands in for the token the value cannot
@@ -346,6 +354,23 @@ DEFAULT_FILED_QUERY_MAX_ITEMS = filed_query.DEFAULT_MAX_ITEMS
 #: the harness itself falls back to so that nothing about the number is a claim
 #: this module makes here. The bound's own two proofs are untouched and still
 #: pin it from both sides at `FILED_QUERY_TIMEOUT`.
+#:
+#: This is the module's whole account of the shape, and it holds for all three
+#: commands a fixture here spawns. The sync proofs for `sync_command` and
+#: `sweep_max_entries` and the item proof for `item_update_command` are the
+#: same kind of proof — a command that sleeps for nothing, and an assertion
+#: about which command ran or how many entries were attempted — and under
+#: `SYNC_TIMEOUT` and `ITEM_UPDATE_TIMEOUT` they made the same claim about the
+#: machine; story-177's second attempt went red on exactly that and passed
+#: unchanged once the machine was quiet. So each of them runs under the
+#: default for its command, through `BOUND_THE_OTHER_SYNC_PROOFS_RUN_UNDER`
+#: and `BOUND_THE_OTHER_ITEM_PROOFS_RUN_UNDER`, handed to the fixture by the
+#: `not_about_the_*_bound()` helper for that command. The bound's own proofs
+#: — the number read off what the harness built, the kill past it, and for the
+#: sync and query commands the landing half that reports inconclusive — still
+#: run under the tight values. `tests/test_no_test_bounds_the_machine.py`
+#: holds that every proof here which spawns a fixture command is one or the
+#: other: about the bound it names, or run under the default for its command.
 BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER = DEFAULT_FILED_QUERY_TIMEOUT
 
 #: How long the fixture allows an item-update command to run. Not a whole
@@ -366,6 +391,13 @@ ITEM_SLEEPS_PAST_THE_BOUND = 9
 #: The default the fallback comparison and the ordering above are stated
 #: against, read off the item-update module rather than written here.
 DEFAULT_ITEM_UPDATE_TIMEOUT = item_update.DEFAULT_TIMEOUT_SECONDS
+
+#: The bound the item proof that is *not* about the bound — the one for
+#: `item_update_command` — configures instead of `ITEM_UPDATE_TIMEOUT`. The
+#: account of why the number is made irrelevant to it rather than widened is
+#: kept in one place, above `BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER`, and
+#: holds for this command exactly as it holds for the query command.
+BOUND_THE_OTHER_ITEM_PROOFS_RUN_UNDER = DEFAULT_ITEM_UPDATE_TIMEOUT
 
 #: Where the fixture's item-update command lives inside the target, and what a
 #: publish put to it is about. The path, the item's key and the projected
@@ -1872,8 +1904,12 @@ def test_sync_command_is_the_command_an_entry_is_filed_by_running(tmp_path):
     printed, and that script sits at the configured path and nowhere else. A
     harness that had stopped reading the key would build no transport at all,
     and the entry would still be pending.
+
+    Nothing here is about how long a command may run, so the sweep is not held
+    to the tight bound the three proofs below pin — the command key is what is
+    asserted, and the machine's spawn latency is not.
     """
-    swept_queue = swept(tmp_path)
+    swept_queue = swept(tmp_path, **not_about_the_sync_bound())
     assert swept_queue.problem == ""
     assert swept_queue.transport.command == SYNC_COMMAND_REL
     assert swept_queue.entry["state"] == outbox.LANDED
@@ -1973,8 +2009,12 @@ def test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts(tmp_path):
     Both numbers are pinned. The seeded queue sits between the configured bound
     and the default written in harness source, so a harness that had fallen
     back to that default would file every entry and leave no remainder at all.
+
+    Nothing here is about how long a command may run, so the sweep is not held
+    to the tight sync bound — the count is what is asserted, and the machine's
+    spawn latency is not.
     """
-    values = fixture_config()
+    values = fixture_config(**not_about_the_sync_bound())
     target = build_target(tmp_path, values)
     journal = counting_sync_command(target, values)
 
@@ -2047,6 +2087,29 @@ def not_about_the_bound() -> dict[str, object]:
     these proofs configure a bound of their own.
     """
     return {filed_query.TIMEOUT_KEY: BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER}
+
+
+def not_about_the_sync_bound() -> dict[str, object]:
+    """The departure a sync proof that says nothing about the bound makes.
+
+    The key is read off the sweep module rather than written here, so it is
+    the key the harness reads. See `BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER`
+    for why these proofs configure a bound of their own; the reason is the
+    same for every command a fixture here spawns.
+    """
+    return {outbox_sweep.TIMEOUT_KEY: BOUND_THE_OTHER_SYNC_PROOFS_RUN_UNDER}
+
+
+def not_about_the_item_bound() -> dict[str, object]:
+    """The departure an item proof that says nothing about the bound makes.
+
+    The key is read off the item-update module rather than written here, so
+    it is the key the harness reads. See
+    `BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER` for why these proofs configure a
+    bound of their own; the reason is the same for every command a fixture
+    here spawns.
+    """
+    return {item_update.TIMEOUT_KEY: BOUND_THE_OTHER_ITEM_PROOFS_RUN_UNDER}
 
 
 def test_filed_query_command_is_the_command_the_question_is_put_to(tmp_path):
@@ -2192,8 +2255,12 @@ def test_item_update_command_is_the_command_a_story_is_published_by(tmp_path):
     and that script sits at the configured path and nowhere else. A harness
     that had stopped reading the key would publish nothing at all, and there
     would be no record to read.
+
+    Nothing here is about how long a command may run, so the publish is not
+    held to the tight bound the proof below pins — the command key is what is
+    asserted, and the machine's spawn latency is not.
     """
-    answer, recorded = published_from(tmp_path)
+    answer, recorded = published_from(tmp_path, **not_about_the_item_bound())
 
     assert answer.published is True, answer.reason
     question = json.loads(recorded.read_text(encoding="utf-8"))
@@ -2211,8 +2278,12 @@ def test_an_item_command_sleeping_past_the_bound_is_killed_and_publishes_nothing
     not publish and names that bound. A loaded machine makes the command slower
     and the kill more certain, so this never reports inconclusive.
 
-    Its control is the test above: the same fixture, the same command with no
-    sleep in it, which publishes and is recorded.
+    Its control is the test above: the same command with no sleep in it, which
+    publishes and is recorded. That control runs under the harness default
+    bound rather than this one, since nothing it asserts is about the bound —
+    so what ties this kill to the configured number is not the control but the
+    reason the answer carries, which names `ITEM_UPDATE_TIMEOUT` and would
+    name the default had the harness fallen back to it.
     """
     answer, recorded = published_from(tmp_path,
                                       sleeps=ITEM_SLEEPS_PAST_THE_BOUND)

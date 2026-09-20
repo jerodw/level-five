@@ -567,6 +567,326 @@ def test_the_halves_beside_each_missed_precondition_cannot_skip(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# 3a. A configured-bound proof that is not about the bound runs under the
+#     harness default
+#
+# The config module varies every key in every fixture, so a proof that spawns
+# a fixture command inherits the tight timeout for that command unless it
+# says otherwise. A proof that is about the bound wants that; a proof about
+# which command ran, or how many entries were attempted, does not, and under
+# the tight bound it is also asserting that this machine spawns a shell inside
+# a few seconds — which is what went red on story-177's second attempt. The
+# module's remedy is the `not_about_the_*_bound()` helper for each command,
+# which hands the fixture the harness's own default. What is held here is
+# that every proof of that shape takes one side or the other.
+# --------------------------------------------------------------------------
+
+#: Each way a test in the config module runs a fixture command, and for that
+#: command the bound constant a proof about the bound names and the helper a
+#: proof that is not about it passes. The runners and helpers are read off the
+#: module as its own functions rather than spelled here; the constants are
+#: names, checked below to exist on the module so the table cannot go on
+#: naming a constant that was renamed away.
+FIXTURE_COMMAND_RUNNERS = {
+    config_module.swept.__name__:
+        ("SYNC_TIMEOUT", config_module.not_about_the_sync_bound.__name__),
+    f"{config_module.outbox_sweep.__name__}.{config_module.outbox_sweep.sweep.__name__}":
+        ("SYNC_TIMEOUT", config_module.not_about_the_sync_bound.__name__),
+    config_module.asked_what_is_filed.__name__:
+        ("FILED_QUERY_TIMEOUT", config_module.not_about_the_bound.__name__),
+    config_module.published_from.__name__:
+        ("ITEM_UPDATE_TIMEOUT", config_module.not_about_the_item_bound.__name__),
+}
+
+#: The one keyword by which `swept` is asked to build the transport and run
+#: nothing, so a call carrying it spawns no command and is not held to this.
+RUNS_NOTHING = ("run", False)
+
+
+def _dotted(func: ast.expr) -> str | None:
+    """`name` or `module.name` for a call's callee, and None for any other."""
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        return f"{func.value.id}.{func.attr}"
+    return None
+
+
+def _runs_nothing(call: ast.Call) -> bool:
+    keyword_name, keyword_value = RUNS_NOTHING
+    return any(keyword.arg == keyword_name
+               and isinstance(keyword.value, ast.Constant)
+               and keyword.value.value is keyword_value
+               for keyword in call.keywords)
+
+
+def fixture_commands_run_by(function: ast.FunctionDef) -> set[str]:
+    """Which runners in the table `function` calls, ignoring a call that is
+    asked to run nothing."""
+    return {name for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            for name in [_dotted(node.func)]
+            if name in FIXTURE_COMMAND_RUNNERS and not _runs_nothing(node)}
+
+
+def _names_referenced(function: ast.FunctionDef) -> set[str]:
+    return {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+
+
+def _helpers_called(function: ast.FunctionDef) -> set[str]:
+    return {name for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            for name in [_dotted(node.func)] if name}
+
+
+def configured_bound_problems(source: str) -> list[str]:
+    """Every test in `source` that runs a fixture command under a configured
+    bound without being about that bound or configuring the default.
+
+    A test is about the bound when its source names the bound constant for the
+    command it runs; it configures the default when it calls the helper for
+    that command. Either satisfies the rule. Every test that runs a fixture
+    command is found by what it calls, so a fourth proof written in the
+    inherited-bound shape is reported without being listed anywhere.
+    """
+    problems = []
+    for function in ast.parse(source).body:
+        if not isinstance(function, ast.FunctionDef) \
+                or not function.name.startswith("test_"):
+            continue
+        referenced = _names_referenced(function)
+        called = _helpers_called(function)
+        for runner in sorted(fixture_commands_run_by(function)):
+            bound, helper = FIXTURE_COMMAND_RUNNERS[runner]
+            if bound not in referenced and helper not in called:
+                problems.append(
+                    f"{function.name} runs a fixture command through "
+                    f"{runner} under the configured bound, and neither names "
+                    f"{bound} nor passes {helper}()")
+    return problems
+
+
+def config_module_source() -> str:
+    return Path(config_module.__file__).read_text(encoding="utf-8")
+
+
+def test_every_bound_constant_the_table_names_is_one_the_module_declares():
+    """The table names its constants as strings, and a string cannot be
+    imported — so each is checked to be a number the module still declares,
+    and the tight value rather than the default the helper hands out."""
+    for bound, helper in FIXTURE_COMMAND_RUNNERS.values():
+        assert isinstance(getattr(config_module, bound), (int, float)), bound
+        handed = getattr(config_module, helper)()
+        assert getattr(config_module, bound) not in handed.values(), bound
+
+
+def test_every_configured_bound_proof_is_about_the_bound_or_runs_under_the_default():
+    """The standing assertion, against the config module as it is."""
+    assert configured_bound_problems(config_module_source()) == []
+
+
+def test_the_rule_sees_a_test_behind_every_runner_in_the_table():
+    """The companion the absence above needs: the scan is finding the tests
+    that run fixture commands rather than finding nothing.
+
+    Every runner in the table is reached by at least one test in the live
+    module, and each of the two sides — a proof naming its bound, and a proof
+    passing the helper — is in use. Either side having no member would mean
+    the distinction had stopped being drawn.
+    """
+    tests = [function for function in ast.parse(config_module_source()).body
+             if isinstance(function, ast.FunctionDef)
+             and function.name.startswith("test_")]
+    reached = set().union(*(fixture_commands_run_by(test) for test in tests))
+    assert reached == set(FIXTURE_COMMAND_RUNNERS)
+
+    about_the_bound = [test.name for test in tests
+                       if fixture_commands_run_by(test)
+                       and any(bound in _names_referenced(test)
+                               for bound, _ in FIXTURE_COMMAND_RUNNERS.values())]
+    under_the_default = [test.name for test in tests
+                         if fixture_commands_run_by(test)
+                         and any(helper in _helpers_called(test)
+                                 for _, helper in FIXTURE_COMMAND_RUNNERS.values())]
+    assert about_the_bound
+    assert under_the_default
+    assert not set(about_the_bound) & set(under_the_default)
+
+
+def _proof_source(body: str, *, name: str = "test_it") -> str:
+    return f"def {name}(tmp_path):\n{body}"
+
+
+def test_the_rule_reports_a_proof_that_neither_names_its_bound_nor_configures_the_default():
+    """The negative control, constructed for each runner in the table.
+
+    A proof that spawns a fixture command and asserts nothing about the
+    bound, in the shape the three proofs had before this rule existed, is
+    reported naming the test, the runner, the constant and the helper.
+    """
+    for runner, (bound, helper) in FIXTURE_COMMAND_RUNNERS.items():
+        planted = _proof_source(
+            f"    result = {runner}(tmp_path)\n"
+            f"    assert result\n", name="test_inherits_the_bound")
+        problems = configured_bound_problems(planted)
+        assert len(problems) == 1, problems
+        for named in ("test_inherits_the_bound", runner, bound, f"{helper}()"):
+            assert named in problems[0], (named, problems[0])
+
+
+def test_the_rule_accepts_a_proof_on_either_side_and_a_call_that_runs_nothing():
+    """The positive controls beside the negative one.
+
+    The same reader is silent on a proof naming its bound, on a proof passing
+    the helper — including the `fixture_config(**helper())` spelling the
+    sweep-max-entries proof uses — and on a `swept` asked to build the
+    transport and run nothing, so the empty report above is the rule being
+    satisfied rather than a reader that reports nothing.
+    """
+    for runner, (bound, helper) in FIXTURE_COMMAND_RUNNERS.items():
+        names_its_bound = _proof_source(
+            f"    result = {runner}(tmp_path)\n"
+            f"    assert str({bound}) in result.reason\n")
+        assert configured_bound_problems(names_its_bound) == []
+
+        passes_the_helper = _proof_source(
+            f"    result = {runner}(tmp_path, **{helper}())\n"
+            f"    assert result\n")
+        assert configured_bound_problems(passes_the_helper) == []
+
+        through_the_config = _proof_source(
+            f"    values = fixture_config(**{helper}())\n"
+            f"    result = {runner}(tmp_path, values)\n"
+            f"    assert result\n")
+        assert configured_bound_problems(through_the_config) == []
+
+    keyword_name, keyword_value = RUNS_NOTHING
+    builds_only = _proof_source(
+        f"    built = {config_module.swept.__name__}"
+        f"(tmp_path, {keyword_name}={keyword_value!r})\n"
+        f"    assert built.transport\n")
+    assert configured_bound_problems(builds_only) == []
+    # And a helper that is not a test is not what the rule is over: the
+    # runners themselves live in the module and run nothing on their own.
+    assert configured_bound_problems(
+        f"def helper(tmp_path):\n"
+        f"    return {config_module.swept.__name__}(tmp_path)\n") == []
+
+
+#: Each helper, the orchestration module whose key it hands out, and the
+#: module whose default it hands out at that key. The sync default lives on
+#: the transport rather than on the sweep module, which is where the sweep
+#: itself falls back to when the key is absent.
+NOT_ABOUT_THE_BOUND_HELPERS = [
+    (config_module.not_about_the_sync_bound, config_module.outbox_sweep,
+     config_module.command_transport),
+    (config_module.not_about_the_bound, config_module.filed_query,
+     config_module.filed_query),
+    (config_module.not_about_the_item_bound, config_module.item_update,
+     config_module.item_update),
+]
+
+
+@pytest.mark.parametrize("helper, keyed_by, defaulted_by",
+                         NOT_ABOUT_THE_BOUND_HELPERS,
+                         ids=lambda value: value.__name__)
+def test_each_not_about_the_bound_helper_hands_the_fixture_exactly_the_harness_default(
+        helper, keyed_by, defaulted_by):
+    """What each helper returns is one key, the one the orchestration module
+    reads, at the value the harness falls back to — read off the orchestration
+    modules rather than restated, so a helper cannot drift into a bound of the
+    test module's own."""
+    handed = helper()
+    assert list(handed) == [keyed_by.TIMEOUT_KEY]
+    assert handed[keyed_by.TIMEOUT_KEY] == defaulted_by.DEFAULT_TIMEOUT_SECONDS
+    # The control the equality needs: the default is not the tight value the
+    # fixture varies the key to — compared as numbers, since the fixture
+    # writes its values as text — so the helper is a departure from the
+    # fixture rather than a restatement of it.
+    assert float(handed[keyed_by.TIMEOUT_KEY]) != \
+        float(config_module.VARYING[keyed_by.TIMEOUT_KEY])
+
+
+def test_the_helper_table_covers_every_runner_in_the_rule():
+    """The two tables agree: every helper the rule accepts is one whose
+    return is checked above, and no helper is checked that the rule does not
+    accept."""
+    accepted = {helper for _, helper in FIXTURE_COMMAND_RUNNERS.values()}
+    checked = {helper.__name__ for helper, _, _ in NOT_ABOUT_THE_BOUND_HELPERS}
+    assert accepted == checked
+
+
+# --------------------------------------------------------------------------
+# 3b. No proof node may report inconclusive
+#
+# The config module's account of why a bound is made irrelevant rather than
+# widened rests on this: the pristine-copy control asserts that every node in
+# KEY_PROOFS *passed*, so a proof node that reported inconclusive would turn
+# that control red on a loaded machine. The rule in 3a does not hold it — a
+# proof node rewritten to route through `entry_that_got_to_land` names its
+# bound and so satisfies 3a — and `reaches_the_helper` does not see it either,
+# since the `machine_load.inconclusive` call sits inside those two routes
+# rather than in their callers. So it is held here, over every proof node, by
+# name of the routes the config module itself declares.
+# --------------------------------------------------------------------------
+
+#: The config module's own inconclusive routes, read off it as names so a
+#: renamed route cannot leave this looking for the old spelling.
+CONFIG_MODULE_ROUTES = (config_module.entry_that_got_to_land.__name__,
+                        config_module.answer_that_got_to_be_heard.__name__)
+
+
+def reaches_an_inconclusive_route(source: str) -> bool:
+    """Whether `source` can report inconclusive, through the shared helper or
+    either of the config module's own routes to it."""
+    return (reaches_the_helper(source)
+            or any(f"{route}(" in source for route in CONFIG_MODULE_ROUTES))
+
+
+def proof_node_sources() -> dict[str, str]:
+    return {proof.node: inspect.getsource(getattr(config_module, proof.node))
+            for proof in config_module.KEY_PROOFS.values()}
+
+
+def test_no_proof_node_reaches_an_inconclusive_route():
+    """The standing assertion: every node the pristine control requires to
+    have passed has no route by which it could report anything else."""
+    for node, source in sorted(proof_node_sources().items()):
+        assert not reaches_an_inconclusive_route(source), node
+
+
+def test_the_proof_node_reader_finds_every_node():
+    """The positive control the absence above needs: the sources read are
+    one per proof in the table, and the table is not empty."""
+    sources = proof_node_sources()
+    assert len(sources) == len(config_module.KEY_PROOFS)
+    assert sources
+    assert all(source.lstrip().startswith(("def ", "@"))
+               for source in sources.values())
+
+
+def test_the_proof_node_reader_reports_a_node_routed_through_either_route():
+    """The negative control: a proof node rewritten in the shape the previous
+    ARCHITECTURE.md paragraph prescribed — the sync-command proof routed
+    through `entry_that_got_to_land` with its bound — is reported, as is one
+    routed through `answer_that_got_to_be_heard`, and one reaching the shared
+    helper directly. The source that does none is not, so the report is
+    about the route rather than about any proof node."""
+    for route, bound in zip(CONFIG_MODULE_ROUTES,
+                            ("SYNC_TIMEOUT", "FILED_QUERY_TIMEOUT")):
+        routed = _proof_source(
+            f"    result = {route}({config_module.swept.__name__}"
+            f"(tmp_path), {bound})\n"
+            f"    assert result\n")
+        assert reaches_an_inconclusive_route(routed), route
+    assert reaches_an_inconclusive_route(_proof_source(
+        f"    {machine_load.__name__}.inconclusive('loaded')\n"))
+    assert not reaches_an_inconclusive_route(_proof_source(
+        f"    result = {config_module.swept.__name__}(tmp_path)\n"
+        f"    assert result\n"))
+
+
+# --------------------------------------------------------------------------
 # 4. The ceiling, over suites this module builds and runs
 #
 # The nested suites install the shipped hooks by importing them out of
