@@ -90,6 +90,7 @@ from test_revert_check import (  # noqa: F401 - fixtures used by name
     write,
 )
 from test_plan_commit import artifact
+from test_plan_time_validation import reasoned
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
@@ -566,18 +567,19 @@ def test_artifact_problems_accepts_the_declared_artifact_against_either_reading(
 
 
 def committed(story_id: str) -> str:
-    """One committed artifact, carrying the mandate today's schema requires.
+    """One committed artifact, as a plan would be validated today.
 
-    The artifacts reconstructed below were written before story-087, and a
-    committed artifact is an execution record that is never edited to satisfy a
-    contract written after it. What these reconstructions are is a *plan as it
-    would be validated today*, so the block l5-plan would confer is appended to
-    the copy this module builds and the artifact on disk is left alone. Every
-    other byte is the artifact's own, which is what makes the surgery below
-    surgery on the real plan.
+    The artifacts reconstructed below were written before story-087 and before
+    story-177, and a committed artifact is an execution record that is never
+    edited to satisfy a contract written after it. What these reconstructions
+    are is a *plan as it would be validated today*, so the block l5-plan would
+    confer is appended to the copy this module builds and a reason is written
+    onto each of the copy's bare do_not_modify entries, and the artifact on
+    disk is left alone. Every other byte is the artifact's own, which is what
+    makes the surgery below surgery on the real plan.
     """
     text = (STORIES_DIR / f"{story_id}.yaml").read_text(encoding="utf-8")
-    return text + conftest.MANDATE_BLOCK
+    return reasoned(text) + conftest.MANDATE_BLOCK
 
 
 def without_grants(text: str) -> str:

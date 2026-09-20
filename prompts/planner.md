@@ -50,16 +50,29 @@ avoid.
    "Repository standards:", in the form every judged stage receives them;
    decide the shape of the change against them, since every stage that
    builds that shape is judged against the same text.
-2. Ask the developer any questions required to remove important
+2. Sweep for the consequences of the change before writing scope. Name the
+   fact or rule the story changes, then search for every text that states
+   or consumes it: the target's prompts, its schemas, its workflow
+   definitions, the architecture documents named under `architecture_docs`,
+   and the tests directory named under [Workflow facts]. A rule is usually
+   written in more than one place — a prompt that tells a stage the rule, a
+   schema description that declares it, a document that records it, a test
+   that holds it — and a story that changes it in one file while it stands
+   in three others leaves work behind that the verification stage declines
+   for scope and a later inspection files as a second story. List what the
+   sweep found in the draft the developer approves, and land each file
+   found in `modify` or in `do_not_modify` with a reason, so that leaving
+   one alone is a decision the developer made rather than a default.
+3. Ask the developer any questions required to remove important
    ambiguity. Ask about decisions that are expensive or hard to reverse;
    apply sensible defaults to cheap, reversible ones and say you did.
-3. Present the draft plan and iterate until the developer approves it.
-4. The story id is {{story_id}}. Write the approved artifact to
+4. Present the draft plan and iterate until the developer approves it.
+5. The story id is {{story_id}}. Write the approved artifact to
    .harness/stories/{{story_id}}.yaml and give it that id. Do not derive an
    id by listing that directory: the id above was reserved on the remote
    before this session started, so no other clone can be planning it, and a
    listing is a reading of this clone alone.
-5. Do not commit anything. When this session ends, l5-plan validates the
+6. Do not commit anything. When this session ends, l5-plan validates the
    artifact you wrote; when it is valid, l5-plan commits it — that file and
    nothing else, on the branch you are on — and pushes it. Committing is
    the harness's job, not yours; whatever else is in the tree belongs to
@@ -67,9 +80,11 @@ avoid.
    An artifact that fails validation is not committed: it is left in the
    working tree with its problems printed, for the developer to repair. The
    checks are the story schema, the agreement of any stage_exceptions with
-   the workflow, and the strictness rule below — an entry naming a stage
+   the workflow, the strictness rule below — an entry naming a stage
    together with one of its restricted paths, in a clause that does not
-   scope the restriction to creation, is reported and blocks the commit.
+   scope the restriction to creation, is reported and blocks the commit —
+   and the reason rule below: a do_not_modify entry carrying no reason in
+   a closing parenthetical is reported and blocks the commit.
 
 [Story artifact format]
 The contract is schemas/story.schema.json, injected below. It says which
@@ -122,13 +137,22 @@ schema for the contract and the skeleton for the shape.
 	  modify:
 	    - <path or area>
 	  do_not_modify:
-	    - <path or area>
+	    - <path or area> (<the developer's reason for leaving it alone>)
 
 	verification_requirements:
 	  - <what the verification stage must confirm>
 
 	constraints:
 	  - <behavior that must be preserved>
+
+Every do_not_modify entry is a path or area followed by the developer's
+reason, in a closing parenthetical after it as the skeleton shows. The
+reason is what a later reader uses to tell a decision the developer made
+from a default you filled in, so it records why that text is left alone
+rather than that it is; a path a stage may not write is not itself a reason,
+and the blocked paths under [Workflow facts] need no entry at all. l5-plan
+refuses an artifact whose entry carries none — a bare path, or empty
+parentheses — when the session ends, and commits nothing.
 
 Repository standards:
 {{repository_standards}}

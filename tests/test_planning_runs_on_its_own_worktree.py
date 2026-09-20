@@ -68,7 +68,7 @@ scope:
   modify:
     - src/
   do_not_modify:
-    - rules/
+    - rules/ (blocked for every stage, and this story changes no rule)
 
 verification_requirements:
   - confirm the behaviour

@@ -144,7 +144,7 @@ from test_plan_commit import (  # noqa: F401
     stamped,
     writes,
 )
-from test_plan_time_validation import L5_RUN, install, run_script
+from test_plan_time_validation import L5_RUN, install, reasoned, run_script
 
 HARNESS_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
@@ -1723,15 +1723,17 @@ def test_artifact_problems_reports_against_either_root_and_words_it_from_one(
 def story_on_disk(story_id: str) -> tuple[Path, dict]:
     """One committed artifact and its parse, through the reader a run uses.
 
-    Read with the mandate story-087 requires appended to the copy, never to the
-    file: the artifacts below were committed before that requirement existed,
-    and a committed artifact is an execution record that is not edited to
-    satisfy a contract written after it. Every other byte, and everything the
-    surgery below does to it, is the committed plan's own.
+    Read with the mandate story-087 requires appended to the copy and the
+    reason story-177 requires written onto each of the copy's bare
+    do_not_modify entries, never to the file: the artifacts below were
+    committed before either requirement existed, and a committed artifact is
+    an execution record that is not edited to satisfy a contract written after
+    it. Every other byte, and everything the surgery below does to it, is the
+    committed plan's own.
     """
     path = STORIES_DIR / f"{story_id}.yaml"
     reading = story_coordinator.read_story(
-        stamped(path.read_text(encoding="utf-8")))
+        stamped(reasoned(path.read_text(encoding="utf-8"))))
     assert reading.problems == [], (story_id, reading.problems)
     return path, reading.parsed
 
@@ -1755,11 +1757,12 @@ def test_story_056s_committed_artifact_carrying_its_grants_is_reported_by_nothin
     """
     path, story = story_on_disk("story-056")
 
-    # Validated as a copy carrying the mandate story-087 requires, for the
-    # reason `story_on_disk` gives: the artifact on disk predates the
-    # requirement and is not edited to meet it.
+    # Validated as a copy carrying the mandate story-087 requires and the
+    # do_not_modify reasons story-177 requires, for the reason `story_on_disk`
+    # gives: the artifact on disk predates both requirements and is not edited
+    # to meet them.
     validated = write_artifact(
-        tmp_path, stamped(path.read_text(encoding="utf-8")), path.name)
+        tmp_path, stamped(reasoned(path.read_text(encoding="utf-8"))), path.name)
     assert plan_validation.artifact_problems([validated], STAGES, HARNESS_ROOT,
         HARNESS_ROOT, WORKFLOW['name']) == {}
 

@@ -35,6 +35,15 @@ no directory is refused whatever it carries. And the story workflow's
 say from the other: a stage confined to the tests directory whose work is
 validation, rather than a stage that "may write" the assertion.
 
+story-177 added a step to the same process list and a rule to the same
+skeleton: before scope is written the planner sweeps for every text that
+states or consumes the rule the story changes and lists what it found in the
+draft, and every do_not_modify entry carries the developer's reason in a
+closing parenthetical, which l5-plan refuses an artifact for lacking. The
+section "story-177: the consequence sweep and the reason rule" holds both on
+the prompt l5-plan hands the session, with the baseline template — which
+carried neither — as the control.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -635,6 +644,197 @@ def test_the_baseline_template_carried_no_backstop():
     assert BACKSTOP_QUESTION not in before
     assert BACKSTOP_REMEDY not in before
     assert BACKSTOP_REFUSAL not in before.lower()
+
+
+# --------------------------------------------------------------------------
+# story-177: the consequence sweep and the reason rule
+#
+# Before scope is written the planner is told to look for everywhere the rule
+# the story changes is stated — the target's prompts, schemas, workflow
+# definitions, the configured architecture documents and the tests directory
+# — and to list what it found in the draft the developer approves; and every
+# do_not_modify entry carries the developer's reason in a closing
+# parenthetical, which l5-plan refuses an artifact for lacking. Both are held
+# on the prompt l5-plan actually hands the session, captured the way the
+# standards are captured above, and controlled against the baseline template
+# this module already reads, which carried neither.
+# --------------------------------------------------------------------------
+
+
+def numbered_steps(section: str) -> list[str]:
+    """The process section's numbered steps, each with its number stripped,
+    in the order the template gives them."""
+    steps = re.split(r"^\d+\. ", section, flags=re.MULTILINE)[1:]
+    assert steps, "the process section has no numbered steps"
+    return [step.strip() for step in steps]
+
+
+def step_index(steps: list[str], pattern: str) -> int:
+    """The position of the one step matching `pattern`; a pattern matching
+    none or several is an error rather than a guess."""
+    found = [index for index, step in enumerate(steps)
+             if re.search(pattern, step, re.DOTALL)]
+    assert len(found) == 1, (pattern, found)
+    return found[0]
+
+
+#: How each step the sweep is placed relative to is recognised: the one that
+#: reads the architecture documents and the standards, the one that asks the
+#: developer questions, and the one that presents the draft. The first is
+#: recognised by the reading it has instructed since before this module's
+#: baseline, so the same pattern finds it in the baseline template too.
+STANDARDS_STEP = r"Read the architecture documents"
+QUESTIONS_STEP = r"Ask the developer any questions"
+DRAFT_STEP = r"Present the draft plan"
+SWEEP_STEP = r"Sweep for the consequences"
+
+#: What the sweep step has to tell the planner to search, as the phrases a
+#: reader would look for. The architecture documents are named by the
+#: configuration key the earlier step already reads them under.
+SWEEP_SEARCHES = (
+    r"prompts",
+    r"schemas",
+    r"workflow\s+definitions",
+    rf"architecture documents named under `{ARCHITECTURE_DOCS_KEY}`",
+    r"tests directory named under \[Workflow facts\]",
+)
+SWEEP_LISTS_ITS_FINDINGS = r"List what the\s+sweep found in the draft the developer approves"
+SWEEP_LANDS_EACH_FILE = r"`modify` or in `do_not_modify` with a reason"
+
+#: The reason rule, as the rendered prompt has to state it.
+REASON_RULE_FORM = r"do_not_modify entry is a path or area followed by the developer's\s+reason"
+REASON_RULE_PARENTHETICAL = r"closing parenthetical"
+REASON_RULE_REFUSAL = r"l5-plan\s+refuses an artifact whose entry carries none"
+
+#: The skeleton's do_not_modify item, showing the form: a path or area
+#: placeholder followed by a parenthetical holding a reason placeholder.
+SKELETON_DO_NOT_MODIFY_ITEM = re.compile(
+    r"^\t  do_not_modify:\n\t    - <path or area> \(<[^>]+reason[^>]*>\)$",
+    re.MULTILINE)
+
+
+def sweep_step_of(text: str) -> str:
+    steps = numbered_steps(process_section(text))
+    return steps[step_index(steps, SWEEP_STEP)]
+
+
+def test_the_rendered_prompt_carries_the_sweep_step_before_the_draft_step(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session: a numbered step telling the planner
+    to sweep, after the step that reads the standards and before both the
+    questions step and the step that presents the draft."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    steps = numbered_steps(process_section(prompt))
+    sweep = step_index(steps, SWEEP_STEP)
+    assert step_index(steps, STANDARDS_STEP) < sweep
+    assert sweep < step_index(steps, QUESTIONS_STEP)
+    assert sweep < step_index(steps, DRAFT_STEP)
+    assert step_index(steps, QUESTIONS_STEP) < step_index(steps, DRAFT_STEP)
+
+
+def test_the_sweep_step_names_every_place_to_search_and_what_to_do_with_it(
+    plan_capture, tmp_path
+):
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    sweep = sweep_step_of(prompt)
+    assert re.search(r"Name the\s+fact or rule the story changes", sweep)
+    assert re.search(r"states\s+or consumes it", sweep)
+    for searched in SWEEP_SEARCHES:
+        assert re.search(searched, sweep), searched
+    assert re.search(SWEEP_LISTS_ITS_FINDINGS, sweep)
+    assert re.search(SWEEP_LANDS_EACH_FILE, sweep)
+    # The step is one the sweep belongs in on its own rather than a sentence
+    # added to a neighbour: none of the neighbouring steps carries the sweep's
+    # instruction.
+    steps = numbered_steps(process_section(prompt))
+    for other in (STANDARDS_STEP, QUESTIONS_STEP, DRAFT_STEP):
+        assert not re.search(SWEEP_LISTS_ITS_FINDINGS,
+                             steps[step_index(steps, other)]), other
+
+
+def test_the_rendered_prompt_states_the_reason_rule_and_the_refusal(
+    plan_capture, tmp_path
+):
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    assert re.search(REASON_RULE_FORM, prompt)
+    assert re.search(REASON_RULE_PARENTHETICAL, prompt)
+    assert re.search(REASON_RULE_REFUSAL, prompt)
+    # What the reason is for, said where the rule is: a later reader telling
+    # a decision from a default.
+    assert re.search(r"later reader", prompt)
+    assert re.search(r"decision the developer made\s+from a default", prompt)
+    # And the placeholders the rule sits among were all resolved, so the rule
+    # reached the session as text and not as a template.
+    assert PLACEHOLDER.search(prompt) is None
+
+
+def test_the_rendered_skeleton_shows_the_do_not_modify_form(plan_capture, tmp_path):
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    assert SKELETON_DO_NOT_MODIFY_ITEM.search(prompt) is not None
+    # The modify item beside it stays the bare placeholder: the reason is a
+    # do_not_modify thing, and the skeleton says so by the contrast.
+    assert re.search(r"^\t  modify:\n\t    - <path or area>$", prompt, re.MULTILINE)
+
+
+def test_the_template_carries_the_same_text_the_session_receives():
+    """The three assertions above read a render; this reads the template, so
+    a regression in either the template or the rendering is caught by name."""
+    template = planner_template()
+    assert re.search(SWEEP_STEP, template)
+    assert re.search(REASON_RULE_FORM, template)
+    assert re.search(REASON_RULE_REFUSAL, template)
+    assert SKELETON_DO_NOT_MODIFY_ITEM.search(template) is not None
+    assert template.count("do_not_modify:") == 1
+
+
+def test_the_baseline_template_carried_neither_the_sweep_nor_the_reason_rule():
+    """Control for the presences above, in this module's own idiom: the
+    template before it carried no sweep step, stated no reason rule, and its
+    skeleton's do_not_modify item was the bare placeholder — so the same
+    checks go the other way there, and green today is the text having been
+    added rather than the checks matching what was always written."""
+    before = baseline_planner_template()
+    steps = numbered_steps(process_section(before))
+    assert [index for index, step in enumerate(steps)
+            if re.search(SWEEP_STEP, step)] == []
+    assert not re.search(SWEEP_LISTS_ITS_FINDINGS, before)
+    assert not re.search(REASON_RULE_FORM, before)
+    assert not re.search(REASON_RULE_REFUSAL, before)
+    assert SKELETON_DO_NOT_MODIFY_ITEM.search(before) is None
+    assert re.search(r"^\t  do_not_modify:\n\t    - <path or area>$", before,
+                     re.MULTILINE)
+    # The steps the sweep is placed between were there, in that order, so the
+    # placement above is a step inserted between existing ones.
+    assert step_index(steps, STANDARDS_STEP) < step_index(steps, QUESTIONS_STEP)
+    assert step_index(steps, QUESTIONS_STEP) < step_index(steps, DRAFT_STEP)
+
+
+def test_the_skeleton_check_reports_a_render_with_the_parenthetical_removed(
+    tmp_path
+):
+    """A second control that needs no history: the same skeleton check over a
+    copy of the template with the reason stripped from the item, rendered
+    through the same context as the real one, reports the form missing —
+    so the presence above is the item carrying the form and not the pattern
+    matching any do_not_modify item at all."""
+    root = build_target(tmp_path / "t", STANDARDS)
+    context = context_assembler.schema_context(REPO_ROOT)
+    context.update(context_assembler.workflow_context(
+        conftest.build_workflow(conftest.workflow_stage()),
+        harness_config.load_rules(REPO_ROOT)))
+    context.update(context_assembler.standards_context(
+        root, harness_config.load_config(root)))
+    intact = context_assembler.render(planner_template(), context)
+    assert SKELETON_DO_NOT_MODIFY_ITEM.search(intact) is not None
+
+    stripped = SKELETON_DO_NOT_MODIFY_ITEM.sub(
+        "\t  do_not_modify:\n\t    - <path or area>", planner_template())
+    assert stripped != planner_template()
+    rendered = context_assembler.render(stripped, context)
+    assert SKELETON_DO_NOT_MODIFY_ITEM.search(rendered) is None
+    assert re.search(REASON_RULE_FORM, rendered), \
+        "the strip took more than the skeleton item with it"
 
 
 # --------------------------------------------------------------------------

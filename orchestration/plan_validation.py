@@ -18,18 +18,19 @@ check with its own reader is the divergence story-005 existed to remove — and
 the messages are the coordinator's own, so a given defect reads the same at
 plan time as at pre-flight.
 
-The third, fourth and fifth classes are this module's own and all three run
-at plan time only, for one shared reason: none is refused by l5-run, because
-adding it to pre-flight would, for each of the three, start refusing
+The third, fourth, fifth and seventh classes are this module's own and all
+four run at plan time only, for one shared reason: none is refused by l5-run,
+because adding it to pre-flight would, for each of them, start refusing
 committed artifacts that have already run. The sixth is this module's own
-too and is described at the end, and it is the one class of which pre-flight
+too and is described below, and it is the one class of which pre-flight
 also refuses a half. They are otherwise unlike each other, and the
 difference is worth stating rather than blending. The third scans English
-prose and carries the hedging that entails. The fourth and fifth are
-structural — a literal in the artifact against a literal in the workflow
-definition, and a literal in the artifact against one pattern — and inherit
-none of that hedging: no clause split, no vocabulary of scoping words, no
-paraphrase they can be evaded by, nothing they decline to decide.
+prose and carries the hedging that entails. The fourth, fifth and seventh
+are structural — a literal in the artifact against a literal in the workflow
+definition, a literal in the artifact against one pattern, and the shape of
+an entry against one pattern — and inherit none of that hedging: no clause
+split, no vocabulary of scoping words, no paraphrase they can be evaded by,
+nothing they decline to decide.
 
 What the third check is
 -----------------------
@@ -196,6 +197,31 @@ artifact declaring another workflow was planned against facts that are not
 its own, and refusing it is what makes those injected facts trustworthy
 rather than merely usual. An artifact naming no workflow is nothing to
 report — its run loads the target configuration's default.
+
+What the seventh check is
+-------------------------
+Every scope.do_not_modify entry carries the developer's reason, written in a
+closing parenthetical after the path or area. The list had been filled in by
+default: a planner left a file alone because nothing told it otherwise, and a
+story then changed a rule in one file while the same rule stood written in
+two or three others, each of which the judging stage declined for scope alone
+and an inspection later found. The reason is what a later reader uses to tell a
+developer's decision from a planner's default, and the check refuses an
+entry carrying none where the developer is still present to supply one.
+
+It reads shape and not prose. An entry passes when non-empty text precedes
+a closing parenthetical holding at least one word character; a bare path
+and an empty parenthetical are reported. Nothing parses, matches or scores
+the reason's text — what a reason says is what a reviewer weighs, the shape
+stage_exceptions.reason and reverting_breaks_the_suite already have. The
+reason is a parenthetical on the string rather than a second field, because
+the schema-directed parser reads a field's items as one type and object
+items would stop every committed artifact parsing at pre-flight.
+
+It is plan-time only, for the reason the third, fourth and fifth are:
+committed artifacts under the stories directory are history, are not
+rewritten, and carry bare entries, so refusing them at pre-flight would make
+those stories unrunnable and l5-run keeps accepting them.
 
 Nothing here repairs an artifact and nothing here deletes one. The problems
 are returned rather than printed, and the caller decides.
@@ -507,6 +533,74 @@ def workflow_problems(story: dict, harness_root: Path, selected: str) -> list[st
     return problems
 
 
+#: The form a passing entry takes, shown in each problem so a planner repairing
+#: one sees what to write rather than only what was wrong.
+_PASSING_ENTRY_FORM = "<path or area> (<the developer's reason for leaving it alone>)"
+
+
+def carries_a_reason(entry: str) -> bool:
+    """Whether a scope.do_not_modify entry carries the developer's reason.
+
+    True when non-empty text — the path or area — precedes a closing
+    parenthetical holding at least one word character. The parenthetical is
+    the one the entry ends with, found by walking back from its final ")" to
+    the "(" that balances it, so a reason may itself carry parentheses. Shape
+    alone is read: the reason's text is neither parsed nor scored, so a bare
+    path and an empty parenthetical are the two things refused and any reason
+    at all passes.
+    """
+    text = entry.rstrip()
+    if not text.endswith(")"):
+        return False
+    depth = 0
+    for position in range(len(text) - 1, -1, -1):
+        character = text[position]
+        if character == ")":
+            depth += 1
+        elif character == "(":
+            depth -= 1
+            if depth == 0:
+                reason, before = text[position + 1:-1], text[:position]
+                return before.strip() != "" and re.search(r"\w", reason) is not None
+    return False
+
+
+def scope_reason_problems(story: dict) -> list[str]:
+    """Report scope.do_not_modify entries carrying no reason.
+
+    The seventh class, plan-time only for the reason the third, fourth and
+    fifth are: committed artifacts carry bare entries and refusing them at
+    pre-flight would make those stories unrunnable.
+
+    One problem per offending entry, naming the entry's index, quoting the
+    entry and showing the form a passing entry takes. An entry passes when
+    non-empty text precedes a closing parenthetical holding at least one word
+    character; a bare path and an empty parenthetical are each reported.
+    Structural, like the fourth and fifth: one entry against one pattern, with
+    no prose read and nothing it declines to decide — what the reason says is
+    a reviewer's to weigh.
+
+    A story with no scope, a scope with no do_not_modify, and an empty list
+    each yield nothing rather than raising; an entry that is not a string is
+    the schema's to refuse and is skipped here.
+    """
+    scope = story.get("scope")
+    entries = scope.get("do_not_modify", []) if isinstance(scope, dict) else []
+    problems: list[str] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, str) or carries_a_reason(entry):
+            continue
+        problems.append(
+            f"$.scope.do_not_modify[{index}]: {entry!r} carries no reason. "
+            f"Every do_not_modify entry is the path or area followed by the "
+            f"developer's reason for leaving it alone, in a closing "
+            f"parenthetical: {_PASSING_ENTRY_FORM}. The reason is what a "
+            f"later reader uses to tell a developer's decision from a "
+            f"planner's default."
+        )
+    return problems
+
+
 def artifact_problems(
     artifacts: Iterable[Path],
     stages: list[dict],
@@ -536,8 +630,8 @@ def artifact_problems(
     same reason assignment_problems requires it: it is the only check here that
     asks the filesystem anything, and a defaulted root would let a caller
     resolve existence against the process working directory without saying so.
-    The two checks that read no filesystem — strictness_problems and
-    naming_problems — keep their signatures.
+    The checks that read no filesystem — strictness_problems, naming_problems
+    and scope_reason_problems — keep their signatures.
 
     `harness_root` and `selected` are required for workflow_problems, which
     needs both of its one caller: the root is where the definitions live, and
@@ -555,6 +649,7 @@ def artifact_problems(
             found += assignment_problems(reading.parsed, stages, root)
             found += naming_problems(reading.parsed)
             found += workflow_problems(reading.parsed, harness_root, selected)
+            found += scope_reason_problems(reading.parsed)
         if found:
             problems[Path(artifact)] = found
     return problems

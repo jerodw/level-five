@@ -34,7 +34,11 @@ check reporting the violation it exists to catch:
     created by hand;
   * "l5-run refuses what it refused before" is a comparison against the
     pre-story coordinator, read at this story's baseline and run as the same
-    command over the same repository.
+    command over the same repository;
+  * since story-177, "the scope-reason check passes an entry with a reason"
+    sits beside the same entry with its parenthetical emptied, which the same
+    check reports, and "pre-flight does not refuse a bare entry" sits beside
+    the plan-time composition refusing the same text.
 
 The baseline for anything read out of git is `conftest.story_commit_range`,
 never HEAD and never the working tree against the repository root: the
@@ -159,6 +163,99 @@ def strict_artifact(story_id: str = "story-900") -> str:
     )
 
 
+#: The one do_not_modify line the control artifact carries, and the same line
+#: with its reason stripped or emptied. The path is read off the artifact
+#: rather than written here, so these say nothing about which path it is;
+#: what they change is the shape of the entry and nothing else.
+DO_NOT_MODIFY_LINE = re.search(r"^    - .+ \(.+\)$", ARTIFACT, re.MULTILINE)
+assert DO_NOT_MODIFY_LINE is not None, \
+    "the control artifact carries no do_not_modify entry with a reason"
+REASONED_ENTRY_LINE = DO_NOT_MODIFY_LINE.group(0)
+BARE_ENTRY_LINE = re.sub(r" \(.+\)$", "", REASONED_ENTRY_LINE)
+EMPTY_PARENTHETICAL_LINE = f"{BARE_ENTRY_LINE} ()"
+
+
+def scope_reason_artifact(entry_line: str, story_id: str = "story-900") -> str:
+    """The control artifact with its do_not_modify entry replaced by `entry_line`.
+
+    The story-177 class is decided on the shape of that one entry, so every
+    other byte of the artifact is the control's: an artifact that is refused
+    is refused for the entry and for nothing else about it.
+    """
+    text = artifact(story_id)
+    assert REASONED_ENTRY_LINE in text
+    return text.replace(REASONED_ENTRY_LINE, entry_line)
+
+
+#: The reason `reasoned` writes onto a bare entry. Its text is never read by
+#: the check, so any reason at all would do; this one says what it is.
+COPY_REASON = "a reason the test wrote onto its copy, since story-177"
+
+
+def reasoned(text: str) -> str:
+    """Artifact text with a reason on every bare scope.do_not_modify entry.
+
+    The counterpart of `stamped` for the story-177 class: the committed
+    artifacts written before this story carry bare entries, and a committed
+    artifact is an execution record that is never edited to satisfy a contract
+    written after it. A module that validates a *copy* of one as a plan would
+    be validated today reasons the copy, exactly as it stamps it, and leaves
+    the file under the stories directory alone.
+
+    A text edit rather than a re-serialisation, for the reason `without_grants`
+    in the forced-adaptation module gives: the artifacts are read by the
+    harness's own parser, and dumping a parse back out would be asserting
+    against a document this repository never wrote. Only the single-line items
+    directly under `do_not_modify:` are touched, and an entry that already
+    carries a reason is left as it is.
+    """
+    lines = text.splitlines(keepends=True)
+    start = next((index for index, line in enumerate(lines)
+                  if line.strip() == "do_not_modify:"), None)
+    if start is None:
+        return text
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    item = " " * (indent + 2) + "- "
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if not line.startswith(item):
+            break
+        entry = line[len(item):].rstrip("\n")
+        if plan_validation.carries_a_reason(entry):
+            continue
+        lines[index] = f"{item}{entry.rstrip()} ({COPY_REASON})\n"
+    return "".join(lines)
+
+
+def test_reasoned_reasons_every_bare_entry_and_only_those():
+    """The helper the corpus modules lean on, asserted before it is used.
+
+    Positive: a copy with two bare entries and one reasoned entry comes back
+    with all three carrying a reason, and only those three lines differ.
+    Control: text carrying no do_not_modify block comes back byte for byte,
+    so a helper that found nothing could not pass as one that reasoned it.
+    """
+    text = scope_reason_artifact(BARE_ENTRY_LINE).replace(
+        BARE_ENTRY_LINE, f"{BARE_ENTRY_LINE}\n{BARE_ENTRY_LINE}-more\n"
+        f"{REASONED_ENTRY_LINE}")
+    before = story_coordinator.read_story(stamped(text)).parsed
+    assert plan_validation.scope_reason_problems(before) != []
+
+    after = story_coordinator.read_story(stamped(reasoned(text))).parsed
+    assert plan_validation.scope_reason_problems(after) == []
+    assert len(after["scope"]["do_not_modify"]) == 3
+    assert after["scope"]["do_not_modify"][2] == before["scope"]["do_not_modify"][2]
+    changed = [(a, b) for a, b in zip(text.splitlines(), reasoned(text).splitlines())
+               if a != b]
+    assert [a for a, _ in changed] == [BARE_ENTRY_LINE, f"{BARE_ENTRY_LINE}-more"]
+    assert all(b.endswith(f" ({COPY_REASON})") for _, b in changed)
+
+    without_block = text.replace("  do_not_modify:\n", "  do_not_modify: []\n")
+    for line in (BARE_ENTRY_LINE, f"{BARE_ENTRY_LINE}-more", REASONED_ENTRY_LINE):
+        without_block = without_block.replace(line + "\n", "")
+    assert reasoned(without_block) == without_block
+
+
 #: The four defects l5-plan must report, and what each is defective about.
 #: Keyed by name so the parametrised tests below say which one failed.
 DEFECTS = {
@@ -174,28 +271,65 @@ DEFECTS = {
 
 #: The defects l5-run also refuses. The strictness class is plan-time only by
 #: design, so it is absent here and is asserted absent from pre-flight below.
+#: The scope-reason class since story-177 is plan-time only for the same
+#: reason — committed artifacts carry bare entries and are not rewritten —
+#: and is absent here and asserted absent from pre-flight the same way.
 PRE_FLIGHT_DEFECTS = dict(DEFECTS)
 
 DEFECTS["strictness"] = strict_artifact()
+DEFECTS["scope-reason-bare"] = scope_reason_artifact(BARE_ENTRY_LINE)
+DEFECTS["scope-reason-empty"] = scope_reason_artifact(EMPTY_PARENTHETICAL_LINE)
+
+
+def plan_time_problems(text: str) -> list[str]:
+    """Every plan-time problem an artifact's text has, through the readers
+    `artifact_problems` composes, without the filesystem the composition
+    needs. What a defect below is defective about is one of these."""
+    reading = story_coordinator.read_story(text)
+    found = list(reading.problems)
+    if reading.parsed is not None:
+        found += story_coordinator.stage_exception_problems(reading.parsed, STAGES)
+        found += plan_validation.strictness_problems(reading.parsed, STAGES)
+        found += plan_validation.scope_reason_problems(reading.parsed)
+    return found
 
 
 def test_every_defect_this_file_uses_is_actually_defective():
     """Otherwise a refusal test could pass on an artifact nothing objects to."""
     for name, text in DEFECTS.items():
-        reading = story_coordinator.read_story(text)
-        found = list(reading.problems)
-        if reading.parsed is not None:
-            found += story_coordinator.stage_exception_problems(reading.parsed, STAGES)
-            found += plan_validation.strictness_problems(reading.parsed, STAGES)
-        assert found, f"the {name} artifact has nothing wrong with it"
+        assert plan_time_problems(text), \
+            f"the {name} artifact has nothing wrong with it"
     # Stamped, because this is the one artifact here that must have nothing
     # wrong with it, and an artifact with no mandate has something wrong with
     # it since story-087. The defects above are what a *session* writes, which
     # is before the stamp, so they carry none.
-    valid = story_coordinator.read_story(stamped(artifact()))
-    assert valid.problems == []
-    assert story_coordinator.stage_exception_problems(valid.parsed, STAGES) == []
-    assert plan_validation.strictness_problems(valid.parsed, STAGES) == []
+    assert plan_time_problems(stamped(artifact())) == []
+
+
+def test_the_scope_reason_defects_differ_from_the_control_in_the_one_entry_alone():
+    """The anchor for the scope-reason class: each of its defects is the
+    control artifact with one line changed, that line is the do_not_modify
+    entry, and the pre-flight readers find nothing wrong with either — so
+    what refuses them below is the shape of that entry and not a schema,
+    exception or strictness defect riding along with it."""
+    control = artifact("story-900").splitlines()
+    for name in ("scope-reason-bare", "scope-reason-empty"):
+        defective = DEFECTS[name].splitlines()
+        assert len(defective) == len(control), name
+        changed = [(before, after) for before, after in zip(control, defective)
+                   if before != after]
+        assert changed == [(REASONED_ENTRY_LINE, {
+            "scope-reason-bare": BARE_ENTRY_LINE,
+            "scope-reason-empty": EMPTY_PARENTHETICAL_LINE,
+        }[name])], name
+        reading = story_coordinator.read_story(stamped(DEFECTS[name]))
+        assert reading.problems == [], name
+        assert story_coordinator.stage_exception_problems(reading.parsed, STAGES) == []
+        assert plan_validation.strictness_problems(reading.parsed, STAGES) == []
+        assert plan_validation.scope_reason_problems(reading.parsed) != [], name
+    # And the bare line really is bare, and the empty one really is empty.
+    assert "(" not in BARE_ENTRY_LINE
+    assert EMPTY_PARENTHETICAL_LINE.endswith(" ()")
 
 
 # --------------------------------------------------------------------------
@@ -343,6 +477,8 @@ def test_an_artifact_read_story_rejects_is_not_carried_into_the_later_checks(
                         lambda *a: seen.append("exceptions") or [])
     monkeypatch.setattr(plan_validation, "strictness_problems",
                         lambda *a: seen.append("strictness") or [])
+    monkeypatch.setattr(plan_validation, "scope_reason_problems",
+                        lambda *a: seen.append("scope-reason") or [])
     path = tmp_path / "story-900.yaml"
     path.write_text(DEFECTS["unparseable"], encoding="utf-8")
 
@@ -350,12 +486,14 @@ def test_an_artifact_read_story_rejects_is_not_carried_into_the_later_checks(
         HARNESS_ROOT, WORKFLOW['name'])[path]
     assert seen == []
 
-    # Control: a well-formed artifact does reach both, so the emptiness above
-    # is the guard rather than the recorder never being wired up.
+    # Control: a well-formed artifact does reach all of them, in the order
+    # the composition calls them — the story-177 check after the ones that
+    # were there before it — so the emptiness above is the guard rather than
+    # a recorder never being wired up.
     path.write_text(stamped(artifact()), encoding="utf-8")
     assert plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT,
         HARNESS_ROOT, WORKFLOW['name']) == {}
-    assert seen == ["exceptions", "strictness"]
+    assert seen == ["exceptions", "strictness", "scope-reason"]
 
 
 def test_artifact_problems_holds_only_the_artifacts_with_problems(tmp_path: Path):
@@ -686,6 +824,171 @@ def test_the_module_names_no_stage_and_no_restricted_prefix():
 
 
 # --------------------------------------------------------------------------
+# The scope-reason check: shape, not prose
+#
+# story-177's class. Every scope.do_not_modify entry is a path or area
+# followed by the developer's reason in a closing parenthetical, and the check
+# decides on that shape alone: non-empty text before a closing parenthetical
+# holding at least one word character passes, and nothing about what the
+# reason says is read. The stories below are built in place rather than read
+# off any artifact, so the check is handed exactly the shape each test is
+# about and nothing rides along.
+# --------------------------------------------------------------------------
+
+
+def with_do_not_modify(*entries) -> dict:
+    return {"scope": {"modify": ["src/"], "do_not_modify": list(entries)}}
+
+
+def test_a_bare_path_is_reported_naming_its_index_and_quoting_the_entry():
+    (problem,) = plan_validation.scope_reason_problems(
+        with_do_not_modify("docs/zzz-elsewhere/"))
+    assert problem.startswith("$.scope.do_not_modify[0]:")
+    assert "'docs/zzz-elsewhere/'" in problem
+    assert "carries no reason" in problem
+    # The form a passing entry takes is shown, so a planner repairing the
+    # entry sees what to write rather than only what was wrong.
+    assert "(<the developer's reason for leaving it alone>)" in problem
+
+
+def test_an_empty_parenthetical_is_reported_the_same_way_as_a_bare_path():
+    """The criterion's own words: refused the same way. Same pointer, same
+    quoting, same shown form; only the quoted entry differs."""
+    bare = plan_validation.scope_reason_problems(
+        with_do_not_modify("docs/zzz-elsewhere/"))
+    empty = plan_validation.scope_reason_problems(
+        with_do_not_modify("docs/zzz-elsewhere/ ()"))
+    assert len(bare) == len(empty) == 1
+    assert empty[0].startswith("$.scope.do_not_modify[0]:")
+    assert "'docs/zzz-elsewhere/ ()'" in empty[0]
+    assert empty[0].replace("'docs/zzz-elsewhere/ ()'", "'docs/zzz-elsewhere/'") \
+        == bare[0]
+
+
+@pytest.mark.parametrize("entry", [
+    "docs/zzz-elsewhere/ (  )",
+    "docs/zzz-elsewhere/ (--)",
+    "docs/zzz-elsewhere/ ( ... )",
+])
+def test_a_parenthetical_holding_no_word_character_is_reported(entry: str):
+    """Empty in the sense the check reads: whitespace or punctuation alone is
+    not a reason any reader could weigh, so it is refused as an empty one."""
+    (problem,) = plan_validation.scope_reason_problems(with_do_not_modify(entry))
+    assert problem.startswith("$.scope.do_not_modify[0]:")
+    assert repr(entry) in problem
+
+
+@pytest.mark.parametrize("entry", [
+    "docs/zzz-elsewhere/ (the companion story owns it)",
+    "the other modules carrying a sample fixture (they never pass through "
+    "plan-time validation)",
+    "src/zzz.py (see the brief (filed at plan time) for why)",
+    "src/zzz.py (x)",
+    "src/zzz.py(no space before the parenthetical)",
+])
+def test_an_entry_with_a_reason_passes_whatever_the_reason_says(entry: str):
+    """A path, an area described in words rather than a path, a reason that
+    itself carries parentheses, a one-character reason and one with no space
+    before it: shape is what is read, and each of these has the shape."""
+    assert plan_validation.scope_reason_problems(with_do_not_modify(entry)) == []
+    # Control for the silence: the same entry with its parenthetical emptied
+    # is reported, so the check saw the entry and passed it for its reason.
+    emptied = re.sub(r"\(.*\)$", "()", entry)
+    assert emptied != entry
+    assert plan_validation.scope_reason_problems(with_do_not_modify(emptied)) != []
+
+
+@pytest.mark.parametrize("entry", [
+    "(a reason with no path before it)",
+    "   (a reason with only whitespace before it)",
+    "docs/zzz-elsewhere/ (a reason) and then more path",
+])
+def test_a_parenthetical_that_is_not_at_the_end_or_has_nothing_before_it_is_reported(
+        entry: str):
+    """The form is text *then* a closing parenthetical: a parenthetical alone
+    names nothing to leave alone, and one followed by more text is not the
+    entry's closing one."""
+    (problem,) = plan_validation.scope_reason_problems(with_do_not_modify(entry))
+    assert problem.startswith("$.scope.do_not_modify[0]:")
+
+
+def test_the_check_reads_no_prose_so_a_reason_it_cannot_score_still_passes():
+    """The constraint that the check reads shape and not prose, held from the
+    side that matters: a reason that is nonsense, a reason that is the path
+    again, and a reason in another script all pass. Whether a reason is a
+    good one is a reviewer's to weigh, and the check has no opinion."""
+    for reason in ("qqq", "docs/zzz-elsewhere/", "ζζζ", "42"):
+        assert plan_validation.scope_reason_problems(
+            with_do_not_modify(f"docs/zzz-elsewhere/ ({reason})")) == [], reason
+
+
+def test_one_problem_per_offending_entry_each_naming_its_own_index():
+    problems = plan_validation.scope_reason_problems(with_do_not_modify(
+        "docs/zzz-one/",
+        "docs/zzz-two/ (a reason)",
+        "docs/zzz-three/ ()",
+        "docs/zzz-four/ (another reason)",
+        "docs/zzz-five/",
+    ))
+    assert [problem.split(":")[0] for problem in problems] == [
+        "$.scope.do_not_modify[0]",
+        "$.scope.do_not_modify[2]",
+        "$.scope.do_not_modify[4]",
+    ]
+    assert "'docs/zzz-one/'" in problems[0]
+    assert "'docs/zzz-three/ ()'" in problems[1]
+    assert "'docs/zzz-five/'" in problems[2]
+
+
+def test_an_empty_list_a_missing_list_and_a_missing_scope_yield_nothing():
+    assert plan_validation.scope_reason_problems(with_do_not_modify()) == []
+    assert plan_validation.scope_reason_problems({"scope": {"modify": ["src/"]}}) == []
+    assert plan_validation.scope_reason_problems({}) == []
+    # Control: the same reader with one bare entry in the list is not silent,
+    # so the three silences above are the empty inputs rather than a reader
+    # that never looks.
+    assert plan_validation.scope_reason_problems(
+        with_do_not_modify("docs/zzz-elsewhere/")) != []
+
+
+def test_a_non_string_entry_is_left_to_the_schema():
+    """The schema declares the items strings and refuses anything else; this
+    check neither crashes on one nor reports it twice."""
+    assert plan_validation.scope_reason_problems(
+        with_do_not_modify({"path": "docs/zzz-elsewhere/"}, 7, None)) == []
+
+
+def test_the_check_reaches_the_composed_problems_for_a_real_artifact(tmp_path: Path):
+    """Through `artifact_problems`, on the defect the end-to-end tests drive:
+    the composed problems for the bare-entry artifact are exactly the ones
+    the check reports for it on its own, so what l5-plan prints is this
+    check's message and nothing else the composition found."""
+    path = tmp_path / "story-900.yaml"
+    path.write_text(stamped(DEFECTS["scope-reason-bare"]), encoding="utf-8")
+    problems = plan_validation.artifact_problems([path], STAGES, HARNESS_ROOT,
+        HARNESS_ROOT, WORKFLOW['name'])
+    story = story_coordinator.read_story(stamped(DEFECTS["scope-reason-bare"])).parsed
+    assert problems[path] == plan_validation.scope_reason_problems(story)
+    assert len(problems[path]) == 1
+    assert problems[path][0].startswith("$.scope.do_not_modify[0]:")
+
+
+def test_the_module_states_the_seventh_class_and_why_it_is_plan_time_only():
+    """Beside the account of the classes before it, in the module's own
+    docstring, where a reader of the module meets it."""
+    lowered = " ".join(plan_validation.__doc__.lower().split())
+    assert "what the seventh check is" in lowered
+    seventh = lowered[lowered.index("what the seventh check is"):]
+    assert "do_not_modify" in seventh
+    assert "closing parenthetical" in seventh
+    assert "plan-time only" in seventh
+    assert "reads shape and not prose" in seventh
+    # The reason is the one the third, fourth and fifth are given, and the
+    # docstring says so rather than giving a new one.
+    assert "for the reason the third, fourth and fifth are" in seventh
+
+
+# --------------------------------------------------------------------------
 # End to end: a failing artifact is reported, and nothing is committed.
 # --------------------------------------------------------------------------
 
@@ -747,6 +1050,43 @@ def test_the_control_for_every_refusal_above_is_the_valid_artifact(
     assert refs_carrying_a_new_commit(planning, refs_before) != {}
     assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
     assert planning.status() == ""
+
+
+@pytest.mark.parametrize("defect", ["scope-reason-bare", "scope-reason-empty"])
+def test_a_scope_reason_refusal_names_the_field_and_the_entry_it_refused(
+        defect: str, planning: Planning):
+    """story-177's criterion, in the words the developer reads: the problem
+    l5-plan prints names $.scope.do_not_modify and quotes the offending entry.
+    The parametrised refusal above holds that nothing was committed and the
+    artifact was left byte for byte; this holds what was said about it."""
+    bare_entry = DEFECTS[defect].splitlines()[
+        artifact("story-900").splitlines().index(REASONED_ENTRY_LINE)]
+    entry_text = bare_entry.strip()[2:]
+    before = planning.head()
+
+    result = run_plan(planning, L5_STUB_WRITE=writes(
+        (".harness/stories/story-900.yaml", DEFECTS[defect])))
+
+    assert result.returncode != 0, result.stdout
+    assert planning.head() == before
+    assert "$.scope.do_not_modify[0]" in result.stderr
+    assert repr(entry_text) in result.stderr
+    assert "carries no reason" in result.stderr
+    assert "committed nothing" in result.stdout
+
+    # The control the criterion states: the same artifact with a reason in a
+    # closing parenthetical on the entry commits and pushes as before. The
+    # reason is put on the very line the refusal quoted, so what changed
+    # between the refusal and the commit is that line and nothing else.
+    refs_before = remote_refs(planning.remote)
+    repaired = DEFECTS[defect].replace(bare_entry, REASONED_ENTRY_LINE)
+    assert repaired == artifact("story-900")
+    control = run_plan(planning, L5_STUB_WRITE=writes(
+        (".harness/stories/story-900.yaml", repaired)))
+    assert control.returncode == 0, control.stderr
+    assert "$.scope.do_not_modify" not in control.stderr
+    assert refs_carrying_a_new_commit(planning, refs_before) != {}
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
 
 def test_when_one_of_several_artifacts_fails_none_of_them_is_committed(
@@ -1185,6 +1525,67 @@ def test_pre_flight_does_not_start_refusing_the_strictness_class(
     assert "story-900.yaml" in refused.stderr
 
 
+@pytest.mark.parametrize("defect", ["scope-reason-bare", "scope-reason-empty"])
+def test_pre_flight_does_not_start_refusing_the_scope_reason_class(
+        defect: str, planning: Planning):
+    """story-177's class is plan-time only, held the way the strictness one
+    is: a committed artifact whose do_not_modify entry carries no reason gets
+    past the story checks to the clean-tree refusal, which names the dirty
+    path and not the artifact. That is what keeps every artifact committed
+    before the rule runnable without being rewritten."""
+    install(planning, "story-900", stamped(DEFECTS[defect]))
+    planning.git("checkout", "-q", "-b",
+                 story_coordinator.story_branch(
+                     harness_config.load_config(planning.root), "story-900"))
+    (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
+
+    result = run_script(L5_RUN, planning, "story-900")
+
+    assert result.returncode == 1
+    assert "dirty.txt" in result.stderr
+    assert "story-900.yaml" not in result.stderr
+    assert "do_not_modify" not in result.stderr
+    # Control: the same artifact is refused at plan time — the same text,
+    # through the composition l5-plan calls — so getting past pre-flight
+    # above is the class being plan-time only rather than the artifact
+    # having nothing wrong with it. And the same command with a
+    # schema-invalid artifact is refused for the artifact instead.
+    assert plan_validation.scope_reason_problems(
+        story_coordinator.read_story(stamped(DEFECTS[defect])).parsed) != []
+    install(planning, "story-900", DEFECTS["schema"])
+    refused = run_script(L5_RUN, planning, "story-900")
+    assert "story-900.yaml" in refused.stderr
+
+
+def test_the_committed_artifacts_the_leniency_exists_for_do_carry_bare_entries():
+    """The reason the class is plan-time only, held rather than remembered:
+    artifacts already committed under this repository's stories directory
+    carry do_not_modify entries with no reason, so a pre-flight that refused
+    the class would refuse stories that have already run. Read as a subject
+    — a claim about what this repository has committed — and the control is
+    that the same reader finds a reasoned entry somewhere too, so a bare one
+    is a distinct shape it can tell apart."""
+    # Spelled with `joinpath`, as the sibling corpus modules spell it: the
+    # guard in tests/test_artifact_schemas.py forbids joining the harness
+    # root to ".harness" with the operator, because that is the only way a
+    # test could reach the gitignored run directory.
+    stories = HARNESS_ROOT.joinpath(".harness", "stories")
+    bare, with_reason = set(), set()
+    for path in sorted(stories.glob("story-*.yaml")):
+        parsed = story_coordinator.read_story(
+            path.read_text(encoding="utf-8")).parsed
+        if parsed is None:
+            continue
+        entries = (parsed.get("scope") or {}).get("do_not_modify") or []
+        for entry in entries:
+            if not isinstance(entry, str):
+                continue
+            (with_reason if plan_validation.carries_a_reason(entry) else bare).add(
+                path.name)
+    assert bare, "no committed artifact carries a bare entry"
+    assert with_reason, "no committed artifact carries a reasoned entry"
+
+
 # --------------------------------------------------------------------------
 # Non-vacuity: the pre-story script committed every one of these.
 # --------------------------------------------------------------------------
@@ -1237,6 +1638,43 @@ def test_the_planner_prompt_states_that_plan_time_validates_before_committing():
     old = show("prompts/planner.md")
     assert not re.search(r"(?i)l5-plan validates", old)
     assert not re.search(r"(?i)fails validation is not committed", old)
+
+
+def test_the_schema_declares_the_entry_form_and_the_plan_time_refusal():
+    """The shipped schema as the subject: its description of
+    scope.do_not_modify states the form an entry takes, that the reason is
+    the developer's decision recorded for a later reader, that an entry
+    carrying none is refused at plan time, and that artifacts committed
+    before the rule are not held to it. The items stay strings, which is the
+    constraint that keeps every committed artifact parsing."""
+    schema = json.loads((HARNESS_ROOT / "schemas" / "story.schema.json")
+                        .read_text(encoding="utf-8"))
+    field = schema["properties"]["scope"]["properties"]["do_not_modify"]
+    assert field["items"] == {"type": "string"}
+    description = " ".join(field["description"].lower().split())
+    assert "closing parenthetical" in description
+    assert "<path or area> (<" in description
+    assert "developer's decision" in description
+    assert "later reader" in description
+    assert "refused at plan time" in description
+    assert re.search(r"committed before this rule are not held to it", description)
+    assert re.search(r"pre-flight does not refuse", description)
+
+
+def test_the_plan_time_checks_the_prompt_lists_include_the_reason_rule():
+    """The sentence listing what l5-plan checks when the session ends names
+    the reason rule beside the strictness rule, in the same step."""
+    prompt = PLANNER_PROMPT.read_text(encoding="utf-8")
+    step = re.search(r"(?s)l5-plan validates.*?\n\n", prompt).group(0)
+    assert "scope the restriction to creation" in step
+    assert re.search(r"reason rule", step)
+    assert re.search(r"do_not_modify entry carrying no reason", step)
+    assert re.search(r"closing\s+parenthetical", step)
+    assert "blocks the commit" in step
+    # Control: the pre-story text of the same file says none of it.
+    old = show("prompts/planner.md")
+    assert "reason rule" not in old
+    assert "do_not_modify entry carrying no reason" not in old
 
 
 #: A step telling the planner to run a validation command itself. The
