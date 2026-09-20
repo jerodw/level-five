@@ -33,7 +33,7 @@ Everything below arrived as a story the harness planned, executed, verified and 
 
 **Execution.** The Story Coordinator advances a story stage by stage, assembling each stage's context, injecting it into a prompt and invoking the agent headlessly. Two workflows ship: the story workflow, and a refactor workflow whose correctness claim is that behaviour is unchanged and whose implementer is guarded by a suite census instead of the create and revert checks. A run works in a worktree of its own, carrying the build state the configured commands need. *(Ch. 12–17, Ch. 19)*
 
-**Governance.** Every writing stage declares what it may write and carries a check that records what it wrote — the implementer what it may not create, the tester the directory it is confined to, the documenter the architecture documents the target configures. An edit outside a confinement is not forbidden but asked about: it stands where the suite fails without it and is undone where the suite passes. A deny-only tool guard travels with each invocation, and a stage that executes no suite cannot invoke one. *(Ch. 15, Ch. 18)*
+**Governance.** Every writing stage declares what it may write and carries a check that records what it wrote — the implementer what it may not create, the tester the directory it is confined to, the documenter the architecture documents the target configures. An edit outside a confinement is not forbidden but asked about: it is undone where the suite passes without it, and where the suite needs it a confined stage's edit is still undone and routed to the stage that owns the work, because a stage may not author what it validates. A deny-only tool guard travels with each invocation, and a stage that executes no suite cannot invoke one. *(Ch. 15, Ch. 18)*
 
 **Verification and routing.** The verifier writes a verdict and the coordinator routes from the artifact: advance, retry, or escalate. A retry goes to the stage that owns the defect, named by the verifier from a category table the workflow declares, carrying structured guidance. A verdict may also report that no retry can finish the work, which escalates without spending the budget. On a passing verdict the suite runs again in a fresh clone with the story committed. A stage that fails *mechanically* runs again in place on a budget retries do not share. A red suite is carried forward for the verifier to judge rather than handed back to whichever stage ran last. *(Ch. 17–18)*
 
@@ -43,14 +43,13 @@ Everything below arrived as a story the harness planned, executed, verified and 
 
 **The outbox.** Work to file externally goes to a durable local queue first and reaches a tracker on a sweep, so a provider that is slow or unreachable can never turn a finished story into a failed one. Entries are deduplicated by identity, receipts are kept apart from the queue, and a partly-filed entry says so. *(Ch. 17)*
 
-**Observability.** `l5-status` reports runs and their stages. Every run leaves its state, the same events in two renderings, a record of every retry, and the artifacts each stage produced. Long steps announce themselves before they start and say what the wait is worth. What a run and an inspection cost is recorded where a reader meets it. *(Ch. 18)*
+**Observability.** `l5-status` reports runs and their stages. Every run leaves its state, the same events in two renderings, a record of every retry, and the artifacts each stage produced. Long steps announce themselves before they start and say how long they are expected to take, from what they have taken before; a fresh target with no history announces nothing invented. What a run and an inspection cost is recorded where a reader meets it. *(Ch. 18)*
 
 ## What's next
 
 The roadmap, in the order it is being worked:
 
 - **One defect is filed once per run**, however many attempts the run takes. An inspection reads the change on each attempt and re-derives the name it files under, so one defect can reach the backlog three times.
-- **Long operations say how long they are expected to take**, from what they have taken before, rather than saying only that the wait is long.
 - **A planning session runs under a declared tool policy**, as a stage does.
 - **A completed story can be sent back for work** without editing its branch by hand.
 - **The architecture document is inspected as the code is** — it is changed by nearly every story and read by no inspection.
