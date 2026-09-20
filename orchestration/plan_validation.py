@@ -49,7 +49,10 @@ The check is a clause-level scan of the three free-text arrays a story is
 evaluated against. An entry is split into clauses on commas, semicolons and
 the standalone word "and", and a clause is reported
 when it names a stage the loaded workflow defines, names one of that stage's
-declared restricted prefixes, and carries no word scoping it to creation.
+declared restricted prefixes, and carries no word scoping it to creation. A
+pairing whose two halves both sit inside one quoted span — a run delimited by
+backticks or by double quotes — is a quoted pattern rather than a clause about
+the stage and is not reported; strictness_problems says why.
 Both halves of that match are read off the loaded workflow definition through
 story_coordinator.stage_restrictions; no stage name and no restricted prefix
 is written in this module.
@@ -251,10 +254,39 @@ _CREATION = re.compile(
     re.IGNORECASE,
 )
 
+#: A quoted span: a run delimited by backticks or by double quotes, holding no
+#: delimiter of its own kind inside it. Single quotes are not a delimiter —
+#: an apostrophe would open a span an ordinary possessive never closes.
+_QUOTED_SPAN = re.compile(r"`[^`]*`|\"[^\"]*\"")
+
 
 def _names_stage(clause: str, stage: str) -> bool:
     """A stage is named on a word boundary, so a possessive is still a mention."""
     return re.search(rf"\b{re.escape(stage)}\b", clause) is not None
+
+
+def _without_quoted_pairings(entry: str, restrictions) -> str:
+    """Blank out each quoted span holding a stage name beside a prefix.
+
+    Found on the whole entry before it is split into clauses, so a quoted
+    pattern that happens to contain a clause boundary stays one span. A span
+    holding only one half of a pairing is left as it is, so that half still
+    counts as sitting outside every quoted span. The two halves are read off
+    one restriction at a time: a span pairing one restriction's stage with
+    another restriction's prefix is no pairing the clause loop would report,
+    so it is left as it is.
+    """
+    restrictions = list(restrictions)
+
+    def blank(match: re.Match) -> str:
+        span = match.group(0)
+        if any(restriction.prefix in span
+               and _names_stage(span, restriction.stage)
+               for restriction in restrictions):
+            return " "
+        return span
+
+    return _QUOTED_SPAN.sub(blank, entry)
 
 
 def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
@@ -277,6 +309,20 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
     with the prefix it is confined to restates the rule accurately and has
     nothing over-strict in it. Reporting one would refuse a planner for writing
     down what the workflow says.
+
+    A pairing that sits inside a quoted span is not reported either. A quoted
+    span is a run of the entry delimited by backticks or by double quotes;
+    single quotes are not a delimiter, because an apostrophe would make an
+    ordinary possessive read as the start of one. A sentence such as "grep for
+    `<stage>|<prefix>` over a file returns nothing" quotes a search pattern —
+    it is text about text, and the stage name sits beside the prefix by
+    construction of the pattern rather than as a clause about the stage — so it
+    restates no restriction and there is nothing over-strict in it. The spans
+    are found on the whole entry before it is split into clauses, so a quoted
+    pattern that carries a comma or the word "and" stays one span. Only a span
+    holding both halves excludes the pairing: a pairing with either half outside
+    every quoted span is reported exactly as it always was, whether or not the
+    entry carries a quote mark elsewhere.
     """
     restrictions = [
         restriction
@@ -287,7 +333,8 @@ def strictness_problems(story: dict, stages: list[dict]) -> list[str]:
     for field in SCANNED_FIELDS:
         for index, entry in enumerate(story.get(field, [])):
             reported: set[tuple[str, str]] = set()
-            for clause in _CLAUSE_BOUNDARY.split(entry):
+            scanned = _without_quoted_pairings(entry, restrictions)
+            for clause in _CLAUSE_BOUNDARY.split(scanned):
                 if _CREATION.search(clause):
                     continue
                 for restriction in restrictions:

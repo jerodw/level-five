@@ -38,7 +38,10 @@ check reporting the violation it exists to catch:
   * since story-177, "the scope-reason check passes an entry with a reason"
     sits beside the same entry with its parenthetical emptied, which the same
     check reports, and "pre-flight does not refuse a bare entry" sits beside
-    the plan-time composition refusing the same text.
+    the plan-time composition refusing the same text;
+  * since story-181, "a quoted search pattern holding a stage name beside a
+    prefix is not reported" sits beside the same sentence with its delimiters
+    stripped, which the same check reports in the words it always has.
 
 The baseline for anything read out of git is `conftest.story_commit_range`,
 never HEAD and never the working tree against the repository root: the
@@ -819,6 +822,240 @@ def test_the_module_names_no_stage_and_no_restricted_prefix():
     assert found == []
     for literal in literals:
         planted = f'{source}\nSTAGE = "{literal}"\n'
+        assert [x for x in literals
+                if re.search(re.escape(x), planted, re.IGNORECASE)] != []
+
+
+# --------------------------------------------------------------------------
+# A quoted span is text about text, not a restatement
+#
+# story-181's distinction. l5-plan refused story-179's artifact for two lines
+# that quoted a search pattern — the stage name beside the prefix, as a grep
+# argument — and asserted the pattern is found nowhere. The pattern holds
+# both halves by construction, and the check read it as a clause about the
+# stage. Now a span delimited by backticks or by double quotes is a quoted
+# span; a pairing whose two halves both sit inside one such span is not
+# reported, and a pairing with either half outside every span is reported
+# exactly as before. Spans are found on the whole entry before clause
+# splitting, and single quotes are not a delimiter.
+#
+# Every sentence below is composed from RESTRICTED_STAGE and RESTRICTED_PREFIX
+# as the rest of this file does, and the last assertion in the section scans
+# the section's own source for a literal of either. Each absence — "this
+# quoted sentence is not reported" — sits beside the same sentence with its
+# delimiters stripped, which the same check reports.
+#
+# The architecture document is not asserted on here. This story assigns its
+# strictness_problems entry to the stage that runs after this one, in
+# `likely_file_changes`.
+# --------------------------------------------------------------------------
+
+
+#: The two delimiters of a quoted span, and the one that is deliberately not.
+QUOTE_DELIMITERS = ["`", '"']
+NOT_A_DELIMITER = "'"
+
+
+def quoted_pattern(delimiter: str, joiner: str = "|") -> str:
+    """The story-179 shape: a search pattern holding both halves, quoted.
+
+    The joiner sits between the stage and the prefix inside the span, so a
+    clause boundary can be placed inside the quoted pattern without changing
+    anything else about the sentence.
+    """
+    return (f"grep for {delimiter}{RESTRICTED_STAGE}{joiner}{RESTRICTED_PREFIX}"
+            f"{delimiter} over a file returns nothing")
+
+
+def unquoted_restatement() -> str:
+    """The shape the check has always reported, with no quote mark in it."""
+    return f"the {RESTRICTED_STAGE} leaves {RESTRICTED_PREFIX} alone"
+
+
+def strictness(entry: str) -> list[str]:
+    return plan_validation.strictness_problems({"constraints": [entry]}, STAGES)
+
+
+def reported_in_the_usual_words(entry: str, clause: str = None) -> str:
+    """The one message the check has always produced for a clause, verbatim.
+
+    Composed from the same pieces the module composes it from, so a change in
+    the message text — not only in the verdict — would show here.
+    """
+    clause = entry if clause is None else clause
+    return (f"$.constraints[0]: {entry!r} states a restriction the workflow "
+            f"does not. The clause {clause!r} names {RESTRICTED_STAGE} together "
+            f"with {RESTRICTED_PREFIX} without scoping it to creation, while "
+            f"the workflow declares only: {RESTRICTION.wording}")
+
+
+@pytest.mark.parametrize("delimiter", QUOTE_DELIMITERS)
+def test_a_quoted_search_pattern_holding_both_halves_is_not_reported(
+        delimiter: str):
+    """The first two criteria: backticks, then double quotes."""
+    entry = quoted_pattern(delimiter)
+    assert strictness(entry) == []
+    # Control: the same words with the delimiters removed are one problem, so
+    # the silence above is the span and not the sentence being invisible.
+    stripped = entry.replace(delimiter, "")
+    assert len(strictness(stripped)) == 1
+    assert RESTRICTED_STAGE in strictness(stripped)[0]
+    assert RESTRICTED_PREFIX in strictness(stripped)[0]
+
+
+def test_an_unquoted_restatement_is_still_reported_in_the_usual_words():
+    entry = unquoted_restatement()
+    assert strictness(entry) == [reported_in_the_usual_words(entry)]
+
+
+def test_a_quoted_span_elsewhere_in_the_entry_excuses_nothing():
+    """The exclusion is held to the span, not to a quote mark anywhere."""
+    entry = f"{unquoted_restatement()}, see `README`"
+    (problem,) = strictness(entry)
+    assert problem == reported_in_the_usual_words(entry, unquoted_restatement())
+    # Control: the same entry with the pairing moved inside the span it
+    # already carries is not reported, so it is the position of the halves
+    # relative to the span that decides.
+    moved = f"see `{unquoted_restatement()}`, README"
+    assert strictness(moved) == []
+
+
+@pytest.mark.parametrize("shape", [
+    "the `{stage}` leaves {prefix} alone",
+    "the {stage} leaves `{prefix}` alone",
+    "the `{stage}` leaves `{prefix}` alone",
+    'the "{stage}" leaves {prefix} alone',
+])
+def test_a_pairing_with_either_half_outside_the_span_is_still_reported(
+        shape: str):
+    """Only a span holding both halves excludes the pairing. The third shape
+    quotes each half in its own span, and neither span holds both."""
+    entry = shape.format(stage=RESTRICTED_STAGE, prefix=RESTRICTED_PREFIX)
+    (problem,) = strictness(entry)
+    assert problem.startswith(f"$.constraints[0]: {entry!r} states a restriction "
+                              "the workflow does not.")
+    assert "without scoping it to creation" in problem
+    assert RESTRICTION.wording in problem
+    # Control: the whole pairing inside one span is not reported.
+    both = f"the `{RESTRICTED_STAGE} leaves {RESTRICTED_PREFIX}` alone"
+    assert strictness(both) == []
+
+
+@pytest.mark.parametrize("joiner", [", ", " and ", "; "])
+def test_a_clause_boundary_inside_a_quoted_span_stays_inside_it(joiner: str):
+    """Spans are found on the whole entry before it is split into clauses,
+    so a comma, a semicolon or the word "and" inside the quoted pattern does
+    not put the two halves in different clauses with the span cut in two."""
+    # The criterion's shape. On its own it cannot tell a whole-entry span
+    # search from a per-clause one: cut at the boundary, each piece holds one
+    # half, so neither search reports it.
+    assert strictness(quoted_pattern("`", joiner)) == []
+    # The shape that can tell them apart: cut at the boundary, the piece after
+    # it holds both halves and no complete span, so a check that found its
+    # spans per clause would report it. Found on the whole entry, the span
+    # holds both halves and the pairing is excluded.
+    entry = (f"grep for `{RESTRICTED_PREFIX}{joiner}{RESTRICTED_STAGE} "
+             f"{RESTRICTED_PREFIX}` over a file returns nothing")
+    assert strictness(entry) == []
+    # Control: the same entry with its backticks stripped is that per-clause
+    # reading, and it is reported — the piece after the boundary is the
+    # clause named.
+    (problem,) = strictness(entry.replace("`", ""))
+    assert "without scoping it to creation" in problem
+    assert f"{RESTRICTED_STAGE} {RESTRICTED_PREFIX}" in problem
+
+
+def test_a_single_quoted_span_is_not_a_span():
+    """Single quotes are not a delimiter — an apostrophe would open a span an
+    ordinary possessive never closes."""
+    entry = quoted_pattern(NOT_A_DELIMITER)
+    (problem,) = strictness(entry)
+    assert problem.startswith(f"$.constraints[0]: {entry!r}")
+    assert "without scoping it to creation" in problem
+    # Control: the same sentence with a real delimiter in place of the single
+    # quotes is not reported, so the delimiter is the whole difference.
+    for delimiter in QUOTE_DELIMITERS:
+        assert strictness(entry.replace(NOT_A_DELIMITER, delimiter)) == []
+
+
+def test_an_unquoted_pairing_beside_a_quoted_one_is_reported_once_verbatim():
+    """A quoted span excuses its own pairing and nothing else, and the
+    message quotes the entry as the planner wrote it, span and all."""
+    entry = f"{unquoted_restatement()}; {quoted_pattern('`')}"
+    (problem,) = strictness(entry)
+    assert problem == reported_in_the_usual_words(entry, unquoted_restatement())
+    assert repr(entry) in problem
+
+
+def test_the_exclusion_reads_its_halves_off_the_workflow_it_is_handed():
+    """Against a workflow restricting something else, a quoted pattern of
+    the synthetic pair is not reported and the same pattern unquoted is, so
+    the span test reads the definition rather than a copy of it."""
+    synthetic = [{"name": "cartographer", "may_not_create": ["atlas/"]},
+                 {"name": "surveyor"}]
+    quoted = "grep for `cartographer|atlas/` over a file returns nothing"
+    unquoted = "the cartographer leaves atlas/ alone"
+    assert plan_validation.strictness_problems(
+        {"constraints": [quoted]}, synthetic) == []
+    assert len(plan_validation.strictness_problems(
+        {"constraints": [unquoted]}, synthetic)) == 1
+
+
+def test_a_span_pairing_halves_of_different_restrictions_excludes_nothing():
+    """Under a workflow declaring two create restrictions, a span holding one
+    restriction's stage beside the other's prefix is no pairing the clause
+    loop would report, so blanking it excludes nothing real — and it must not
+    be blanked, or a genuine restatement sitting in the same span is hidden.
+    A pooled reading, which blanks a span holding any stage beside any
+    prefix, passes every single-restriction case above; this is the case
+    that tells the per-restriction reading from it."""
+    synthetic = [{"name": "cartographer", "may_not_create": ["atlas/"]},
+                 {"name": "surveyor", "may_not_create": ["survey/"]}]
+    crossed = "the surveyor must leave `cartographer|survey/` alone"
+    (problem,) = plan_validation.strictness_problems(
+        {"constraints": [crossed]}, synthetic)
+    assert "surveyor" in problem
+    assert "survey/" in problem
+    assert "without scoping it to creation" in problem
+    # Control: the same workflow, with the span holding both halves of one
+    # restriction, is not reported — so it is the halves belonging to one
+    # restriction that decides, not the second restriction being declared.
+    paired = "grep for `surveyor|survey/` over a file returns nothing"
+    assert plan_validation.strictness_problems(
+        {"constraints": [paired]}, synthetic) == []
+
+
+def test_the_docstring_says_what_a_quoted_span_is_and_why_it_is_exempt():
+    doc = plan_validation.strictness_problems.__doc__
+    assert "quoted span" in doc
+    assert re.search(r"backticks?", doc)
+    assert re.search(r"double quotes?", doc)
+    assert re.search(r"single quotes? (?:are|is) not", doc)
+    assert "text about text" in doc
+    assert re.search(r"restat", doc)
+
+
+def quoted_span_section() -> str:
+    """The source of this section alone, between its header and the next."""
+    source = VALIDATION_FILE.read_text(encoding="utf-8")
+    start = source.index("# A quoted span is text about text")
+    end = source.index("# The scope-reason check", start)
+    return source[start:end]
+
+
+def test_this_section_names_no_stage_and_no_restricted_prefix():
+    """The same scanner the file applies to the module under test, over the
+    section that composes every sentence above, with the same control."""
+    section = quoted_span_section()
+    assert "def quoted_pattern" in section
+    assert "def test_a_single_quoted_span_is_not_a_span" in section
+    literals = STAGE_NAMES + [restriction.prefix
+                              for restriction in RESTRICTIONS]
+    found = [literal for literal in literals
+             if re.search(re.escape(literal), section, re.IGNORECASE)]
+    assert found == []
+    for literal in literals:
+        planted = f'{section}\nSTAGE = "{literal}"\n'
         assert [x for x in literals
                 if re.search(re.escape(x), planted, re.IGNORECASE)] != []
 
