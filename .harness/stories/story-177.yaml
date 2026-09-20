@@ -1,0 +1,134 @@
+story:
+  id: story-177
+  title: A plan scopes in every text that states the rule it changes, and a do_not_modify entry carries the developer's reason
+  description: |
+    In plain terms. When a story is planned, the plan says which files may be
+    changed and which must be left alone. The "leave alone" list has been
+    filled in by default, and stories keep changing a rule in one file while
+    the same rule is written in two or three other places; the verifier then
+    declines the other files for scope alone, an inspection finds them, and a
+    second story is planned for what was a loose end of the first. Five
+    stories on 2026-09-19 (172, 173, 175, 176) each left that kind of work
+    behind.
+
+    This story changes two things about planning. First, before scope is
+    written the planner looks for everywhere the rule it changes is stated —
+    the target's prompts, schemas, workflow definitions, the architecture
+    documents its configuration names, and its tests directory — and shows
+    the developer what it found at approval, each file landing in modify or
+    in do_not_modify with a reason. Second, every do_not_modify entry carries
+    the developer's reason, written in parentheses after the path, and
+    l5-plan refuses to commit an artifact whose entry carries none. The
+    reason is what a later reader uses to tell a developer's decision from a
+    planner's default.
+
+    The reason is a parenthetical on the string rather than a second field:
+    the schema-directed parser reads a field's items as one type, so object
+    items would stop every committed artifact and every run-time test fixture
+    parsing at pre-flight. The check is plan-time only, in
+    orchestration/plan_validation.py beside the strictness, assignment,
+    naming and workflow checks, for the reason those are: committed artifacts
+    under .harness/stories/ are history and are not rewritten, and l5-run
+    keeps accepting them.
+
+    Planned from the brief filed under 242.
+  workflow: story-workflow
+
+tasks:
+  - Add a consequence-sweep step to prompts/planner.md's process, between reading the standards and asking the developer questions. The step names the fact or rule the story changes, searches the target's prompts, schemas, workflow definitions, the architecture documents named under architecture_docs and the tests directory named under [Workflow facts] for every text that states or consumes it, lists what it found in the draft the developer approves, and lands each file found in modify or in do_not_modify with a reason.
+  - State the reason rule in prompts/planner.md. Every do_not_modify entry is a path or area followed by the developer's reason in a closing parenthetical; the skeleton's do_not_modify item shows that form; the prose says l5-plan refuses an artifact whose entry carries none; the sentence at prompts/planner.md:69-72 listing the plan-time checks names this one beside the others.
+  - Declare the entry form in schemas/story.schema.json's description of scope.do_not_modify, and say that the reason is the developer's decision recorded for a later reader, that an entry without one is refused at plan time, and that artifacts committed before this rule are not held to it.
+  - Add scope_reason_problems(story) to orchestration/plan_validation.py and call it from artifact_problems after the checks already there. An entry passes when non-empty text precedes a closing parenthetical holding at least one word character; a bare path and an empty parenthetical are reported, one problem per offending entry, naming $.scope.do_not_modify[<index>], quoting the entry and showing the form a passing entry takes. A story with an empty do_not_modify yields nothing. The module docstring describes this seventh class as plan-time only, for the reason it gives for the third through sixth.
+  - Adapt the plan-time control artifacts so they carry a reason on their do_not_modify entry: ARTIFACT in tests/test_plan_commit.py, which the other plan-time modules import, and the artifact template in tests/test_planning_runs_on_its_own_worktree.py.
+  - Hold the rendered planner prompt to the sweep step and the reason rule in tests/test_planner_receives_the_standards.py, following that module's pattern of reading the prompt l5-plan actually hands the session and checking the baseline template did not already carry the text.
+  - Hold the refusal in tests/test_plan_time_validation.py. A scope-reason defect joins DEFECTS so the parametrised end-to-end tests show it reported and never committed with the artifact left byte for byte; it stays out of PRE_FLIGHT_DEFECTS and a test shows l5-run accepts an artifact carrying a bare entry; unit tests cover a bare path, an empty parenthetical, an area described in words with a reason, and an empty list.
+  - Record the rule and the sweep in .harness/docs/ARCHITECTURE.md beside the account of plan-time validation and the planner prompt.
+
+acceptance_criteria:
+  - The prompt l5-plan renders for a planning session carries a process step, placed before the step that presents the draft, that tells the planner to search the target's prompts, schemas, workflow definitions, the configured architecture documents and the tests directory for every text stating or consuming the rule the story changes, and to list what it found in the draft the developer approves.
+  - The rendered prompt states that every do_not_modify entry carries the developer's reason in a closing parenthetical and that l5-plan refuses an artifact whose entry carries none, and its skeleton's do_not_modify item shows that form.
+  - schemas/story.schema.json's description of scope.do_not_modify states the entry form and that an entry without a reason is refused at plan time.
+  - l5-plan, given a session artifact whose do_not_modify holds a bare path, exits non-zero, prints a problem naming $.scope.do_not_modify and the offending entry, commits nothing, and leaves the artifact on disk unchanged.
+  - l5-plan, given the same artifact with a reason in a closing parenthetical on every do_not_modify entry, commits and pushes it as before.
+  - An entry whose parenthetical is empty is refused the same way as a bare path.
+  - l5-run's pre-flight accepts a committed artifact whose do_not_modify entries carry no reason, so no story artifact committed before this one is refused.
+  - No artifact already committed under .harness/stories/ is rewritten.
+  - The full test suite passes.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/plan_validation.py, add a module-level compiled pattern for a passing entry and scope_reason_problems(story) returning one message per offending entry; wire it into artifact_problems after workflow_problems; extend the module docstring with a section describing the seventh class and why it is plan-time only.
+    - In prompts/planner.md, insert the sweep step as a numbered step after the standards step and before the questions step, renumbering what follows; change the skeleton's do_not_modify item to show the parenthetical; add a short paragraph stating the reason rule near the skeleton; add the reason rule to the list of checks l5-plan performs at the end of the session.
+    - In schemas/story.schema.json, rewrite the description of scope.do_not_modify.
+    - Update ARTIFACT in tests/test_plan_commit.py and the artifact template in tests/test_planning_runs_on_its_own_worktree.py so their rules/ entry carries a reason, since the check now refuses the bare form and every plan-time module imports the first.
+    - Write the tests listed under tasks in tests/test_planner_receives_the_standards.py and tests/test_plan_time_validation.py.
+    - Record the change in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: the sweep step, the reason rule, the skeleton's do_not_modify form and the list of plan-time checks
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: the description of scope.do_not_modify declares the entry form and the plan-time refusal
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: scope_reason_problems and its wiring into artifact_problems, plus the docstring's account of the seventh class
+    - file: tests/test_plan_commit.py
+      stage: implementer
+      reason: the shared plan-time control artifact's do_not_modify entry gains a reason
+      reverting_breaks_the_suite: this artifact is the control every plan-time module commits, and the new check refuses its bare rules/ entry, so reverting the adaptation turns every test that expects the control to commit red
+    - file: tests/test_planning_runs_on_its_own_worktree.py
+      stage: implementer
+      reason: that module's own artifact template gains a reason on its do_not_modify entry
+      reverting_breaks_the_suite: the module runs l5-plan to a commit with this template, and the new check refuses its bare rules/ entry, so reverting the adaptation turns those tests red
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: assertions that the rendered planner prompt carries the sweep step and the reason rule
+    - file: tests/test_plan_time_validation.py
+      stage: tester
+      reason: the scope-reason defect in DEFECTS, its absence from PRE_FLIGHT_DEFECTS, and unit tests of scope_reason_problems
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records the consequence sweep, the reason rule and why the check is plan-time only
+
+scope:
+  modify:
+    - prompts/planner.md
+    - schemas/story.schema.json
+    - orchestration/plan_validation.py
+    - tests/test_plan_commit.py
+    - tests/test_planning_runs_on_its_own_worktree.py
+    - tests/test_planner_receives_the_standards.py
+    - tests/test_plan_time_validation.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-verifier.md (how the verifier handles a finding declined for scope is the companion brief, verifier-extends-scope-within-bounds, which depends on this story landing first)
+    - orchestration/story_coordinator.py (pre-flight must keep accepting committed artifacts whose entries carry no reason, so no run-time reader changes)
+    - orchestration/story_parser.py (the parser keeps reading do_not_modify items as strings; the reason lives inside the string)
+    - scripts/l5-plan (it already calls plan_validation.artifact_problems and prints through the coordinator's refusal helper, so the new check reaches it with no change to the script)
+    - workflows/ (no stage rule changes; the checks the coordinator enforces at run time are unchanged)
+    - tests/history-fixtures/ (frozen baselines of earlier templates and tests, kept as they were)
+    - the other test modules carrying a bare rules/ entry in a run-time story fixture (they never pass through plan-time validation, and rewriting them would say the run-time reader changed when it did not)
+
+verification_requirements:
+  - Confirm the prompt l5-plan renders carries the sweep step before the draft step and states the reason rule, by reading the rendered prompt rather than the template alone.
+  - Confirm l5-plan refuses an artifact with a bare do_not_modify entry, commits nothing and leaves the artifact unchanged, and commits the same artifact once every entry carries a reason.
+  - Confirm l5-run's pre-flight accepts an artifact whose do_not_modify entries carry no reason.
+  - Confirm no artifact under .harness/stories/ other than story-177.yaml changed.
+  - Confirm the existing tests pass alongside the new ones.
+
+constraints:
+  - do_not_modify items stay strings in the schema; the reason is a closing parenthetical on the string, never a second field.
+  - The check is plan-time only and joins artifact_problems in orchestration/plan_validation.py; scripts/l5-plan stays a thin entry point and story_coordinator's pre-flight is unchanged.
+  - The check reads shape, not prose: it decides on the presence of a closing parenthetical holding a word, and does not parse, match or score the reason's text.
+  - Existing assertions are neither weakened nor skipped; the two control artifacts are adapted only by adding a reason to their existing entry.
+  - Standard library only; deterministic logic covered by tests that invoke no model.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 20:20:23
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 242
