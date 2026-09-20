@@ -1,0 +1,140 @@
+story:
+  id: story-178
+  title: Every configured-bound proof that is not about the bound runs under the harness default
+  description: |
+    Three proofs in tests/test_config_keys_are_obeyed.py fail on a loaded
+    machine for a reason that has nothing to do with what they check. The
+    sync-command proof, the sweep-max-entries proof and the item-command proof
+    each run a fixture command that sleeps for nothing and assert which
+    command ran or how many entries were attempted; none says anything about
+    how long a command may run. But the fixture varies every key, so they
+    inherit sync_timeout_seconds = SYNC_TIMEOUT (5.3) and
+    item_update_timeout_seconds = ITEM_UPDATE_TIMEOUT (2.7), and under those
+    bounds each is also asserting that this machine spawns a shell inside a
+    few seconds while the suite runs its modules in parallel and several of
+    them spawn nested pytest runs. story-177's second attempt spent a verifier
+    self-route, an escalation and a resume on exactly that: the three went
+    red, the pristine-copy control went red with them, and the same tests
+    passed unchanged once the machine was quiet.
+
+    The module already decided how such a proof is made safe, for the query
+    command: BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER is set to the value the
+    harness itself falls back to, not_about_the_bound() hands it to the two
+    query proofs that are not about the bound, and the comment beside the
+    constant says why the number is made irrelevant to them rather than
+    widened, and why a proof node may not report inconclusive in its place
+    (the pristine control requires every proof node to have passed). The
+    sync and item proofs are the same kind of proof and were never given that
+    treatment. This story gives it to them, extends the module's account to
+    cover all three commands, and adds a standing assertion in
+    tests/test_no_test_bounds_the_machine.py so that the next proof written
+    in this shape reddens rather than waits for load to find it.
+
+    The sweep beyond that module found nothing else with the shape.
+    tests/test_command_transport.py already runs its landing proofs under
+    command_transport.DEFAULT_TIMEOUT_SECONDS through transport_for's
+    default; its KILL_BOUND_SECONDS sites drive commands that sleep forever
+    and its SPAWN_BOUND_SECONDS site is routed through spawned_child_pid. The
+    timeout sites in tests/test_opportunistic_sweep.py at :805 and :1143 and
+    in tests/test_command_transport.py at :906 refuse a bad value before any
+    command spawns, and :1170 of the sweep module configures no sync command
+    so builds no transport. The item, query, fetch and brief modules
+    configure a tight bound only on a command that sleeps forever, where the
+    bound is the subject, or through the spawn-bound helper, and their
+    command proofs pass no timeout at all. .harness/docs/ARCHITECTURE.md's
+    section "A test may bound an operation and may not bound the machine"
+    records the sync-command proof's defect and prescribes routing it through
+    entry_that_got_to_land, a repair this story replaces.
+
+    The implementer owns no file in this story, on story-109's precedent:
+    every edit is under tests/, where an implementer's edit is governed by the
+    revert check and would be undone silently because reverting it leaves the
+    suite green. Every test edit is the tester's and the document is the
+    documenter's.
+
+    Planned from the brief filed under 251.
+  workflow: story-workflow
+
+tasks:
+  - In tests/test_config_keys_are_obeyed.py, add two helpers beside not_about_the_bound() in its shape and for its reason, one for the sync command and one for the item-update command, each returning the harness default under the key the module reads (outbox_sweep.TIMEOUT_KEY with DEFAULT_SYNC_TIMEOUT, item_update.TIMEOUT_KEY with DEFAULT_ITEM_UPDATE_TIMEOUT), with constants declared in BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER's shape.
+  - Extend the comment above BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER so the module's account of why the bound is made irrelevant rather than widened covers the sync and item commands as well as the query command.
+  - Pass the sync helper at test_sync_command_is_the_command_an_entry_is_filed_by_running and at test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts (through fixture_config(**...)), and the item helper at test_item_update_command_is_the_command_a_story_is_published_by, so each runs its fixture command under the harness default.
+  - Reword the docstring of test_an_item_command_sleeping_past_the_bound_is_killed_and_publishes_nothing, which calls the item-command proof its control under the same fixture, to say that control now runs under the harness default bound and that the kill is tied to the configured number by the reason naming it.
+  - In tests/test_no_test_bounds_the_machine.py, beside test_the_halves_beside_each_missed_precondition_cannot_skip, add a standing assertion that every test in test_config_keys_are_obeyed.py that runs a fixture command under a configured bound either is about that bound or configures the harness default, with a constructed control showing a proof that does neither is reported.
+  - Assert in that same module that each not-about-the-bound helper returns exactly the harness default under the key its module reads, read off the orchestration module rather than restated.
+  - In .harness/docs/ARCHITECTURE.md, rewrite the paragraph in "A test may bound an operation and may not bound the machine" that records the sync-command proof's defect and prescribes the landing helper as its repair, and record the rule as it now holds for all three commands and where it is enforced.
+
+acceptance_criteria:
+  - test_sync_command_is_the_command_an_entry_is_filed_by_running, test_sweep_max_entries_is_the_bound_on_what_one_sweep_attempts and test_item_update_command_is_the_command_a_story_is_published_by each run their fixture command with the timeout key set to the harness default for that command, and each still asserts exactly what it asserted before.
+  - The two new helpers return {outbox_sweep.TIMEOUT_KEY: command_transport.DEFAULT_TIMEOUT_SECONDS} and {item_update.TIMEOUT_KEY: item_update.DEFAULT_TIMEOUT_SECONDS} respectively, through the module's existing DEFAULT_SYNC_TIMEOUT and DEFAULT_ITEM_UPDATE_TIMEOUT constants, and the query helper is unchanged.
+  - SYNC_TIMEOUT, SLEEPS_PAST_THE_BOUND, ITEM_UPDATE_TIMEOUT, ITEM_SLEEPS_PAST_THE_BOUND, FILED_QUERY_TIMEOUT and QUERY_SLEEPS_PAST_THE_BOUND keep their values, and the ordering assertions over them in test_every_token_exempt_key_states_why_and_carries_a_value_of_its_own are unchanged.
+  - The bound's own proofs are unchanged - test_sync_timeout_seconds_is_the_bound_a_sync_command_is_held_to, test_a_sync_command_sleeping_past_the_bound_is_killed_and_left_pending, test_a_sync_command_that_finishes_inside_the_bound_lands, test_filed_query_timeout_seconds_is_the_bound_a_query_is_held_to, test_a_query_command_sleeping_past_the_bound_is_killed_and_unanswered, test_a_query_command_that_answers_inside_the_bound_is_heard and test_an_item_command_sleeping_past_the_bound_is_killed_and_publishes_nothing still run under the tight values, and entry_that_got_to_land and answer_that_got_to_be_heard are the only inconclusive routes in the module.
+  - A standing assertion in tests/test_no_test_bounds_the_machine.py holds that every test in tests/test_config_keys_are_obeyed.py which runs a fixture command - through swept() without run=False, outbox_sweep.sweep(), asked_what_is_filed() or published_from() - either names in its source the bound it pins or passes the not-about-the-bound helper for that command, and it is shown reporting a constructed proof that does neither.
+  - The standing assertion holds against the module as this story leaves it, so a fourth proof written in the inherited-bound shape reddens the suite.
+  - No assertion in either module is weakened, removed or skipped; the census counters at the end of the run are no smaller than at the tester's baseline.
+  - The KEY_PROOFS table, the pristine-copy control and the per-key mutation control are unchanged, and the pristine copy still runs every proof node green.
+  - The CLASSIFICATION table in tests/test_no_test_bounds_the_machine.py is unchanged, and no test this story touches reads a clock it did not read before.
+  - .harness/docs/ARCHITECTURE.md no longer prescribes routing the sync-command proof through entry_that_got_to_land, and records instead that a configured-bound proof that is not about the bound runs under the harness default for all three commands, naming the standing assertion that holds it.
+
+technical_plan:
+  implementation_steps:
+    - Read BOUND_THE_OTHER_QUERY_PROOFS_RUN_UNDER, its comment and not_about_the_bound() in tests/test_config_keys_are_obeyed.py first; the sync and item helpers take their shape and their reason from these, and the comment is extended rather than duplicated beside each constant.
+    - Declare BOUND_THE_OTHER_SYNC_PROOFS_RUN_UNDER = DEFAULT_SYNC_TIMEOUT beside the sync constants and BOUND_THE_OTHER_ITEM_PROOFS_RUN_UNDER = DEFAULT_ITEM_UPDATE_TIMEOUT beside the item constants, or one shared comment naming all three, whichever keeps the module's account in one place; the defaults are read off the orchestration modules as the existing constants already are.
+    - Write not_about_the_sync_bound() returning {outbox_sweep.TIMEOUT_KEY: ...} and not_about_the_item_bound() returning {item_update.TIMEOUT_KEY: ...}, each with a docstring pointing at the shared reason.
+    - Change the three call sites. swept(tmp_path, **not_about_the_sync_bound()) at the sync-command proof; fixture_config(**not_about_the_sync_bound()) at the sweep-max-entries proof, which builds its target directly; published_from(tmp_path, **not_about_the_item_bound()) at the item-command proof. Nothing else in those tests changes.
+    - Reword the item killed-half docstring that names the command proof as its control under the same fixture, since the control now runs under the default bound while the killed half runs under ITEM_UPDATE_TIMEOUT, and the reason naming the bound is what ties the kill to the number.
+    - In tests/test_no_test_bounds_the_machine.py, write a function that reads each test function's source out of config_module, decides whether it runs a fixture command (calls swept( without run=False, outbox_sweep.sweep(, asked_what_is_filed( or published_from(), and for each such test reports a problem unless the source names the bound constant for that command (SYNC_TIMEOUT, FILED_QUERY_TIMEOUT or ITEM_UPDATE_TIMEOUT) or calls the not-about-the-bound helper for that command. Assert the problem list is empty against the live module, and assert it is non-empty against a constructed source that does neither, in the shape enumeration_problems and its two controls already take.
+    - Assert each of the three helpers returns exactly one key, that the key is the orchestration module's TIMEOUT_KEY, and that the value equals that module's DEFAULT_TIMEOUT_SECONDS.
+    - Rewrite the ARCHITECTURE.md paragraph beginning "One site in that group still observes a landing without routing through the helper" so it records that the repair was the default bound rather than the helper, why a proof node may not report inconclusive, and that the same treatment now covers the sync, query and item commands with the standing assertion naming where it is held.
+  likely_file_changes:
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The two helpers, their constants, the extended comment, the three call sites and the reworded item docstring.
+    - file: tests/test_no_test_bounds_the_machine.py
+      stage: tester
+      reason: The standing assertion that every proof running a fixture command under a configured bound is about that bound or configures the default, its constructed control, and the check on what each helper returns.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The paragraph prescribing the landing helper as the sync-command proof's repair is superseded, and the rule as it now holds for all three commands is recorded.
+
+scope:
+  modify:
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_no_test_bounds_the_machine.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - tests/test_command_transport.py (swept and found already in the shape this story asks for - transport_for defaults to DEFAULT_TIMEOUT_SECONDS so every landing proof runs under the harness default, the KILL_BOUND_SECONDS sites drive commands that sleep forever, the SPAWN_BOUND_SECONDS site is routed through spawned_child_pid, and the sync_timeout_seconds site at :906 refuses the value before any command spawns)
+    - tests/test_opportunistic_sweep.py (swept and found to carry no proof of the shape - :805 and :1143 refuse a bad timeout before any command spawns, and :1170 configures no sync command so builds no transport)
+    - tests/test_a_planned_story_is_published_onto_its_item.py, tests/test_filed_query.py, tests/test_brief_fetch.py and tests/test_a_brief_follows_its_story.py (swept and found to configure a tight bound only on a command that sleeps forever, where the bound is the subject, or through the spawn-bound helper routed to the inconclusive report; their command proofs pass no timeout and already run under the default)
+    - tests/machine_load.py (the inconclusive route and the ceiling are not what this story changes; no proof gains or loses a route through it)
+    - orchestration/command_transport.py, orchestration/outbox_sweep.py, orchestration/filed_query.py and orchestration/item_update.py (the harness's own defaults and keys are what the helpers read; this story reads them and changes nothing about them)
+    - .harness/config.yaml (this repository's own configured values are untouched, and the test-only values live in the test module)
+    - .harness/standards/testing.md (the standard already states the rule a test may bound an operation and not the machine; this story applies it rather than restating it)
+
+verification_requirements:
+  - Confirm the three named proofs pass the not-about-the-bound helper for their command and that their assertions are otherwise unchanged against main.
+  - Confirm the three timeout constants and their sleep constants keep their values and the ordering assertions over them are unchanged.
+  - Confirm the bound's own proofs, their killed halves and the two landing halves routed through tests/machine_load.py are unchanged, and that no proof node in KEY_PROOFS reaches the helper.
+  - Confirm the standing assertion in tests/test_no_test_bounds_the_machine.py enumerates the config module's tests by what they call rather than by a list of names, holds against the live module, and is shown reporting a constructed proof that neither names its bound nor configures the default.
+  - Confirm each helper's returned key and value are read off the orchestration module and asserted as such.
+  - Confirm no assertion was weakened, removed or skipped, and that the census counters at the end of the run are no smaller than at the tester's baseline.
+  - Confirm the CLASSIFICATION table and the clock-reading enumeration are unchanged and still agree.
+  - Confirm the run's suite is green from the coordinator's own record rather than an agent's account, and that the pristine-copy control passed in it.
+  - Confirm .harness/docs/ARCHITECTURE.md no longer prescribes the landing helper as the sync-command proof's repair and records the rule for all three commands, naming the standing assertion.
+
+constraints:
+  - The implementer owns no file in this story; every test edit is the tester's and the document is the documenter's, on story-109's precedent.
+  - SYNC_TIMEOUT, ITEM_UPDATE_TIMEOUT and FILED_QUERY_TIMEOUT keep their values; widening a bound is what the module's own comment says is not the fix.
+  - The proofs that are about a bound, their killed halves, and the landing halves' inconclusive route through tests/machine_load.py are untouched.
+  - No proof node in KEY_PROOFS may report inconclusive; the pristine control requires every proof node to have passed.
+  - No wall-clock bound is added to any test, and no module starts reading a clock.
+  - The harness's own defaults and keys in orchestration/ are read, not changed.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 22:27:46
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 251
