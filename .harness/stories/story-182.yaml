@@ -1,0 +1,101 @@
+story:
+  id: story-182
+  title: A backstop refusal on a target declaring no tests directory names the remedy that exists rather than a rerun that refuses again
+  description: |
+    Planned from the brief filed under 237.
+
+    story-174 taught the planner's backstop that a tests directory rendered
+    as None means no confinement to it can be recognised, so the backstop
+    refuses. The remedy beside that paragraph is still the one story-171
+    wrote for a different case: rerun `l5-plan --workflow` under a
+    definition chosen by what it says it is for. On a target that declares
+    no `tests_dir` — a configuration the harness supports, since the
+    `{{tests_dir}}` token resolves out of the workflow and the confinement
+    does not exist there — every shipped workflow is refused on the same
+    ground, so the planner sends the developer to a rerun that refuses with
+    the same instruction. The paragraph never says there is no workflow to
+    name, and the story workflow's applies_when string names the very
+    confinement the rendered facts show is absent, so a planner told to
+    read the definitions has no text saying which to believe.
+
+    This story adds the remedy that exists to the None case: the planner
+    tells the developer that no rerun under another definition helps there
+    and that the way out is to declare `tests_dir` in the target's
+    configuration so the workflow's confinement resolves. The rerun remedy
+    stays for the case it was written for — a directory is named and no
+    stage is confined to it. The refusal itself is unchanged, and so is the
+    contract that the token resolves out for a target declaring no tests
+    directory. A test beside the story-174 assertions holds the new
+    sentence, and the architecture record of the backstop records the
+    remedy.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/planner.md, extend the backstop paragraph above the numbered steps so that where the tests directory is rendered as None it says no rerun under another workflow definition helps, because every definition is refused on that same ground, and names the remedy that exists, which is to declare `tests_dir` in the target's configuration so the workflow's confinement resolves; the planner says that to the developer in place of naming a workflow. Keep the existing rerun remedy for the case where a directory is named and no stage is confined to it.
+  - In tests/test_planner_receives_the_standards.py, beside the story-174 test that holds the None wording, add an assertion that the backstop paragraph carries the None-case remedy, names `tests_dir` as the thing to declare, and says a rerun under another definition does not help, with the baseline template as the control that carried none of it.
+  - In .harness/docs/ARCHITECTURE.md, in the paragraphs recording the backstop and what None means, record that the None case carries its own remedy and what it is.
+
+acceptance_criteria:
+  - The backstop paragraph in prompts/planner.md, in the text before the numbered steps of [Process], states that where the tests directory is rendered as None a rerun of `l5-plan --workflow` under another definition does not help, and states that the remedy is to declare `tests_dir` in the target's configuration.
+  - The same paragraph still tells the planner, for the case where a directory is named and no restriction confines a stage to it, to name the workflow the developer should rerun `l5-plan --workflow` under, so the existing tests holding that remedy stay green without change.
+  - prompts/planner.md carries the `{{tests_dir}}` placeholder exactly once, names no tests directory literally, and adds no sentence containing the words the normative-prose detector in tests/test_planner_injection.py flags.
+  - A test in tests/test_planner_receives_the_standards.py holds the None-case remedy on the planner template, that it names `tests_dir` and says a rerun does not help, and controls against the baseline template, which carried neither.
+  - The backstop's mechanical rule as the test module applies it is unchanged, so a rendering naming no tests directory is still refused for every shipped workflow.
+  - The paragraphs of .harness/docs/ARCHITECTURE.md that record the backstop and what None means record the remedy for the None case.
+  - All existing tests pass without any assertion weakened or removed, and the new test passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the backstop paragraph at prompts/planner.md lines 25-46 and the tests holding it at tests/test_planner_receives_the_standards.py lines 154-157 and 586-646, so the addition sits in the sentence explaining None and leaves every held phrase in place.
+    - Add the None-case remedy to the paragraph as prose, naming `tests_dir` as a configuration key in backticks and saying no rerun under another definition helps there, and word it without "required", "optional" or "mandatory".
+    - Add the test beside test_the_backstop_reads_the_tests_directory_from_the_workflow_facts, using before_the_numbered_steps, process_section and baseline_planner_template as that test does.
+    - Extend the ARCHITECTURE.md paragraphs at the backstop record and the story-174 record so the None case's remedy is recorded beside the refusal.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The backstop paragraph gains the None-case remedy and the statement that a rerun does not help there.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: A new assertion beside the story-174 test holds the None-case remedy's wording, controlled against the baseline template.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The record of the backstop and of what None means records the remedy the paragraph now carries.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json (the applies_when string names a confinement that resolves out on a target declaring no tests_dir, but the brief's paths exclude it, tests pin its phrases, and once the paragraph says no rerun helps in the None case the planner no longer reads the definitions there, so the misdirection has no reader; widening it is a separate story)
+    - workflows/refactor-workflow.json (its applies_when is not misleading and the story changes nothing it states)
+    - schemas/harness-config.schema.json (the contract that the tests_dir token resolves out for a target declaring none is what the story leaves in place; the finding is about what the planner says under it)
+    - orchestration/harness_config.py (resolving an undeclared tests_dir to None is the contract the story preserves, not the defect)
+    - orchestration/context_assembler.py (the rendering the planner receives is unchanged; the story adds prose, not a placeholder)
+    - tests/test_plan_commit.py (its byte comparison subtracts placeholders only, and this story adds none)
+    - tests/test_planner_injection.py (its detector and placeholder count are constraints on the new wording, not things the story changes)
+    - scripts/l5-plan (nothing about how the session is rendered or validated changes)
+
+verification_requirements:
+  - Confirm the backstop paragraph in prompts/planner.md, before the numbered steps, says that where the tests directory is rendered as None no rerun under another workflow definition helps and that the remedy is to declare `tests_dir` in the target's configuration.
+  - Confirm the phrases the existing backstop tests hold — the finishing question, the confinement fact, `l5-plan --workflow`, "do not proceed into the interview", "rendered as None" and "no confinement to it can be recognised" — are still in the paragraph.
+  - Confirm prompts/planner.md carries `{{tests_dir}}` exactly once and that tests/test_planner_injection.py passes unchanged.
+  - Confirm a new test in tests/test_planner_receives_the_standards.py holds the None-case remedy and controls against the baseline template, and that backstop_refuses and the tests applying it are unchanged.
+  - Confirm .harness/docs/ARCHITECTURE.md records the None-case remedy where it records the backstop.
+  - Confirm the full suite passes with no existing assertion weakened or removed.
+
+constraints:
+  - The backstop still refuses where the tests directory is rendered as None; the story changes what the planner tells the developer, not whether it refuses.
+  - The rerun remedy for a named directory with no stage confined to it is preserved in the paragraph.
+  - prompts/planner.md names no stage, no restricted prefix and no tests directory literally, and adds no normative prose the detector in tests/test_planner_injection.py flags.
+  - Python 3.10+, standard library only; the new test invokes no model.
+  - No existing test is weakened, skipped or removed.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-19 22:55:21
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 237
