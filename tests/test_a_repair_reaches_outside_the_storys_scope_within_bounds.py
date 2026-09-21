@@ -1186,14 +1186,15 @@ def test_the_refused_slugs_handed_to_the_accounting_are_the_ones_declined():
 
 def inspected_check(*findings: dict):
     """The bounds asked over the inspection fixture's own table and stages,
-    against the shared sample story that fixture installs — the inputs the
-    two runs above decide with."""
+    against this module's declared story — the one carrying the reasoned
+    do_not_modify entry that bars FROZEN_FILE, which the shared sample story
+    does not carry — so a check here refuses what the runs above refuse."""
     judging = next(stage for stage in inspected.WORKFLOW["stages"]
                    if stage.get("inspection"))
     return story_coordinator.scope_extension_check(
         list(findings), judging["on_failure"]["retry_routing"],
         inspected.STAGE_NAMES, inspected.WORKFLOW["stages"],
-        story_parser.parse(conftest.STORY, STORY_SCHEMA), RULES)
+        DECLARED, RULES)
 
 
 def test_the_routed_slugs_are_read_off_the_findings_artifact_before_accounting(
