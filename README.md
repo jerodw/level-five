@@ -68,6 +68,8 @@ Run directories are execution state rather than source, so `.harness/runs/` is g
 
 ## Prerequisites
 
+**The harness runs on macOS and Linux only.** It does not run on Windows: the coordinator takes its suite lock with `fcntl`, bounds every configured command with a POSIX process group, and links build state into worktrees with symlinks, and the reference tracker script is bash with `jq`. WSL is untested.
+
 - Claude Code CLI (`claude`) with an active subscription
 - Python 3 (3.10+)
 - Git
