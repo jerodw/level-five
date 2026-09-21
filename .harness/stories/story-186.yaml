@@ -1,0 +1,135 @@
+story:
+  id: story-186
+  title: The document a story changes is inspected as the code it changed is
+  description: |
+    Almost every story edits the architecture document, and the inspection
+    that runs after a story completes never reads it. That inspection is
+    bounded to the target's source and tests directories, the document lives
+    outside both, so the changed path is dropped before the Inspector sees
+    anything, and the run has been recording the drop on every story for
+    weeks. Drift that is visible from the code side still gets caught,
+    because the Inspector reads the code and notices the document
+    contradicts it; drift visible only in the prose does not — a paragraph
+    contradicting the one after it, a section made redundant by the one
+    added beneath it, a correction appended under a sentence that still
+    states the thing being corrected.
+
+    This story makes the documents a target declares as its architecture
+    documents inspectable on the same terms as its source. When a story
+    changes one, the document is in the scope the inspection reads and
+    reports, counted against the file cap like any other changed file and
+    trimmed on the same terms as a changed source file. A story that did not
+    change it does not pull it in, and a file beside it that the target has
+    not declared stays out. The Inspector is told what a finding about a
+    document is — a claim the document contradicts elsewhere in itself or
+    that the code contradicts, a fact stated twice — and that a paragraph it
+    would have worded differently is not one, so a large document in scope
+    does not become a brief per paragraph.
+
+    It deliberately leaves alone the claim-support check, which asks a
+    different question (whether a claim the run added about another story is
+    supported) and goes on asking it unchanged; what the source directories
+    mean, since the document is inspected as a declared document and not
+    reclassified as source; and findings that were produced and then lost,
+    which is a separate defect filed separately. This story was planned from
+    the brief filed under key 165.
+
+    The change lands in `orchestration/story_inspection.py`. `scope_prefixes`
+    today returns `source_dirs` plus `tests_dir` as prefixes; the expansion
+    gains the target's `architecture_docs` entries as exact-path scope
+    entries beside those prefixes, so `in_scope` holds for a changed document
+    and for a sibling in its directory only where that sibling is itself a
+    declared document. Both callers of `expansion` — the post-story
+    inspection and the pre-stage inspection — share it, so both read a
+    changed document. `POST_STORY_FRAMING` and `PRE_STAGE_FRAMING` gain the
+    sentence telling the Inspector what a document finding is and what is
+    not one. In `schemas/harness-config.schema.json`, the description of
+    `inspect_after_story_max_files` currently says the scope is bounded to
+    `source_dirs` and `tests_dir` and the description of `architecture_docs`
+    says only that the documents are assembled into every stage's context;
+    both are brought into agreement with the new rule. The paragraph of
+    `.harness/docs/ARCHITECTURE.md` stating the expansion's bound is updated
+    by the documenter. The tester adds the standing assertion to
+    `tests/test_a_completed_story_is_inspected.py`.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/story_inspection.py, extend the scope the expansion is bounded to so that each path the target declares under architecture_docs is in scope as an exact path, beside the source_dirs and tests_dir prefixes; a changed declared document is kept in the changed set, its containing directory contributes only the siblings that are themselves declared documents, and a target declaring no architecture_docs computes exactly the scope it computes today.
+  - Keep the document on the same terms as a changed source file with respect to the file cap - it is ordered among the changed files and trimmed after siblings - and leave cap_paths and the record's naming of what was trimmed as they are, so the record names a trimmed document the way it names any trimmed file.
+  - Add to POST_STORY_FRAMING and PRE_STAGE_FRAMING a sentence telling the Inspector that a declared architecture document the story changed may be among the files listed, that a finding about it is a claim the document contradicts elsewhere in itself, a claim the code contradicts, or a fact the document states more than once, and that wording the Inspector would have chosen differently is not a finding.
+  - Update the docstring of scope_prefixes and the docstring of expansion in orchestration/story_inspection.py so that neither describes the bound as source_dirs plus tests_dir alone.
+  - In schemas/harness-config.schema.json, update the description of inspect_after_story_max_files so the bound it states includes the declared architecture documents, and the description of architecture_docs so it says a declared document is in the scope of an inspection of a story that changed it.
+  - Add tests to tests/test_a_completed_story_is_inspected.py asserting the scope rule for declared documents and the Inspector framing, as the acceptance criteria state.
+  - Update the paragraph of .harness/docs/ARCHITECTURE.md that states the expansion's bound so it records the declared architecture documents as in scope when changed, on the same terms as source, and records that the claim-support check is unchanged by it.
+
+acceptance_criteria:
+  - A run whose stages recorded a change to a path the target declares under architecture_docs has that path in the changed set of the Expansion the post-story inspection computes, and the run's record and events.log line do not name it as left out of scope.
+  - A run whose stages recorded no change to a declared architecture document does not have that document in the Expansion's changed set or siblings, and a target declaring no architecture_docs computes the same Expansion it computed before this story for the same changed paths.
+  - A file in the same directory as a changed declared document that is not itself declared under architecture_docs is not in the Expansion's siblings.
+  - A changed declared document is ordered among the changed files, so cap_paths trims siblings before it and trims it on the same terms as a changed source file where the changed files alone exceed the cap; what is trimmed is named in the record as any trimmed file is.
+  - The pre-stage inspection, which shares the expansion, puts a changed declared document in scope on the same terms.
+  - The prompt rendered for a post-story or pre-stage inspection tells the Inspector what a finding about a declared document is - a claim contradicted elsewhere in the document or by the code, or a fact stated more than once - and that wording it would have chosen differently is not one.
+  - The description of inspect_after_story_max_files in schemas/harness-config.schema.json no longer states the bound as source_dirs and tests_dir alone, and the description of architecture_docs says a declared document is inspected when a story changed it.
+  - orchestration/story_coordinator.py's claim-support check and orchestration/inspection.py's broad-mode scopes are unchanged in behaviour, and every existing test passes without any assertion weakened.
+  - A test in tests/test_a_completed_story_is_inspected.py asserts that a story which changed a configured architecture document has that document in the scope its inspection reports and that one which did not does not, with the undeclared-neighbour case and the framing sentence asserted beside it.
+
+technical_plan:
+  implementation_steps:
+    - Read scope_prefixes, _prefix, _under and expansion in orchestration/story_inspection.py and the docstring of Expansion, and read the harness_config reader for architecture_docs at orchestration/harness_config.py:307 so the key is read the way the rest of the harness reads it.
+    - Add the declared documents to what in_scope consults - as exact paths rather than prefixes, so a document's directory is not pulled in wholesale - and keep the blocked-prefix exclusion applying after it exactly as it does today.
+    - Extend the two framing constants with the document sentence, keeping each a single question that the runner renders as the scope's framing.
+    - Update the docstrings and the two schema descriptions so no text states the old bound.
+    - Tester adds the assertions beside the existing expansion tests at tests/test_a_completed_story_is_inspected.py:1186 onward, using the module's existing fixture idiom for declaring source_dirs and a changed file.
+    - Documenter updates the paragraph at .harness/docs/ARCHITECTURE.md:2210 that states the bound.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The scope the expansion is bounded to gains the declared architecture documents as exact paths; the two framing constants gain the document sentence; the docstrings stop stating the old bound.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The descriptions of inspect_after_story_max_files and architecture_docs state the bound and the consequence of declaring a document, and both currently state the old rule.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: The standing assertion that a changed declared document is in the reported scope, an unchanged one is not, an undeclared neighbour stays out, and the framing carries the document sentence.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The paragraph stating the expansion's bound records the declared documents as in scope when changed and that the claim-support check is unchanged.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - schemas/harness-config.schema.json
+    - tests/test_a_completed_story_is_inspected.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py (the claim-support check it holds answers a different question, whether an added claim about another story is supported, and the brief asks that it go on answering it unchanged)
+    - orchestration/inspection.py (broad-mode scopes are what l5-inspect covers when a developer names no scope; the brief is about the inspection of a story's change, and widening broad mode is a separate decision)
+    - prompts/inspector.md (the per-mode question lives in the framing constants each caller supplies, and the severity scale and floor already apply to a document finding unchanged)
+    - orchestration/context_assembler.py (it reads architecture_docs to assemble stage context, which is a different consumer of the key and is not what this story changes)
+    - orchestration/harness_config.py (the key is already read there in the shape the rest of the harness uses; this story consumes it and adds no new key)
+    - templates/config.yaml (the key already exists in the template and this story declares no new key)
+    - workflows/ (the documenter's confinement to the declared documents is the workflow's business and is not what this story changes)
+
+verification_requirements:
+  - Confirm that a run changing a path declared under architecture_docs reports it in the Expansion's changed set and not among the paths left out of scope, and that a run not changing it does not include it.
+  - Confirm that a target declaring no architecture_docs computes the same Expansion as before for the same changed paths, and that an undeclared file beside a changed declared document is not among the siblings.
+  - Confirm that the cap trims a changed document on the same terms as a changed source file and that the record names it when trimmed.
+  - Confirm that the rendered framing for both inspection modes carries the sentence saying what a document finding is and that wording is not one.
+  - Confirm that the schema descriptions of inspect_after_story_max_files and architecture_docs state the new rule and that no text under orchestration/ or schemas/ still states the bound as source_dirs plus tests_dir alone.
+  - Confirm that the claim-support check and broad-mode scopes are untouched and that all existing tests pass with no assertion weakened or skipped.
+
+constraints:
+  - The post-story inspection remains a total function that may never block, delay or refuse a run; a declared document the tree does not hold is excluded and named exactly as any other unheld path is.
+  - The declared documents are not added to source_dirs or reclassified as source; they are in scope as declared documents.
+  - No new configuration key is declared; the existing architecture_docs key is what the scope reads.
+  - The file cap, the severity floor and the brief cap apply to a document finding exactly as they apply to any other; no second cap or floor is introduced for documents.
+  - The coordinator stays deterministic: the scope is computed before any agent is invoked, with no model call.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:16:24
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 165
