@@ -1,0 +1,199 @@
+story:
+  id: story-191
+  title: The post-story inspection reports a refused area suggestion, every drop reason it defines, and a record it could not write, where a reader meets its other outcomes
+  description: |
+    After a story finishes, the harness inspects the result and writes a few
+    lines into the run's log saying what it found, what it filed as backlog
+    items, and what it left out. Three of those lines are wrong or missing.
+    When a filed item names no area and the Inspector's only attempt to
+    suggest one was rejected, the note telling a developer "this item has no
+    area" is written on the direct filing path but never on the path every
+    real run uses, where items are held until the run completes: the evidence
+    that a suggestion was made is dropped when the items are held. The
+    one-line summary counts its drops by walking a list of reasons written by
+    hand inside the summary function, so a reason the module defines and the
+    list does not name is counted in the total and named nowhere. And when the
+    inspection's record cannot be written to the history at all, the log says
+    the record was written but "no record path is tracked", which sends a
+    reader to look for tracking when the problem was writing — while a target
+    that genuinely ignores its history never reaches that phrase and is
+    instead told, in capitals, that its record was NOT committed on every
+    story.
+
+    This story fixes all three in the post-story reporting code. The artifact
+    that holds items for the run's completion also carries the suggestions
+    the Inspector wrote and the reader refused, so the completion filing can
+    tell that the target has an area vocabulary and say which filed item
+    named none. The summary counts its drops from the reasons the drops
+    themselves carry, so the vocabulary of reasons is stated once, in the
+    module that defines it. And the record commit first establishes whether
+    the record exists on disk: a record that was never written is reported as
+    not written, with the cause where one is known, in the same words the
+    hand-run broad inspection already uses; "no record path is tracked" is
+    said only for a target whose history git actually ignores, which is asked
+    of git rather than inferred from a file's absence.
+
+    It leaves alone what the inspection looks for and how findings are
+    routed, the commit itself with its return-code checks and its unstaging
+    on failure, and the broad inspection's own report, which already says
+    these things and is the text the post-story lines are brought to match.
+
+    This story was planned from the brief filed under 271, which covers the
+    work filed as #261, #262 and #263.
+
+    Where the three live. In orchestration/story_inspection.py: `write_held`
+    serialises only the usable `AreaSuggestion` pairs and nothing about
+    drops, `held_area_suggestions` reads only those back, and
+    `_file_at_completion` builds the `inspection.Report` whose
+    `unnamed_areas` gate reads `dropped_for(UNUSABLE_SUGGESTION)` from the
+    filing's own drops, which never carry that reason — so on a run whose
+    every held brief named no area and whose only suggestion was refused, the
+    gate closes and no "no area was named for" note is written.
+    `_inspect_after_story` carries `result.dropped` into its report and is the
+    path that works. `_summary` walks a hand-written `reasons` list and calls
+    `report.dropped_for(reason)` for each, while the completion line thirty
+    lines below `_file_at_completion` derives its reasons from `dropped`
+    itself. `_say` guards the whole of `append_event`, which writes
+    events.log and the run's history before the cross-run projection, so a
+    history directory that cannot be written leaves the inspection line in
+    events.log and no segment file; `commit_record` then asks `record_paths`,
+    whose guard turns any raise into `()` and which keeps only files that
+    exist, and `inspection.commit_record_paths` answers
+    `Recorded(written=True, committed=False, detail="nothing staged: no
+    record path is tracked")`. In orchestration/inspection.py: `record`
+    already returns `Recorded(detail="the record could not be written: …")`
+    on a raise and the same shape when the declaration routes the kind to no
+    log, which is the vocabulary the narrow path is brought to;
+    `commit_record_paths` filters nothing on git tracking, so a target
+    ignoring its history lands on "git add failed: The following paths are
+    ignored …" rather than the not-tracked branch the `Recorded` docstring
+    says exists to avoid calling it a failure.
+
+    The shape decided at planning, so the stages do not renegotiate it. The
+    held artifact gains a key of its own — `refused_area_suggestions`, a list
+    of the detail strings of each `Drop` under `UNUSABLE_SUGGESTION` the
+    pre-stage inspection made — and the completion filing reads them back as
+    `Drop(UNUSABLE_SUGGESTION, detail)` and passes them into the `Report` it
+    builds for the area gate only: the `inspection-filed` line's own `dropped`
+    count and its per-reason clauses count the filing's drops exactly as
+    today, because the refused suggestions were already counted on the
+    inspection's own line. `_say` returns a string — "" where `append_event`
+    returned, and the exception's text where the guard swallowed one — and
+    every caller that goes on to commit threads it to `commit_record` through
+    a keyword argument (`_report` returns what its `_say` returned, so
+    `_inspect_after_story` can thread it). `story_inspection.record_paths`
+    stops turning a raise into `()`, since `commit_record` already guards the
+    whole body and the exception then reaches the detail. `commit_record`
+    decides before staging: where the history declaration routes the
+    inspection kind to no log it reports not written in the words `record`
+    uses for that; where the segment files the append would have written are
+    absent it reports `written=False` with "the record could not be written:
+    <cause>", the cause being what `_say` swallowed, or a fixed phrase saying
+    no history segment holds the record where nothing was swallowed; else it
+    stages through `commit_record_paths` as today. Its events.log note takes
+    the two shapes scripts/l5-inspect prints: "inspection record of
+    <story> written but NOT committed: <detail>" and "inspection record of
+    <story> NOT committed, because it was not written: <detail>".
+    `commit_record_paths` asks git whether the named paths are ignored (`git
+    check-ignore`) before `git add`, and where every path is ignored answers
+    "nothing staged: no record path is tracked" as a not-committed,
+    non-failure outcome; its empty-paths branch stops claiming anything about
+    tracking and says no record path was named.
+  workflow: story-workflow
+
+tasks:
+  - Carry the pre-stage inspection's refused area suggestions to the run's completion, by writing each UNUSABLE_SUGGESTION drop's detail into the held artifact under refused_area_suggestions in write_held and reading them back as Drops in a reader beside held_area_suggestions, and have _file_at_completion pass them into the Report its unnamed_areas gate reads, so a held-then-filed brief that named no area beside a refused suggestion is reported as area-less at completion. The inspection-filed line's dropped count and per-reason clauses stay computed from the filing's own drops.
+  - Replace the hand-written reasons list in _summary with a derivation from the reasons report.dropped actually carries, in first-seen order, each named once with its count, so the summary counts every reason the module defines and any it does not, and _summary names no reason constant.
+  - Make the swallowed write failure reach the record commit, by having _say return the exception's text ("" where the append returned), having _report return what its _say returned, threading that value from every committing call site into commit_record through a keyword argument, and letting story_inspection.record_paths raise rather than return () — commit_record's own guard already covers it.
+  - Make commit_record establish whether the record was written before it claims so, distinguishing the declaration routing the inspection kind to no log, the routed segment files being absent (reported as written=False with "the record could not be written: <cause>"), and the record being present and staged as today; and write its events.log note in the two shapes scripts/l5-inspect prints, "written but NOT committed: <detail>" and "NOT committed, because it was not written: <detail>".
+  - Have commit_record_paths ask git whether the named record paths are ignored before staging them, answering "nothing staged: no record path is tracked" as a not-committed, non-failure outcome where every path is ignored, and reword its empty-paths branch so it no longer claims anything about tracking; update the Recorded and commit_record_paths docstrings to say what is now true.
+  - Write a standing test module under tests/ that holds the three outcomes, and adapt the existing test docstrings and assertions the change makes false.
+  - Record the change in .harness/docs/ARCHITECTURE.md beside the sections that describe the held artifact, the summary line and the record commit.
+
+acceptance_criteria:
+  - A pre-stage inspection whose Inspector wrote a refused area suggestion writes that refusal's detail into the held artifact under refused_area_suggestions, and one whose suggestions were all usable, or that wrote none, writes an empty list there.
+  - Driving file_at_completion against a run directory whose final attempt's held artifact holds a brief naming no area and a refused suggestion, and no usable suggestion, writes a "no area was named for <slug>" line to events.log for that brief.
+  - Driving file_at_completion against a held artifact holding an area-less brief, no suggestion and no refusal writes no "no area was named for" line, so a target declaring no vocabulary is reported exactly as before.
+  - A refused suggestion carried to completion reaches no brief, no payload and no outbox entry, and the inspection-filed line's dropped count does not count it.
+  - The source of _summary names no drop-reason constant of the inspection module, and a Report whose dropped carries a reason no constant defines is summarised with that reason and its count on the line.
+  - For every reason the inspection module defines, the summary line reads as it did — "; <reason>: <count>" for each reason with a non-zero count — and the existing assertions over those clauses pass unchanged in what they assert.
+  - Running the post-story inspection against a run whose history directory cannot be written leaves the inspection line in events.log, returns from commit_record a Recorded with written False and committed False whose detail begins "the record could not be written", and writes exactly one events.log note reading "inspection record of <story> NOT committed, because it was not written: <detail>" in which the cause of the write failure appears and "no record path is tracked" does not.
+  - Where story_inspection.record_paths raises inside commit_record, the exception's text appears in the Recorded detail and in the events.log note.
+  - A record that was written and whose commit fails is reported as before, with written True, committed False, git's words in the detail, and a note reading "inspection record of <story> written but NOT committed: <detail>".
+  - A target whose ignore rules keep the history directory out of version control gets a Recorded with written True, committed False and the detail "nothing staged: no record path is tracked", not one beginning "git add failed", and gains no commit.
+  - The broad inspection's own report — inspection.record and the lines scripts/l5-inspect prints — is unchanged in what it says on every path it took before.
+  - The new test module and every adapted test pass, and no existing assertion is weakened or skipped.
+
+technical_plan:
+  implementation_steps:
+    - In write_held, add a refused_area_suggestions parameter defaulting to () and serialise each item's detail as a string under that key; in _inspect_before_stage, pass the details of result.dropped entries whose reason is inspection.UNUSABLE_SUGGESTION.
+    - Add a reader beside held_area_suggestions that returns tuple[inspection.Drop, ...] under UNUSABLE_SUGGESTION from the held artifact's refused_area_suggestions, tolerant of the key's absence and of non-string entries.
+    - In _file_at_completion, build the Report for the area gate with dropped=tuple(dropped) + held refusals, and keep the line, its dropped count and the _say call computed from the local dropped list.
+    - In _summary, replace the reasons list with a first-seen-ordered count over report.dropped, and update its docstring.
+    - Change _say to return str ("" on success, the exception's text on the swallowed raise); change _report to return what its _say returns; thread the value from _inspect_after_story, its bad-bound path, inspect_after_story's guard, file_at_completion's guard, _file_at_completion's bad-bound path and its ordinary path into commit_record as a keyword argument.
+    - Remove the guard in story_inspection.record_paths so a raise reaches commit_record's own guard; update its docstring.
+    - In commit_record, before commit_record_paths, resolve which logs the declaration routes the inspection kind to (the derivation inspection.record_paths already makes, exposed rather than copied) and the story's segment; report the no-log case and the absent-files case as not written with the detail described in the story, and only otherwise stage; word the events.log note in the two shapes.
+    - In inspection.commit_record_paths, run git check-ignore over the paths before git add and answer the not-tracked detail where every path is ignored; reword the empty-paths branch; update the Recorded docstring's account of the not-tracked branch.
+    - Tester writes the standing module and adapts tests/test_what_the_inspector_files_is_not_noise.py's docstring that says the summary lists every reason, tests/test_a_record_commit_that_fails_is_reported.py's stage-nothing test to the new detail, and tests/test_a_completed_story_is_inspected.py's untracked-record test if its wording is made false.
+    - Documenter records the three changes in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: write_held, the held-refusals reader, _file_at_completion, _summary, _say, _report, record_paths and commit_record carry the three changes.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: commit_record_paths asks git whether the record paths are ignored, rewords its empty-paths branch, and the Recorded docstring says what the not-tracked branch now is; the routed-logs derivation record_paths makes is exposed for the narrow commit.
+    - file: tests/test_the_post_story_inspection_reports_its_other_outcomes.py
+      stage: tester
+      reason: The new standing module holding the refused-suggestion note at completion, the derived summary counts, and the not-written record report.
+    - file: tests/test_what_the_inspector_files_is_not_noise.py
+      stage: tester
+      reason: Its docstring says the post-story summary lists every reason so it can count each one, which the story makes false.
+    - file: tests/test_a_record_commit_that_fails_is_reported.py
+      stage: tester
+      reason: The stage-nothing test's docstring and expectations describe a case the story now reports as not written.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: The untracked-record test's wording may be made false by the check-ignore answer; adapted only where it is.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the held artifact's new key, the derived summary counts and the not-written record report beside the sections describing each.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/inspection.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/inspector.md (what the Inspector is asked to write is unchanged; the suggestion field keeps its shape and the refusal is carried by the coordinator's own held artifact)
+    - schemas/inspection-findings.schema.json (the Inspector's envelope is unchanged; the held artifact is the coordinator's own file and has no schema)
+    - scripts/l5-inspect (the broad report already prints both record shapes; the story brings the post-story lines to it, not the other way)
+    - orchestration/story_coordinator.py (append_event's events.log format and its history projection are unchanged; the write failure is surfaced by the caller that guards it rather than by changing the append)
+    - workflows/ (which stage declares the inspection is unchanged)
+    - inspection.record and the commit, return-code checks and unstaging in inspection.commit_record_paths (right in both modes; the story adds a question before the add and changes only the detail wording of the branches named)
+
+verification_requirements:
+  - Confirm a driven file_at_completion writes the "no area was named for" note for an area-less held brief beside a refused suggestion, and writes none where there is neither suggestion nor refusal.
+  - Confirm the source of _summary names no drop-reason constant and that a Report with a reason no constant defines is summarised with that reason and its count.
+  - Confirm the events.log note and the Recorded for a history directory that cannot be written say the record was not written, carry the cause, and do not say "no record path is tracked".
+  - Confirm a target ignoring its history directory gets the not-tracked detail rather than a git add failure and gains no commit.
+  - Confirm the broad inspection's report lines and inspection.record's outcomes are unchanged.
+  - Confirm the full suite passes with the new module and no existing assertion weakened or skipped.
+
+constraints:
+  - A refused area suggestion reaches no brief, no payload, no outbox entry and no tracker, at inspection time and at completion.
+  - The inspection-filed line's dropped count and per-reason clauses count the filing's own drops, as today.
+  - Every producer in story_inspection stays total: nothing added raises past the guard of the entry point it runs under, and no inspection outcome changes a run's status or exit code.
+  - The commit stages by name, checks both git return codes, unstages on a failed commit, and neither retries, amends, resets past the staged paths nor pushes.
+  - Existing tests are not weakened or skipped; adaptations change wording and expectations the story made false and nothing else.
+  - Standard library only; no model call inside coordinator logic.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 14:34:25
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 271
