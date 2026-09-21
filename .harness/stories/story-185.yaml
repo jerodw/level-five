@@ -1,0 +1,136 @@
+story:
+  id: story-185
+  title: The Inspector is told one place for a brief's file:line evidence, and it is the place the prose layer and the brief schema name
+  description: |
+    The Inspector writes most of this repository's briefs, and the prompt it
+    works from tells it two things about where a brief's evidence goes. Its
+    own instructions say the file:line citations go in the line the body
+    opens with. The shared writing rule rendered above that text and the
+    brief schema rendered below it both say the opening is plain English —
+    what is wrong, what the work does about it, what it leaves alone — and
+    that paths and line-level names come in the paragraphs after. Whichever
+    the Inspector obeys, it disobeys the other in every brief it files.
+
+    This story changes one clause in the Inspector's instructions so it says
+    what the rule and the schema say: the opening says what is wrong in plain
+    terms, and the file:line evidence follows in the paragraphs after it. The
+    brief schema's title description carries a milder version of the same
+    clause, and the filing skill's title section carries an ambiguous one;
+    both get the same one-clause repair, so the documents a brief writer
+    reads say it the same way. A test then holds that none of those documents
+    places the evidence in the opening, beside the existing assertion that
+    the opening says what is wrong.
+
+    The rule itself, the body descriptions in both schemas and the skill's
+    body section are left as they are: they already agree with each other and
+    are the wording the repaired sentences are brought to. No check scores
+    where a brief's evidence sits; the rule stays prose for a writer.
+
+    Where the statements are. prompts/inspector.md:212-214 says of what is
+    wrong today that "it is said in the body's opening line: that is the case
+    for the work, and it is where your file:line evidence already goes".
+    prompts/prose-layer.md:47-48, rendered into that prompt through
+    {{prose_layer}}, says "Paths, stage names, check names and field names are
+    kept for the paragraphs that follow the opening".
+    schemas/story-brief.schema.json:27, rendered through
+    {{story_brief_schema}}, says "The paragraphs naming paths, stage names,
+    check names and field names follow that opening". The title description at
+    schemas/story-brief.schema.json:19 says the body "opens by saying it,
+    which is where the case rests and where the file:line evidence already
+    lives". plugin/skills/file-a-brief/SKILL.md:56-58 says "open the body by
+    saying what is wrong today: that is the case for the work, the file:line
+    evidence is already there", and its body section at SKILL.md:66-72 keeps
+    the evidence "for the paragraphs after the opening". prompts/assist.md:57
+    and orchestration/story_brief.py:28 already put the evidence in the body
+    after the opening and are not touched.
+
+    What holds the wording today: missing_where_the_fault_is_said at
+    tests/test_a_brief_is_titled_for_its_end_state.py:300-311 requires only
+    "body", "category", "severity" and one of "broken"/"wrong" of each
+    document, which the repaired sentences keep, so that module holds rather
+    than adapts. tests/test_every_story_and_brief_opens_in_plain_english.py
+    pins the body description, which does not change. story-180 left
+    prompts/inspector.md alone on the ground that its sentence about the
+    opening agreed with the form (.harness/stories/story-180.yaml:119); the
+    half about what is wrong does, and the half about where the evidence goes
+    is what this story repairs.
+
+    This story was planned from the brief filed under 253.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/inspector.md, replace the clause saying the file:line evidence goes in the body's opening line with one saying the opening says what is wrong in plain terms and the file:line evidence follows in the paragraphs after it, keeping the rest of the sentence (that what is wrong today is said in the body's opening, and that category and severity carry the fact that something is broken now).
+  - In the title description of schemas/story-brief.schema.json, replace "where the file:line evidence already lives" said of the opening with a clause placing the evidence in the paragraphs that follow the opening, agreeing with the body description eight lines below it.
+  - In the title section of plugin/skills/file-a-brief/SKILL.md, replace "the file:line evidence is already there" with a clause placing the evidence in the paragraphs after the opening, agreeing with the skill's own body section.
+  - Add assertions under tests/ that no document a brief writer reads — the Inspector prompt, the brief schema's title description, the assist prompt and the skill — places file:line evidence in the opening, beside the existing assertion that the opening says what is wrong; record the superseded clauses literally, as tests/test_a_brief_is_titled_for_its_end_state.py records the wordings story-159 replaced, and assert no document carries them.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - The rendered Inspector prompt no longer says the file:line evidence goes in the body's opening line, and says instead that the opening says what is wrong and the evidence follows in the paragraphs after it.
+  - The title description of schemas/story-brief.schema.json no longer says the opening is where the file:line evidence lives, and agrees with its body description that the evidence follows the opening.
+  - The title section of plugin/skills/file-a-brief/SKILL.md no longer says the file:line evidence is already there in the opening, and agrees with its body section.
+  - prompts/prose-layer.md, the body description of schemas/story-brief.schema.json, the description of schemas/story.schema.json, the body section of plugin/skills/file-a-brief/SKILL.md, prompts/assist.md and orchestration/story_brief.py are unchanged.
+  - A test asserts, over each document a brief writer reads, that no sentence places file:line evidence in the opening, and a control shows the scan reporting each superseded clause as this story found it.
+  - Every test in tests/test_a_brief_is_titled_for_its_end_state.py, tests/test_a_brief_is_not_only_a_defect.py, tests/test_every_story_and_brief_opens_in_plain_english.py, tests/test_inspection.py and tests/test_the_assist_agent_files_a_brief.py passes unchanged.
+  - No check under orchestration/ scores where a brief's evidence sits.
+
+technical_plan:
+  implementation_steps:
+    - Edit the sentence at prompts/inspector.md:212-215 so the opening line is where what is wrong is said and the file:line evidence follows in the paragraphs after it; restate the schema's wording rather than quoting a whole sentence of it, because test_no_document_quotes_a_whole_sentence_of_the_schemas_description reads both.
+    - Edit the clause at schemas/story-brief.schema.json:19 to place the evidence in the paragraphs that follow the opening.
+    - Edit the clause at plugin/skills/file-a-brief/SKILL.md:56-58 to place the evidence in the paragraphs after the opening.
+    - Write the test module, reading the documents through the same paths tests/test_a_brief_is_titled_for_its_end_state.py reads them, with the superseded clauses held as literal values and the scan shown reporting them.
+    - Record the story in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: The clause placing the file:line evidence in the opening line is replaced by one placing it in the paragraphs after.
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: The title description's clause placing the evidence where the body opens is replaced by one agreeing with the body description.
+    - file: plugin/skills/file-a-brief/SKILL.md
+      stage: implementer
+      reason: The title section's "already there" clause is replaced by one agreeing with the skill's body section.
+    - file: tests/test_a_briefs_evidence_follows_its_opening.py
+      stage: tester
+      reason: New module asserting no document a brief writer reads places file:line evidence in the opening, with the superseded clauses recorded and the scan's controls; the name is the tester's to settle.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The record of what the story changed and why.
+
+scope:
+  modify:
+    - prompts/inspector.md
+    - schemas/story-brief.schema.json
+    - plugin/skills/file-a-brief/SKILL.md
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/prose-layer.md (the entry at lines 47-48 is the rule the repaired sentences are brought to; it already says the names follow the opening)
+    - The body description of schemas/story-brief.schema.json and the description of schemas/story.schema.json (they already agree with the prose layer and are the wording being matched; tests/test_every_story_and_brief_opens_in_plain_english.py pins them)
+    - The body section of plugin/skills/file-a-brief/SKILL.md (it already puts the evidence in the paragraphs after the opening; the title section is brought to it)
+    - prompts/assist.md (line 57 already cites the evidence in the paragraphs after the opening)
+    - orchestration/story_brief.py (its module docstring puts the evidence in the body rather than the opening, which agrees with the form)
+    - orchestration/ (no check scores where a brief's evidence sits; the rule stays prose for a writer)
+    - tests/test_a_brief_is_titled_for_its_end_state.py, tests/test_a_brief_is_not_only_a_defect.py, tests/test_every_story_and_brief_opens_in_plain_english.py, tests/test_inspection.py and tests/test_the_assist_agent_files_a_brief.py (their scans want terms the repaired sentences keep, so the new wording must satisfy them rather than alter them)
+
+verification_requirements:
+  - Confirm the rendered Inspector prompt, the schema's title description and the skill's title section each place the file:line evidence after the opening and not in it, by the new module's assertions and their controls.
+  - Confirm the prose-layer entry, both body descriptions, the skill's body section, prompts/assist.md and orchestration/story_brief.py are unchanged.
+  - Confirm every test in the modules named under do_not_modify passes unchanged.
+  - Confirm no file under orchestration/ changed.
+
+constraints:
+  - The Inspector's behaviour beyond where it cites evidence is unchanged; the edit to its prompt is one sentence.
+  - The rule that the opening says what is wrong today, and that category and severity carry the fact that something is broken, is kept in every document that states it.
+  - The repaired sentences restate the schema's wording rather than quote a whole sentence of it.
+  - No check scores where a brief's evidence sits or whether an opening is plain enough.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:12:16
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 253
