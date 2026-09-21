@@ -20,3 +20,6 @@
 {"story_id": "story-183", "operation": "suite-run", "duration_seconds": 527.977, "timestamp": "2026-09-21 12:30:11"}
 {"story_id": "story-183", "operation": "tester", "duration_seconds": 584.636, "timestamp": "2026-09-21 12:30:11"}
 {"story_id": "story-183", "operation": "documenter", "duration_seconds": 45.203, "timestamp": "2026-09-21 12:30:56"}
+{"story_id": "story-183", "operation": "inspection", "duration_seconds": 285.493, "timestamp": "2026-09-21 12:48:45"}
+{"story_id": "story-183", "operation": "verifier", "duration_seconds": 1175.243, "timestamp": "2026-09-21 13:03:34"}
+{"story_id": "story-183", "operation": "clean-clone", "duration_seconds": 504.414, "timestamp": "2026-09-21 13:11:59"}
