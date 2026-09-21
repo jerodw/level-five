@@ -1,0 +1,144 @@
+story:
+  id: story-192
+  title: A run that escalated at the retry ceiling resumes, because the resume restores the budget whose exhaustion stopped it
+  description: |
+    A story that ran out of retries cannot be run again until something is
+    changed by hand, even though running it again is exactly what would
+    finish it. story-183 stopped on 2026-09-21 with "verification failed and
+    retries are exhausted": its code was correct and the verifier's verdict
+    named a one-line fix to a test that the next verification would route to
+    the tester. l5-run refused to resume it, saying nothing had changed since
+    the escalation and resuming would reach the same point the same way. The
+    developer's only ways forward were to make the fix by hand or to touch
+    something unrelated so the refusal would let go.
+
+    The refusal is wrong for this case, and the harness already accepts the
+    argument for a sibling case. Resuming a run gives it a fresh retry
+    allowance — the retry count goes back to zero, and the refusal's own
+    guidance says so — so a run that stopped because that allowance was
+    spent will not reach the same point: it will take the retry it could not
+    take before. A run stopped on an exhausted self-route budget is already
+    exempted from the refusal for exactly this reason, and a run stopped on a
+    cost ceiling is exempted for a related one. This story exempts a run
+    stopped at the retry ceiling the same way: when the recorded retry count
+    is at or past the ceiling the rules declare, the resume proceeds without
+    being put to the unchanged-since-escalation refusal at all, and enters
+    at the stage the run stopped at with a retry count of zero.
+
+    Everything else about the refusal stays as it is. A run that escalated
+    for a reason a fresh allowance cannot fix — a mechanical failure, an
+    ownership violation, a check that could not run, or a verdict the
+    verifier declared unfinishable by retry, as story-190's was — is still
+    refused while the story, the branch and the harness are unchanged, with
+    the same message it prints today. The retry ceiling itself, the places
+    that compare against it, and what a resume does once it is permitted are
+    not changed. This story was planned from the brief filed under 265.
+
+    Where it lands. The exemption sits at the guard's call site in
+    orchestration/story_coordinator.py, in run_story beside the existing
+    `not state.stopped_on_cost` condition (near :10083), rather than inside
+    unchanged_since_escalation: the rules are already loaded in run_story
+    (:9876) and the guard is called with the state, the story text and the
+    two roots and reads nothing else, so placing the exemption there means
+    the guard's signature, its text and every test that calls it are left
+    untouched. The condition reads state.retry_count against
+    rules["max_retries"] — the counter the escalation sites at :11742 and
+    :12148 compare and the rules value they compare it against — and never
+    the escalation's reason text. The self-route exemption inside the guard
+    (:8789) stays where it is; a reader is pointed from the call-site comment
+    to it and from the guard's docstring to the call site, so the two budget
+    exemptions name each other.
+
+    What "at the ceiling" exempts. The counter is read alone, so any run
+    escalated with retry_count at or past the ceiling is exempted, including
+    one whose verifier declared the work unfinishable while the count already
+    stood at the ceiling. That is the imprecision the self-route exemption
+    already accepts, and it errs toward permitting a pointless resume rather
+    than refusing a needed one, which is the guard's stated bias; the
+    developer accepted it at planning.
+
+    What holds it. tests/test_resume_guard.py gains the assertions below,
+    written by the tester. BUDGET_LEG (:491) and the pre-story
+    reconstruction, the three-comparison count and the guard's inputs scan
+    all hold unchanged, because the guard's text does not change — and one
+    new assertion says so. The behavioural shape follows
+    tests/test_self_routing_retry.py::test_a_resumed_run_starts_the_resumed_stage_with_a_count_of_zero
+    (:1312) and
+    tests/test_bookkeeping_self_route_budget.py::test_a_resume_starts_the_resumed_stage_with_both_counters_at_zero
+    (:644). The documenter records the exemption in
+    .harness/docs/ARCHITECTURE.md beside the paragraph that records the
+    cost-ceiling skip ("One recorded run state now skips the guard", :357).
+  workflow: story-workflow
+
+tasks:
+  - In run_story, at the call site of unchanged_since_escalation, exempt a run whose state.retry_count is at or past rules["max_retries"] from being put to the guard, in the same condition and shape as the existing stopped_on_cost exemption, with a comment giving the reason: the resume zeroes retry_count, so the resume restores the very resource whose exhaustion stopped the run, and refusing would tell the developer nothing has changed while the harness is about to change it.
+  - Have that comment name the self-route exemption inside the guard as the sibling it mirrors, and add one sentence to the guard's docstring pointing at the call-site exemption, so a reader finding either finds the other; change nothing else in the guard's docstring, comments or code.
+  - Leave the refusal guidance text that already states the fact this exemption acts on (the "restores the run's attempt allowance" block near :8645) as it is.
+  - Write the assertions in tests/test_resume_guard.py that hold the exemption, listed under acceptance criteria.
+  - Record the exemption in .harness/docs/ARCHITECTURE.md beside the cost-ceiling paragraph under "Resuming a run".
+
+acceptance_criteria:
+  - A run whose state records status escalated, stopped_on_cost false, self_route_count zero and retry_count equal to the rules' max_retries, with the story artifact, the branch and the harness all what they were at escalation, resumes when l5-run is invoked for it rather than being refused, and enters at the recorded stage with retry_count zero.
+  - The same holds when retry_count is greater than max_retries.
+  - A run so resumed whose next verification fails with a retry recommended takes a retry — the verification-failed event names retry 1 of max_retries and routes to the declared destination — rather than escalating again at the ceiling.
+  - A run escalated with retry_count below max_retries, self_route_count zero and stopped_on_cost false, with nothing changed, is still refused, and the refusal text is byte for byte what the coordinator prints today for that run.
+  - The exemption is decided from state.retry_count and rules["max_retries"] and from nothing else: a test that rewrites the recorded escalation reason to a budget-exhaustion sentence while retry_count is below the ceiling still sees the refusal, and one that rewrites it to a non-budget sentence while retry_count is at the ceiling still sees the resume.
+  - The executable source of unchanged_since_escalation is unchanged by this story, and the existing tests over it — the pre-story reconstruction with BUDGET_LEG listed, the three-comparison count, and the no-bypass scan — pass without edits.
+  - A new test in tests/test_resume_guard.py proves its own non-vacuity by loading a mutant coordinator with the exemption removed and observing the refusal return for the at-ceiling run, in the way the module's existing tests use load_mutant.
+  - The full suite passes with the new tests.
+  - .harness/docs/ARCHITECTURE.md records that a run stopped at the retry ceiling skips the guard at the call site, beside the cost-ceiling paragraph, and says the decision is read from the counter and the rules rather than the reason text.
+
+technical_plan:
+  implementation_steps:
+    - Read run_story's resume branch around :10080-10100 and the guard's docstring at :8718-8774, then the self-route exemption comment at :8775-8790, so the new comment uses the same vocabulary.
+    - Add the condition to the resume branch's if statement beside `not state.stopped_on_cost`, reading state.retry_count >= rules["max_retries"], with the comment described in the tasks; rules is already bound at :9876.
+    - Add one sentence to the guard's docstring naming the call-site exemption for the retry ceiling and the cost ceiling, without touching the docstring's other sentences or any code in the function.
+    - Tester writes the assertions in tests/test_resume_guard.py, using the module's existing escalate/guard helpers and load_mutant for the non-vacuity control, and a run_story-level test for the resume-then-retry shape modelled on the two cited tests.
+    - Documenter adds the paragraph to ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The call-site exemption in run_story, its comment, and one sentence in the guard's docstring.
+    - file: tests/test_resume_guard.py
+      stage: tester
+      reason: The assertions holding the exemption, the byte-for-byte refusal for a non-budget escalation, the counter-not-prose check, the unchanged-guard check, and the mutant control.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the retry-ceiling skip beside the cost-ceiling skip under "Resuming a run".
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_resume_guard.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - the body of unchanged_since_escalation in orchestration/story_coordinator.py, other than one docstring sentence (the exemption lives at the call site so the guard's three comparisons, the shared-root leg, the self-route exemption and the tests that reconstruct its text are all left as they are)
+    - the escalation sites that compare state.retry_count against rules["max_retries"] (:11742 and :12148) and rules/execution-rules.json (the ceiling and where it is enforced are not what this story is about; it changes only whether a run stopped there may resume)
+    - the resume path that zeroes the counters and re-enters at the recorded stage (near :10329) (the resume must re-enter at the recorded stage as it does today; nothing skips the verifier or edits the tree on the run's behalf)
+    - the refusal guidance text near :8645 (it already states the fact this exemption acts on, so it needs no change)
+    - tests/test_escalation_resume.py, tests/test_cost_ceiling.py, tests/test_capacity_pause.py, tests/test_a_run_stands_on_its_branch_first.py (they call the guard by its current signature, which this story keeps, so no adaptation is forced)
+    - tests/test_self_routing_retry.py and tests/test_bookkeeping_self_route_budget.py (they are the model for the new assertions, not their home)
+
+verification_requirements:
+  - Confirm the exemption is at the call site in run_story, reads state.retry_count and rules["max_retries"], and reads no escalation reason text.
+  - Confirm the executable source of unchanged_since_escalation is unchanged from the base of the story branch, and that the tests in tests/test_resume_guard.py that reconstruct and count it pass without edits.
+  - Confirm the new tests cover both the at-ceiling resume and the below-ceiling refusal, that the refusal text for the below-ceiling run is compared whole against what the coordinator printed before this story, and that the mutant control fails the at-ceiling case.
+  - Confirm the resumed run enters at the recorded stage with retry_count zero and that a failing verdict after the resume takes a retry rather than escalating.
+  - Confirm the full suite passes.
+  - Confirm ARCHITECTURE.md records the exemption beside the cost-ceiling paragraph.
+
+constraints:
+  - The coordinator stays deterministic; the exemption reads state.json and the loaded rules only.
+  - The three comparisons the guard makes, the shared-root leg and the self-route exemption keep their text and behaviour.
+  - A run escalated for any reason other than a spent retry budget, with nothing changed, is still refused with today's message.
+  - The resume re-enters at the recorded stage exactly as it does today; the retry ceiling and the escalation sites that enforce it are unchanged.
+  - Existing tests are not weakened or skipped.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 14:42:39
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 265
