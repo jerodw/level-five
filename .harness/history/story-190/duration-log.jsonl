@@ -1,0 +1,5 @@
+{"story_id": "story-190", "operation": "implementer", "duration_seconds": 1468.449, "timestamp": "2026-09-21 09:38:11"}
+{"story_id": "story-190", "operation": "suite-run", "duration_seconds": 894.732, "timestamp": "2026-09-21 11:04:07"}
+{"story_id": "story-190", "operation": "tester", "duration_seconds": 5155.255, "timestamp": "2026-09-21 11:04:07"}
+{"story_id": "story-190", "operation": "documenter", "duration_seconds": 151.765, "timestamp": "2026-09-21 11:06:38"}
+{"story_id": "story-190", "operation": "inspection", "duration_seconds": 291.026, "timestamp": "2026-09-21 11:11:29"}

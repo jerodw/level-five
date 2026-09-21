@@ -18,14 +18,27 @@ subjects, kept apart:
     itself when its own suite drives the coordinator on constructed targets.
 
   * **the ways the turn fails toward running.** A holder that was killed, a
-    lock file that cannot be created or opened, and a bound that expired are
-    each shown running the suite, recording the result it would have recorded
-    with the turn, and saying in the events log why no turn was taken.
+    lock file that cannot be created or opened, and a bound of zero that found
+    the turn held are each shown running the suite, recording the result it
+    would have recorded with the turn, and saying in the events log why no
+    turn was taken.
 
   * **the bound.** Observed through an injected clock and an injected sleep, so
-    nothing here waits: the wait ends at the configured number of minutes and
-    not before, a holder that lets go inside the bound is waited for, and an
-    absent key waits up to sixty minutes.
+    nothing here waits. The key counts suite runs: with an estimate of what a
+    suite run takes here, established through `set_duration_estimates`, the
+    wait ends at the count times the estimate and not before, and the
+    announcement names both; with no estimate it ends at the sixty-minute
+    fallback and the announcement says why. A holder that lets go inside the
+    bound is waited for, and an absent key waits five suite runs' worth.
+
+  * **the takeover (story-190).** A wait that expires on a holder still there
+    takes the turn from it rather than running beside it: a fresh lock file
+    is renamed over the path while the holder keeps its lock on the orphaned
+    inode. Three waiters behind one hung holder, each on a thread of its own
+    and all on one fake clock stepped from the test, are shown draining one
+    per bound and never together; every waiter that did not take over says
+    the turn changed hands and starts its wait over. A fresh entrant after a
+    takeover queues behind the new holder.
 
   * **what the turn does not touch.** The configured command runs exactly as
     configured on every path, no module under `orchestration/` names the
@@ -50,7 +63,16 @@ Every absence asserted here sits beside a demonstration that it can fail:
   * "the selector runs and the census take no turn" sits beside the clean-clone
     check under the same held lock, which takes one;
   * "no orchestration module names the option" sits beside a planted module
-    that does, which the same scan reports.
+    that does, which the same scan reports;
+  * "a holder that lets go, and a bound of zero, take nothing over" — the
+    inode at the lock path is unchanged — sit beside the expired wait, under
+    which the same reading finds a different inode;
+  * "no waiter but the taker writes a takeover note" sits beside the taker's
+    own log, which carries exactly one;
+  * "the takeover lock is released after the swap" sits beside the same lock
+    held by the test, which the same probe reports held;
+  * "the old key is declared nowhere" sits beside the new key, which the same
+    schema declares.
 
 The wall clock is read here for one purpose: preconditions. A process has to
 have started its command before anything can be asked about whether a second
@@ -67,8 +89,10 @@ import fcntl
 import json
 import shlex
 import signal
+import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -98,8 +122,22 @@ WAITED = "suite-turn-waited"
 RERUN_STARTED = "suite-rerun-started"
 NOTE = "note"
 
-#: The key this story adds, and the reader the coordinator answers it through.
-KEY = "suite_turn_wait_minutes"
+#: The key story-190 replaced the minute bound with: a count of suite runs,
+#: and the key it retired, which the shipped schema must no longer declare.
+KEY = "suite_turn_wait_suite_runs"
+OLD_KEY = "suite_turn_wait_minutes"
+
+#: The operation whose estimate the bound multiplies, named by the coordinator.
+SUITE_RUN = story_coordinator.SUITE_RUN_OPERATION
+
+#: The estimate the bound tests establish for a suite run, in seconds. Not a
+#: whole number of minutes, so a bound derived from it cannot be confused with
+#: a minute count read off the old key, and short, so the polls are few.
+ESTIMATE_SECONDS = 45.0
+
+#: The bound the coordinator falls back to where no estimate exists — sixty
+#: minutes, which is what the retired key defaulted to.
+FALLBACK_SECONDS = story_coordinator.SUITE_TURN_WAIT_FALLBACK_SECONDS
 
 #: How long a test waits for a precondition — a process to have started its
 #: command, a run to have written its wait, two runs to have finished. A
@@ -207,13 +245,63 @@ def lock_of(target: Path) -> Path:
     return story_coordinator.suite_lock_path(target, config_of(target))
 
 
-def configure_bound(target: Path, minutes: str) -> None:
-    """Set the bound in a built target's configuration and commit it, so the
+def configure_key(target: Path, key: str, value: str) -> None:
+    """Set one key in a built target's configuration and commit it, so the
     run starts from a tree it can account for."""
     config = target / ".harness" / "config.yaml"
-    config.write_text(config.read_text(encoding="utf-8") + f"{KEY}: {minutes}\n",
+    config.write_text(config.read_text(encoding="utf-8") + f"{key}: {value}\n",
                       encoding="utf-8")
-    conftest.commit_setup(target, "the bound on waiting for a turn")
+    conftest.commit_setup(target, f"the configured {key}")
+
+
+def configure_bound(target: Path, count: str) -> None:
+    """Set the bound — a count of suite runs — in a built target's configuration."""
+    configure_key(target, KEY, count)
+
+
+def inode_at(lock_path: Path) -> int:
+    return lock_path.stat().st_ino
+
+
+def inode_held(handle) -> int:
+    return os.fstat(handle.fileno()).st_ino
+
+
+def is_held(lock_path: Path) -> bool:
+    """Whether some open file description holds the exclusive lock at the
+    path — probed with a handle of its own, released on the way out."""
+    with open(lock_path, "a", encoding="utf-8") as probe:
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        return False
+
+
+def takeover_lock_of(target: Path) -> Path:
+    return lock_of(target).with_name(story_coordinator.SUITE_TAKEOVER_LOCK_NAME)
+
+
+@pytest.fixture(autouse=True)
+def no_estimate_held_over():
+    """The estimates are module state, established once per run and left in
+    place when the run ends; a turn taken directly reads whatever the last
+    run in this worker established. Each test starts and ends with none, so
+    a test that wants an estimate says so through `with_estimate`."""
+    story_coordinator.set_duration_estimates({})
+    yield
+    story_coordinator.set_duration_estimates({})
+
+
+def with_estimate(seconds: float = ESTIMATE_SECONDS) -> None:
+    """Establish an estimate for a suite run, as the startup read would have."""
+    story_coordinator.set_duration_estimates({SUITE_RUN: seconds})
+
+
+def bound_of(count: str, estimate: float = ESTIMATE_SECONDS) -> float:
+    """What the bound must be, stated from the count and the estimate rather
+    than read off the coordinator."""
+    return float(count) * estimate
 
 
 # --------------------------------------------------------------------------
@@ -718,37 +806,92 @@ def test_a_worktree_root_that_is_a_regular_file_runs_the_body_and_says_why(
 POLL = story_coordinator.SUITE_TURN_POLL_SECONDS
 
 
-def test_the_wait_ends_at_the_configured_bound_and_the_suite_runs_anyway(
+#: What the wait announcement says its bound came from, in the two wordings
+#: the story states: the count and the estimate, or the fallback because too
+#: few suite runs have been measured here.
+FROM_THE_ESTIMATE = "measured here"
+FROM_THE_FALLBACK = "too few suite runs have been measured"
+
+
+def test_the_wait_ends_at_the_count_times_the_estimate_and_names_both(
         make_target, tmp_path):
+    """The bound is the configured count of suite runs times what a suite run
+    takes here, observed within one poll on a holder that never lets go, and
+    the announcement says so. What an expired wait then does — taking the
+    turn — is the subject of the takeover tests below; here only the note's
+    presence is read."""
+    with_estimate()
     target = make_target("bounded")
     config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    assert story_coordinator.suite_turn_wait_seconds(config) == bound
     with holding(lock_of(target)):
         ran, clock = take_turn(tmp_path / "run", target, config)
 
     assert ran is True
-    assert sum(clock.slept) == pytest.approx(120.0, abs=POLL)
+    assert sum(clock.slept) == pytest.approx(bound, abs=POLL)
     assert all(0 < step <= POLL for step in clock.slept)
     assert kinds_of(tmp_path / "run") == [WAITED, NOTE]
     [waited] = entries_of_kind(tmp_path / "run", WAITED)
     assert waited["stage"] == DECLARING
     assert waited["artifacts"] == [SUITE_ARTIFACT]
-    assert "2 minutes" in waited["message"]
+    assert f"{bound / 60:g} minutes" in waited["message"]
+    assert "2 suite run" in waited["message"]
+    assert f"{ESTIMATE_SECONDS / 60:g}-minute estimate" in waited["message"]
+    assert FROM_THE_ESTIMATE in waited["message"]
+    assert FROM_THE_FALLBACK not in waited["message"]
     assert str(lock_of(target)) in waited["message"]
     [note] = notes_about_the_turn(tmp_path / "run")
-    assert "2 minutes" in note and "without one" in note
+    assert f"{bound / 60:g} minutes" in note
+
+
+def test_with_no_estimate_the_wait_ends_at_the_sixty_minute_fallback_and_says_why(
+        make_target, tmp_path):
+    """The other source of the bound. No estimate is held — the autouse
+    fixture cleared it — so the same count waits the fallback, which is sixty
+    minutes, and the announcement says the fallback applies because too few
+    suite runs have been measured."""
+    assert story_coordinator.duration_estimate(SUITE_RUN) is None
+    assert FALLBACK_SECONDS == 60 * 60
+    target = make_target("fallback")
+    config = {**config_of(target), KEY: "2"}
+    assert story_coordinator.suite_turn_wait_seconds(config) == FALLBACK_SECONDS
+    with holding(lock_of(target)):
+        ran, clock = take_turn(tmp_path / "run", target, config)
+
+    assert ran is True
+    assert sum(clock.slept) == pytest.approx(FALLBACK_SECONDS, abs=POLL)
+    assert kinds_of(tmp_path / "run") == [WAITED, NOTE]
+    [waited] = entries_of_kind(tmp_path / "run", WAITED)
+    assert "60 minutes" in waited["message"]
+    assert FROM_THE_FALLBACK in waited["message"]
+    assert FROM_THE_ESTIMATE not in waited["message"]
+    # The control for the two absences above: the same count under an
+    # estimate names the estimate and not the fallback.
+    with_estimate()
+    with holding(lock_of(target)):
+        take_turn(tmp_path / "control", target, config)
+    [control] = entries_of_kind(tmp_path / "control", WAITED)
+    assert FROM_THE_ESTIMATE in control["message"]
+    assert FROM_THE_FALLBACK not in control["message"]
 
 
 def test_a_holder_that_lets_go_inside_the_bound_is_waited_for_and_then_taken(
         make_target, tmp_path):
     """The other side of the bound: a wait that is granted writes the wait and
-    no note, and stops sleeping the moment the lock is free."""
+    no note, stops sleeping the moment the lock is free, and takes the turn
+    on the same inode — nothing is taken over from a holder that merely
+    finished."""
+    with_estimate()
     target = make_target("released")
     config = {**config_of(target), KEY: "2"}
     lock = lock_of(target)
     lock.parent.mkdir(parents=True, exist_ok=True)
     holder = open(lock, "a", encoding="utf-8")
     fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    before = inode_at(lock)
     let_go_after = 30.0
+    assert let_go_after < bound_of("2")
 
     def let_go(now: float) -> None:
         # Closing the holder releases the lock; the next poll takes it.
@@ -765,34 +908,428 @@ def test_a_holder_that_lets_go_inside_the_bound_is_waited_for_and_then_taken(
     assert let_go_after <= sum(clock.slept) < let_go_after + 2 * POLL
     assert kinds_of(tmp_path / "run") == [WAITED]
     assert notes_about_the_turn(tmp_path / "run") == []
+    assert inode_at(lock) == before
+    assert not takeover_lock_of(target).exists()
 
 
-def test_a_bound_of_zero_takes_the_turn_only_if_it_is_free(make_target, tmp_path):
+def test_a_bound_of_zero_takes_the_turn_only_if_it_is_free_and_takes_nothing_over(
+        make_target, tmp_path):
+    """Zero keeps its meaning under an estimate and without one: a free turn
+    is taken with no event, and a held one is not waited for and not taken
+    over — the suite runs at once without a turn, the wait and the expiry
+    note are written, and the inode at the lock path is unchanged."""
     target = make_target("zero")
     config = {**config_of(target), KEY: "0"}
+    for estimate in (None, ESTIMATE_SECONDS):
+        story_coordinator.set_duration_estimates(
+            {} if estimate is None else {SUITE_RUN: estimate})
+        assert story_coordinator.suite_turn_wait_seconds(config) == 0.0
+        label = "no-estimate" if estimate is None else "estimate"
 
-    ran, clock = take_turn(tmp_path / "free", target, config)
-    assert ran is True and clock.slept == []
-    assert kinds_of(tmp_path / "free") == []
+        ran, clock = take_turn(tmp_path / label / "free", target, config)
+        assert ran is True and clock.slept == []
+        assert kinds_of(tmp_path / label / "free") == []
 
-    with holding(lock_of(target)):
-        ran, clock = take_turn(tmp_path / "held", target, config)
-    assert ran is True and clock.slept == []
-    assert kinds_of(tmp_path / "held") == [WAITED, NOTE]
+        lock = lock_of(target)
+        with holding(lock) as hung:
+            before = inode_at(lock)
+            ran, clock = take_turn(tmp_path / label / "held", target, config)
+            assert inode_at(lock) == before == inode_held(hung)
+        assert ran is True and clock.slept == []
+        assert kinds_of(tmp_path / label / "held") == [WAITED, NOTE]
+        [waited] = entries_of_kind(tmp_path / label / "held", WAITED)
+        assert "0 minutes" in waited["message"]
+        [note] = notes_about_the_turn(tmp_path / label / "held")
+        assert "0 minutes" in note and "without one" in note
+        assert "took the turn" not in note
+        assert not takeover_lock_of(target).exists()
 
 
-def test_an_absent_key_waits_up_to_sixty_minutes(make_target, tmp_path):
+def test_an_absent_key_waits_five_suite_runs_worth_or_the_fallback(
+        make_target, tmp_path):
     target = make_target("absent")
     config = config_of(target)
-    assert KEY not in config
-    assert story_coordinator.suite_turn_wait_seconds(config) == 60 * 60
+    assert KEY not in config and OLD_KEY not in config
     assert story_coordinator.suite_turn_wait_problems(config) == []
+    assert story_coordinator.DEFAULT_SUITE_TURN_WAIT_SUITE_RUNS == "5"
 
+    assert story_coordinator.suite_turn_wait_seconds(config) == FALLBACK_SECONDS
     with holding(lock_of(target)):
-        ran, clock = take_turn(tmp_path / "run", target, config)
+        ran, clock = take_turn(tmp_path / "fallback", target, config)
     assert ran is True
-    assert sum(clock.slept) == pytest.approx(3600.0, abs=POLL)
-    assert "60 minutes" in entries_of_kind(tmp_path / "run", WAITED)[0]["message"]
+    assert sum(clock.slept) == pytest.approx(FALLBACK_SECONDS, abs=POLL)
+    [waited] = entries_of_kind(tmp_path / "fallback", WAITED)
+    assert "60 minutes" in waited["message"] and FROM_THE_FALLBACK in waited["message"]
+
+    with_estimate()
+    assert story_coordinator.suite_turn_wait_seconds(config) == bound_of("5")
+    with holding(lock_of(target)):
+        ran, clock = take_turn(tmp_path / "estimated", target, config)
+    assert ran is True
+    assert sum(clock.slept) == pytest.approx(bound_of("5"), abs=POLL)
+    [waited] = entries_of_kind(tmp_path / "estimated", WAITED)
+    assert "5 suite run" in waited["message"] and FROM_THE_ESTIMATE in waited["message"]
+
+
+# --------------------------------------------------------------------------
+# An expired wait takes the turn (story-190)
+# --------------------------------------------------------------------------
+
+#: What the takeover note says, in the three clauses the story states.
+TAKEOVER_NOTE = ("took the turn", "left the previous holder running")
+#: What the restart announcement says.
+CHANGED_HANDS = "changed hands"
+
+
+def takeover_notes(run_dir: Path) -> list[str]:
+    return [note for note in notes_about_the_turn(run_dir)
+            if all(clause in note for clause in TAKEOVER_NOTE)]
+
+
+def enter_turn(stack: contextlib.ExitStack, run_dir: Path, target: Path,
+               config: dict, clock: FakeClock) -> None:
+    """Enter `suite_turn` and leave it entered, so the turn is held — as a
+    suite in flight holds it — until the stack is closed."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    stack.enter_context(story_coordinator.suite_turn(
+        run_dir, target, config, DECLARING, SUITE_ARTIFACT,
+        sleep=clock.sleep, clock=clock.now))
+
+
+def test_an_expired_wait_takes_the_turn_from_a_holder_that_is_still_there(
+        make_target, tmp_path):
+    """The takeover, from the file system's side. The waiter's bound expires
+    on a holder that never lets go; the waiter's body then runs while the
+    holder's handle is still open, the inode at the lock path is a fresh one
+    the waiter holds exclusively, the holder keeps its lock on the orphaned
+    inode, the takeover lock beside the suite lock is released, and the note
+    says the bound expired, this run took the turn, and the holder was left
+    running."""
+    with_estimate()
+    target = make_target("taken-over")
+    config = {**config_of(target), KEY: "2"}
+    lock = lock_of(target)
+    with holding(lock) as hung:
+        before = inode_at(lock)
+        assert inode_held(hung) == before
+        with contextlib.ExitStack() as stack:
+            clock = FakeClock()
+            enter_turn(stack, tmp_path / "taker", target, config, clock)
+            # Inside the taker's body: the holder is still open and still
+            # holds its lock, and the path now names a different inode.
+            assert not hung.closed
+            assert inode_held(hung) == before
+            after = inode_at(lock)
+            assert after != before
+            assert is_held(lock) is True
+            assert takeover_lock_of(target).is_file()
+            assert is_held(takeover_lock_of(target)) is False
+        # The taker's body ended: the new inode is free, and the path keeps it.
+        assert inode_at(lock) == after
+        assert is_held(lock) is False
+        assert not hung.closed
+
+    assert sum(clock.slept) == pytest.approx(bound_of("2"), abs=POLL)
+    assert kinds_of(tmp_path / "taker") == [WAITED, NOTE]
+    [note] = notes_about_the_turn(tmp_path / "taker")
+    assert takeover_notes(tmp_path / "taker") == [note]
+    assert f"{bound_of('2') / 60:g} minutes" in note
+    assert "without one" not in note
+
+
+def test_the_held_probe_reports_a_lock_the_test_holds(tmp_path):
+    """The control for `is_held` reporting the takeover lock released: the
+    same probe on a file this test holds reports it held, and released once
+    let go."""
+    probe = tmp_path / "probe.lock"
+    with holding(probe):
+        assert is_held(probe) is True
+    assert is_held(probe) is False
+
+
+def test_a_fresh_entrant_after_a_takeover_queues_behind_the_new_holder(
+        make_target, tmp_path):
+    """After a takeover the lock path names the taker's inode. A run opening
+    the path fresh waits on that inode — not on the hung holder's — and takes
+    the turn when the taker's body ends, on the same inode, with one wait
+    event and no note."""
+    with_estimate()
+    target = make_target("fresh-entrant")
+    config = {**config_of(target), KEY: "2"}
+    lock = lock_of(target)
+    with holding(lock) as hung:
+        taker = contextlib.ExitStack()
+        enter_turn(taker, tmp_path / "taker", target, config, FakeClock())
+        held_by_taker = inode_at(lock)
+        assert held_by_taker != inode_held(hung)
+        ends_at = 30.0
+        assert ends_at < bound_of("2")
+
+        def taker_ends(now: float) -> None:
+            if now - 1000.0 >= ends_at:
+                taker.close()
+
+        entrant_clock = FakeClock(on_advance=taker_ends)
+        try:
+            ran, entrant_clock = take_turn(tmp_path / "entrant", target, config,
+                                           clock=entrant_clock)
+        finally:
+            taker.close()
+        # The entrant took the turn on the taker's inode, not a third one, and
+        # the hung holder was never waited on and never released.
+        assert inode_at(lock) == held_by_taker
+        assert not hung.closed
+
+    assert ran is True
+    assert ends_at <= sum(entrant_clock.slept) < ends_at + 2 * POLL
+    assert kinds_of(tmp_path / "entrant") == [WAITED]
+    assert notes_about_the_turn(tmp_path / "entrant") == []
+    assert takeover_notes(tmp_path / "taker") != []
+
+
+# The three waiters. `fcntl.flock` is per open file description, so three
+# handles on one path in one process contend exactly as three processes
+# would; each waiter runs on a thread of its own, and all three read one fake
+# clock the test advances one poll at a time. Only one waiter runs between
+# steps — every other is blocked inside its injected sleep, or inside its
+# body waiting to be let out — so the interleaving is the test's and nothing
+# here reads a real clock or depends on the machine's scheduling.
+
+SLEEPING = "sleeping"
+RUNNING = "running"
+IN_BODY = "in its body"
+DONE = "done"
+
+
+class Waiters:
+    """Several waiters on one target's lock, stepped from the test."""
+
+    def __init__(self, target: Path, config: dict, root: Path):
+        self.target, self.config, self.root = target, config, root
+        self.now = 1000.0
+        self.condition = threading.Condition()
+        self.state: dict[str, str] = {}
+        self.wake_at: dict[str, float] = {}
+        self.slept: dict[str, list[float]] = {}
+        self.released: dict[str, bool] = {}
+        self.errors: dict[str, BaseException] = {}
+        self.threads: dict[str, threading.Thread] = {}
+
+    def run_dir(self, name: str) -> Path:
+        return self.root / name
+
+    def _sleep(self, name: str, seconds: float) -> None:
+        with self.condition:
+            self.slept[name].append(seconds)
+            self.wake_at[name] = self.now + seconds
+            self.state[name] = SLEEPING
+            self.condition.notify_all()
+            self.condition.wait_for(lambda: self.state[name] == RUNNING)
+
+    def _run(self, name: str) -> None:
+        try:
+            with story_coordinator.suite_turn(
+                    self.run_dir(name), self.target, self.config, DECLARING,
+                    SUITE_ARTIFACT, sleep=lambda seconds: self._sleep(name, seconds),
+                    clock=lambda: self.now):
+                with self.condition:
+                    self.state[name] = IN_BODY
+                    self.condition.notify_all()
+                    self.condition.wait_for(lambda: self.released[name])
+        except BaseException as error:
+            # Kept for the stepping side to re-raise: an exception on a
+            # thread would otherwise be printed and lost.
+            self.errors[name] = error
+        finally:
+            with self.condition:
+                self.state[name] = DONE
+                self.condition.notify_all()
+
+    def _until_yielded(self, name: str) -> None:
+        with self.condition:
+            yielded = self.condition.wait_for(
+                lambda: self.state[name] != RUNNING, timeout=PRECONDITION_SECONDS)
+        if not yielded:
+            pytest.fail(f"waiter {name} neither slept, entered its body nor "
+                        f"ended after being let run")
+        if name in self.errors:
+            raise self.errors[name]
+
+    def start(self, name: str, at: float) -> None:
+        """Start a waiter at clock time `at`, and let it run until it sleeps."""
+        assert at >= self.now
+        self.now = at
+        self.run_dir(name).mkdir(parents=True, exist_ok=True)
+        self.state[name] = RUNNING
+        self.slept[name] = []
+        self.released[name] = False
+        thread = threading.Thread(target=self._run, args=(name,), daemon=True)
+        self.threads[name] = thread
+        thread.start()
+        self._until_yielded(name)
+
+    def sleeping(self) -> list[str]:
+        return sorted(n for n, s in self.state.items() if s == SLEEPING)
+
+    def in_body(self) -> list[str]:
+        return sorted(n for n, s in self.state.items() if s == IN_BODY)
+
+    def step(self) -> str:
+        """Advance the clock to the earliest pending wake — ties broken by
+        name — and let that waiter run until it sleeps again, enters its body
+        or ends. Never two in a body at once, checked on every step."""
+        sleeping = self.sleeping()
+        assert sleeping, "no waiter is sleeping"
+        name = min(sleeping, key=lambda n: (self.wake_at[n], n))
+        with self.condition:
+            self.now = max(self.now, self.wake_at[name])
+            self.state[name] = RUNNING
+            self.condition.notify_all()
+        self._until_yielded(name)
+        assert len(self.in_body()) <= 1, self.in_body()
+        return name
+
+    def step_until(self, condition, what: str, *, limit: int = 100_000) -> None:
+        steps = 0
+        while not condition():
+            assert steps < limit, f"{limit} steps without {what}"
+            self.step()
+            steps += 1
+
+    def end_body(self, name: str) -> None:
+        """Let a waiter out of its body, which ends its turn and closes its
+        handle, and wait until it has."""
+        assert self.state[name] == IN_BODY
+        with self.condition:
+            self.released[name] = True
+            self.condition.notify_all()
+            ended = self.condition.wait_for(
+                lambda: self.state[name] == DONE, timeout=PRECONDITION_SECONDS)
+        if not ended:
+            pytest.fail(f"waiter {name} did not end after its body was released")
+        self.threads[name].join()
+        if name in self.errors:
+            raise self.errors[name]
+
+
+def test_three_waiters_behind_a_hung_holder_drain_one_per_bound_and_never_together(
+        make_target, tmp_path):
+    """The story's central claim. Three waiters queue behind a holder that
+    never lets go, started a few seconds apart so their bounds expire in
+    order. The first to expire takes the turn and runs its body while the
+    holder's handle is still open; the other two each announce that the turn
+    changed hands and are still waiting when the first's body ends; they then
+    take the turn one after the other, each only after the previous body has
+    ended, and never together. Only the taker writes a takeover note."""
+    with_estimate()
+    target = make_target("three-waiters")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    with holding(lock) as hung:
+        hung_inode = inode_held(hung)
+        waiters = Waiters(target, config, tmp_path / "waiters")
+        waiters.start("first", 1000.0)
+        waiters.start("second", 1005.0)
+        waiters.start("third", 1010.0)
+        for name in ("first", "second", "third"):
+            assert kinds_of(waiters.run_dir(name)) == [WAITED]
+
+        # The first's bound expires and it takes the turn, alone.
+        waiters.step_until(lambda: waiters.in_body() != [],
+                           "a waiter entering its body")
+        assert waiters.in_body() == ["first"]
+        assert waiters.now == pytest.approx(1000.0 + bound, abs=POLL)
+        assert sum(waiters.slept["first"]) == pytest.approx(bound, abs=POLL)
+        assert not hung.closed and inode_held(hung) == hung_inode
+        new_inode = inode_at(lock)
+        assert new_inode != hung_inode
+        assert kinds_of(waiters.run_dir("first")) == [WAITED, NOTE]
+        assert len(takeover_notes(waiters.run_dir("first"))) == 1
+
+        # The other two notice the turn changed hands, say so, and restart.
+        def both_restarted() -> bool:
+            return all(len(entries_of_kind(waiters.run_dir(n), WAITED)) == 2
+                       for n in ("second", "third"))
+        waiters.step_until(both_restarted, "both other waiters restarting")
+        assert waiters.in_body() == ["first"]
+        assert waiters.sleeping() == ["second", "third"]
+        for name in ("second", "third"):
+            first_wait, restart = entries_of_kind(waiters.run_dir(name), WAITED)
+            assert CHANGED_HANDS not in first_wait["message"]
+            assert CHANGED_HANDS in restart["message"]
+            assert restart["message"] == story_coordinator._announcement(
+                *restart["message"].split("; ", 1))
+            assert str(lock) in restart["message"]
+            assert FROM_THE_ESTIMATE in restart["message"]
+            assert notes_about_the_turn(waiters.run_dir(name)) == []
+        # Still waiting when the first's body ends: the restart was announced
+        # well inside a fresh bound, so neither has expired again.
+        assert waiters.now - (1000.0 + bound) < bound / 2
+        waiters.end_body("first")
+        assert inode_at(lock) == new_inode
+
+        # Then the second takes the turn on the new inode, and only then the
+        # third, each after the previous body ended and neither by takeover.
+        waiters.step_until(lambda: waiters.in_body() != [], "the second taking the turn")
+        assert waiters.in_body() == ["second"]
+        assert waiters.sleeping() == ["third"]
+        assert inode_at(lock) == new_inode
+        assert kinds_of(waiters.run_dir("second")) == [WAITED, WAITED]
+        waiters.step()
+        waiters.step()
+        assert waiters.in_body() == ["second"] and waiters.sleeping() == ["third"]
+        waiters.end_body("second")
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the third taking the turn")
+        assert waiters.in_body() == ["third"]
+        assert waiters.sleeping() == []
+        assert inode_at(lock) == new_inode
+        assert kinds_of(waiters.run_dir("third")) == [WAITED, WAITED]
+        waiters.end_body("third")
+
+        assert waiters.errors == {}
+        assert not hung.closed and inode_held(hung) == hung_inode
+
+    # The takeover note was written by the taker alone.
+    assert len(takeover_notes(waiters.run_dir("first"))) == 1
+    for name in ("second", "third"):
+        assert takeover_notes(waiters.run_dir(name)) == []
+        assert notes_about_the_turn(waiters.run_dir(name)) == []
+    # Every sleep was one poll or less, and every clock read was the fake's.
+    for name in ("first", "second", "third"):
+        assert all(0 < step <= POLL for step in waiters.slept[name])
+
+
+def test_the_stepping_harness_reports_two_waiters_in_their_bodies_at_once(
+        make_target, tmp_path):
+    """The control for "never together", which `step` asserts on every step
+    above: two bodies at once are something the harness can see and reports.
+    A waiter bounded at zero runs at once without a turn beside the holder
+    it found, which is exactly the overlap a takeover must not produce, and
+    the next step over a third, queued waiter fails on it."""
+    with_estimate()
+    target = make_target("two-bodies")
+    with holding(lock_of(target)):
+        waiters = Waiters(target, {**config_of(target), KEY: "0"}, tmp_path / "w")
+        waiters.start("beside-the-holder", 1000.0)
+        assert waiters.in_body() == ["beside-the-holder"]
+        assert kinds_of(waiters.run_dir("beside-the-holder")) == [WAITED, NOTE]
+        waiters.start("also-beside-it", 1000.0)
+        assert waiters.in_body() == ["also-beside-it", "beside-the-holder"]
+        waiters.config = {**config_of(target), KEY: "2"}
+        waiters.start("queued", 1000.0)
+        assert waiters.sleeping() == ["queued"]
+        with pytest.raises(AssertionError, match="beside"):
+            waiters.step()
+        waiters.end_body("beside-the-holder")
+        waiters.end_body("also-beside-it")
+        assert waiters.in_body() == []
+    # The holder let go: the queued waiter takes the turn normally.
+    waiters.step_until(lambda: waiters.in_body() == ["queued"],
+                       "the queued waiter taking the turn")
+    waiters.end_body("queued")
+    assert kinds_of(waiters.run_dir("queued")) == [WAITED]
 
 
 def test_an_uncontended_turn_writes_nothing_and_sleeps_nothing(make_target, tmp_path):
@@ -806,17 +1343,21 @@ def test_an_uncontended_turn_writes_nothing_and_sleeps_nothing(make_target, tmp_
 
 
 # --------------------------------------------------------------------------
-# The key: refused when malformed, accepted when a duration
+# The key: refused when malformed, accepted when a count
 # --------------------------------------------------------------------------
 
 NOT_BOUNDS = ["an hour", "-1", "", "nan", "6,0", "inf minus"]
-ARE_BOUNDS = ["0", "1", "0.5", "60", "180"]
+ARE_BOUNDS = ["0", "1", "0.5", "5", "60"]
 
 
 @pytest.mark.parametrize("value", ARE_BOUNDS)
-def test_a_non_negative_number_of_minutes_is_accepted(value):
+def test_a_non_negative_number_of_suite_runs_is_accepted(value):
     assert story_coordinator.suite_turn_wait_problems({KEY: value}) == []
-    assert story_coordinator.suite_turn_wait_seconds({KEY: value}) == float(value) * 60
+    # Without an estimate the bound is the fallback, except that zero is zero.
+    expected = 0.0 if float(value) == 0 else FALLBACK_SECONDS
+    assert story_coordinator.suite_turn_wait_seconds({KEY: value}) == expected
+    with_estimate()
+    assert story_coordinator.suite_turn_wait_seconds({KEY: value}) == bound_of(value)
 
 
 @pytest.mark.parametrize("value", NOT_BOUNDS)
@@ -846,17 +1387,44 @@ def test_a_bad_bound_refuses_the_run_at_pre_flight_naming_the_key_and_the_value(
     assert code == 0 and runner.calls
 
 
+def test_a_configuration_still_carrying_the_old_key_is_refused_naming_both_keys(
+        make_target, harness_root, capsys):
+    """The retired key is refused by the undeclared-key check rather than
+    read: the message names the old key and lists the declared set, the new
+    key among it, with no run directory created and no agent invoked."""
+    stale = make_target("stale")
+    configure_key(stale, OLD_KEY, "60")
+    code, runner, run_dir = drive(stale, harness_root)
+
+    assert code == 1
+    assert runner.calls == []
+    assert not run_dir.exists()
+    message = capsys.readouterr().err
+    assert OLD_KEY in message and KEY in message
+    # The old key is refused as undeclared and not as a bad bound: the
+    # bound's own check does not read it.
+    assert story_coordinator.suite_turn_wait_problems({OLD_KEY: "an hour"}) == []
+
+
 def test_the_key_is_declared_and_set_in_both_configurations():
     schema = schema_validator.load_schema("harness-config")
     assert KEY in schema["properties"]
+    assert OLD_KEY not in schema["properties"]
+    assert OLD_KEY not in json.dumps(schema)
     description = schema["properties"][KEY]["description"]
-    assert "60" in description and "zero" in description.lower()
+    assert "zero" in description.lower()
+    assert "sixty minutes" in description and "fallback" in description
     assert "pre-flight" in description
-    assert conftest.repository_config()[KEY] == "60"
+    assert "takes the turn" in description
+    assert conftest.repository_config()[KEY] == "5"
+    assert OLD_KEY not in conftest.repository_config()
     template = (REPO_ROOT / "templates" / "config.yaml").read_text(encoding="utf-8")
-    assert f"{KEY}: 60" in template
+    assert f"{KEY}: 5" in template and OLD_KEY not in template
+    assert "counts suite runs" in template
     assert "duration" in template and "core count" in template
     shipped = (REPO_ROOT / ".harness" / "config.yaml").read_text(encoding="utf-8")
+    assert f"{KEY}: 5" in shipped and OLD_KEY not in shipped
+    assert "counts suite runs" in shipped
     assert "duration" in shipped and "core count" in shipped
 
 
@@ -1038,6 +1606,37 @@ def test_the_kind_is_a_literal_in_exactly_one_function_body():
     assert "append_event(" in turn
     assert "flock(" in turn or "_try_suite_lock(" in turn
     assert "os.environ" not in turn and "getenv" not in turn
+
+
+def test_the_takeover_and_the_restart_are_written_from_the_turns_own_body_under_no_new_kind():
+    """Every event of the wait — the first announcement, the restart and the
+    takeover note — is written by `suite_turn`'s own body, and the only kind
+    it names is the one story-167 declared: the restart is a second event of
+    that kind and the takeover a note, so the history enum gains nothing."""
+    turn = conftest.function_source(COORDINATOR_SOURCE, "suite_turn")
+    named_kinds = {node.value.value
+                   for node in ast.walk(ast.parse(turn))
+                   if isinstance(node, ast.keyword) and node.arg == "kind"
+                   and isinstance(node.value, ast.Constant)}
+    assert named_kinds == {WAITED}
+    assert CHANGED_HANDS in turn
+    for clause in TAKEOVER_NOTE:
+        assert clause in turn
+    history = schema_validator.load_schema("execution-history")
+    kinds = history["items"]["properties"]["event"]["enum"]
+    assert not [kind for kind in kinds if "takeover" in kind or "restart" in kind]
+
+
+def test_the_takeover_swaps_a_locked_file_over_the_path_under_the_takeover_lock():
+    """The mechanism, read off the source: the takeover renames a fresh file
+    over the lock path — never unlinks it — while the takeover lock is held,
+    and the lock name sits beside the suite lock's."""
+    takeover = conftest.function_source(COORDINATOR_SOURCE, "_take_over_suite_turn")
+    assert "SUITE_TAKEOVER_LOCK_NAME" in takeover
+    assert ".replace(" in takeover or "rename(" in takeover
+    assert "unlink(lock_path" not in takeover and "lock_path.unlink" not in takeover
+    assert story_coordinator.SUITE_TAKEOVER_LOCK_NAME != story_coordinator.SUITE_LOCK_NAME
+    assert "/" not in story_coordinator.SUITE_TAKEOVER_LOCK_NAME
 
 
 def test_the_lock_is_a_kernel_lock_derived_through_the_worktree_root():

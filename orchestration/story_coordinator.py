@@ -843,7 +843,7 @@ def cost_ceiling_problems(workflow: dict) -> list[str]:
 
 #: What a target that configures no pause wait waits: nothing. Zero is the
 #: default here because here zero means "do not wait". The other default
-#: durations in harness source — `DEFAULT_SUITE_TURN_WAIT_MINUTES` below and
+#: durations in harness source — `SUITE_TURN_WAIT_FALLBACK_SECONDS` below and
 #: the sync timeout in `orchestration/outbox_sweep.py` — are non-zero because
 #: for each of them zero means something else, and each says what.
 NO_PAUSE_WAIT = "0"
@@ -885,12 +885,24 @@ def pause_wait_problems(config: dict) -> list[str]:
     return []
 
 
-#: How long a run waits for its turn at the whole suite when another run of
-#: the same repository holds it, unset. Sixty minutes is several suite runs on
-#: this repository, so a run that outlasts it is a suite hung in another run
-#: rather than one that is merely slow — and a hung suite must not stall every
-#: run behind it, which is why the wait is bounded at all.
-DEFAULT_SUITE_TURN_WAIT_MINUTES = "60"
+#: How many suite runs' worth of time a run waits for its turn at the whole
+#: suite when another run of the same repository holds it, unset. The number
+#: counts suite runs as this machine has measured them — the bound is the
+#: count times `duration_estimate(SUITE_RUN_OPERATION)` — because what the
+#: wait is for is the holder's suite to end, and how long that takes is a fact
+#: about this machine and not one to configure. Five, because a run that has
+#: outwaited five suites is behind a suite that hung rather than one that is
+#: merely slow, and a hung suite must not stall every run behind it, which is
+#: why the wait is bounded at all.
+DEFAULT_SUITE_TURN_WAIT_SUITE_RUNS = "5"
+
+#: The bound where the harness has not yet measured enough suite runs to know
+#: what one takes on this machine: a fresh target, or fewer than
+#: `DURATION_ESTIMATE_MINIMUM` observations. Sixty minutes is several suite
+#: runs on this repository, so a run that outlasts it is a suite hung in
+#: another run rather than one that is merely slow. It is the reason the
+#: minute default carried before the count replaced it.
+SUITE_TURN_WAIT_FALLBACK_SECONDS = 60 * 60.0
 
 #: How often a run waiting for its turn asks for the lock again. The poll is
 #: what makes a killed holder's release visible: the kernel drops the lock the
@@ -902,42 +914,96 @@ SUITE_TURN_POLL_SECONDS = 0.5
 #: and already shared by every worktree of one repository.
 SUITE_LOCK_NAME = "suite.lock"
 
+#: The second, momentary lock a waiter whose bound expired takes across the
+#: swap that takes the turn over — see `_take_over_suite_turn`. Beside the
+#: suite lock, and held only for the length of the swap.
+SUITE_TAKEOVER_LOCK_NAME = "suite.takeover.lock"
+
+
+def _suite_turn_wait_count(config: dict) -> float:
+    """The configured count of suite runs, read as the string `load_config`
+    produces and parsed here. Only ever called after
+    `suite_turn_wait_problems` has passed, so the parse cannot fail.
+    """
+    return float(
+        config.get("suite_turn_wait_suite_runs", DEFAULT_SUITE_TURN_WAIT_SUITE_RUNS)
+    )
+
 
 def suite_turn_wait_seconds(config: dict) -> float:
-    """The configured bound on waiting for a turn at the suite, in seconds.
+    """The bound on waiting for a turn at the suite, in seconds.
 
-    Shaped like `pause_wait_bound`: read as the string `load_config` produces,
-    parsed here, and only ever called after `suite_turn_wait_problems` has
-    passed, so the parse cannot fail. The key is in minutes because that is the
-    unit a suite run is measured in; it is returned in seconds because that is
-    the unit the clock is read in.
+    Shaped like `pause_wait_bound`: the key is read as the string `load_config`
+    produces, parsed here, and only ever read after `suite_turn_wait_problems`
+    has passed. The key counts suite runs, and the bound is that count times
+    what a suite run takes on this machine, read through
+    `duration_estimate(SUITE_RUN_OPERATION)` and nothing else. Where no
+    estimate exists the bound is `SUITE_TURN_WAIT_FALLBACK_SECONDS`. Zero is
+    zero either way: take the turn only if it is free, and otherwise run at
+    once.
     """
-    minutes = float(
-        config.get("suite_turn_wait_minutes", DEFAULT_SUITE_TURN_WAIT_MINUTES)
+    count = _suite_turn_wait_count(config)
+    if count == 0:
+        return 0.0
+    estimate = duration_estimate(SUITE_RUN_OPERATION)
+    if estimate is None:
+        return SUITE_TURN_WAIT_FALLBACK_SECONDS
+    return count * estimate
+
+
+def suite_turn_wait_cost(config: dict) -> str:
+    """What a contended wait is worth, said with where its bound came from.
+
+    One of two wordings for a non-zero count — the count times the estimate,
+    or the fallback because too few suite runs have been measured here — and a
+    third for zero, whose bound comes from neither. Composed here so that
+    `suite_turn` does not branch on the estimate inline, and so the clause and
+    `suite_turn_wait_seconds` read one count and one estimate.
+    """
+    count = _suite_turn_wait_count(config)
+    bound = suite_turn_wait_seconds(config)
+    if count == 0:
+        return (
+            "this waits for at most 0 minutes, because "
+            "suite_turn_wait_suite_runs is 0: the turn is taken only if it "
+            "is free, and otherwise the suite runs at once without one"
+        )
+    estimate = duration_estimate(SUITE_RUN_OPERATION)
+    if estimate is None:
+        return (
+            f"this waits until that run's suite ends, or for at most "
+            f"{bound / 60:g} minutes, whichever comes first; that is the "
+            f"fallback bound, because too few suite runs have been measured "
+            f"here to know what one takes"
+        )
+    return (
+        f"this waits until that run's suite ends, or for at most "
+        f"{bound / 60:g} minutes, whichever comes first; that is "
+        f"{count:g} suite run(s) at the {estimate / 60:g}-minute estimate "
+        f"measured here"
     )
-    return minutes * 60.0
 
 
 def suite_turn_wait_problems(config: dict) -> list[str]:
-    """Check the configured suite-turn wait against what a bound can be.
+    """Check the configured suite-turn wait against what a count can be.
 
-    Shaped like `pause_wait_problems`, and for its reason: a bound that cannot
-    be compared against a wait is a defect every run under that configuration
+    Shaped like `pause_wait_problems`, and for its reason: a count that cannot
+    be multiplied into a bound is a defect every run under that configuration
     carries, so it is refused before a stage is spent on it. An absent key is
-    not checked at all — absent means sixty minutes, which is what
+    not checked at all — absent means five suite runs, which is what
     `suite_turn_wait_seconds` answers for it.
     """
-    if "suite_turn_wait_minutes" not in config:
+    if "suite_turn_wait_suite_runs" not in config:
         return []
-    configured = config["suite_turn_wait_minutes"]
+    configured = config["suite_turn_wait_suite_runs"]
     try:
         bound = float(configured)
     except (TypeError, ValueError):
         bound = -1.0
     if bound < 0 or bound != bound:  # NaN compares unequal to itself
         return [
-            f"suite_turn_wait_minutes is {configured!r}, which is not a "
-            f"non-negative number of minutes"
+            f"suite_turn_wait_suite_runs is {configured!r}, which is not a "
+            f"non-negative number of suite runs"
         ]
     return []
 
@@ -4036,10 +4102,22 @@ def _suite_rerun_started(
 # The turn fails toward running, in three ways. It is a kernel file lock,
 # released when its holder dies, so a killed run never holds it. A lock file
 # that cannot be created or opened costs the turn and never the run. And a wait
-# that outlasts the configured bound runs the suite anyway, because a suite
-# hung in another run would otherwise stall every run behind it and the harness
-# puts no timeout on the suite itself. Every path that runs without a turn says
-# so in events.log.
+# that outlasts the configured bound does not stall: a suite hung in another
+# run would otherwise stall every run behind it and the harness puts no
+# timeout on the suite itself. What an expired wait does depends on the bound.
+# At zero the suite runs at once without a turn. At any other bound the waiter
+# takes the turn *from* the holder — a live process's flock cannot be taken,
+# so the takeover is a fresh file renamed over the lock path, which the hung
+# holder does not hold; the holder keeps its lock on an orphaned inode nobody
+# opens again. Every other waiter notices the inode at the path change, says
+# so, reopens the path and starts its wait over, so behind a hung run the queue
+# drains one run per wait instead of all giving up within minutes of each
+# other and sharing the machine with the hung one. Every path that runs
+# without a turn, takes one over, or restarts its wait says so in events.log.
+#
+# The bound is a configured count of suite runs times what a suite run has
+# taken on this machine, or a fallback where too few have been measured — see
+# `suite_turn_wait_seconds`.
 
 
 def suite_lock_path(target_root: Path, config: dict) -> Path:
@@ -4066,6 +4144,65 @@ def _try_suite_lock(handle) -> bool:
     return True
 
 
+def _inode_held(handle) -> int:
+    """The inode of the file `handle` is open on."""
+    # `fstat` is imported by name rather than reached through `os`, for the
+    # reason `_kill_group` gives: this module names no environment reader.
+    from os import fstat
+
+    return fstat(handle.fileno()).st_ino
+
+
+def _inode_at(lock_path: Path) -> int:
+    """The inode at the lock path now. The path is only ever renamed over,
+    never unlinked, so it always resolves; a stat that fails is an `OSError`
+    the caller treats as the could-not-open path.
+    """
+    return lock_path.stat().st_ino
+
+
+def _take_over_suite_turn(lock_path: Path, waited_on: int):
+    """Take the turn from a holder whose flock cannot be taken: a fresh file,
+    locked, renamed over `lock_path`. Returns the handle holding the new lock,
+    or None where another waiter took over first.
+
+    The swap happens under a second, momentary lock at
+    `SUITE_TAKEOVER_LOCK_NAME` beside the suite lock, so two waiters expiring
+    in the same poll cannot each rename over the other: the one that takes the
+    takeover lock confirms the inode at the path is still the one it waited on
+    and swaps; the other finds the takeover lock held, or the inode already
+    changed, takes nothing over, and sees the new inode on its next poll. The
+    rename is what makes the swap atomic for anyone opening the path: a reader
+    finds either the old inode or the new one and never a half. The lock path
+    is never unlinked, and the file's existence still means nothing.
+
+    Any `OSError` other than the takeover lock being held propagates, so the
+    caller treats it as the could-not-open path; a temporary file left by such
+    a failure is removed on the way out.
+    """
+    takeover_path = lock_path.with_name(SUITE_TAKEOVER_LOCK_NAME)
+    with open(takeover_path, "a", encoding="utf-8") as takeover:
+        if not _try_suite_lock(takeover):
+            return None
+        if _inode_at(lock_path) != waited_on:
+            return None
+        descriptor, fresh = tempfile.mkstemp(
+            dir=lock_path.parent, prefix=f"{SUITE_LOCK_NAME}.")
+        handle = open(descriptor, "a", encoding="utf-8")
+        try:
+            # A file nobody else has opened: the lock is granted, and it is
+            # the lock the handle keeps once the file is at the lock path.
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            Path(fresh).replace(lock_path)
+        except BaseException:
+            handle.close()
+            Path(fresh).unlink(missing_ok=True)
+            raise
+        # Returning leaves the block, which closes the takeover handle and
+        # releases the takeover lock; the returned handle keeps the suite lock.
+        return handle
+
+
 @contextlib.contextmanager
 def suite_turn(
     run_dir: Path,
@@ -4081,19 +4218,38 @@ def suite_turn(
 
     The lock is tried without blocking first. When it is held, a
     `suite-turn-waited` event announces the wait — through `_announcement`,
-    naming what the wait is worth — and the lock is then polled every
-    `SUITE_TURN_POLL_SECONDS` until it is granted or the configured bound
-    expires. The announcement is written before the wait and the suite's own
-    announcement after it, so the wait is readable off the events log as the
-    gap between the two lines; an uncontended turn writes nothing at all.
+    naming what the wait is worth and where its bound came from — and the
+    path is then polled every `SUITE_TURN_POLL_SECONDS`. Each poll makes two
+    observations, in this order. First the inode at the path is compared
+    against the inode of the handle being waited on: a different inode is the
+    turn having changed hands (a waiter ahead of this one took it over), at
+    which point the handle is reopened on the path, a second
+    `suite-turn-waited` event announces the restart, and the bound starts over
+    from that moment. Then, with the same inode, the flock is tried: refused
+    is the same holder still there, granted is the holder finishing normally
+    and the turn taken on the same inode. The announcement is written before
+    the wait and the suite's own announcement after it, so the wait is
+    readable off the events log as the gap between the two lines; an
+    uncontended turn writes nothing at all.
 
-    Every way of not taking the turn runs the body anyway and says why as a
-    note: a lock file that cannot be created or opened, and a bound that
-    expired with the lock still held. Nothing here refuses or stops a run.
+    A bound that expires with the lock still held takes the turn from the
+    holder, through `_take_over_suite_turn`, and a note says the bound
+    expired, that this run took the turn, and that the previous holder was
+    left running. A takeover another waiter got to first takes nothing over
+    here: the next poll sees the new inode and restarts, so behind a hung
+    holder the queue drains one run per wait. A bound of zero takes nothing
+    over — it writes the wait and the expiry note and runs at once without a
+    turn, exactly as it did before takeovers existed.
+
+    A lock file that cannot be created or opened, and any stat or open that
+    fails mid-wait other than the lock being held, runs the body anyway and
+    says why as a note naming the path and the error. Nothing here refuses or
+    stops a run.
 
     `sleep` and `clock` are parameters for the reason `run_story`'s `sleep`
     is: a test observes the wait without taking it. The kind is a literal in
-    this one function body, for the reason `_suite_rerun_started` gives.
+    this one function body, for the reason `_suite_rerun_started` gives, and
+    the restart is the same kind written from the same call.
     """
     lock_path = suite_lock_path(target_root, config)
     handle = None
@@ -4103,23 +4259,76 @@ def suite_turn(
         taken = _try_suite_lock(handle)
         if not taken:
             bound = suite_turn_wait_seconds(config)
-            append_event(
-                run_dir,
-                _announcement(
-                    f"waiting for the repository's turn at the suite, which "
-                    f"another run holds at {lock_path}",
-                    f"this waits until that run's suite ends, or for at most "
-                    f"{bound / 60:g} minutes, whichever comes first",
-                ),
-                kind="suite-turn-waited",
-                stage=stage_name,
-                artifacts=[artifact],
+            cost = suite_turn_wait_cost(config)
+            waited_on = _inode_held(handle)
+            message = (
+                f"waiting for the repository's turn at the suite, which "
+                f"another run holds at {lock_path}"
             )
-            started = clock()
-            while not taken and clock() - started < bound:
-                sleep(min(SUITE_TURN_POLL_SECONDS, max(0.0, bound - (clock() - started))))
-                taken = _try_suite_lock(handle)
-            if not taken:
+            announce = True
+            while not taken:
+                if announce:
+                    append_event(
+                        run_dir,
+                        _announcement(message, cost),
+                        kind="suite-turn-waited",
+                        stage=stage_name,
+                        artifacts=[artifact],
+                    )
+                    started = clock()
+                    announce = False
+                changed_hands = False
+                while clock() - started < bound:
+                    sleep(min(SUITE_TURN_POLL_SECONDS,
+                              max(0.0, bound - (clock() - started))))
+                    if _inode_at(lock_path) != waited_on:
+                        changed_hands = True
+                        break
+                    taken = _try_suite_lock(handle)
+                    if taken:
+                        break
+                if taken:
+                    break
+                if not changed_hands and bound > 0:
+                    # The bound expired on a holder that is still there. Take
+                    # the turn from it, unless another waiter got there first
+                    # -- then the next poll sees the new inode and restarts.
+                    handle_after = _take_over_suite_turn(lock_path, waited_on)
+                    if handle_after is not None:
+                        handle.close()
+                        handle = handle_after
+                        taken = True
+                        append_event(
+                            run_dir,
+                            f"the turn at the suite was still held after "
+                            f"{bound / 60:g} minutes, so this run took the "
+                            f"turn and left the previous holder running; a "
+                            f"suite hung in another run must not stall this "
+                            f"one",
+                            stage=stage_name,
+                            artifacts=[artifact],
+                        )
+                        break
+                    sleep(SUITE_TURN_POLL_SECONDS)
+                    changed_hands = _inode_at(lock_path) != waited_on
+                    if not changed_hands:
+                        # Still the inode this run waited on: whoever holds
+                        # the takeover lock has not swapped yet. Try again
+                        # rather than re-announce a wait that has not ended.
+                        continue
+                if changed_hands:
+                    # The turn changed hands: reopen the path, say so, and
+                    # start the bound over from this moment.
+                    handle.close()
+                    handle = open(lock_path, "a", encoding="utf-8")
+                    waited_on = _inode_held(handle)
+                    message = (
+                        f"the turn at the suite changed hands, so the wait "
+                        f"restarts: another run took the turn at {lock_path} "
+                        f"from the holder this run was waiting on"
+                    )
+                    announce = True
+                    continue
                 append_event(
                     run_dir,
                     f"the turn at the suite was still held after {bound / 60:g} "
@@ -4128,6 +4337,7 @@ def suite_turn(
                     stage=stage_name,
                     artifacts=[artifact],
                 )
+                break
     except OSError as error:
         append_event(
             run_dir,
@@ -8797,7 +9007,7 @@ def _refuse_bad_pause_wait(target_root: Path, problems: list[str]) -> int:
 
 
 def _refuse_bad_suite_turn_wait(target_root: Path, problems: list[str]) -> int:
-    """Refuse a run whose configured suite-turn wait is not a duration.
+    """Refuse a run whose configured suite-turn wait is not a count.
 
     Thin, like `_refuse_bad_pause_wait` beside it and for its reason: the
     configuration is wrong, not the story and not the tree, so the guidance
@@ -8807,10 +9017,12 @@ def _refuse_bad_suite_turn_wait(target_root: Path, problems: list[str]) -> int:
         f"{target_root / '.harness' / 'config.yaml'} configures a suite-turn "
         f"wait that cannot be compared against a wait:",
         problems,
-        "Set suite_turn_wait_minutes to a non-negative number of minutes, or "
-        "remove it — removed, a run waits up to 60 minutes for another run of "
-        "the same repository to finish its suite; zero takes the turn only "
-        "when it is free.",
+        "Set suite_turn_wait_suite_runs to a non-negative number of suite "
+        "runs, or remove it — removed, a run waits five suite runs' worth of "
+        "time, as measured on this machine, for another run of the same "
+        "repository to finish its suite, or sixty minutes where too few suite "
+        "runs have been measured here; zero takes the turn only when it is "
+        "free.",
     )
 
 
