@@ -1,0 +1,208 @@
+story:
+  id: story-183
+  title: The verifier extends a story's scope within declared bounds to finish a finding about the story's own change, and announces every extension in the log and on the console
+  description: |
+    Today, when the verifier judges an Inspector finding about the story's
+    own change to be right, it can only fix it if the fix lives in one file
+    that one stage owns and that the story already lists. Four verdicts on
+    2026-09-19 (stories 172, 173, 174 and 175) declined correct findings for
+    exactly that reason and sent each to the backlog, where fixing it costs
+    a brief, a planning interview, a whole story run, a review and a merge
+    instead of one extra stage invocation in the run that found it.
+
+    This story lets the verifier reach a little further, within bounds it
+    decides inside and with every reach announced. A repair may name a file
+    outside the story's declared scope when that file states or consumes the
+    rule the story changed — the test is that the file already says something
+    the story made false, not that the fix would be convenient there. The
+    coordinator checks each such reach against three hard limits and refuses
+    any that crosses one, naming the limit and carrying on with the rest of
+    the pass rather than stopping the run; a refused finding is accounted as
+    declined with the limit as its reason and filed as a brief at completion,
+    so it is not lost. Every reach the coordinator accepts is written to the
+    events log and the console as one line naming the stage, the file and the
+    reason, through the same writer the existing grant lines use. Multi-file,
+    multi-stage repairs already work mechanically — the pass enters at the
+    earliest stage and runs forward — so the change is the permission, the
+    bounds and the announcement, not a new routing engine.
+
+    It deliberately leaves alone: the Inspector's line, so findings about
+    surrounding code stay briefs; the budgets, so an extension spends the
+    repair-pass budget that exists and no new key goes on any workflow; the
+    approved story artifact, which is never rewritten mid-run — an extension
+    is a run-time grant recorded on top of it, so the mandate conferred at
+    planning is still the mandate; and the failed-verdict route, because
+    retries carry no grants today and extending them would touch the
+    retry-guidance schema and the retry-routing path, which is a second story
+    if wanted. This story was planned from the brief filed under 243.
+
+    The shape. A repairable finding in schemas/verification-result.schema.json
+    stays one path and one category, as today, and gains an optional
+    scope_extension string: the reason, which is the rule the story changed
+    and the line in the named file that states it. A fix spanning files is one
+    finding per file, each naming the same slug in location and carrying its
+    own category, which repair_destination already resolves to one pass
+    entering at the earliest stage in workflow order. The per-file shape was
+    chosen over a nested list of files because repair_pass_grants, the pass
+    record and the slug accounting in orchestration/story_inspection.py are
+    all per-finding already.
+
+    The bounds, checked by the coordinator at routing and before the pass
+    record is written. A finding carrying scope_extension is refused when its
+    path is under a repository-wide blocked path from the execution rules;
+    when the stage its category resolves to has a restriction that governs
+    the path (restrictions_on), so a tester extension cannot reach the
+    implementation — unlike an in-scope repairable finding, whose grant lifts
+    confinement today and keeps doing so; or when the path matches a
+    scope.do_not_modify entry that carries a reason, where the entry's text
+    before its closing parenthetical, stripped, equals the path or is a
+    directory prefix of it, and a bare entry carrying no reason bars nothing.
+    carries_a_reason moves from orchestration/plan_validation.py to
+    orchestration/story_coordinator.py, and plan_validation imports it from
+    there under the same name, because plan_validation already imports the
+    coordinator and the reverse import would be circular.
+
+    What a refusal and an acceptance each write. A refusal drops that finding
+    from the pass, appends a scope-extension-refused event naming the finding's
+    location, the file, the stage and the bound in the bound's own words, and
+    routes the remaining findings as normal; where none remain, no pass is
+    taken and no record written. The verdict handed to the accounting has the
+    refused finding removed from repairable_findings and a declined_findings
+    entry added for its slug with the refusal as the reason, so
+    account_after_verdict counts it as left with a reason and the completion
+    filing files it as a brief. An accepted extension appears in the
+    repair-pass-N.json record as the finding it is, with scope_extension
+    beside its resolved stage, and at the entered stage's post-stage checks
+    repair_pass_grants grants it as any other finding does, with the coordinator
+    appending one scope-extension-grant-applied event per granted extension in
+    the form the correction-pass grant lines take — "scope-extension grant
+    applied: <stage> may change <file>: <reason>" — through append_event, so
+    events.log, execution-history.json and the console stay renderings of one
+    write. Both kinds join the closed enum in schemas/execution-history.schema.json.
+
+    Both verifier prompts, prompts/story-verifier.md and
+    prompts/refactor-verifier.md, carry the rule that a finding routed to this
+    story whose fix is only out of scope is extended rather than declined,
+    with declined_findings kept for a finding that is too small or wrong, and
+    state the three bounds in the prompt's own words. The default paragraph,
+    the correction-bounds paragraph and the repairable paragraph each say the
+    one-file-one-stage rule today and each is rewritten; the passages stay
+    identical between the two prompts, as tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+    holds them.
+  workflow: story-workflow
+
+tasks:
+  - Declare an optional scope_extension string on each repairable finding in schemas/verification-result.schema.json, describing it as the reason an out-of-scope file is reached — the rule the story changed and the line in the file that states it — and rewrite the repairable_findings, path and declined reason descriptions so a fix spanning files is one finding per file rather than a blocking issue.
+  - Rewrite the default, correction-bounds and repairable passages of prompts/story-verifier.md and prompts/refactor-verifier.md identically: a finding routed to this story whose fix is only out of scope is extended rather than declined; an extension names the file, the stage that owns it through the category, and in scope_extension the rule the story changed and the line that states it; the three bounds, stated in the prompt's own words; declined_findings kept for a finding that is too small or wrong; a fix spanning files is one finding per file, each naming the same slug.
+  - In orchestration/story_coordinator.py, before the repair-pass record is written, check each finding carrying scope_extension against the three bounds — blocked paths from the execution rules, the resolved stage's own restrictions via restrictions_on, and a reasoned scope.do_not_modify entry equal to or a directory prefix of the path — and refuse one that crosses a bound with a scope-extension-refused event naming the location, file, stage and bound, routing the remaining findings and taking no pass where none remain.
+  - Move carries_a_reason from orchestration/plan_validation.py into orchestration/story_coordinator.py and import it back into plan_validation under the same name, so the do_not_modify bound and the plan-time reason check read one definition.
+  - Hand the accounting a verdict with each refused finding removed from repairable_findings and a declined_findings entry added for its slug carrying the refusal as its reason, so orchestration/story_inspection.py counts it as left with a reason and files it as a brief at completion; change story_inspection.py only if the accounting needs a parameter for this.
+  - At the entered stage's post-stage checks, append one scope-extension-grant-applied event per granted finding carrying scope_extension, in the form the correction-pass grant lines take and naming the stage, the file and the reason, through append_event; add scope-extension-grant-applied and scope-extension-refused to the closed event enum in schemas/execution-history.schema.json.
+  - Say in repair_pass_statement that a finding carrying scope_extension names a file outside the story's declared scope, that the coordinator has granted it for this pass, and that the reason recorded on the finding is why.
+  - Write the tester's assertions in a new module under tests/, and adapt tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py and tests/test_repair_pass.py where the deliberate rewording of the passages and the new bound behaviour make their pinned phrases false, without weakening what they hold.
+  - Record the extension route, its bounds, its events and what it leaves alone in .harness/docs/ARCHITECTURE.md beside the repair-pass section.
+
+acceptance_criteria:
+  - A passing verdict carrying two repairable findings, each with scope_extension, naming two files outside the story's scope.modify across two stages, is granted, the pass enters at the earlier of the two stages in workflow order and runs forward to verification, the run completes, and events.log carries one scope-extension-grant-applied line per granted file naming the stage, the file and the reason.
+  - A finding carrying scope_extension whose path is under a repository-wide blocked path is refused with an event naming that bound, the run continues, and no grant for that path is applied.
+  - A finding carrying scope_extension whose path is governed by a restriction on the stage its category resolves to is refused with an event naming that restriction in the workflow's own words, the run continues, and no grant for that path is applied.
+  - A finding carrying scope_extension whose path matches a scope.do_not_modify entry carrying a reason is refused with an event naming that entry, the run continues, and no grant for that path is applied; the same path against a bare entry carrying no reason is not refused on that ground.
+  - A refused finding is accounted as declined with the refusal as its reason and is filed as a brief at the run's completion rather than lost.
+  - A verdict whose only repairable finding is refused takes no pass, writes no repair-pass record, and spends nothing from the repair-pass budget.
+  - A repairable finding naming a single in-scope file and carrying no scope_extension is granted, routed and recorded exactly as it is today, and no scope-extension event is written for it.
+  - The scope-extension-grant-applied line is written through append_event, so events.log and execution-history.json carry it as the same event and the console prints it.
+  - The rendered story-verifier and refactor-verifier prompts carry the rule that an out-of-scope fix to a routed finding is extended rather than declined, state the three bounds, and read identically in the passages the existing parity test compares.
+  - schemas/verification-result.schema.json validates a repairable finding with and without scope_extension, and refuses a scope_extension that is not a string.
+  - schemas/execution-history.schema.json's enum names both new event kinds, and every kind the coordinator writes is in that enum.
+  - carries_a_reason is defined once, in orchestration/story_coordinator.py, and orchestration/plan_validation.py imports it under the same name so its plan-time check is unchanged.
+  - No workflow definition under workflows/ changes, and the approved story artifact is not written to during a run that takes an extension.
+  - All existing tests pass together with the new ones, with no existing assertion weakened or skipped.
+
+technical_plan:
+  implementation_steps:
+    - Add the scope_extension property to repairable_findings items in schemas/verification-result.schema.json and reword the descriptions that state the one-file-one-stage rule.
+    - Rewrite the three passages in both verifier prompts identically, keeping the phrases the existing prompt tests pin where they remain true ("too small" once, "one stage" in the repairable paragraph, the story-artifact bound sentence) and adapting the tests where a pin is made false deliberately.
+    - Move carries_a_reason into story_coordinator.py; re-import it in plan_validation.py.
+    - Add a pure function in story_coordinator.py that, given the verdict's repairable findings with resolved stages, the story, the execution rules and the stage restrictions, returns the accepted findings and the refused ones each with the bound named; call it in the verifier branch before the repair-pass record is written and before account_after_verdict, transforming the verdict handed to the accounting.
+    - Append scope-extension-refused events at routing and scope-extension-grant-applied events at the post-stage checks beside the repair-pass grant events; extend repair_pass_statement.
+    - Add both kinds to schemas/execution-history.schema.json.
+    - Tester writes the new module and adapts the two pinned modules; documenter records the route in ARCHITECTURE.md.
+  likely_file_changes:
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: Declare scope_extension and reword the one-file rule.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: Carry the extension rule and its bounds.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: Carry the same passages identically.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Check the bounds, refuse or grant, announce, transform the verdict for the accounting, extend the pass statement, host carries_a_reason.
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: Import carries_a_reason from the coordinator instead of defining it.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Only if the accounting needs a parameter to receive the refused findings' reasons.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: Two new event kinds join the closed enum.
+    - file: tests/test_scope_extension.py
+      stage: tester
+      reason: The assertions listed under acceptance_criteria, including the in-scope control.
+    - file: tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      stage: tester
+      reason: Adapt pinned phrases the rewritten passages deliberately change.
+      reverting_breaks_the_suite: The passages this story rewrites are pinned by phrase in this module, so the adaptation is forced by the prompt change and reverting it fails the suite.
+    - file: tests/test_repair_pass.py
+      stage: tester
+      reason: Adapt where the grant bounds it holds are restated for extensions.
+      reverting_breaks_the_suite: Where the implementer's coordinator change makes a pinned assertion here false, the adaptation is forced and reverting it fails the suite; where nothing is made false, no edit is expected.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Record the route, its bounds, its events and what it leaves alone.
+
+scope:
+  modify:
+    - schemas/verification-result.schema.json
+    - schemas/execution-history.schema.json
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - orchestration/story_coordinator.py
+    - orchestration/plan_validation.py
+    - orchestration/story_inspection.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/ (no new budget key — an extension spends the repair-pass budget that exists, so a story needing more extensions than its budgets allow still escalates)
+    - schemas/retry-guidance.schema.json (the failed-verdict route is left alone; retries carry no grants today and extending them is a second story)
+    - the retry-routing path of the verifier branch in orchestration/story_coordinator.py (same reason — extensions enter through the repair pass only)
+    - the about_the_change partition in orchestration/story_inspection.py (the Inspector's line between a finding about the story's change and one about surrounding code holds; findings about surrounding code stay briefs)
+    - prompts/story-implementer.md, prompts/story-tester.md, prompts/documenter.md, prompts/refactor-implementer.md (the entered stages are told about an extension through the coordinator-written pass statement, which already says to change the file each finding names)
+    - orchestration/story_parser.py and schemas/story.schema.json (the approved story artifact is not rewritten during a run; an extension is a run-time grant recorded on top of it)
+
+verification_requirements:
+  - Confirm each acceptance criterion against the tester's module, and that the two-file two-stage case, the three refusal cases, the refused-then-filed case, the no-pass case and the in-scope control are each a separate test that can fail.
+  - Confirm the refusal tests demonstrate the bound they name by also showing the same finding is accepted when the bound does not apply, so an absence of a grant is a fact about the bound and not about a check that granted nothing.
+  - Confirm no workflow definition changed and that the story artifact under .harness/stories/ is untouched by a run taking an extension.
+  - Confirm the two verifier prompts' passages read identically and that the existing prompt tests were adapted rather than deleted or skipped.
+  - Confirm every event kind the coordinator writes is in schemas/execution-history.schema.json's enum.
+
+constraints:
+  - The coordinator stays deterministic; no model call is added to routing.
+  - Every extension decision — grant or refusal — is reconstructable from state.json and events.log.
+  - An in-scope repairable finding carrying no scope_extension behaves exactly as before this story.
+  - No new budget key is read from any workflow definition; the repair_pass budget bounds extensions.
+  - The refusal of an extension never escalates the run on its own.
+  - Standard library only; no third-party runtime dependency.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:10:51
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 243
