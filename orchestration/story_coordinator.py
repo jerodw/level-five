@@ -930,7 +930,9 @@ def _suite_turn_wait_count(config: dict) -> float:
     )
 
 
-def suite_turn_wait_seconds(config: dict) -> float:
+def suite_turn_wait_seconds(
+    config: dict, *, fallback: float | None = SUITE_TURN_WAIT_FALLBACK_SECONDS,
+) -> float | None:
     """The bound on waiting for a turn at the suite, in seconds.
 
     Shaped like `pause_wait_bound`: the key is read as the string `load_config`
@@ -938,16 +940,33 @@ def suite_turn_wait_seconds(config: dict) -> float:
     has passed. The key counts suite runs, and the bound is that count times
     what a suite run takes on this machine, read through
     `duration_estimate(SUITE_RUN_OPERATION)` and nothing else. Where no
-    estimate exists the bound is `SUITE_TURN_WAIT_FALLBACK_SECONDS`. Zero is
-    zero either way: take the turn only if it is free, and otherwise run at
-    once.
+    estimate exists the answer is `fallback` — `SUITE_TURN_WAIT_FALLBACK_SECONDS`
+    unless the caller says otherwise, and None where the caller wants to know
+    that the fallback applied rather than a bound to wait for, which is how
+    `suite_turn_wait_cost` learns where the bound came from without a read of
+    its own. Zero is zero either way: take the turn only if it is free, and
+    otherwise run at once.
+
+    This is the one function outside the announcement renderers that reads an
+    estimate, and `tests/test_an_operation_announces_what_it_has_taken_before.py`
+    names it as such. History is evidence and never state: no verdict, check,
+    retry or escalation may depend on what earlier runs took, because a
+    decision that reads history is a decision `state.json` and `events.log`
+    cannot reconstruct. A wait's length is not such a decision. The estimate
+    decides how long a run waits before taking a turn the holder is no longer
+    using, and nothing about which stage runs next, what a check concludes or
+    what a run records — two identical runs over a seeded duration log and over
+    none reach the same stages, the same verdicts and the same exit code, and
+    differ only in how long one of them waited. That is why this bound may read
+    the estimate where a verdict may not, and why it is the only bound that
+    does.
     """
     count = _suite_turn_wait_count(config)
     if count == 0:
         return 0.0
     estimate = duration_estimate(SUITE_RUN_OPERATION)
     if estimate is None:
-        return SUITE_TURN_WAIT_FALLBACK_SECONDS
+        return fallback
     return count * estimate
 
 
@@ -957,30 +976,32 @@ def suite_turn_wait_cost(config: dict) -> str:
     One of two wordings for a non-zero count — the count times the estimate,
     or the fallback because too few suite runs have been measured here — and a
     third for zero, whose bound comes from neither. Composed here so that
-    `suite_turn` does not branch on the estimate inline, and so the clause and
-    `suite_turn_wait_seconds` read one count and one estimate.
+    `suite_turn` does not branch on the estimate inline. The estimate is read
+    through `suite_turn_wait_seconds` alone — asked with no fallback, so that
+    None is the answer where too few suite runs have been measured — and the
+    estimate the wording names is the bound divided back by the count, so the
+    clause and the bound cannot come from two reads.
     """
     count = _suite_turn_wait_count(config)
-    bound = suite_turn_wait_seconds(config)
     if count == 0:
         return (
             "this waits for at most 0 minutes, because "
             "suite_turn_wait_suite_runs is 0: the turn is taken only if it "
             "is free, and otherwise the suite runs at once without one"
         )
-    estimate = duration_estimate(SUITE_RUN_OPERATION)
-    if estimate is None:
+    from_estimate = suite_turn_wait_seconds(config, fallback=None)
+    if from_estimate is None:
         return (
             f"this waits until that run's suite ends, or for at most "
-            f"{bound / 60:g} minutes, whichever comes first; that is the "
-            f"fallback bound, because too few suite runs have been measured "
-            f"here to know what one takes"
+            f"{SUITE_TURN_WAIT_FALLBACK_SECONDS / 60:g} minutes, whichever "
+            f"comes first; that is the fallback bound, because too few suite "
+            f"runs have been measured here to know what one takes"
         )
     return (
         f"this waits until that run's suite ends, or for at most "
-        f"{bound / 60:g} minutes, whichever comes first; that is "
-        f"{count:g} suite run(s) at the {estimate / 60:g}-minute estimate "
-        f"measured here"
+        f"{from_estimate / 60:g} minutes, whichever comes first; that is "
+        f"{count:g} suite run(s) at the {from_estimate / count / 60:g}-minute "
+        f"estimate measured here"
     )
 
 
@@ -4161,10 +4182,38 @@ def _inode_at(lock_path: Path) -> int:
     return lock_path.stat().st_ino
 
 
-def _take_over_suite_turn(lock_path: Path, waited_on: int):
+def _takeover_lock_path(lock_path: Path) -> Path:
+    """The second, momentary lock beside the suite lock, under which the turn
+    is swapped and a granted turn is confirmed.
+    """
+    return lock_path.with_name(SUITE_TAKEOVER_LOCK_NAME)
+
+
+def _confirm_suite_turn(lock_path: Path, handle) -> bool:
+    """Whether a flock just granted on `handle` is the turn: True when the
+    inode `handle` holds is still the one at `lock_path`, False when the path
+    has moved on to a fresh inode a taker renamed over it.
+
+    Asked under the takeover lock, taken blocking because a swap is momentary,
+    so the answer cannot be read in the middle of one: a taker mid-swap
+    finishes first and this reports the new inode, or this reports first and
+    the taker's own flock retry under the same lock then meets the grant. A
+    holder that let go inside the one poll between a taker's inode check and
+    its rename would otherwise leave this run granted the old inode while the
+    taker runs on the new one — the overlap the turn exists to prevent.
+    """
+    with open(_takeover_lock_path(lock_path), "a", encoding="utf-8") as takeover:
+        fcntl.flock(takeover, fcntl.LOCK_EX)
+        return _inode_at(lock_path) == _inode_held(handle)
+
+
+def _take_over_suite_turn(lock_path: Path, handle):
     """Take the turn from a holder whose flock cannot be taken: a fresh file,
-    locked, renamed over `lock_path`. Returns the handle holding the new lock,
-    or None where another waiter took over first.
+    locked, renamed over `lock_path`. `handle` is the handle this run has
+    been waiting on. Returns the handle holding the turn — `handle` itself
+    where the holder let go in the meantime and its lock was granted, a fresh
+    handle where the turn was swapped — or None where another waiter took
+    over first.
 
     The swap happens under a second, momentary lock at
     `SUITE_TAKEOVER_LOCK_NAME` beside the suite lock, so two waiters expiring
@@ -4176,16 +4225,27 @@ def _take_over_suite_turn(lock_path: Path, waited_on: int):
     finds either the old inode or the new one and never a half. The lock path
     is never unlinked, and the file's existence still means nothing.
 
+    Before swapping, and still under the takeover lock, the flock on `handle`
+    is tried once more. A holder that finished in the window between this
+    run's last poll and now has released it, and taking the turn on that inode
+    is the ordinary grant; swapping over it would leave the next waiter to be
+    granted the old inode while this run ran on the new one, which is the
+    overlap the turn exists to prevent. Only a lock still refused here — the
+    holder still there — is taken over. The waiter's side of the same race is
+    `_confirm_suite_turn`.
+
     Any `OSError` other than the takeover lock being held propagates, so the
     caller treats it as the could-not-open path; a temporary file left by such
     a failure is removed on the way out.
     """
-    takeover_path = lock_path.with_name(SUITE_TAKEOVER_LOCK_NAME)
-    with open(takeover_path, "a", encoding="utf-8") as takeover:
+    waited_on = _inode_held(handle)
+    with open(_takeover_lock_path(lock_path), "a", encoding="utf-8") as takeover:
         if not _try_suite_lock(takeover):
             return None
         if _inode_at(lock_path) != waited_on:
             return None
+        if _try_suite_lock(handle):
+            return handle
         descriptor, fresh = tempfile.mkstemp(
             dir=lock_path.parent, prefix=f"{SUITE_LOCK_NAME}.")
         handle = open(descriptor, "a", encoding="utf-8")
@@ -4241,6 +4301,28 @@ def suite_turn(
     over — it writes the wait and the expiry note and runs at once without a
     turn, exactly as it did before takeovers existed.
 
+    A takeover and a normal release can meet, and the two sides of the race
+    are closed under the takeover lock. A holder that lets go in the window
+    between a taker's inode check and its rename would leave an ordinary
+    waiter granted the old inode while the taker renamed a fresh one over the
+    path, and both would run. So the taker retries the flock on the handle it
+    waited on under the takeover lock and, where it is granted, takes the turn
+    on that inode and swaps nothing (`_take_over_suite_turn`); and a waiter
+    whose ordinary flock is granted confirms, under the same lock, that the
+    inode it holds is still the one at the path (`_confirm_suite_turn`), and
+    where it is not, lets the orphan go, reopens the path and keeps waiting —
+    announcing the restart, since the turn did change hands. What the lock
+    serialises is the swap against the confirmation. Two windows are left,
+    and neither is closed here. The first: a lock refused by the hung holder
+    and one refused by a waiter granted and confirmed in the instant between
+    this run's expiry and its taking the takeover lock look the same to the
+    taker. The second: the first, uncontended `_try_suite_lock` at the top of
+    this function is the one grant not confirmed under the takeover lock, so
+    a fresh entrant granted the old inode after the holder lets go — while a
+    taker already holds the takeover lock with its retry refused and has not
+    yet renamed the fresh file over the path — runs on the orphaned inode
+    beside the taker. Each is a fraction of a poll.
+
     A lock file that cannot be created or opened, and any stat or open that
     fails mid-wait other than the lock being held, runs the body anyway and
     says why as a note naming the path and the error. Nothing here refuses or
@@ -4286,6 +4368,15 @@ def suite_turn(
                         break
                     taken = _try_suite_lock(handle)
                     if taken:
+                        # Granted — but on the inode still at the path? A
+                        # taker may have renamed a fresh file over it in the
+                        # same instant the holder let go, in which case this
+                        # run holds an orphan and the turn is the taker's:
+                        # let the orphan go and keep waiting on the path.
+                        if not _confirm_suite_turn(lock_path, handle):
+                            fcntl.flock(handle, fcntl.LOCK_UN)
+                            taken = False
+                            changed_hands = True
                         break
                 if taken:
                     break
@@ -4293,7 +4384,13 @@ def suite_turn(
                     # The bound expired on a holder that is still there. Take
                     # the turn from it, unless another waiter got there first
                     # -- then the next poll sees the new inode and restarts.
-                    handle_after = _take_over_suite_turn(lock_path, waited_on)
+                    handle_after = _take_over_suite_turn(lock_path, handle)
+                    if handle_after is handle:
+                        # The holder let go as this run went to take the
+                        # turn: it is taken on the same inode, exactly as a
+                        # grant inside the bound is, and nothing is swapped.
+                        taken = True
+                        break
                     if handle_after is not None:
                         handle.close()
                         handle = handle_after

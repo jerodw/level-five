@@ -979,9 +979,11 @@ def test_the_coordinator_finds_the_log_through_its_declared_fields():
 
 def test_the_estimate_is_read_only_by_the_announcers():
     """Every read of an estimate in the coordinator is handed straight to the
-    composer or to the stage-started line's renderer, so no timeout, bound,
-    check or routing decision can be reading it. The control is a planted
-    function that routes on one, which the same reader reports."""
+    composer or to the stage-started line's renderer, with one sanctioned
+    exception named below, so no verdict, check, retry or routing decision
+    can be reading it. The control is a planted function that routes on one,
+    which the same reader reports — and the same read planted into a function
+    that is not the sanctioned one, which it reports too."""
     assert estimate_reads_outside_announcements(COORDINATOR_SOURCE) == []
     assert estimate_reads_in(COORDINATOR_SOURCE), \
         "the scan found no read at all, so it is looking nowhere"
@@ -992,15 +994,63 @@ def test_the_estimate_is_read_only_by_the_announcers():
     assert estimate_reads_outside_announcements(COORDINATOR_SOURCE + planted) == [
         "duration_estimate('x')"]
 
+    # A read that is not routed on and not handed to a renderer is still
+    # reported when it sits in a function other than the sanctioned one: the
+    # exemption is by name, and a second bound reading the estimate is a
+    # second reader.
+    planted_bound = ('\n\ndef _planted_bound(config):\n'
+                     '    return 2 * duration_estimate("y")\n')
+    assert estimate_reads_outside_announcements(
+        COORDINATOR_SOURCE + planted_bound) == ["duration_estimate('y')"]
+
     inspecting = (REPO_ROOT / "orchestration" / "story_inspection.py").read_text(
         encoding="utf-8")
     assert estimate_reads_in(inspecting) == []
     assert "_duration_estimates" not in inspecting
 
 
+def test_the_one_sanctioned_reader_is_the_suite_turn_wait_and_it_says_why():
+    """The exemption is held shut from both sides: the sanctioned function
+    exists, actually reads the estimate (so the exemption is not stale), reads
+    it for the suite-run operation and no other, and its docstring states
+    why a wait's length may read the estimate where a verdict may not. Every
+    other read in the coordinator is still handed to a renderer, so the
+    exemption covers nothing but the wait."""
+    assert SANCTIONED_READERS == {"suite_turn_wait_seconds"}
+    tree = ast.parse(COORDINATOR_SOURCE)
+    functions = {node.name: node for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef)}
+    for name in SANCTIONED_READERS:
+        assert name in functions
+        reads = reads_in(functions[name])
+        assert reads, f"{name} reads no estimate, so its exemption is stale"
+        assert {ast.unparse(read.args[0]) for read in reads} == \
+            {"SUITE_RUN_OPERATION"}
+        docstring = ast.get_docstring(functions[name]) or ""
+        assert "verdict" in docstring and "wait" in docstring
+        assert "History is evidence" in docstring
+    # Every read outside the sanctioned function is handed to a renderer:
+    # the same scan with the exemption emptied reports exactly the sanctioned
+    # function's reads and nothing else.
+    every_read = estimate_reads_outside_announcements(
+        COORDINATOR_SOURCE, sanctioned=frozenset())
+    sanctioned_reads = [ast.unparse(read) for name in SANCTIONED_READERS
+                        for read in reads_in(functions[name])]
+    assert every_read == sanctioned_reads
+
+
 #: The two renderers an estimate may be handed to. The composer, and the
 #: renderer the stage-started line uses because it carries no cost clause.
 RENDERERS = {"_announcement", "_with_estimate"}
+
+#: The one function outside the renderers that may read an estimate: the
+#: bound on waiting for a turn at the suite, since story-190 a configured
+#: count of suite runs times what one has taken here. A wait's length is not
+#: a verdict, a check, a retry or an escalation — it decides how long a run
+#: waits for a turn and nothing about what the run does — so it may read
+#: history where those may not. The exemption is by name, so a second bound
+#: reading the estimate is a second reader and is reported.
+SANCTIONED_READERS = frozenset({"suite_turn_wait_seconds"})
 
 
 def reads_in(tree: ast.AST) -> list[ast.Call]:
@@ -1014,14 +1064,25 @@ def estimate_reads_in(source: str) -> list[ast.Call]:
     return reads_in(ast.parse(source))
 
 
-def estimate_reads_outside_announcements(source: str) -> list[str]:
+def estimate_reads_outside_announcements(
+        source: str, sanctioned: frozenset[str] = SANCTIONED_READERS) -> list[str]:
     tree = ast.parse(source)
     parents: dict[int, ast.AST] = {}
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             parents[id(child)] = node
+
+    def enclosing_function(node: ast.AST) -> str | None:
+        while node is not None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return node.name
+            node = parents.get(id(node))
+        return None
+
     loose = []
     for read in reads_in(tree):
+        if enclosing_function(read) in sanctioned:
+            continue
         parent = parents.get(id(read))
         if isinstance(parent, ast.keyword):
             parent = parents.get(id(parent))

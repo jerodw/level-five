@@ -1,1 +1,3 @@
 {"story_id": "story-190", "status": "escalated", "retry_count": 0, "verifier_outcome": "failed", "timestamp": "2026-09-21 11:15:50"}
+{"story_id": "story-190", "status": "resumed", "retry_count": 0, "timestamp": "2026-09-21 11:29:53"}
+{"story_id": "story-190", "status": "completed", "retry_count": 0, "timestamp": "2026-09-21 12:43:12"}

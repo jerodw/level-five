@@ -38,7 +38,11 @@ subjects, kept apart:
     and all on one fake clock stepped from the test, are shown draining one
     per bound and never together; every waiter that did not take over says
     the turn changed hands and starts its wait over. A fresh entrant after a
-    takeover queues behind the new holder.
+    takeover queues behind the new holder. A takeover meeting a normal
+    release leaves one suite in flight on either side: a taker granted the
+    old lock under the takeover lock runs on the old inode and swaps nothing,
+    and a waiter granted the old inode after the path has moved on lets it
+    go and queues on the new one rather than running.
 
   * **what the turn does not touch.** The configured command runs exactly as
     configured on every path, no module under `orchestration/` names the
@@ -71,6 +75,11 @@ Every absence asserted here sits beside a demonstration that it can fail:
     own log, which carries exactly one;
   * "the takeover lock is released after the swap" sits beside the same lock
     held by the test, which the same probe reports held;
+  * "a taker granted the lock it waited on swaps nothing" sits beside the
+    same helper called with the holder still there, which swaps;
+  * "a waiter granted an orphaned inode does not run and writes no note" sits
+    beside the same release with no swap in between, which is the ordinary
+    grant on the old inode with no restart;
   * "the old key is declared nowhere" sits beside the new key, which the same
     schema declares.
 
@@ -808,8 +817,10 @@ POLL = story_coordinator.SUITE_TURN_POLL_SECONDS
 
 #: What the wait announcement says its bound came from, in the two wordings
 #: the story states: the count and the estimate, or the fallback because too
-#: few suite runs have been measured here.
-FROM_THE_ESTIMATE = "measured here"
+#: few suite runs have been measured here. Each phrase is one only its own
+#: wording carries — both wordings say "measured here", so a bare "measured
+#: here" would be found in the fallback's and prove nothing by its absence.
+FROM_THE_ESTIMATE = "-minute estimate measured here"
 FROM_THE_FALLBACK = "too few suite runs have been measured"
 
 
@@ -909,7 +920,10 @@ def test_a_holder_that_lets_go_inside_the_bound_is_waited_for_and_then_taken(
     assert kinds_of(tmp_path / "run") == [WAITED]
     assert notes_about_the_turn(tmp_path / "run") == []
     assert inode_at(lock) == before
-    assert not takeover_lock_of(target).exists()
+    # The grant was confirmed under the takeover lock — the waiter's side of
+    # the race with a takeover — so that lock's file exists; nothing holds it
+    # and nothing was swapped over the path.
+    assert is_held(takeover_lock_of(target)) is False
 
 
 def test_a_bound_of_zero_takes_the_turn_only_if_it_is_free_and_takes_nothing_over(
@@ -1114,9 +1128,19 @@ class Waiters:
         self.released: dict[str, bool] = {}
         self.errors: dict[str, BaseException] = {}
         self.threads: dict[str, threading.Thread] = {}
+        #: Called with the waiter's name and the time on every read of the
+        #: clock, which is how a test acts at a moment no sleep marks: a
+        #: waiter's final read, the one that ends its poll loop, falls after
+        #: its last flock attempt and before it goes to take the turn over.
+        self.on_clock = None
 
     def run_dir(self, name: str) -> Path:
         return self.root / name
+
+    def _read_clock(self, name: str) -> float:
+        if self.on_clock is not None:
+            self.on_clock(name, self.now)
+        return self.now
 
     def _sleep(self, name: str, seconds: float) -> None:
         with self.condition:
@@ -1131,7 +1155,7 @@ class Waiters:
             with story_coordinator.suite_turn(
                     self.run_dir(name), self.target, self.config, DECLARING,
                     SUITE_ARTIFACT, sleep=lambda seconds: self._sleep(name, seconds),
-                    clock=lambda: self.now):
+                    clock=lambda: self._read_clock(name)):
                 with self.condition:
                     self.state[name] = IN_BODY
                     self.condition.notify_all()
@@ -1239,8 +1263,12 @@ def test_three_waiters_behind_a_hung_holder_drain_one_per_bound_and_never_togeth
         waiters.step_until(lambda: waiters.in_body() != [],
                            "a waiter entering its body")
         assert waiters.in_body() == ["first"]
+        # The bound is measured on the shared clock, which the other two
+        # waiters' starts advanced while the first was asleep; so the first's
+        # own sleeps cover the bound less the ten seconds of those starts.
         assert waiters.now == pytest.approx(1000.0 + bound, abs=POLL)
-        assert sum(waiters.slept["first"]) == pytest.approx(bound, abs=POLL)
+        assert sum(waiters.slept["first"]) == pytest.approx(
+            bound - (1010.0 - 1000.0), abs=POLL)
         assert not hung.closed and inode_held(hung) == hung_inode
         new_inode = inode_at(lock)
         assert new_inode != hung_inode
@@ -1330,6 +1358,234 @@ def test_the_stepping_harness_reports_two_waiters_in_their_bodies_at_once(
                        "the queued waiter taking the turn")
     waiters.end_body("queued")
     assert kinds_of(waiters.run_dir("queued")) == [WAITED]
+
+
+# --------------------------------------------------------------------------
+# A takeover meeting a normal release: one suite in flight, on either side
+# --------------------------------------------------------------------------
+#
+# A holder that finishes in the window between a taker's inode check and its
+# rename would leave two runs holding a turn: an ordinary waiter granted the
+# old inode, and the taker on the fresh one it renamed over the path. The two
+# sides are driven separately, each at the one moment the race needs, and on
+# each the reading is the same: exactly one run's suite is in flight.
+
+
+def watching_takeovers(monkeypatch) -> list[tuple[int, bool, int]]:
+    """Record every takeover attempt the turn makes: the inode it waited on,
+    whether it was handed back the very handle it waited on — the holder
+    having let go under the takeover lock — and the inode at the path after."""
+    seen: list[tuple[int, bool, int]] = []
+    real = story_coordinator._take_over_suite_turn
+
+    def watching(lock_path, handle):
+        result = real(lock_path, handle)
+        seen.append((inode_held(handle), result is handle, inode_at(lock_path)))
+        return result
+
+    monkeypatch.setattr(story_coordinator, "_take_over_suite_turn", watching)
+    return seen
+
+
+def test_a_holder_that_lets_go_as_the_taker_expires_is_taken_on_the_old_inode_and_nothing_is_swapped(
+        make_target, tmp_path, monkeypatch):
+    """The taker's side. The holder lets go on the taker's final clock read —
+    after the taker's last flock attempt inside its poll loop and before its
+    retry under the takeover lock — so the retry is granted: the taker runs
+    on the old inode, renames nothing over the path and writes no takeover
+    note. A second waiter behind it is refused for as long as the taker's body
+    runs and is then granted the same inode, so at no moment are two suites
+    in flight."""
+    with_estimate()
+    target = make_target("let-go-at-expiry")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    takeovers = watching_takeovers(monkeypatch)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    old_inode = inode_at(lock)
+    waiters = Waiters(target, config, tmp_path / "waiters")
+
+    def let_go(name: str, now: float) -> None:
+        if name == "taker" and now - 1000.0 >= bound and not holder.closed:
+            holder.close()
+
+    waiters.on_clock = let_go
+    try:
+        waiters.start("taker", 1000.0)
+        # Behind the taker, its bound expiring later, so it is refused by
+        # the holder throughout the taker's wait and by the taker after.
+        waiters.start("other", 1005.0)
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the taker entering its body")
+        assert waiters.in_body() == ["taker"]
+        assert waiters.now == pytest.approx(1000.0 + bound, abs=POLL)
+        assert holder.closed
+        # Granted the handle it waited on, under the takeover lock, and the
+        # path still names that inode: nothing was swapped over it.
+        assert takeovers == [(old_inode, True, old_inode)]
+        assert inode_at(lock) == old_inode
+        assert is_held(lock) is True
+        assert kinds_of(waiters.run_dir("taker")) == [WAITED]
+        assert notes_about_the_turn(waiters.run_dir("taker")) == []
+
+        # The other is still refused, by the taker now, and never restarts:
+        # the turn did not change hands.
+        waiters.step()
+        waiters.step()
+        assert waiters.in_body() == ["taker"] and waiters.sleeping() == ["other"]
+        assert kinds_of(waiters.run_dir("other")) == [WAITED]
+        waiters.end_body("taker")
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the other taking the turn")
+        assert waiters.in_body() == ["other"]
+        assert inode_at(lock) == old_inode
+        assert takeovers == [(old_inode, True, old_inode)]
+        waiters.end_body("other")
+    finally:
+        holder.close()
+
+    assert waiters.errors == {}
+    assert kinds_of(waiters.run_dir("other")) == [WAITED]
+    for name in ("taker", "other"):
+        assert notes_about_the_turn(waiters.run_dir(name)) == []
+        assert all(0 < step <= POLL for step in waiters.slept[name])
+
+
+def test_the_takeover_swaps_only_a_lock_still_refused_under_the_takeover_lock(
+        make_target, tmp_path):
+    """The control for the helper the test above watches, from the file
+    system's side: with the holder still there the same call renames a fresh
+    inode over the path and hands back a different handle, and with the
+    holder gone it hands back the handle it was given and moves nothing."""
+    target = make_target("helper")
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with holding(lock):
+        old_inode = inode_at(lock)
+        with open(lock, "a", encoding="utf-8") as waited_on:
+            assert story_coordinator._try_suite_lock(waited_on) is False
+            fresh = story_coordinator._take_over_suite_turn(lock, waited_on)
+            try:
+                assert fresh is not waited_on
+                assert inode_at(lock) == inode_held(fresh) != old_inode
+                assert is_held(lock) is True
+            finally:
+                fresh.close()
+    # The holder let go, and the path names the swapped inode: a waiter on it
+    # that goes to take over is granted the very handle it waited on instead.
+    with open(lock, "a", encoding="utf-8") as waited_on:
+        swapped_inode = inode_at(lock)
+        assert story_coordinator._take_over_suite_turn(lock, waited_on) is waited_on
+        assert inode_at(lock) == swapped_inode == inode_held(waited_on)
+        assert is_held(lock) is True
+    assert is_held(takeover_lock_of(target)) is False
+
+
+def test_a_waiter_granted_the_old_inode_after_the_path_moved_on_requeues_rather_than_running(
+        make_target, tmp_path, monkeypatch):
+    """The waiter's side. Between this waiter's inode check and its flock
+    attempt, a taker whose bound expired renames a fresh file over the path
+    and the holder then lets go — so the flock on the old inode is granted.
+    The waiter does not run on it: it confirms under the takeover lock that
+    the path has moved on, lets the orphan go, reopens the path, announces
+    that the turn changed hands, and waits on the taker's inode; only when
+    the taker's body ends does it run, on that inode. The taker's suite is
+    the one in flight throughout."""
+    with_estimate()
+    target = make_target("granted-an-orphan")
+    config = {**config_of(target), KEY: "2"}
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    old_inode = inode_at(lock)
+    # Another waiter's handle on the old inode, which the takeover is made with.
+    taker_waited_on = open(lock, "a", encoding="utf-8")
+    taker: dict[str, object] = {}
+    swap_at, taker_ends_at = 30.0, 60.0
+    assert taker_ends_at < bound_of("2")
+    real_inode_at = story_coordinator._inode_at
+    armed = False
+
+    def between_the_check_and_the_flock(lock_path: Path) -> int:
+        nonlocal armed
+        inode = real_inode_at(lock_path)
+        if armed and "handle" not in taker:
+            taker["handle"] = None
+            fresh = story_coordinator._take_over_suite_turn(lock_path, taker_waited_on)
+            assert fresh is not None and fresh is not taker_waited_on
+            taker["handle"], taker["inode"] = fresh, inode_held(fresh)
+            holder.close()
+        return inode
+
+    def on_advance(now: float) -> None:
+        nonlocal armed
+        if now - 1000.0 >= swap_at:
+            armed = True
+        if now - 1000.0 >= taker_ends_at and taker.get("handle") is not None:
+            taker["handle"].close()
+
+    monkeypatch.setattr(story_coordinator, "_inode_at", between_the_check_and_the_flock)
+    clock = FakeClock(on_advance=on_advance)
+    try:
+        with contextlib.ExitStack() as stack:
+            enter_turn(stack, tmp_path / "waiter", target, config, clock)
+            # In the body: on the taker's inode, which the path names; the
+            # old inode is nobody's, the orphan having been let go.
+            assert inode_at(lock) == taker["inode"] != old_inode
+            assert is_held(lock) is True
+            assert story_coordinator._try_suite_lock(taker_waited_on) is True
+            fcntl.flock(taker_waited_on, fcntl.LOCK_UN)
+    finally:
+        holder.close()
+        taker_waited_on.close()
+        if taker.get("handle") is not None:
+            taker["handle"].close()
+
+    # Granted the orphan at the swap, it kept waiting until the taker's body
+    # ended, and ran only then.
+    assert taker_ends_at <= sum(clock.slept) < taker_ends_at + 2 * POLL
+    assert all(0 < step <= POLL for step in clock.slept)
+    first_wait, restart = entries_of_kind(tmp_path / "waiter", WAITED)
+    assert kinds_of(tmp_path / "waiter") == [WAITED, WAITED]
+    assert CHANGED_HANDS not in first_wait["message"]
+    assert CHANGED_HANDS in restart["message"]
+    assert str(lock) in restart["message"]
+    assert notes_about_the_turn(tmp_path / "waiter") == []
+    assert is_held(takeover_lock_of(target)) is False
+
+
+def test_the_same_drive_without_the_swap_runs_on_the_old_inode(
+        make_target, tmp_path):
+    """The control for the re-queue above: the holder letting go at the same
+    moment with no taker in between is the ordinary grant, taken on the old
+    inode with one wait event and no restart — so the restart the test above
+    reads is the swap's doing and not the release's."""
+    with_estimate()
+    target = make_target("no-swap")
+    config = {**config_of(target), KEY: "2"}
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    old_inode = inode_at(lock)
+
+    def let_go(now: float) -> None:
+        if now - 1000.0 >= 30.0 and not holder.closed:
+            holder.close()
+
+    try:
+        ran, clock = take_turn(tmp_path / "waiter", target, config,
+                               clock=FakeClock(on_advance=let_go))
+    finally:
+        holder.close()
+    assert ran is True
+    assert inode_at(lock) == old_inode
+    assert kinds_of(tmp_path / "waiter") == [WAITED]
+    assert 30.0 <= sum(clock.slept) < 30.0 + 2 * POLL
 
 
 def test_an_uncontended_turn_writes_nothing_and_sleeps_nothing(make_target, tmp_path):
