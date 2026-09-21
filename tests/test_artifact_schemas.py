@@ -470,7 +470,11 @@ def test_prompts_this_story_leaves_alone_carry_no_schema_placeholders(harness_ro
     # the documenter a changed-files record and so injects
     # {{changed_files_schema}} there deliberately; the stage/schema sweep above
     # holds that property, because the documenter now declares a schemas map.
-    for name in ("assist.md", "harness-layer.md"):
+    # assist.md left the list in story-189, which injects {{story_brief_schema}}
+    # there deliberately so the assist agent is handed the brief's shape as the
+    # schema file itself; tests/test_the_assist_agent_files_a_brief.py and the
+    # module story-189's tester wrote hold that property.
+    for name in ("harness-layer.md",):
         text = (harness_root / "prompts" / name).read_text()
         assert "_schema}}" not in text, name
 

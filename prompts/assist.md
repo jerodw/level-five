@@ -55,15 +55,23 @@ English — what is wrong or wanted, what the work does about it, and what it
 deliberately leaves alone — that a developer who does not know the harness
 intimately can follow, with the paths, stage names and field names kept for
 the paragraphs after them, and with its evidence cited as file:line wherever
-the brief is about code that exists; a category; a severity saying how much
-the work matters, with confidence — how sure you are of the judgement the
-brief makes — as a separate axis, and effort as S, M or L; and the
-workflow it should be planned under, named as the workflow definitions
-name themselves. Optionally it carries the bare repository-relative paths
-it is about — bare, because line-level evidence belongs in the body — and
-what a story planned from it should deliberately leave alone.
-schemas/story-brief.schema.json is the shape and says why each part of it
-is where it is.
+the brief is about code that exists; and a severity saying how much the
+work matters, with confidence — how sure you are of the judgement the
+brief makes — as a separate axis. Where it names the paths it is about,
+they are bare repository-relative paths, because line-level evidence
+belongs in the body. Everything else a brief carries, and the shape each
+of those parts takes, is in the schema rather than restated here:
+schemas/story-brief.schema.json is the shape every brief must satisfy and
+says why each part of it is where it is.
+
+{{story_brief_schema}}
+
+A brief's workflow field names one of the workflows the harness defines,
+exactly as it is spelled here. These are the workflows that field may
+name, each given as a name and what that workflow says it is for; a brief
+naming any other is refused at filing.
+
+{{workflow_candidates}}
 
 A brief is not a story artifact and nothing executes one. It states the
 work and the case for it; the developer plans it into a story through

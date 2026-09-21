@@ -2724,6 +2724,20 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "deployment's own assist prompt keeps the brief shape and now names "
         "the skill, and because the launcher is asserted to hand the session "
         "that very file rather than a file shaped like it",
+    "test_the_assist_agent_receives_the_brief_schema_and_the_workflows.py":
+        "what it resolves live is the one document its criteria are about: "
+        "schemas/story-brief.schema.json, because the claim is that this "
+        "deployment's own brief schema reaches the assist session verbatim "
+        "through the launcher, which a fixture schema could only say back "
+        "about itself. The workflow names it looks for are read through the "
+        "same helper the filing refuses against, and where a definition *is* "
+        "an input — that a workflow added to the harness reaches the prompt "
+        "with no edit to the template — the module builds a harness root "
+        "defining a workflow this repository does not ship and drives the "
+        "real launcher against that. Every absence it asserts is controlled "
+        "over a mutant of the shipped launcher that renders with the prose "
+        "partial alone, over the partial that does carry the harness-layer "
+        "marks, and over the superseded wording carried here as literals",
     "test_undeclared_config_keys.py":
         "its subject is this repository's own configuration keys",
     "test_validation_module_naming.py":

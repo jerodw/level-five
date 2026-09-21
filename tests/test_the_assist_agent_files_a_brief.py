@@ -82,6 +82,7 @@ import inspection
 import outbox
 import schema_validator
 import story_brief
+import workflow_selection
 
 import test_inspection as producer
 import test_no_target_stack_in_harness_source as scan_module
@@ -1197,16 +1198,23 @@ def test_the_launcher_still_appends_the_assist_prompt_it_appended(monkeypatch):
     appended = args[args.index("--append-system-prompt") + 1]
     # Since story-104 the launcher renders the template rather than reading it
     # raw, so what it appends is that template with its shared partial
-    # resolved. Comparing against the rendering rather than the file is what
-    # keeps this an equality rather than a substring check. The template is
-    # read off the shipped path here rather than through the launcher's own
-    # loader, so the claim that the session is handed *this deployment's*
-    # assist prompt stays a read of that file — which is what this module's
-    # entry in the live-artifact declaration says it is.
+    # resolved; since story-189 the context it renders against is the one the
+    # Inspector gets for the same job — every shipped schema and the defined
+    # workflows by name — with the partial resolved into that context last.
+    # Comparing against the rendering rather than the file is what keeps this
+    # an equality rather than a substring check. The template is read off the
+    # shipped path here rather than through the launcher's own loader, so the
+    # claim that the session is handed *this deployment's* assist prompt stays
+    # a read of that file — which is what this module's entry in the
+    # live-artifact declaration says it is.
+    context = context_assembler.schema_context(REPO_ROOT)
+    context["workflow_candidates"] = workflow_selection.candidate_block(
+        workflow_selection.candidates(REPO_ROOT))
+    context["prose_layer"] = context_assembler.resolved_partial(
+        REPO_ROOT, context_assembler.PROSE_LAYER, context)
     assert appended == context_assembler.render(
         (REPO_ROOT / "prompts" / "assist.md").read_text(encoding="utf-8"),
-        {"prose_layer": context_assembler.resolved_partial(
-            REPO_ROOT, context_assembler.PROSE_LAYER, {})})
+        context)
 
 
 def test_the_launcher_tells_the_session_where_the_harness_it_started_from_is(
