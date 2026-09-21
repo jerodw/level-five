@@ -1,0 +1,139 @@
+story:
+  id: story-188
+  title: A record commit that fails is checked, reported, and leaves nothing staged
+  description: |
+    When an inspection finishes it writes a one-line record of what it did into
+    the versioned cross-run history and commits that line, so the tree is left
+    clean for the next run. If the commit fails — a pre-commit hook rejects it,
+    git has no identity to commit as — nothing checks, nothing says so, and the
+    record is left half-done: added to git's staging area but never committed.
+    The developer sees a normal-looking report, and the next run refuses to
+    start on a dirty tree with no message connecting the refusal to the
+    inspection that caused it. Each repeat adds another uncommitted line.
+
+    This story makes both commit paths check what git returned and say what
+    happened. In broad mode the report a developer is already reading gets a
+    line about the record on every real inspection: committed, or not committed
+    and why. In narrow mode, after a story, a record that was not committed
+    becomes a line in the run's own events log, where the inspection already
+    reports everything else it did. When the commit fails, what was staged is
+    unstaged again, so the tree is left as the commit found it: modified, with
+    nothing staged. A record that could not be written at all is reported on
+    the same terms.
+
+    It deliberately leaves alone the guarantee that an inspection never stops a
+    run — nothing here raises or refuses — and it neither retries nor repairs a
+    failed commit. Putting the index back is restoring what the commit found,
+    not fixing the commit.
+
+    Planned from the brief filed under key 4. The brief's line numbers have
+    drifted: the broad-mode commit is at orchestration/inspection.py:1383-1388
+    and the narrow one at orchestration/story_inspection.py:679-683, and since
+    story-165 the record goes to a per-writer segment under .harness/history/
+    rather than the root inspection-log.jsonl. Two things the brief did not
+    name are in scope because the same function serves them: the filing at
+    completion commits through commit_record under FILED_COMMIT_SUBJECT and
+    was silent the same way, and .harness/docs/ARCHITECTURE.md already records
+    as open that commit_record has no run directory and so cannot note in
+    events.log when it staged nothing — every caller holds run_dir, so this
+    story closes that.
+
+    The shape of the answer is the one plan_mandate.commit_records already
+    has: a frozen result saying what the commit did or why it did nothing, with
+    both git return codes checked. inspection.record returns such a result
+    instead of None, Report gains a defaulted field carrying it, and
+    scripts/l5-inspect prints it. story_inspection.commit_record gains run_dir,
+    is guarded whole so it never raises, returns the same shape, and notes into
+    events.log through _note when the record was not committed. The broad
+    report says it on every non-dry run, the report's own no-silent-bound
+    idiom; narrow mode notes only when not committed, since events.log already
+    carries the record line itself.
+  workflow: story-workflow
+
+tasks:
+  - Give orchestration/inspection.py a small frozen dataclass describing what recording did — whether the record was written, whether it was committed, and a detail string saying why not — and have record return it on every path instead of None, including the path where the history directory could not be written and the paths where git add or git commit returned non-zero or raised.
+  - Where git commit returns non-zero in inspection.record, unstage exactly the paths that were staged with git restore --staged -- <paths>, so the working tree is left modified with nothing staged.
+  - Add a defaulted record field to inspection.Report carrying that result, and have inspect attach it with dataclasses.replace for a non-dry run, leaving a dry run's Report saying no record was attempted.
+  - Have scripts/l5-inspect print one line about the record on every non-dry run — that it was committed, or that it was NOT committed and why, in the detail's words.
+  - Give story_inspection.commit_record a run_dir parameter, guard it whole so it never raises, check both git return codes, unstage on a failed commit on the same terms as broad mode, and return the same result shape.
+  - Have commit_record write one note into the run's events.log through _note whenever the record was not committed — a failed add, a failed commit, a raise, or nothing staged — naming which and quoting git's stderr where there is any.
+  - Pass run_dir at every commit_record call site in orchestration/story_inspection.py, including the three that commit under FILED_COMMIT_SUBJECT.
+  - Update the record docstring and the ARCHITECTURE.md sections that describe the record commit and the open note about commit_record having no run directory.
+
+acceptance_criteria:
+  - In a temporary repository whose pre-commit hook exits non-zero, inspection.record writes the record, reports it as not committed with git's stderr in the detail, and git diff --cached --quiet exits 0 afterwards, so nothing is staged.
+  - In the same repository, scripts/l5-inspect's report contains a line saying the record was NOT committed and why, and the command still exits 0.
+  - On a repository where the commit succeeds, scripts/l5-inspect's report contains a line saying the record was committed, and the record commit is the branch tip with the same subject it has today.
+  - A dry run of scripts/l5-inspect prints no record line and makes no commit, exactly as today.
+  - In a temporary repository whose pre-commit hook exits non-zero, inspect_after_story returns None, raises nothing, and the run's events.log contains one line saying the inspection record was not committed and why; nothing is staged afterwards.
+  - Where commit_record stages nothing, events.log says so in one line.
+  - A commit that succeeds in narrow mode adds no new line to events.log beyond what the record already wrote.
+  - No path in inspection.record or story_inspection.commit_record raises to its caller: a raise inside either becomes a not-committed result with the exception in its detail.
+  - Nothing retries the commit, amends, resets past the staged paths, or pushes.
+
+technical_plan:
+  implementation_steps:
+    - Define the result dataclass in orchestration/inspection.py beside Report, with fields written (bool), committed (bool) and detail (str), and a default instance meaning no record was attempted.
+    - Rewrite record so each early return constructs that result with the reason, checks added.returncode and the commit's returncode, and on a failed commit runs git restore --staged -- <paths> before returning the not-committed result carrying the commit's stderr.
+    - Add the defaulted record field to Report and attach the result in inspect via dataclasses.replace when not dry_run.
+    - In scripts/l5-inspect, after the dry-run and nothing-reached-a-tracker lines, print the record line on every non-dry run.
+    - In orchestration/story_inspection.py, add run_dir as the first parameter of commit_record, wrap its body in the module's totality guard, return the result on every path, unstage on a failed commit, and call _note with a one-line message whenever committed is false.
+    - Update every commit_record call site to pass run_dir.
+    - Documenter records the closed open note and the reporting in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: record returns a result, checks both git return codes, unstages on a failed commit; Report carries the result
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: commit_record gains run_dir, is guarded whole, returns the result, notes a failure into events.log; six call sites pass run_dir
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: one report line about the record on every non-dry run
+    - file: tests/test_a_record_commit_that_fails_is_reported.py
+      stage: tester
+      reason: the new assertions — a failing pre-commit hook is reported in both modes, leaves nothing staged, and raises nothing; a successful commit reports as committed
+    - file: tests/test_two_runs_merge_without_contending.py
+      stage: tester
+      reason: calls inspection.record directly and may need adapting to the returned result
+      reverting_breaks_the_suite: the call at line 673 ignores the return today; if the implementer's change to record's signature or Report makes that test fail, adapting it is forced by the deliberate change and reverting the adaptation reddens it
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the record-commit description and the open note that commit_record cannot yet note in events.log
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - scripts/l5-inspect
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/plan_mandate.py (its Commit result is the model for the shape, not the deliverable; sharing the class would couple the inspection to the planner for no gain)
+    - orchestration/story_coordinator.py (the pre-flight dirty-tree refusal is correct as it stands; the story makes the cause visible rather than changing the refusal)
+    - prompts/ (no prompt states the record commit; the Inspector's judgement is unchanged)
+    - schemas/ (the record's shape and the cross-run declaration are unchanged; only whether the commit landed is newly reported)
+    - workflows/ (no stage rule changes)
+
+verification_requirements:
+  - Confirm each acceptance criterion by reading the new test module and the run's evidence, not by re-running the suite by hand.
+  - Confirm that a failed commit leaves the record unstaged in both modes, and that no path in either producer raises.
+  - Confirm the successful-commit path is unchanged in subject and in what is staged, so nothing that reads a branch for a completion, escalation or pause commit reads this one.
+  - Confirm scripts/l5-inspect exits 0 on a failed record commit and that a dry run prints no record line.
+  - Confirm no retry, amend, reset beyond the staged paths, or push was added.
+
+constraints:
+  - inspect_after_story remains total; it returns None on every path and raises on no path.
+  - Both producers stage by name and never with git add -A; unstaging names the same paths and nothing else.
+  - No model calls in coordinator or inspection logic; standard library only.
+  - The record's fields and the cross-run history declaration are unchanged.
+  - The commit subjects COMMIT_SUBJECT and FILED_COMMIT_SUBJECT are unchanged.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:25:46
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 4
