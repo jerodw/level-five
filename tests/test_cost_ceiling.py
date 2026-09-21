@@ -1278,14 +1278,22 @@ def test_a_budget_stop_is_resumable_on_evidence_that_refuses_every_other(
     assert resumed.calls
 
     # The control: an escalation about the work, in the same unchanged state.
+    # The verdict declines a retry rather than exhausting them: since story-192
+    # a run stopped at the retry ceiling is exempted from the guard beside the
+    # budget stop, because the resume restores the retry allowance too, so a
+    # control that escalated by spending every retry would resume for a reason
+    # this test is not about. A declined retry is an escalation a fresh
+    # allowance cannot fix, and its retry count stays below the ceiling.
     other_target, other_harness = environment(
         build("refused-resume-workflow", writer=WRITER_ALLOWANCE,
               verifier=VERIFIER_ALLOWANCE))
-    ordinary = Runner(other_target, costs=[None],
-                      verdicts=[failing(f"attempt-{n}") for n in range(1, 6)])
+    declined = {**failing("attempt-1"), "retry_recommended": False}
+    declined.pop("retry_target")
+    ordinary = Runner(other_target, costs=[None], verdicts=[declined])
     assert run(other_target, other_harness, ordinary) == 2
     other_state = story_coordinator.load_state(run_dir_of(other_target))
     assert other_state.stopped_on_cost is False
+    assert other_state.retry_count == 0
     assert story_coordinator.unchanged_since_escalation(
         other_state, story_text, other_target, other_harness)
 

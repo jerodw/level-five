@@ -1,0 +1,138 @@
+def unchanged_since_escalation(
+    state: RunState, story_text: str, target_root: Path, harness_root: Path
+) -> list[str]:
+    """Evidence that resuming would reach the same point the same way.
+
+    Three comparisons, each of which must be *establishable* before it can say
+    anything: the story artifact against the digest recorded at run start, the
+    branch against the escalation commit the harness made, and the harness
+    against the revision recorded when the run escalated.
+
+    Returns the evidence only when all three are establishable and identical,
+    and an empty list otherwise. Anything the guard cannot establish counts as
+    not-the-same, so an absent digest, an escalation that committed nothing, a
+    target whose HEAD cannot be read, or a harness root that is not a git
+    repository produces no refusal rather than a false one.
+
+    A run that stopped on an exhausted self-route budget is exempted ahead of
+    all three, and for a different reason than they are: not that the guard
+    cannot establish sameness, but that sameness is the wrong conclusion. The
+    resume zeroes `self_route_count`, so the stage is entered with a budget it
+    did not have when it stopped — the resource whose exhaustion stopped it.
+
+    The third comparison has two forms, decided by whether the harness and the
+    target are one checkout. When they are separate — the deployment the guard
+    was written for — it is the recorded-revision comparison, unchanged. When
+    they are one tree, what leg two established covers the harness source only
+    while the working tree is standing on the branch it spoke about: leg two
+    says that branch is exactly the escalation commit, and the `status
+    --porcelain` leg beside it says the tree is clean, not that it is that
+    branch's tree. So the shared-checkout form requires the tree to resolve to
+    `state.branch`, and standing anywhere else it establishes nothing and the
+    resume proceeds. The recorded revision cannot be reached for instead — it
+    is recorded as the first act of `_escalate`, before the two escalation
+    commits move HEAD, so a shared-root comparison of it always differs and the
+    guard could never refuse.
+
+    What that gives up is deliberate and chosen: under one checkout an
+    off-branch resume with genuinely nothing changed is no longer refused,
+    because the guard cannot tell that case from a harness fixed on the base
+    without a second definition of "has the harness changed". Permitting a
+    pointless resume is the direction the guard's one-directional bias already
+    takes; refusing a needed one is not.
+
+    The branch comparison resolves `state.branch~1` rather than `HEAD~1`,
+    because the story branch is what it means and HEAD is only the same thing
+    when the developer happens to be standing on it. The `status --porcelain`
+    leg beside it needs no such repointing and keeps its current meaning: the
+    working tree is one tree whatever branch is checked out, and the dirty-tree
+    pre-flight above this guard has already refused for every status that could
+    reach it, so what it establishes is unchanged by where the run is standing.
+
+    A tree hash over the harness's own source directories was considered and
+    not taken. It is a second definition of "has the harness changed" living
+    beside the branch comparison that already answers it, and it would have to
+    choose which directories count — a choice nothing else in the harness
+    makes.
+    """
+    # A run stopped on an exhausted self-route budget is exempted before any
+    # comparison, because for that run the guard's conclusion is false rather
+    # than unestablishable. The three comparisons below would all hold — the
+    # artifact, the branch and the harness are untouched — and the run would
+    # still not reach the same point the same way, because the resume restores
+    # the very resource whose exhaustion stopped it: the resume path sets
+    # `self_route_count` back to zero, saying in as many words that a resumed
+    # stage starts with its full budget. Refusing here tells a developer
+    # nothing has changed while the harness is about to change it.
+    #
+    # Read off the live counter rather than the escalation's reason text, which
+    # is prose the guard would have to match. The counter is what the budget
+    # comparison in `self_route` reads, so this asks the same question that
+    # stopped the run.
+    if state.self_route_count:
+        return []
+    if not state.story_digest or state.story_digest != story_digest(story_text):
+        return []
+    evidence = [
+        "the story artifact is byte for byte the one the escalated run read"
+    ]
+
+    # The escalation commit is the branch tip's parent, not the tip: the record
+    # of its sha is committed on top of it, because a commit cannot carry its
+    # own sha. A branch a developer has committed on since therefore fails this
+    # comparison, which is what it is for.
+    #
+    # Resolved against `state.branch` rather than HEAD, because the story
+    # branch is what the comparison means and HEAD is only the same thing when
+    # the developer happens to be standing on it. The guard runs above the
+    # checkout — it refuses, so it stays above every act — so an off-branch
+    # resume asked about HEAD could never establish sameness and could never
+    # refuse.
+    if (
+        not state.escalation_commit
+        or _revision(target_root, f"{state.branch}~1") != state.escalation_commit
+    ):
+        return []
+    porcelain = _git(target_root, "status", "--porcelain")
+    if porcelain.returncode != 0 or porcelain.stdout.strip():
+        return []
+    evidence.append(
+        f"branch {state.branch} is exactly the escalation commit "
+        f"{state.escalation_commit[:12]}, with nothing uncommitted"
+    )
+
+    # Under one checkout the branch comparison above stands for the harness
+    # comparison only while the working tree is standing on the branch it spoke
+    # about. Leg two established that `state.branch` is exactly the escalation
+    # commit, and the `status --porcelain` leg beside it established that the
+    # tree is clean — neither says the tree is *that* branch's, so a developer
+    # who checked out the base and committed a harness fix there is standing in
+    # a tree the two legs above have said nothing about. Standing anywhere else
+    # this leg therefore establishes nothing and the resume proceeds, which
+    # permits a pointless resume where nothing changed rather than refusing a
+    # needed one where the harness did.
+    #
+    # Both revisions go through `_revision`, so one that cannot be read is ""
+    # and falls to the not-established answer the rest of the guard gives.
+    # The recorded revision cannot serve here — it is recorded before the
+    # escalation commits move HEAD, so it always differs — and a tree hash over
+    # the harness's source directories was rejected rather than reached for: it
+    # is a second definition of "has the harness changed" beside the one already
+    # answering it, and it would have to choose which directories count.
+    if same_repository(target_root, harness_root):
+        standing = _revision(target_root)
+        if not standing or standing != _revision(target_root, state.branch):
+            return []
+        evidence.append(
+            f"the harness is the same checkout as the target and the working "
+            f"tree is standing on {state.branch}, so it is covered by the "
+            f"branch comparison above"
+        )
+        return evidence
+
+    if not state.harness_revision or _revision(harness_root) != state.harness_revision:
+        return []
+    evidence.append(
+        f"the harness is still at revision {state.harness_revision[:12]}"
+    )
+    return evidence

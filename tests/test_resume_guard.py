@@ -46,6 +46,16 @@ report the violation it exists to catch:
     beside `same_repository` returning True for two paths in one checkout, so
     the helper is shown capable of the answer it is being asked to withhold.
 
+Since story-192 the module also holds the exemption at the guard's call site: a
+run that escalated with its retry count at or past the ceiling the rules
+declare is never put to the guard, because the resume zeroes that count and so
+restores the very allowance whose exhaustion stopped the run. Those assertions
+are in the last section. Their controls are the guard itself, which still
+finds evidence against the same run, and a mutant coordinator with the clause
+removed, which refuses the same run; and the guard's own executable text is
+shown unchanged against a frozen copy at this story's baseline, so everything
+above this paragraph reads as it did.
+
 Nothing here invokes a model: every run goes through a fake agent runner.
 """
 import ast
@@ -320,19 +330,34 @@ def separate_root(tmp_path: Path) -> Path:
 
 class Runner:
     """A fake agent runner: each stage writes the artifacts its workflow entry
-    declares, and the implementer edits the target's working tree."""
+    declares, and the implementer edits the target's working tree.
+
+    `verdicts` is a sequence the verifier answers with in order, the last one
+    repeated once it is spent, for a run that has to fail some verifications
+    and then pass; a single `verdict` is the same thing with one entry.
+    `counts` records the retry count in state.json as each stage was entered,
+    which is how a resume is shown to have zeroed it: the stage can only be
+    entered with the count the coordinator saved before invoking it.
+    """
 
     def __init__(self, target_root: Path, verdict: dict = FAIL, *,
-                 edit: bool = True):
+                 edit: bool = True, verdicts: list[dict] | None = None):
         self.target_root = target_root
         self.run_dir = conftest.run_dir_for(target_root, STORY_ID)
-        self.verdict = verdict
+        self.verdicts = list(verdicts) if verdicts is not None else [verdict]
         self.edit = edit
         self.calls: list[str] = []
+        self.counts: list[tuple[str, int]] = []
+
+    @property
+    def verdict(self) -> dict:
+        return self.verdicts[0]
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None, max_budget_usd=None, run_dir=None):
         self.calls.append(stage)
+        self.counts.append(
+            (stage, story_coordinator.load_state(self.run_dir).retry_count))
         if stage == WRITING:
             record = {"modified": [], "created": [], "deleted": []}
             if self.edit:
@@ -350,8 +375,10 @@ class Runner:
             write_json(self.run_dir / conftest.TESTER_CHANGED_FILES,
                        {"modified": [], "created": [], "deleted": []})
         elif stage == VERIFYING:
+            verdict = (self.verdicts.pop(0) if len(self.verdicts) > 1
+                       else self.verdicts[0])
             write_json(self.run_dir / conftest.VERIFICATION_RESULT,
-                       conftest.answering_guidance(self.verdict, self.run_dir))
+                       conftest.answering_guidance(verdict, self.run_dir))
         elif stage == DOCUMENTING:
             write(self.run_dir / conftest.DOCUMENTATION_REPORT, "Nothing.\n")
             write_json(self.run_dir / conftest.DOCUMENTER_CHANGED_FILES,
@@ -1037,3 +1064,425 @@ def test_the_rejected_alternative_is_recorded_at_the_comparison():
     assert "tree hash" in prose
     assert "which directories" in prose
     assert "a phrase this source does not carry" not in prose   # the control
+
+
+# --------------------------------------------------------------------------
+# story-192: a run stopped at the retry ceiling is not put to the guard
+# --------------------------------------------------------------------------
+
+
+RETRY_CATEGORY, RETRY_DESTINATION = conftest.first_retry_route(WORKFLOW)
+
+#: A failed verdict that asks for a retry, routed on the workflow's first
+#: declared category. Enough of these in a row spend the whole retry allowance
+#: and escalate the run at the ceiling, which is the shape this section is
+#: about.
+RETRYING = {**FAIL, "retry_recommended": True, "retry_target": RETRY_CATEGORY}
+
+#: The clause this story added at the guard's call site in `run_story`, as it
+#: stands in today's source. Deleting it reconstructs the pre-story call site,
+#: which is the control for every resume asserted below; `load_mutant` fails
+#: loudly rather than mutating nothing if the clause has moved.
+EXEMPTION = '            and state.retry_count < rules["max_retries"]\n'
+
+#: The two reasons the coordinator escalates a failed verdict with, one at the
+#: ceiling and one below it. Asserted against the recorded summary so the tests
+#: that rewrite a reason are shown to be rewriting the sentence the run wrote,
+#: and swapped between the two runs to show the reason decides nothing.
+AT_THE_CEILING = "verification failed and retries are exhausted"
+DECLINED = "verification failed and the verifier did not recommend a retry"
+
+
+def ceiling(harness: Path) -> int:
+    """The retry ceiling a run under `harness` reads, off the rules that root
+    carries rather than a number written here."""
+    return harness_config.load_rules(harness)["max_retries"]
+
+
+def without_the_exemption(tmp_path: Path):
+    """Today's coordinator with the call-site exemption deleted: the guard is
+    put to every escalated run that did not stop on a cost ceiling, which is
+    what `run_story` did before this story."""
+    return load_mutant(COORDINATOR_PATH, [(EXEMPTION, "")],
+                       name="coordinator_without_the_ceiling_exemption",
+                       tmp_path=tmp_path)
+
+
+def escalate_at_the_ceiling(target_root: Path, harness: Path) -> Runner:
+    """Drive a run to the escalation this story is about: every verification
+    fails and asks for a retry, until the allowance is spent."""
+    runner = Runner(target_root, RETRYING)
+    code = story_coordinator.run_story(STORY_ID, harness, target_root, runner)
+    assert code == 2, "the shape was meant to escalate"
+    state = state_of(target_root)
+    assert state["status"] == "escalated"
+    assert state["stopped_on_cost"] is False
+    assert state["self_route_count"] == 0
+    assert state["retry_count"] == ceiling(harness)
+    assert story_coordinator.escalation_reason(
+        run_dir_of(target_root)) == AT_THE_CEILING
+    return runner
+
+
+def escalate_below_the_ceiling(target_root: Path, harness: Path,
+                               retries_taken: int) -> Runner:
+    """Drive a run to an escalation a fresh allowance cannot fix, after
+    `retries_taken` retries: the last verification declines a retry."""
+    assert 0 <= retries_taken < ceiling(harness), retries_taken
+    runner = Runner(target_root, verdicts=[RETRYING] * retries_taken + [FAIL])
+    code = story_coordinator.run_story(STORY_ID, harness, target_root, runner)
+    assert code == 2, "the shape was meant to escalate"
+    state = state_of(target_root)
+    assert state["status"] == "escalated"
+    assert state["stopped_on_cost"] is False
+    assert state["self_route_count"] == 0
+    assert state["retry_count"] == retries_taken
+    assert story_coordinator.escalation_reason(
+        run_dir_of(target_root)) == DECLINED
+    return runner
+
+
+def resume(target_root: Path, harness: Path, runner: Runner, *,
+           module=story_coordinator) -> int:
+    return module.run_story(STORY_ID, harness, target_root, runner)
+
+
+def events_of(target_root: Path) -> str:
+    return (run_dir_of(target_root) / "events.log").read_text(encoding="utf-8")
+
+
+def quiet_target(tmp_path: Path, name: str) -> Path:
+    """A separate-root target whose run directory git ignores, so a test can
+    rewrite a recorded file there and still stand on a clean tree.
+
+    The reason `guard` overrides fields in memory rather than on disk holds
+    here too, only harder: these tests go through `run_story`, which reads
+    state.json off disk, so the override has to be on disk — and in a tracked
+    run directory the rewrite dirties the tree and clears the guard for a
+    reason that has nothing to do with the field.
+    """
+    return build_target(tmp_path / name, harness_inside=False,
+                        gitignore=QUIET_GITIGNORE)
+
+
+def rewrite_state(target_root: Path, **fields) -> None:
+    path = run_dir_of(target_root) / "state.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    for name in fields:
+        assert name in state, name
+    state.update(fields)
+    write_json(path, state)
+    tree = conftest.run_root_for(target_root, STORY_ID)
+    assert git(tree, "status", "--porcelain").stdout.strip() == ""
+
+
+def rewrite_reason(target_root: Path, reason: str) -> None:
+    """Replace the sentence the escalation summary recorded under `## Reason`
+    with `reason`, and show it took: the coordinator's own reader returns the
+    new sentence."""
+    run_dir = run_dir_of(target_root)
+    path = run_dir / "escalation-summary.md"
+    recorded = story_coordinator.escalation_reason(run_dir)
+    assert recorded and recorded != reason
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f"## Reason\n{recorded}", f"## Reason\n{reason}", 1),
+        encoding="utf-8")
+    assert story_coordinator.escalation_reason(run_dir) == reason
+    tree = conftest.run_root_for(target_root, STORY_ID)
+    assert git(tree, "status", "--porcelain").stdout.strip() == ""
+
+
+def test_a_run_stopped_at_the_retry_ceiling_resumes_with_nothing_changed(
+    shared_root, separate_root, separate_harness,
+):
+    """The first acceptance criterion, in both fixtures.
+
+    The run escalates with its retry count at the ceiling, nothing is touched,
+    and the resume proceeds: the verifier — the recorded stage — is the first
+    stage invoked, and it is entered with a retry count of zero.
+
+    The control is the guard itself, put directly to the same run before the
+    resume: it finds all three pieces of evidence, so the run resumes because
+    it was never put to the guard rather than because the guard found nothing.
+    `test_removing_the_exemption_refuses_the_at_ceiling_run` is the second
+    control, on the clause itself.
+    """
+    for root, harness in ((shared_root, shared_root),
+                          (separate_root, separate_harness)):
+        escalate_at_the_ceiling(root, harness)
+        assert len(guard(root, harness)) == 3, root.name    # the control
+
+        resumed = Runner(root, PASS)
+        assert resume(root, harness, resumed) == 0, root.name
+        assert resumed.calls[0] == VERIFIER_STAGE["name"]
+        assert resumed.counts[0] == (VERIFIER_STAGE["name"], 0)
+        assert f"resumed at stage {VERIFIER_STAGE['name']}" in events_of(root)
+        assert state_of(root)["status"] == "completed"
+
+
+def test_a_count_past_the_ceiling_resumes_and_one_below_it_is_refused(
+    tmp_path, separate_harness,
+):
+    """The second acceptance criterion, and the counter as the whole of the
+    decision.
+
+    No run reaches a count past the ceiling on its own, so state.json is
+    rewritten in an ignored run directory: one past the ceiling resumes exactly
+    as one at it does. The control is the same run with its count rewritten to
+    one *below* the ceiling, which is refused with the guard's evidence and
+    with no stage invoked — so the field is read, and it is read against the
+    ceiling rather than for being non-zero.
+    """
+    past = quiet_target(tmp_path, "past-the-ceiling")
+    escalate_at_the_ceiling(past, separate_harness)
+    rewrite_state(past, retry_count=ceiling(separate_harness) + 1)
+
+    resumed = Runner(past, PASS)
+    assert resume(past, separate_harness, resumed) == 0
+    assert resumed.calls[0] == VERIFIER_STAGE["name"]
+    assert resumed.counts[0] == (VERIFIER_STAGE["name"], 0)
+    assert state_of(past)["status"] == "completed"
+
+    # The control: the same escalation with the count rewritten below the
+    # ceiling, which the guard refuses.
+    below = quiet_target(tmp_path, "below-the-ceiling")
+    escalate_at_the_ceiling(below, separate_harness)
+    rewrite_state(below, retry_count=ceiling(separate_harness) - 1)
+    evidence = guard(below, separate_harness)
+    assert len(evidence) == 3
+
+    refused = Runner(below, PASS)
+    assert resume(below, separate_harness, refused) == 1
+    assert refused.calls == []
+    assert state_of(below)["status"] == "escalated"
+
+
+def test_the_ceiling_is_read_from_the_rules_the_resume_loads(
+    tmp_path, separate_harness,
+):
+    """The other half of the decision: the count is compared against the
+    ceiling the rules declare at resume time, not against the one the run
+    stopped under and not against a number in the source.
+
+    The run escalates at the ceiling. The rules the harness root carries are
+    then raised by one — an uncommitted edit to the file, so the harness
+    revision the guard compares is unchanged — and the same run is refused:
+    under the new rules its count is below the ceiling and the guard has all
+    its evidence. The control is the same run before the edit, which resumes.
+    """
+    shipped = harness_config.load_rules(separate_harness)
+    harness = conftest.materialize_workflow(WORKFLOW, tmp_path / "own-rules",
+                                            rules=shipped)
+    git(harness, "init", "-q")
+    git(harness, "config", "user.email", "t@example.com")
+    git(harness, "config", "user.name", "T")
+    git(harness, "add", "-A")
+    git(harness, "commit", "-q", "-m", "the harness")
+    rules_path = harness / "rules" / "execution-rules.json"
+
+    target = quiet_target(tmp_path, "raised-ceiling")
+    escalate_at_the_ceiling(target, harness)
+    recorded = state_of(target)
+
+    write_json(rules_path, {**shipped, "max_retries": ceiling(harness) + 1})
+    assert story_coordinator._revision(harness) == recorded["harness_revision"]
+    assert len(guard(target, harness)) == 3
+
+    refused = Runner(target, PASS)
+    assert resume(target, harness, refused) == 1
+    assert refused.calls == []
+    assert state_of(target)["status"] == "escalated"
+
+    # The control: the rules put back as they were, and the same run resumes.
+    write_json(rules_path, shipped)
+    resumed = Runner(target, PASS)
+    assert resume(target, harness, resumed) == 0
+    assert resumed.counts[0] == (VERIFIER_STAGE["name"], 0)
+
+
+def test_a_resumed_run_takes_the_retry_it_could_not_take_before(
+    separate_root, separate_harness,
+):
+    """The third acceptance criterion: the resume restores the allowance.
+
+    After the resume the verifier fails once more and asks for a retry. Before
+    the resume that verdict escalated the run at the ceiling; after it the run
+    takes retry 1 of the ceiling, routes to the declared destination, and the
+    next verification passes.
+
+    The control for "no second escalation at the ceiling" is the escalation
+    itself: the same sentence is in the log before the resume and is not
+    written again after it.
+    """
+    escalate_at_the_ceiling(separate_root, separate_harness)
+    before = events_of(separate_root)
+    assert AT_THE_CEILING in before                           # the control
+    assert f"retry 1 of {ceiling(separate_harness)}" in before
+
+    resumed = Runner(separate_root, verdicts=[RETRYING, PASS])
+    assert resume(separate_root, separate_harness, resumed) == 0
+    after = events_of(separate_root)[len(before):]
+
+    assert (f"verification failed; retry 1 of {ceiling(separate_harness)} "
+            f"rerouted to {RETRY_DESTINATION} for {RETRY_CATEGORY}") in after
+    assert AT_THE_CEILING not in after
+    assert resumed.calls[:2] == [VERIFIER_STAGE["name"], RETRY_DESTINATION]
+    assert resumed.calls[-1] == VERIFIER_STAGE["name"]
+    assert resumed.counts[0] == (VERIFIER_STAGE["name"], 0)
+    assert resumed.counts[1] == (RETRY_DESTINATION, 1)
+    assert state_of(separate_root)["status"] == "completed"
+
+
+def test_a_run_escalated_below_the_ceiling_is_refused_with_todays_message(
+    tmp_path, separate_harness, capsys,
+):
+    """The fourth acceptance criterion: the refusal is what it was.
+
+    Two escalations a fresh allowance cannot fix — one that took no retry and
+    one that took every retry but the last, each ending on a verdict that
+    declines a retry — are resumed with nothing changed under today's
+    coordinator and under the mutant with the exemption removed, which is the
+    coordinator as it stood before this story. Both refuse: exit 1, no stage
+    invoked, and the message on stderr byte for byte the same.
+
+    The control is `test_removing_the_exemption_refuses_the_at_ceiling_run`,
+    where the two coordinators disagree on an at-ceiling run — so the equality
+    here is the refusal being untouched rather than two identical modules.
+    """
+    before = without_the_exemption(tmp_path)
+    for name, retries in (("no-retry", 0),
+                          ("one-short", ceiling(separate_harness) - 1)):
+        target = build_target(tmp_path / name, harness_inside=False)
+        escalate_below_the_ceiling(target, separate_harness, retries)
+        run_dir = run_dir_of(target)
+        state_before = (run_dir / "state.json").read_text(encoding="utf-8")
+        capsys.readouterr()
+
+        today = Runner(target, PASS)
+        assert resume(target, separate_harness, today) == 1, name
+        todays_message = capsys.readouterr().err
+        was = Runner(target, PASS)
+        assert resume(target, separate_harness, was, module=before) == 1, name
+        earlier_message = capsys.readouterr().err
+
+        assert today.calls == was.calls == []
+        assert todays_message == earlier_message
+        assert DECLINED in todays_message
+        for line in guard(target, separate_harness):
+            assert line in todays_message
+        assert (run_dir / "state.json").read_text(
+            encoding="utf-8") == state_before
+
+
+def test_the_exemption_never_reads_the_escalations_reason(
+    tmp_path, separate_harness,
+):
+    """The fifth acceptance criterion: the counter and the rules decide, and
+    the reason text does not.
+
+    A run escalated below the ceiling has its recorded reason rewritten to the
+    budget-exhaustion sentence and is still refused; a run escalated at the
+    ceiling has its reason rewritten to the declined-retry sentence and still
+    resumes. Each rewrite is shown to have taken through the coordinator's own
+    reader — and, for the refusal, through the message, which prints the
+    rewritten sentence — so the reason was read for the message and for
+    nothing else.
+    """
+    below = quiet_target(tmp_path, "reason-says-exhausted")
+    escalate_below_the_ceiling(below, separate_harness, 0)
+    rewrite_reason(below, AT_THE_CEILING)
+
+    refused = Runner(below, PASS)
+    assert resume(below, separate_harness, refused) == 1
+    assert refused.calls == []
+    assert state_of(below)["status"] == "escalated"
+
+    at = quiet_target(tmp_path, "reason-says-declined")
+    escalate_at_the_ceiling(at, separate_harness)
+    rewrite_reason(at, DECLINED)
+
+    resumed = Runner(at, PASS)
+    assert resume(at, separate_harness, resumed) == 0
+    assert resumed.counts[0] == (VERIFIER_STAGE["name"], 0)
+    assert state_of(at)["status"] == "completed"
+
+
+def test_the_refusal_prints_the_reason_it_was_given(
+    tmp_path, separate_harness, capsys,
+):
+    """The control for the test above: the rewritten reason *is* read — for
+    the message. A refusal after the rewrite prints the rewritten sentence, so
+    the test above rewrote the sentence the coordinator reads rather than one
+    it never looks at."""
+    below = quiet_target(tmp_path, "reason-in-the-message")
+    escalate_below_the_ceiling(below, separate_harness, 0)
+    rewrite_reason(below, AT_THE_CEILING)
+    capsys.readouterr()
+
+    assert resume(below, separate_harness, Runner(below, PASS)) == 1
+    message = capsys.readouterr().err
+    assert AT_THE_CEILING in message
+    assert DECLINED not in message
+
+
+def test_removing_the_exemption_refuses_the_at_ceiling_run(
+    tmp_path, separate_harness,
+):
+    """The seventh acceptance criterion: the resume above is the clause's
+    doing.
+
+    The mutant is today's coordinator with the call-site clause deleted. Put
+    to the same at-ceiling run with nothing changed, it refuses — exit 1, no
+    stage invoked, the state left as the escalation wrote it — where today's
+    coordinator, on the identical run afterwards, resumes.
+    """
+    before = without_the_exemption(tmp_path)
+    target = build_target(tmp_path / "mutant-control", harness_inside=False)
+    escalate_at_the_ceiling(target, separate_harness)
+    state_before = (run_dir_of(target) / "state.json").read_text(
+        encoding="utf-8")
+
+    refused = Runner(target, PASS)
+    assert resume(target, separate_harness, refused, module=before) == 1
+    assert refused.calls == []
+    assert (run_dir_of(target) / "state.json").read_text(
+        encoding="utf-8") == state_before
+
+    resumed = Runner(target, PASS)
+    assert resume(target, separate_harness, resumed) == 0    # the control
+    assert resumed.counts[0] == (VERIFIER_STAGE["name"], 0)
+
+
+def test_the_exemption_sits_at_the_call_site_and_the_guard_is_unchanged():
+    """The sixth acceptance criterion, as text.
+
+    The guard's executable source — docstrings and comments stripped — is
+    character for character what it was at this story's baseline, frozen under
+    tests/history-fixtures/ the way the story-034 bounds are. The clause is in
+    `run_story` and in the guard it is not; the guard's prose points at the
+    call site and the call site's prose points back at the self-route
+    exemption, so a reader finding either finds the other.
+
+    The control is the whole function with its prose, which did change: one
+    docstring sentence was added, so the equality above is the executable
+    text being untouched rather than the file being read twice.
+    """
+    source = COORDINATOR_PATH.read_text(encoding="utf-8")
+    guard_today = function_source(source, "unchanged_since_escalation")
+    guard_before = conftest.history_fixture(
+        "story_coordinator.unchanged_since_escalation"
+        ".at-story-192-baseline.py.txt")
+
+    assert executable_source(guard_today) == executable_source(guard_before)
+    assert guard_today != guard_before                        # the control
+
+    run_story = function_source(source, "run_story")
+    assert EXEMPTION in run_story
+    assert EXEMPTION not in guard_today
+    assert "run_story" in guard_today
+    assert "retry ceiling" in guard_today
+    comments = "\n".join(line for line in run_story.splitlines()
+                         if line.lstrip().startswith("#"))
+    assert "unchanged_since_escalation" in comments
+    assert "self-route exemption" in comments

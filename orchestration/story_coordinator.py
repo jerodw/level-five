@@ -8661,12 +8661,20 @@ def _recommended_investigation_section(run_dir: Path, state: RunState) -> str:
         f"the current entry's spend, which is what a run ceiling is compared "
         f"against and which resuming returns to zero."
     )
+    # The rule for every escalation, stated without branching on this one's
+    # reason: which stops resume as they stand is decided at the guard's call
+    # site in run_story from the recorded counters and the loaded rules, and
+    # this block says the same split so the developer is not sent to change
+    # something the resume itself is about to restore.
     blocks.append(
-        f"Once you have made a change, `l5-run {state.story_id}` resumes this "
-        f"run at the stage it stopped at ({state.current_stage}); `--stage "
-        f"<stage>` overrides that and enters somewhere else. The resume is "
-        f"refused while the story artifact, the branch and the harness are all "
-        f"unchanged, because it would reach the same point the same way."
+        f"`l5-run {state.story_id}` resumes this run at the stage it stopped "
+        f"at ({state.current_stage}); `--stage <stage>` overrides that and "
+        f"enters somewhere else. A run stopped because its retries were spent, "
+        f"its self-route budget was spent, or a cost ceiling was reached "
+        f"resumes with nothing changed, because the resume restores what "
+        f"stopped it. Every other escalation is refused while the story "
+        f"artifact, the branch and the harness are all unchanged, because it "
+        f"would reach the same point the same way."
     )
     return "\n\n".join(blocks)
 
@@ -8736,6 +8744,10 @@ def unchanged_since_escalation(
     cannot establish sameness, but that sameness is the wrong conclusion. The
     resume zeroes `self_route_count`, so the stage is entered with a budget it
     did not have when it stopped — the resource whose exhaustion stopped it.
+    A run stopped at the retry ceiling and a run stopped on a cost ceiling are
+    exempted on the same reasoning, but at the guard's call site in `run_story`
+    rather than here, so this function's text and its three comparisons stay as
+    they are.
 
     The third comparison has two forms, decided by whether the harness and the
     target are one checkout. When they are separate — the deployment the guard
@@ -10080,7 +10092,11 @@ def run_story(
     resume_attempt: int | None = None
     resume_entry: int | None = None
     if state and state.status != "paused":
-        if state.status == "escalated" and not state.stopped_on_cost:
+        if (
+            state.status == "escalated"
+            and not state.stopped_on_cost
+            and state.retry_count < rules["max_retries"]
+        ):
             # Resuming is inferred from the recorded status and from nothing
             # else. What the guard adds is a refusal in the one case where a
             # resume is knowably pointless: the story, the tree and the harness
@@ -10094,6 +10110,25 @@ def run_story(
             # precisely the resume this ceiling exists to allow, so refusing it
             # on the guard's evidence would refuse the only useful response to
             # the stop.
+            #
+            # A run stopped at the retry ceiling is exempted here on the same
+            # terms, and for the reason the self-route exemption inside
+            # `unchanged_since_escalation` gives for its own budget: the resume
+            # zeroes `retry_count`, so it restores the very resource whose
+            # exhaustion stopped the run, and the run will take the retry it
+            # could not take before rather than reach the same point the same
+            # way. Refusing would tell the developer nothing has changed while
+            # the harness is about to change it. The condition reads the
+            # recorded counter against the ceiling the rules declare — the same
+            # comparison the escalation sites make — and never the escalation's
+            # reason text. Because only the counter is read, a run that spent
+            # its retries and then stopped on the final attempt for any other
+            # reason is exempted too; that is the imprecision the self-route
+            # exemption accepts, in the guard's permit-over-refuse direction.
+            # It is read as "at or past" rather than "equal to"
+            # because a resume zeroes the counter and a state file written by an
+            # older coordinator may hold a count the current ceiling no longer
+            # admits; either way the allowance it stopped on is spent.
             evidence = unchanged_since_escalation(
                 state, story_text, run_root.path, harness_root
             )
