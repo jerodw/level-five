@@ -1,0 +1,190 @@
+story:
+  id: story-190
+  title: A run waits for its turn at the suite for a configured number of suite runs' worth of time, and a wait that expires takes the turn rather than running beside the holder
+  description: |
+    When a run is ready to run the whole test suite and another run of the
+    same repository is already running its own, it waits its turn. Today
+    that wait is a fixed sixty minutes, and when it runs out the waiting run
+    simply starts its suite beside whatever is still holding the turn. Every
+    waiting run keeps its own clock, so behind a hung run three queued runs
+    all give up within minutes of each other and share the machine with the
+    hung one — the overload the turn exists to prevent, arriving all at once.
+
+    This story makes the wait a configured number of suite runs, measured by
+    how long a suite actually takes on this machine, and makes an expired
+    wait hand the turn to one run rather than to everyone. A run that gives
+    up on the holder takes the turn from it and runs; every other waiter
+    notices the turn changed hands, says so, and starts its wait over — so
+    behind a hung run the queue drains one run per wait instead of all at
+    once. A holder that is merely slow is still waited for and its turn
+    taken normally when it finishes. Where the harness has not yet measured
+    enough suite runs to know what one takes, the wait falls back to sixty
+    minutes and the announcement says so.
+
+    It leaves alone measuring machine load (the turn still knows only
+    whether another run of this repository holds it), the configured test
+    command and its worker count, and the lock's per-repository scope.
+    Planned from the brief filed under 259.
+
+    The bound. suite_turn_wait_minutes is replaced by
+    suite_turn_wait_suite_runs, unset 5. The bound in seconds is that count
+    times duration_estimate(SUITE_RUN_OPERATION); where no estimate exists —
+    a fresh target, or fewer than DURATION_ESTIMATE_MINIMUM observations —
+    the bound is a module constant SUITE_TURN_WAIT_FALLBACK_SECONDS of sixty
+    minutes carrying the reason DEFAULT_SUITE_TURN_WAIT_MINUTES carries
+    today. suite_turn_wait_seconds and suite_turn_wait_problems read the new
+    key with the same parse-and-refuse shape they have, and the pre-flight
+    refusal in _refuse_bad_suite_turn_wait names the new key. Zero keeps its
+    meaning: take the turn only if it is free and otherwise run at once,
+    without a turn and without taking one. The suite-turn-waited
+    announcement's cost clause says which the bound came from — the count
+    times the estimate, or the fallback because too few suite runs have been
+    measured here.
+
+    The takeover. A live process's flock cannot be taken from it, so the
+    takeover is a new file the hung holder does not hold, at the same path.
+    On expiry the waiter takes a second, momentary lock
+    (suite.takeover.lock beside suite.lock), confirms the file at the path
+    is still the inode it has been waiting on, creates a fresh file, locks
+    it, renames it over suite.lock atomically, and releases the takeover
+    lock. Every waiter compares, on each poll, the inode at the path against
+    the inode of the handle it holds. Three observations separate the cases:
+    the same inode with the flock refused is the same holder still there;
+    the same inode with the flock granted is the holder finishing normally;
+    a different inode at the path is the turn having changed hands, at which
+    point the waiter reopens the path, announces the restart, and starts its
+    bound over from that moment. The hung holder keeps its lock on an
+    orphaned inode nobody opens again; when it finishes and comes back for
+    its next whole-suite run it opens the path fresh and queues normally.
+    The rename makes the swap atomic for anyone opening the path, and the
+    takeover lock stops two waiters expiring in the same poll from each
+    renaming over the other; a waiter that finds the takeover lock held does
+    not take over, and its next poll sees the new inode and restarts. The
+    could-not-open path is unchanged, and the file's existence still means
+    nothing.
+
+    A target still carrying suite_turn_wait_minutes is refused by the
+    existing undeclared-key check once the schema no longer declares it;
+    that refusal names the old key and lists every declared key, the new
+    one among them, and no dedicated rename message is added. The restart
+    is announced as a second suite-turn-waited event through _announcement
+    and the takeover as a note in the shape of today's expiry note, so no
+    event kind is added and schemas/execution-history.schema.json is
+    untouched.
+  workflow: story-workflow
+
+tasks:
+  - Replace suite_turn_wait_minutes with suite_turn_wait_suite_runs in orchestration/story_coordinator.py, unset "5" (a DEFAULT_SUITE_TURN_WAIT_SUITE_RUNS constant whose comment says what the number counts and why five), read by suite_turn_wait_seconds as that count times duration_estimate(SUITE_RUN_OPERATION) when an estimate exists and otherwise SUITE_TURN_WAIT_FALLBACK_SECONDS, a module constant of sixty minutes carrying the reason the minute default carried; refused by suite_turn_wait_problems when not a non-negative number, naming the key and the value; and named by _refuse_bad_suite_turn_wait's remedy line. Zero stays zero either way.
+  - Make suite_turn's wait announcement say which the bound came from, through _announcement's cost clause, in one of two wordings, one naming the count and the estimate and one saying the fallback applies because too few suite runs have been measured here.
+  - Make an expired wait take the turn. On expiry with a non-zero bound, suite_turn takes suite.takeover.lock (a second flock file beside suite.lock, held only across the swap), confirms the inode at the path is the one it waited on, creates a fresh file, locks it, renames it over suite.lock, releases the takeover lock, and writes a note saying the bound expired, that this run took the turn, and that the previous holder was left running. A takeover lock that cannot be taken, or an inode that already changed, means another waiter took over first, and this waiter does not take over.
+  - Make every waiter detect a takeover. On each poll, compare the inode at the lock path against the inode of the held handle; where they differ, reopen the path, write a second suite-turn-waited event through _announcement saying the turn changed hands and the wait restarts, and restart the bound from that moment. Where they match, try the flock as today.
+  - Keep a bound of zero on today's path exactly. A held turn at zero writes the wait and the expiry note and runs at once without a turn and without taking one.
+  - Keep the could-not-open path exactly as it is. A stat or open failure mid-wait that is not the lock being held is treated as that path, the suite runs without a turn, and a note names the path and the error.
+  - Replace the schema entry in schemas/harness-config.schema.json with one for suite_turn_wait_suite_runs saying what the number counts, that the bound is the count times the measured suite-run estimate, what happens with no estimate, what zero means, what an expired wait now does, and that it is refused at pre-flight when not a non-negative number; update the max_pause_wait_seconds description where it names the old key.
+  - Replace the key and its comment in templates/config.yaml and in .harness/config.yaml with suite_turn_wait_suite_runs set to 5, the comment saying the value counts suite runs measured on this machine, why it is a count of suite runs rather than a duration or a core count, and what zero and unset mean.
+  - Write the new assertions in tests/test_suite_turns.py and adapt tests/test_config_keys_are_obeyed.py where its key proof, token exemption, fallback-source table, declared-key list and ordering pin name the old key; adapt the prose reason in tests/test_baseline_honesty.py that names the old key.
+  - Record the change in .harness/docs/ARCHITECTURE.md where it describes the bound, the expiry behaviour, and the places the old key is named as a default duration.
+
+acceptance_criteria:
+  - With set_duration_estimates giving SUITE_RUN_OPERATION an estimate and suite_turn_wait_suite_runs set to a count, a contended turn behind a holder that never lets go is waited for the count times the estimate, within one poll, and the suite-turn-waited message names the count and the estimate as what the bound came from.
+  - With no estimate for SUITE_RUN_OPERATION, the same wait lasts SUITE_TURN_WAIT_FALLBACK_SECONDS, which is sixty minutes, within one poll, and the suite-turn-waited message says the fallback applies because too few suite runs have been measured.
+  - An absent key waits five suite runs' worth when an estimate exists and the fallback otherwise, and suite_turn_wait_problems reports nothing for it.
+  - A value of suite_turn_wait_suite_runs that is not a non-negative number refuses the run at pre-flight naming the key and the value, with no run directory created and no agent invoked, and a repaired value proceeds.
+  - A target whose configuration still carries suite_turn_wait_minutes is refused at pre-flight by a message naming suite_turn_wait_minutes and containing suite_turn_wait_suite_runs, and schemas/harness-config.schema.json no longer declares suite_turn_wait_minutes.
+  - With a hung holder and three waiters observed through injected clocks, the waiter whose bound expires first takes the turn and runs its body while the hung holder's handle is still open; each of the other two writes a second suite-turn-waited event saying the turn changed hands and is still waiting when the first's body ends; they then take the turn one after the other, each only after the previous body has ended, and never together.
+  - The takeover note says the bound expired, that this run took the turn, and that the previous holder was left running, in events.log for the taking run; no other waiter writes a takeover note for that expiry.
+  - A waiter behind a holder that lets go inside the bound is waited for until it does and then takes the turn on the same inode, writing one suite-turn-waited event and no note, exactly as today.
+  - A bound of zero takes a free turn with no event and, where the turn is held, runs at once without a turn, writing the wait and the expiry note and taking nothing over: the inode at the lock path is unchanged afterwards.
+  - After a takeover, a fresh entrant opening the lock path queues behind the new holder and takes the turn when that holder's body ends.
+  - The lock file that cannot be created or opened still costs the turn and never the run, with a note naming the path and the error, unchanged from today.
+  - No module under orchestration/ names the worker-count option, the configured command arrives with exactly its configured arguments on every path, and the lock path is still derived through worktrees.worktree_root, as the existing assertions hold.
+  - Every suite-turn-waited and note event of the wait is written by suite_turn's own body, and no new event kind is added to schemas/execution-history.schema.json.
+  - .harness/config.yaml and templates/config.yaml both set suite_turn_wait_suite_runs to 5 with a comment saying what the number counts, and the schema entry says what zero means, what the fallback is, and that a bad value is refused at pre-flight.
+  - All existing tests pass, adapted only where they assumed the bound was a minute count or named the old key.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/story_coordinator.py, replace DEFAULT_SUITE_TURN_WAIT_MINUTES with DEFAULT_SUITE_TURN_WAIT_SUITE_RUNS = "5" and add SUITE_TURN_WAIT_FALLBACK_SECONDS = 60 * 60.0 with the comment the minute default carried; update the cross-reference in NO_PAUSE_WAIT's comment. Add SUITE_TAKEOVER_LOCK_NAME = "suite.takeover.lock" beside SUITE_LOCK_NAME.
+    - Rewrite suite_turn_wait_seconds to read suite_turn_wait_suite_runs, multiply by duration_estimate(SUITE_RUN_OPERATION) when it is not None, and otherwise return the fallback; return zero for a count of zero in both cases. Rewrite suite_turn_wait_problems for the new key and _refuse_bad_suite_turn_wait's remedy line. Add a small helper that returns the two-wording cost clause so suite_turn does not branch on the estimate inline.
+    - In suite_turn, keep the initial non-blocking try. On a held lock with a non-zero bound, poll as today but on each poll compare os.stat(lock_path).st_ino to os.fstat(handle).st_ino first; on a difference close the handle, reopen the path, append a second suite-turn-waited event through _announcement with the restart wording, and reset started. On expiry call a _take_over_suite_turn helper that opens suite.takeover.lock, tries it non-blocking, and on success re-checks the inode at the path against the waited-on inode, creates a fresh file under a temporary name in the same directory, flocks it, os.rename's it over lock_path, and returns the new handle; on a held takeover lock or a changed inode it returns None and the wait continues into the next poll. On a returned handle append the takeover note and proceed to the body holding it. With a bound of zero the expiry path is today's, unchanged.
+    - Keep OSError handling as it is: any OSError outside the flock-held case reaches the existing could-not-open note, and the finally closes whatever handle is held.
+    - Replace the schema entry, the template comment and key, and the repository's own config key and comment.
+    - Tester: write the new assertions in tests/test_suite_turns.py — an estimate-derived bound, the fallback bound, the old key refused, three waiters draining one per bound, a slow holder taken normally, zero unchanged, a fresh entrant after a takeover — using set_duration_estimates and the injected clock and sleep; flock is per open file description, so three in-process waiters on separate handles, each driven on its own thread with a shared fake clock, suffice, and nothing reads a real clock. Adapt tests/test_config_keys_are_obeyed.py and the reason string in tests/test_baseline_honesty.py.
+    - Documenter: update the architecture document's sections on the bound, the three ways the turn fails toward running, the evidence in events.log, and the two passing mentions of the old key as a default duration.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The constants, the key readers, suite_turn's wait loop, the takeover helper and the pre-flight refusal message.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The suite_turn_wait_minutes entry is replaced by suite_turn_wait_suite_runs, and max_pause_wait_seconds's description names the old key.
+    - file: templates/config.yaml
+      stage: implementer
+      reason: The installed key and its comment.
+    - file: .harness/config.yaml
+      stage: implementer
+      reason: This repository's own configuration sets the old key, which the undeclared-key check would refuse once the schema drops it.
+    - file: tests/test_suite_turns.py
+      stage: tester
+      reason: The new assertions the story exists for, and the existing bound tests adapted where they assumed a minute count.
+      reverting_breaks_the_suite: The existing tests set suite_turn_wait_minutes and assert minute-derived sleeps; with the key renamed and the bound derived from an estimate, they fail with the adaptation reverted.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: The key's proof, TOKEN_EXEMPT, the fallback-source table, the declared-key list and the ordering pin all name suite_turn_wait_minutes.
+      reverting_breaks_the_suite: The declared-key coverage comparison and the fallback-source table are checked against the shipped schema and the coordinator's source, so a schema that declares suite_turn_wait_suite_runs and a coordinator that no longer names DEFAULT_SUITE_TURN_WAIT_MINUTES redden this module with the adaptation reverted.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: The live-resolution reason for test_suite_turns.py names the old key in prose.
+      reverting_breaks_the_suite: Prose only; if the module's reasons are not checked against the named key this entry may be left as it is, and the tester decides.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section on the suite turn describes the bound as a configured duration and the expiry as running without a turn, and two other sections name the old key as a default duration.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/harness-config.schema.json
+    - templates/config.yaml
+    - .harness/config.yaml
+    - tests/test_suite_turns.py
+    - tests/test_config_keys_are_obeyed.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/execution-history.schema.json (no event kind is added; the takeover is a note and the restart a second suite-turn-waited event)
+    - tests/test_a_run_announces_what_it_is_waiting_on.py (its kind-to-emitter map is unchanged because no announcing kind is added)
+    - tests/test_an_operation_announces_what_it_has_taken_before.py (the suite-turn wait still leaves no duration record, because it announces a bound rather than a guess)
+    - schemas/cross-run-history.schema.json (the wait is still untimed and leaves no cross-run record)
+    - The duration_estimates machinery and DURATION_ESTIMATE_WINDOW and DURATION_ESTIMATE_MINIMUM (the bound reads the estimate that exists; how the estimate is made is story-173's and not this story's)
+    - orchestration/worktrees.py (the lock path is still derived through worktree_root and stays per repository, for the reason the architecture document gives)
+    - The configured test command and every module the worker-count assertions cover (the turn queues runs and never changes how many workers a suite uses)
+    - orchestration/harness_config.py (the old key is refused by the undeclared-key check as it stands; no rename message is added)
+
+verification_requirements:
+  - Confirm the estimate-derived bound and the fallback bound through the injected clock, each within one poll, and that each announcement names its source.
+  - Confirm a bad suite_turn_wait_suite_runs refuses the run at pre-flight naming the key and the value, and that a configuration carrying suite_turn_wait_minutes is refused naming it with the new key in the message.
+  - Confirm that with a hung holder and three waiters exactly one takes the turn at expiry, the other two announce a restart and are still waiting when its body ends, and they then take the turn in order, never together; confirm the takeover note is written by the taking run alone.
+  - Confirm a slow holder that lets go inside the bound is still waited for and taken on the same inode with no note, and that a bound of zero takes nothing over.
+  - Confirm the could-not-open path, the worker-count assertions, the lock-path derivation and the call-site assertions in tests/test_suite_turns.py still pass unchanged.
+  - Confirm no test reads a real clock for the wait, and that tests/test_no_test_bounds_the_machine.py still classifies the module as carrying preconditions.
+  - Confirm .harness/config.yaml, templates/config.yaml and the schema all name suite_turn_wait_suite_runs and none names suite_turn_wait_minutes as a declared key.
+  - Confirm the full suite passes with no existing assertion weakened or skipped.
+
+constraints:
+  - The coordinator stays deterministic; no model call is added and every routing decision is reconstructable from state.json and events.log.
+  - The test command is not touched, no module under orchestration/ reads or rewrites the worker-count option, and the lock stays one per repository derived through worktrees.worktree_root.
+  - A takeover is a new inode renamed over the lock path while suite.takeover.lock is held; the lock path is never unlinked, and the file's existence still means nothing.
+  - The estimate is read through duration_estimate(SUITE_RUN_OPERATION) and nothing else; no timeout other than this wait reads an estimate and nothing routes on one.
+  - Every path that runs without a turn, takes one over, or restarts its wait says so in events.log; an uncontended turn still writes nothing and sleeps nothing.
+  - The suite-turn-waited kind and the note stay literals in suite_turn's own body; no announcing kind is added.
+  - suite_turn keeps its injected sleep and clock, and no test bounds the machine.
+  - Standard library only; fail loudly on unexpected state.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 09:11:57
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 259
