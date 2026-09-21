@@ -3259,6 +3259,21 @@ DECLARED_HISTORY_READERS = {
         "module builds with conftest.constructed_story — one story respecting "
         "that path and one editing it — so an empty diff here is the story "
         "having left it alone rather than a range bounded at the wrong commits",
+    "test_a_repair_reaches_outside_the_storys_scope_within_bounds.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story letting a repair reach outside a story's "
+        "scope left every path its own do_not_modify names alone — no workflow "
+        "definition, no retry-guidance or story schema, no story parser and "
+        "none of the four stage prompts an extension is announced to through "
+        "the pass statement instead. No constructed repository can say what "
+        "this story did not touch, and the comparison is made through "
+        "conftest.story_diff over the story's own range rather than against "
+        "HEAD, which would go vacuously green the moment the working tree is "
+        "committed. Its control is a pair of histories the module builds with "
+        "conftest.constructed_story — one story respecting the workflows "
+        "directory and one editing it — so an empty diff here is the story "
+        "having left those paths alone rather than a range bounded at the "
+        "wrong commits",
     "test_baseline_honesty.py":
         "its regression set is committed evidence rather than a constructed "
         "fixture: the five known vacuous assertions are recovered from this "

@@ -7322,7 +7322,23 @@ def repair_pass_grants(
     findings that resolved to it. Bounded to the attempt the record names, so
     a stage re-entered by a later retry in the same run inherits nothing. A
     run that has taken no pass, a workflow that declares none, and a record
-    that is absent or unreadable each grant nothing.
+    that is absent or unreadable each grant nothing. A finding carrying a
+    scope_extension is granted here exactly as any other: the extension was
+    decided when the pass was routed, and a finding the bounds refused is not
+    in the record.
+    """
+    return [
+        finding["path"]
+        for finding in _repair_pass_findings(run_dir, stages, state, stage_name, attempt)
+    ]
+
+
+def _repair_pass_findings(
+    run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
+) -> list[dict]:
+    """The current pass record's findings that resolved to `stage_name` on
+    `attempt`, each naming a path — the one reading behind the grants and
+    the extension announcements.
     """
     if not state.repair_pass_count:
         return []
@@ -7339,7 +7355,7 @@ def repair_pass_grants(
     if parsed.get("attempt") != attempt:
         return []
     return [
-        finding["path"]
+        finding
         for finding in parsed.get("findings", [])
         if isinstance(finding, dict)
         and finding.get("stage") == stage_name
@@ -7374,9 +7390,12 @@ def repair_pass_statement(entry_stage: str) -> str:
         f"correction each of your findings names, in the file it names, and "
         f"nothing else: those files are yours to change for this pass, and an "
         f"edit to any other governed file is put to the revert check after "
-        f"your turn. A repair pass is not a licence to revisit the work. The "
-        f"verification it returns to runs the clean-clone check again on the "
-        f"repaired tree."
+        f"your turn. A finding carrying scope_extension names a file outside "
+        f"the story's declared scope; the coordinator has granted it for this "
+        f"pass, and the reason recorded on the finding is why — the rule the "
+        f"story changed and the line in that file that states it. A repair "
+        f"pass is not a licence to revisit the work. The verification it "
+        f"returns to runs the clean-clone check again on the repaired tree."
     )
 
 
@@ -7475,6 +7494,314 @@ def _repair_pass_recorded(
         kind="repair-pass-recorded",
         stage=stage_name,
     )
+
+
+# --------------------------------------------------------------------------
+# A repair may reach a file outside the story's declared scope
+#
+# A repairable finding may name a file the story did not declare when that
+# file states or consumes the rule the story changed, and says so in
+# scope_extension. The coordinator decides each such reach against three
+# bounds it holds itself — the execution rules' blocked paths, the resolved
+# stage's own restrictions, and a reasoned scope.do_not_modify entry — and
+# refuses one that crosses any, naming the bound. A refusal drops that
+# finding from the pass and never stops the run: the verdict the accounting
+# is handed records it as declined with the bound as its reason, so it is
+# filed as a brief at completion rather than lost. A finding carrying no
+# scope_extension is untouched by all of this. Nothing below writes a stage
+# name, a category or an artifact name; no model is called.
+
+
+#: The field a repairable finding carries to ask for an extension.
+SCOPE_EXTENSION = "scope_extension"
+
+
+def carries_a_reason(entry: str) -> bool:
+    """Whether a scope.do_not_modify entry carries the developer's reason.
+
+    True when non-empty text — the path or area — precedes a closing
+    parenthetical holding at least one word character. The parenthetical is
+    the one the entry ends with, found by walking back from its final ")" to
+    the "(" that balances it, so a reason may itself carry parentheses. Shape
+    alone is read: the reason's text is neither parsed nor scored, so a bare
+    path and an empty parenthetical are the two things refused and any reason
+    at all passes.
+
+    Defined here rather than in plan_validation, which imports it back under
+    the same name, because the plan-time reason check and the run-time
+    do_not_modify bound below must read one definition and plan_validation
+    already imports this module.
+    """
+    text = entry.rstrip()
+    if not text.endswith(")"):
+        return False
+    depth = 0
+    for position in range(len(text) - 1, -1, -1):
+        character = text[position]
+        if character == ")":
+            depth += 1
+        elif character == "(":
+            depth -= 1
+            if depth == 0:
+                reason, before = text[position + 1:-1], text[:position]
+                return before.strip() != "" and re.search(r"\w", reason) is not None
+    return False
+
+
+#: The boundary between the paths one do_not_modify entry lists before its
+#: parenthetical: a comma, a semicolon or a standalone "and" — the clause
+#: boundary plan_validation's strictness check already splits an entry on.
+_ENTRY_PATH_BOUNDARY = re.compile(r"[,;]|\band\b")
+
+
+def _entry_paths(entry: str) -> list[str]:
+    """The paths a reasoned do_not_modify entry lists before its closing
+    parenthetical, each stripped — the path or area the reason is about.
+
+    Planners write one entry for several files ("prompts/a.md, prompts/b.md
+    and prompts/c.md (the reason)"), so the text is split on the clause
+    boundary and each piece is a path in its own right. An entry naming one
+    path yields that one piece.
+    """
+    text = entry.rstrip()
+    depth = 0
+    before = text
+    for position in range(len(text) - 1, -1, -1):
+        character = text[position]
+        if character == ")":
+            depth += 1
+        elif character == "(":
+            depth -= 1
+            if depth == 0:
+                before = text[:position]
+                break
+    return [piece.strip() for piece in _ENTRY_PATH_BOUNDARY.split(before)
+            if piece.strip()]
+
+
+def _names_path(entry_path: str, path: str) -> bool:
+    """Whether a do_not_modify entry's path equals `path` or is a directory
+    prefix of it: `workflows/` and `workflows` both cover
+    `workflows/story-workflow.json`, and `orchestration/story_coordinator.py`
+    covers itself alone.
+    """
+    if not entry_path:
+        return False
+    if entry_path == path:
+        return True
+    directory = entry_path if entry_path.endswith("/") else entry_path + "/"
+    return path.startswith(directory)
+
+
+def do_not_modify_bound(story: dict | None, path: str) -> str | None:
+    """The reasoned scope.do_not_modify entry that bars `path`, if any.
+
+    An entry bars a path when it carries a reason — decided by
+    `carries_a_reason`, the plan-time predicate — and any path its text
+    before the parenthetical lists equals the path or is a directory prefix
+    of it. A bare entry carrying no reason bars nothing: it is a planner's
+    default rather than a developer's decision, which is the distinction the
+    reason exists to draw. An area-style entry naming no path bars nothing
+    either, since no piece of it equals or prefixes a repository path.
+    """
+    # Bound to `declared` rather than `scope`: the standing scan in
+    # tests/test_suite_run_scope.py reports a decision under orchestration/
+    # taken on a name called `scope`, which is the suite-run record's field
+    # and not the story's.
+    declared = (story or {}).get("scope") or {}
+    for entry in declared.get("do_not_modify") or []:
+        if not isinstance(entry, str) or not carries_a_reason(entry):
+            continue
+        if any(_names_path(one, path) for one in _entry_paths(entry)):
+            return entry
+    return None
+
+
+@dataclass(frozen=True)
+class RefusedExtension:
+    """One extension the coordinator refused: the finding as the verdict
+    carried it, the stage its category resolved to, and the bound crossed in
+    the bound's own words.
+    """
+
+    finding: dict
+    stage: str
+    bound: str
+
+
+@dataclass(frozen=True)
+class ScopeExtensionCheck:
+    """What the bounds decided about a verdict's repairable findings.
+
+    `accepted` holds every finding the pass may carry, as the verdict carried
+    it — a finding with no scope_extension is accepted without being asked,
+    and one with an extension is accepted where no bound applies. `refused`
+    holds the rest with the bound each crossed.
+    """
+
+    accepted: list[dict]
+    refused: list[RefusedExtension]
+
+
+def scope_extension_check(
+    findings: list[dict],
+    routes: dict,
+    stage_names: list[str],
+    stages: list[dict],
+    story: dict | None,
+    rules: dict,
+) -> ScopeExtensionCheck:
+    """Decide each finding carrying scope_extension against the three bounds.
+
+    Pure over its inputs. A finding is refused when its path is under a
+    repository-wide blocked path from the execution rules; when the stage its
+    category resolves to declares a restriction that governs the path, so a
+    tester's extension cannot reach the implementation — unlike an in-scope
+    repairable finding, whose grant lifts the stage's confinement for that
+    file; or when a reasoned scope.do_not_modify entry names the path or a
+    directory it is under. The bounds are asked in that order and the first
+    that applies is the one named. A finding whose category the routing table
+    does not define is left in `accepted` before any bound is asked, whatever
+    its path, because the routing that follows escalates naming the unknown
+    category and the bounds have no stage to ask about — a refusal there
+    would name an empty stage and hide the category behind it.
+    """
+    by_name = {stage["name"]: stage for stage in stages}
+    blocked = list(rules.get("blocked_paths") or [])
+    accepted: list[dict] = []
+    refused: list[RefusedExtension] = []
+    for finding in findings:
+        extension = finding.get(SCOPE_EXTENSION) if isinstance(finding, dict) else None
+        if not extension:
+            accepted.append(finding)
+            continue
+        route = routes.get(finding.get("category"))
+        stage_name = route.get("stage") if isinstance(route, dict) else None
+        if stage_name not in by_name:
+            accepted.append(finding)
+            continue
+        path = finding.get("path") or ""
+        bound: str | None = None
+        if is_blocked(path, blocked):
+            prefix = next(one for one in blocked if path.startswith(one))
+            bound = f"{path} is under {prefix}, a path the execution rules block for every stage"
+        else:
+            governing = next(
+                (one for one in restrictions_on(by_name[stage_name]) if one.governs(path)),
+                None,
+            )
+            if governing is not None:
+                bound = f"{governing.wording}, and {path} is governed by it"
+        if bound is None:
+            entry = do_not_modify_bound(story, path)
+            if entry is not None:
+                bound = f"the story's scope.do_not_modify names it with a reason: {entry}"
+        if bound is None:
+            accepted.append(finding)
+        else:
+            refused.append(RefusedExtension(finding, stage_name, bound))
+    return ScopeExtensionCheck(accepted, refused)
+
+
+def refusal_reason(refused: RefusedExtension) -> str:
+    """The one wording of a refusal: what the event says and what the
+    accounting records as the declined finding's reason.
+    """
+    finding = refused.finding
+    return (
+        f"scope extension refused for {finding.get('location')}: {refused.stage} "
+        f"may not change {finding.get('path')} for this pass because {refused.bound}"
+    )
+
+
+def refused_routed_slugs(
+    check: ScopeExtensionCheck, routed_slugs=()
+) -> tuple[str, ...]:
+    """The routed slugs the refused findings' locations name, in the order
+    the refusals were made and each slug once.
+
+    This is the one match between a refusal and a routed finding:
+    `verdict_after_refusals` keys its declined entries by it, and the
+    accounting is handed it as `refused_slugs`, so the two cannot disagree
+    about which routed finding a refusal was of. A check that refused nothing
+    names nothing.
+    """
+    named: list[str] = []
+    for one in check.refused:
+        location = one.finding.get("location")
+        for slug in routed_slugs:
+            if (isinstance(slug, str) and slug and slug not in named
+                    and story_inspection.names_a_slug(location, (slug,))):
+                named.append(slug)
+    return tuple(named)
+
+
+def verdict_after_refusals(
+    verdict: dict, check: ScopeExtensionCheck, routed_slugs=()
+) -> dict:
+    """The verdict handed to the accounting once the bounds have decided.
+
+    Each refused finding is removed from repairable_findings, so the
+    accounting does not count it as acted on, and a declined_findings entry
+    is added for every routed slug its location names, carrying the refusal
+    as its reason, so the accounting counts it as left with a reason and the
+    completion filing files it as a brief. Where its location names no routed
+    slug, the entry is keyed by the location itself — a record of the refusal
+    in the shape the schema takes, matching no routed finding. A check that
+    refused nothing returns the verdict it was given.
+
+    Which routed slug a refusal names is decided by `refused_routed_slugs`,
+    the same match the accounting is handed, so a slug this records as
+    declined is a slug the accounting leaves whatever its accepted sibling
+    did.
+    """
+    if not check.refused:
+        return verdict
+    removed = [id(one.finding) for one in check.refused]
+    declined = list(verdict.get("declined_findings") or [])
+    for one in check.refused:
+        location = one.finding.get("location")
+        named = refused_routed_slugs(
+            ScopeExtensionCheck(accepted=(), refused=(one,)), routed_slugs
+        )
+        for slug in named or (str(location),):
+            declined.append({"slug": slug, "reason": refusal_reason(one)})
+    return {
+        **verdict,
+        "repairable_findings": [
+            one for one in verdict.get("repairable_findings") or []
+            if id(one) not in removed
+        ],
+        "declined_findings": declined,
+    }
+
+
+def _scope_extension_refused(
+    run_dir: Path, stage_name: str, refused: RefusedExtension
+) -> None:
+    """One event per refusal, naming the location, the file, the stage and
+    the bound, so a refusal is reconstructable from events.log alone.
+    """
+    append_event(
+        run_dir,
+        refusal_reason(refused),
+        kind="scope-extension-refused",
+        stage=stage_name,
+    )
+
+
+def repair_pass_extensions(
+    run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
+) -> list[tuple[str, str]]:
+    """The (path, reason) of each granted extension this stage carries on
+    this attempt, read off the pass record exactly as `repair_pass_grants`
+    reads the paths, so the announcement and the grant cannot disagree.
+    """
+    return [
+        (finding["path"], finding[SCOPE_EXTENSION])
+        for finding in _repair_pass_findings(run_dir, stages, state, stage_name, attempt)
+        if finding.get(SCOPE_EXTENSION)
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -10545,6 +10872,22 @@ def run_story(
                     kind="repair-pass-grant-applied",
                     stage=name,
                 )
+            # A finding the pass carries into a file outside the story's
+            # declared scope is granted above as any other finding is; what
+            # is added is the announcement, one per extension, in the form
+            # the grant lines take and through the same writer, so
+            # events.log, execution-history.json and the console stay
+            # renderings of one write.
+            for granted, reason in repair_pass_extensions(
+                run_dir, stages, state, name, attempt
+            ):
+                append_event(
+                    run_dir,
+                    f"scope-extension grant applied: {name} may change "
+                    f"{granted}: {reason}",
+                    kind="scope-extension-grant-applied",
+                    stage=name,
+                )
             exempt = exempt + pass_grants + repair_grants
             ownership = _ownership_violation(run_dir, record_name, enforced, exempt)
             if ownership:
@@ -10881,20 +11224,6 @@ def run_story(
             # bare statement and returns nothing; what it recorded is read back
             # off its artifact for wording the two re-entry events below and by
             # no routing decision.
-            routed_slugs: tuple = ()
-            declared_inspection = (stage.get("inspection") or {}).get("result")
-            if declared_inspection:
-                story_inspection.account_after_verdict(
-                    run_dir, target_root, config or {}, harness_root,
-                    state.story_id, artifact=declared_inspection,
-                    attempt=attempt, verdict=verdict,
-                )
-                routed_slugs = story_inspection.routed_slugs(
-                    run_dir, declared_inspection, attempt
-                )
-            # The artifacts an entry names come off the stage's declared
-            # outputs in the loaded workflow, never a list written here.
-            outputs = stage.get("outputs", [])
             # Where a failed verification goes is read off the table this
             # stage declares, keyed on the category the verifier reported.
             # There is no default: a recommended retry naming no category, or
@@ -10902,6 +11231,50 @@ def run_story(
             # absorbed by a fallback route — a silent fallback is the drift the
             # table exists to remove. No category name appears here.
             routes = stage.get("on_failure", {}).get("retry_routing", {})
+            # A repairable finding reaching outside the story's declared
+            # scope is decided here, before the accounting and before any
+            # pass record is written: each finding carrying scope_extension is
+            # put to the three bounds, a refusal is one event naming the
+            # bound, and the verdict the accounting is handed has the refused
+            # finding removed and recorded as declined with the refusal as its
+            # reason. The archived verdict above is what the verifier wrote;
+            # this is what the run decided about it. Nothing here escalates.
+            declared_inspection = (stage.get("inspection") or {}).get("result")
+            extensions = scope_extension_check(
+                verdict.get("repairable_findings") or [],
+                routes, stage_names, stages, reading.parsed, rules,
+            )
+            for refused in extensions.refused:
+                _scope_extension_refused(run_dir, name, refused)
+            # The routed slugs the refusals named, computed once and handed
+            # to the accounting beside the transformed verdict: a routed
+            # finding fixed as two repairable findings sharing one slug is
+            # otherwise counted as acted on through its accepted sibling when
+            # the coordinator refused the other file, and the brief the
+            # refusal promised is never filed. Empty when nothing was refused.
+            refused_slugs: tuple = ()
+            if extensions.refused:
+                routed_named = (
+                    story_inspection.findings_slugs(
+                        run_dir, declared_inspection, attempt
+                    ) if declared_inspection else ()
+                )
+                refused_slugs = refused_routed_slugs(extensions, routed_named)
+                verdict = verdict_after_refusals(verdict, extensions, routed_named)
+            routed_slugs: tuple = ()
+            if declared_inspection:
+                story_inspection.account_after_verdict(
+                    run_dir, target_root, config or {}, harness_root,
+                    state.story_id, artifact=declared_inspection,
+                    attempt=attempt, verdict=verdict,
+                    refused_slugs=refused_slugs,
+                )
+                routed_slugs = story_inspection.routed_slugs(
+                    run_dir, declared_inspection, attempt
+                )
+            # The artifacts an entry names come off the stage's declared
+            # outputs in the loaded workflow, never a list written here.
+            outputs = stage.get("outputs", [])
             declared = ", ".join(routes) or "no retry categories"
             target = verdict.get("retry_target")
             if verdict.get("status") == "passed":

@@ -113,10 +113,12 @@ declined routed finding becomes a brief, a planning interview, a whole story
 run, a review and a merge, where a repair pass spends no retry, archives no
 attempt and leaves the verdict recorded as passed. You keep the right to
 decline one — a finding can be correct and still be too small to fail the run,
-and one whose fix no single stage can make in one file is a blocking issue
-where it matters — but a declined routed finding is recorded rather than
-silent: name its slug and the reason in declined_findings, so the verdict
-says why it was not acted on. Nothing routes on that array, and a routed
+or wrong — but a fix that is only out of scope is not a reason: a routed
+finding whose fix lives in a file the story did not declare is extended
+rather than declined, on the terms the repairable paragraph below gives, and
+one that matters more than a pass is a blocking issue. A declined routed
+finding is recorded rather than silent: name its slug and the reason in
+declined_findings, so the verdict says why it was not acted on. Nothing routes on that array, and a routed
 finding no entry names is filed as a brief at the run's completion whether or
 not it is declined there. The two routes for a finding you act on without
 failing the run are correctable_findings, for a fix to the words alone, and
@@ -145,35 +147,53 @@ not a finding, and nothing routes on it.
 A correction pass corrects words and never behaviour. Do not record a finding
 there whose repair would change what any test asserts about the system, or
 what the code does — that is a repairable finding where one stage can make it
-in one file, and a blocking issue where it matters more than that. And do not
-record one no single stage can fix: the pass enters at one stage and runs
-forward from there, so a finding needing two stages to coordinate is not one
-of these. Do not record one against the approved story artifact either:
+in the file it names, and a blocking issue where it matters more than that.
+And do not record one whose fix reaches a file the correction stage does not
+own: a correction pass enters at the declared correction stage alone and
+runs forward from there, so a fix spanning files is recorded as repairable
+findings, one per file, rather than here. Do not record one against the approved story artifact either:
 nothing rewrites that mid-run, and the stage the pass enters at is instructed
 to leave it alone, so such a finding has nowhere to be acted on. The passing
 verdict stands: recording a finding does not fail the run.
 
 Record in repairable_findings a finding you judge correct and not fixable in
 the words alone — one line of code, a slot one prompt has and its sibling
-lacks, a declaration a stage was never told about. What belongs there is a
-finding whose fix is one stage's to make in the one file the finding names,
-and whose fix is not to prose alone — that is what separates it from a
-correctable finding, which is bounded to words and enters at the declared
-correction stage whatever category it carries. Name the category that owns
-the fix, spelled exactly as the categories above are: unlike a correctable
-finding's category, this one chooses where the pass goes, because the
-coordinator resolves it through the routing table above to the stage that
-owns the file and re-enters there, running forward to verification again. A
-category this workflow does not define escalates the run. Give each finding a
-`path`: naming it grants the owning stage that one file for that pass, and an
-edit to any other governed file stays governed. A repair pass is routed only
-after the clean-clone check on your verdict has passed, because a repair may
-change behaviour and is built on a verified tree, and the verification it
-returns to runs the check again. A repair pass is not a licence to revisit
-the work: it carries the findings and the corrections and nothing else. Do
-not record one against the approved story artifact either: nothing rewrites
-that mid-run, and the stage the pass enters at is instructed to leave it
-alone, so such a finding has nowhere to be acted on.
+lacks, a declaration a stage was never told about. Each finding names one
+file in `path` and, in its category, the one stage that owns that file, and
+its fix is not to prose alone — that is what separates it from a correctable
+finding, which is bounded to words and enters at the declared correction
+stage whatever category it carries. A fix spanning files is one finding per
+file, each naming the same slug in `location` and carrying its own category:
+the coordinator routes them as one pass entering at the earliest of those
+stages in workflow order and running forward through the rest. Name the
+category that owns the fix, spelled exactly as the categories above are:
+unlike a correctable finding's category, this one chooses where the pass
+goes, because the coordinator resolves it through the routing table above to
+the stage that owns the file and re-enters there, running forward to
+verification again. A category this workflow does not define escalates the
+run. Naming the `path` grants the owning stage that one file for that pass,
+and an edit to any other governed file stays governed. The file may lie
+outside the story's declared scope when it states or consumes the rule the
+story changed — the test is that the file already says something the story
+made false, not that the fix would be convenient there; a routed finding
+whose fix is only out of scope is extended this way rather than declined.
+Such a finding carries `scope_extension`: the rule the story changed and the
+line in that file that states it. The coordinator grants an extension for
+the pass and announces it, and refuses one that crosses any of three bounds,
+naming the bound: the file is under a path the execution rules block for
+every stage; a restriction on the stage the category resolves to governs the
+file, so a tester's extension cannot reach the implementation; or the
+story's scope.do_not_modify names the file, or a directory it is under, with
+a reason beside it. A refused finding is dropped from the pass and accounted
+as declined with the bound as its reason, the rest of the pass is routed, and
+the run continues. A repair pass is routed only after the clean-clone check
+on your verdict has passed, because a repair may change behaviour and is
+built on a verified tree, and the verification it returns to runs the check
+again. A repair pass is not a licence to revisit the work: it carries the
+findings and the corrections and nothing else. Do not record one against the
+approved story artifact either: nothing rewrites that mid-run, and the stage
+the pass enters at is instructed to leave it alone, so such a finding has
+nowhere to be acted on.
 
 retry-guidance.json, written only when status is "failed" and a retry is
 recommended. It must satisfy this schema:

@@ -2491,13 +2491,17 @@ def test_the_accounting_offers_no_way_to_stop_a_run():
         story_inspection.account_after_verdict).parameters
     sibling = inspect_module.signature(
         story_inspection.inspect_after_story).parameters
+    # `refused_slugs` (story-183) names the routed slugs the coordinator
+    # refused a scope extension of, so the accounting leaves them: an input to
+    # the split, and not a way to stop anything.
     assert list(parameters) == [
         "run_dir", "target_root", "config", "harness_root", "story_id",
-        "artifact", "attempt", "verdict"]
+        "artifact", "attempt", "verdict", "refused_slugs"]
     # No stage list, because it inspects nothing, and no runner, because it
     # invokes nothing — the two the post-story sibling has that this does not.
     assert set(sibling) - set(parameters) == {"stages", "runner"}
-    assert set(parameters) - set(sibling) == {"artifact", "attempt", "verdict"}
+    assert set(parameters) - set(sibling) == {
+        "artifact", "attempt", "verdict", "refused_slugs"}
 
 
 @pytest.mark.parametrize("text", ["", "not json", "[1, 2]"],

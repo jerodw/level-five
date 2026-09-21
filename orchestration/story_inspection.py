@@ -1472,7 +1472,7 @@ def names_a_slug(location, slugs) -> bool:
     return bool(_tokens(location) & frozenset(slugs))
 
 
-def acted_on_by(findings, verdict) -> tuple[list, list]:
+def acted_on_by(findings, verdict, *, refused_slugs=()) -> tuple[list, list]:
     """Split routed findings into what the verdict acted on and the rest.
 
     Returns `(acted_on, remainder)`, in the order given. A finding is acted on
@@ -1483,15 +1483,26 @@ def acted_on_by(findings, verdict) -> tuple[list, list]:
     finding nothing can name is a finding nothing acted on, and filing it is
     the loss-free reading.
 
+    `refused_slugs` names the routed slugs the coordinator refused a file of:
+    a fix spanning files is one repairable finding per file sharing one slug,
+    and where a bound refused one of them the accepted sibling still names the
+    slug in its location. Such a finding is left, whatever its other files
+    did, because the pass repairs only the accepted files and the brief the
+    completion filing writes is the record of the rest. Empty by default, so
+    a verdict carrying no refusal is split exactly as before the parameter
+    existed.
+
     Pure over its inputs, so it can be held directly the way the partition
     tests hold `about_the_change`.
     """
     locations = verdict_locations(verdict)
+    refused = frozenset(slug for slug in refused_slugs if isinstance(slug, str))
     acted: list = []
     remainder: list = []
     for one in findings:
         slug = _slug_of(one)
-        if slug and any(names_a_slug(location, (slug,)) for location in locations):
+        if (slug and slug not in refused
+                and any(names_a_slug(location, (slug,)) for location in locations)):
             acted.append(one)
         else:
             remainder.append(one)
@@ -1643,6 +1654,28 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
         pass
 
 
+def findings_slugs(run_dir: Path, artifact: str, attempt: int) -> tuple:
+    """The slugs of the findings one attempt's inspection routed to the story,
+    read off the findings artifact itself.
+
+    For the caller that runs *before* the accounting exists — the coordinator
+    deciding a scope extension needs the routed slugs so a refused finding
+    can be declined by name — where `routed_slugs` below reads what the
+    accounting recorded afterwards. Empty where no inspection ran, and read by
+    nothing that routes.
+    """
+    try:
+        record = _read_findings_record(run_dir, artifact, attempt)
+        if record is None or not record.get("ran"):
+            return ()
+        return tuple(
+            one["slug"] for one in record.get("findings") or ()
+            if isinstance(one, dict) and isinstance(one.get("slug"), str) and one["slug"]
+        )
+    except Exception:  # noqa: BLE001 - reading a record may not become a failure
+        return ()
+
+
 def routed_slugs(run_dir: Path, artifact: str, attempt: int) -> tuple:
     """The slugs the accounting artifact records as routed on one attempt.
 
@@ -1672,7 +1705,8 @@ def routed_slugs(run_dir: Path, artifact: str, attempt: int) -> tuple:
 # exit code.
 def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
                           harness_root: Path, story_id: str, *,
-                          artifact: str, attempt: int, verdict) -> None:
+                          artifact: str, attempt: int, verdict,
+                          refused_slugs=()) -> None:
     """Account for every finding routed to this story, once per attempt.
 
     Called from the verifier branch after the verdict is archived and before
@@ -1681,7 +1715,12 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     ones the verdict acted on — named by slug in the location of a blocking
     issue, a correctable finding or a repairable finding — and the remainder,
     writes the accounting artifact carrying both, and says the split in the
-    run's own record. For
+    run's own record. `refused_slugs` names the routed slugs the coordinator
+    refused a scope extension of; a finding carrying one is left whatever its
+    accepted sibling did, so the refusal the verdict now records as declined
+    for it is what the accounting reads and the completion filing files.
+    Empty when nothing was refused, and then the split is exactly as before
+    the parameter existed. For
     each finding of the remainder it also records the reason the verdict's
     `declined_findings` gave for its slug, or that none was given, and the
     event says how many were declined each way — a report and never a
@@ -1711,6 +1750,7 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
         _account_after_verdict(
             run_dir, target_root, config, harness_root, story_id,
             artifact=artifact, attempt=attempt, verdict=verdict,
+            refused_slugs=refused_slugs,
         )
     except Exception as error:  # noqa: BLE001 - the totality is the guarantee
         print(f"the accounting after the verdict could not run: {error}",
@@ -1725,7 +1765,8 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
 
 def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
                            harness_root: Path, story_id: str, *,
-                           artifact: str, attempt: int, verdict) -> None:
+                           artifact: str, attempt: int, verdict,
+                           refused_slugs=()) -> None:
     """The body of the above, so the guard has one thing to guard."""
     label = f"accounting for the findings routed to {story_id}"
     if (Path(run_dir) / accounting_artifact_file(artifact, attempt)).is_file():
@@ -1739,7 +1780,7 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     if not routed:
         return
 
-    acted, remainder = acted_on_by(routed, verdict)
+    acted, remainder = acted_on_by(routed, verdict, refused_slugs=refused_slugs)
     # Why each left finding was left, where the verdict said. The verdict's
     # `declined_findings` names a slug and a reason; a left finding it names
     # is recorded with that reason, and one it does not name is recorded as

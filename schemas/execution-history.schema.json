@@ -45,6 +45,8 @@
           "repair-pass-routed",
           "repair-pass-recorded",
           "repair-pass-grant-applied",
+          "scope-extension-refused",
+          "scope-extension-grant-applied",
           "self-routed",
           "budget-stopped",
           "capacity-paused",

@@ -585,31 +585,13 @@ def workflow_problems(story: dict, harness_root: Path, selected: str) -> list[st
 _PASSING_ENTRY_FORM = "<path or area> (<the developer's reason for leaving it alone>)"
 
 
-def carries_a_reason(entry: str) -> bool:
-    """Whether a scope.do_not_modify entry carries the developer's reason.
-
-    True when non-empty text — the path or area — precedes a closing
-    parenthetical holding at least one word character. The parenthetical is
-    the one the entry ends with, found by walking back from its final ")" to
-    the "(" that balances it, so a reason may itself carry parentheses. Shape
-    alone is read: the reason's text is neither parsed nor scored, so a bare
-    path and an empty parenthetical are the two things refused and any reason
-    at all passes.
-    """
-    text = entry.rstrip()
-    if not text.endswith(")"):
-        return False
-    depth = 0
-    for position in range(len(text) - 1, -1, -1):
-        character = text[position]
-        if character == ")":
-            depth += 1
-        elif character == "(":
-            depth -= 1
-            if depth == 0:
-                reason, before = text[position + 1:-1], text[:position]
-                return before.strip() != "" and re.search(r"\w", reason) is not None
-    return False
+# Whether a scope.do_not_modify entry carries a reason is decided by one
+# definition, and it lives in the coordinator since story-183: the run-time
+# check that refuses a scope extension against a reasoned entry reads the same
+# predicate this plan-time check reads, and this module already imports the
+# coordinator, so the reverse import would be circular. Imported under the
+# same name, so every reader of plan_validation.carries_a_reason is unchanged.
+carries_a_reason = story_coordinator.carries_a_reason
 
 
 def scope_reason_problems(story: dict) -> list[str]:
