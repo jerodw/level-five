@@ -322,6 +322,29 @@ run added to a configured architecture document makes about other stories,
 and whether anything the repository tracks could support them:
 {{claim_support_result}}
 
+Revert check result — the coordinator's record, one block per stage that
+declares the check, of what that stage changed outside the paths the workflow
+lets it write freely, and what the check found. The check answers one
+question only — whether the suite fails with those edits reverted — and
+records the answer as a fact for you to judge, not as a verdict on the stage.
+A `permitted` of true means the tree needed the edits; it does not by itself
+mean the stage was entitled to make them, and it does not say they stand. A
+`reverted` block with `permitted` false means the suite passed without them,
+so the coordinator undid them in the working tree and the run carried on. A
+`permitted` of true beside a `reverted` block and a `routed` key means the
+edits were needed and were undone anyway, because the restriction `routed`
+names says they belong to another stage: the confined stage did that stage's
+work, the coordinator restored the paths to what the stage found, and the
+tree you are judging lacks that work. The stage's own version of each undone
+path is kept in the run directory under the directory named there, and the
+stage's changed-files record still names the edit as the stage wrote it — that
+record is never rewritten, so a path named there and listed under `reverted`
+is one the run does not carry. Judge the tree as it stands: what a permitted,
+reverted or routed record means for the verdict, and which category a retry
+belongs under, are yours to decide off the routing table injected above —
+nothing here says an edit stands:
+{{revert_check_result}}
+
 Implementation summary:
 {{implementation_summary}}
 

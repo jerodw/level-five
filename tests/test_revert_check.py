@@ -1954,6 +1954,211 @@ def test_the_granularity_the_check_decides_at_is_unchanged_by_the_nomination(
 
 
 # --------------------------------------------------------------------------
+# The third disposition: a routed record, and the texts that describe it
+# (story-184)
+#
+# Since story-175 a confined stage's necessary edit outside its confinement is
+# undone anyway and recorded as permitted *and* routed. The runs that produce
+# such a record are in test_a_necessary_edit_outside_the_confinement_is_routed
+# and test_documenter_is_governed; what is asked here is whether the record
+# the coordinator writes for it satisfies the shipped schema, whether that
+# schema's own prose states the disposition, and whether every shipped
+# verifier is shown the record. The shipped schema and the shipped templates
+# are the subject of these assertions, which is why they are read as they
+# ship; the record is built the way the coordinator builds one rather than
+# read off a run, so what is asked of the schema is asked of exactly the shape
+# `RevertCheckResult.as_record` writes.
+# --------------------------------------------------------------------------
+
+#: The restriction whose sense routes a necessary edit, composed by the
+#: coordinator for a stage of the built workflow confined to the governed
+#: prefix. Its wording is what a routed record carries, and it is derived
+#: rather than written so the record here carries what the coordinator would.
+ROUTING_RESTRICTION = next(
+    restriction for restriction in story_coordinator.restrictions_on(
+        {"name": VALIDATING, story_coordinator.CONFINEMENT: [GOVERNED_PREFIX]})
+    if restriction.routes_necessary_edits)
+
+#: The sentence the schema's `reverted` description opened with before
+#: story-184, when the block was present only on a refusal. Written here as the
+#: control for the scan that says the description no longer says so.
+THE_OLD_REVERTED_SENTENCE = (
+    "Present only when permitted above is false and the refusal was acted on, "
+    "so its absence is the ordinary case"
+)
+
+
+def routed_record() -> dict:
+    """A routed record, built the way the coordinator builds one: the suite
+    failed with the edits reverted, so `permitted` is true, and the edits were
+    undone anyway because the restriction routes them, so a `reverted` block
+    and a `routed` key sit beside it."""
+    return story_coordinator.RevertCheckResult(
+        result=story_coordinator.CleanCloneResult(
+            ran=True, command=TEST_COMMAND, runner=sys.executable, scope=(),
+            clone_path="/scratch/clone", exit_code=1,
+            output_tail="1 failed", output_path="/scratch/revert-suite.log"),
+        paths=("src/app.py",),
+        permitted=True,
+        baseline=BASELINE,
+        reverted=story_coordinator.RevertedEdits(
+            restored=("src/app.py",), removed=(), discarded="discarded-edits",
+            kept=("src/app.py",)),
+        routed=ROUTING_RESTRICTION.wording,
+    ).as_record()
+
+
+def shipped_schema() -> dict:
+    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def test_a_routed_record_as_the_coordinator_writes_it_satisfies_the_schema():
+    """Permitted true beside a reverted block and a routed key validates.
+
+    The schema declares no additionalProperties, so an undeclared key would
+    validate too; the control beneath is what makes this an assertion about
+    `routed` being declared rather than ignored — the same validator rejects
+    the same record with `routed` carrying something other than the string
+    the schema declares.
+    """
+    record = routed_record()
+    assert record["permitted"] is True
+    assert record["routed"] == ROUTING_RESTRICTION.wording
+    assert record["reverted"]["restored"] == ["src/app.py"]
+    schema = schema_validator.load_schema(SCHEMA_STEM)
+    assert schema_validator.validate(record, schema) == []
+    assert schema_validator.validate(
+        {**record, "routed": [ROUTING_RESTRICTION.wording]}, schema) != []
+
+
+def test_routed_is_a_declared_property_described_as_the_restrictions_wording():
+    declared = shipped_schema()["properties"]["routed"]
+    assert declared["type"] == "string"
+    lowered = declared["description"].lower()
+    assert "wording of the restriction" in lowered
+    assert "absent" in lowered
+    assert "permitted" in lowered and "reverted" in lowered
+
+
+def test_the_reverted_description_says_the_block_is_present_for_either_reason():
+    """The block is no longer described as a refusal's alone. The absence
+    carries its control: the sentence the description used to open with,
+    constructed above, is what the same scan reports."""
+    described = shipped_schema()["properties"]["reverted"]["description"]
+    lowered = described.lower()
+    assert "either reason" in lowered
+    assert "permitted above telling the two apart" in lowered
+    assert "routed" in lowered
+    assert "present only when permitted above is false" not in lowered
+    assert "present only when permitted above is false" \
+        in THE_OLD_REVERTED_SENTENCE.lower()
+
+
+def test_the_top_level_description_states_the_routed_disposition_beside_the_others():
+    """In the coordinator docstring's terms, so a reader of the artifact and a
+    reader of the code meet the same three dispositions. The control is the
+    docstring the description was written from, which names all three."""
+    for text in (shipped_schema()["description"],
+                 story_coordinator.RevertCheckResult.__doc__):
+        lowered = text.lower()
+        assert "routed" in lowered
+        assert "permitted" in lowered
+        assert "reverted" in lowered
+        assert "one of three" in lowered
+        assert "another stage's work" in lowered
+        assert "undone anyway" in lowered
+    described = shipped_schema()["description"].lower()
+    assert "refused" in described
+    assert described.index("permitted") < described.index("routed")
+
+
+# --- every shipped verifier is shown the record ----------------------------
+
+#: Both definitions this harness ships, read off the directory rather than
+#: listed, so a third would join the assertions below without an edit here.
+SHIPPED = harness_config.workflow_names(REPO_ROOT)
+
+
+def shipped_verifier_template(name: str) -> str:
+    """The template a shipped workflow's judging stage names, found by the
+    declaration that makes it the judging stage rather than by its name."""
+    definition = json.loads(
+        (REPO_ROOT / "workflows" / f"{name}.json").read_text(encoding="utf-8"))
+    (verifier,) = [stage for stage in definition["stages"] if "clean_clone" in stage]
+    return verifier["prompt"]
+
+
+def shipped_documenter_declares_the_check(name: str) -> bool:
+    """Whether a shipped workflow's confined documenting stage declares the
+    check — which is what makes the verifier's slot meaningful there."""
+    definition = json.loads(
+        (REPO_ROOT / "workflows" / f"{name}.json").read_text(encoding="utf-8"))
+    return any("revert_check" in stage and story_coordinator.CONFINEMENT in stage
+               for stage in definition["stages"])
+
+
+def render_shipped(target_root: Path, name: str, template: str, **extra) -> str:
+    """A shipped template rendered against the fixture target and the shipped
+    workflow it belongs to, with whatever coordinator-passed records `extra`
+    carries."""
+    config = harness_config.load_config(target_root)
+    context = context_assembler.build_context(
+        story_text=STORY,
+        story={"acceptance_criteria": []},
+        run_dir=run_dir_of(target_root),
+        target_root=target_root,
+        harness_root=REPO_ROOT,
+        config=config,
+        rules=harness_config.load_rules(REPO_ROOT),
+        workflow=harness_config.load_workflow(REPO_ROOT, name, config),
+        retry_count=0,
+        **extra,
+    )
+    return context_assembler.render(
+        context_assembler.load_template(REPO_ROOT, template), context)
+
+
+@pytest.mark.parametrize("name", SHIPPED)
+def test_each_shipped_workflows_documenter_declares_the_check(name):
+    """The premise: in every shipped definition a confined stage writes the
+    record, so a verifier that is not shown it is judging a tree it cannot
+    account for."""
+    assert shipped_documenter_declares_the_check(name)
+
+
+@pytest.mark.parametrize("name", SHIPPED)
+def test_each_shipped_verifier_prompt_carries_the_record_under_its_slot(
+    name, target,
+):
+    """The record injected under revert_check_result reaches the rendered
+    prompt of every shipped verifier, introduced by the paragraph describing
+    all three dispositions. The control is the same render with no record
+    passed, where the routed wording is not in the prompt — so its presence
+    above is the injection and not the template happening to carry it."""
+    template = shipped_verifier_template(name)
+    record = json.dumps(routed_record(), indent=2)
+    rendered = render_shipped(target, name, template, revert_check_result=record)
+
+    assert record in rendered
+    assert context_assembler.PLACEHOLDER.search(rendered) is None
+    # The paragraph the record sits directly beneath, and no other: the text
+    # above the record, split on blank lines, last paragraph.
+    introduction = " ".join(
+        re.split(r"\n\s*\n", rendered[:rendered.index(record)])[-1].split())
+    assert introduction.startswith("Revert check result")
+    assert introduction.endswith("nothing here says an edit stands:")
+    assert "`permitted` of true means the tree needed the edits" in introduction
+    assert "`reverted` block with `permitted` false" in introduction
+    assert "`permitted` of true beside a `reverted` block and a `routed` key" \
+        in introduction
+    assert "the tree you are judging lacks that work" in introduction
+
+    without = render_shipped(target, name, template)
+    assert ROUTING_RESTRICTION.wording not in without
+    assert "nothing here says an edit stands" in without
+
+
+# --------------------------------------------------------------------------
 # What this story left alone
 # --------------------------------------------------------------------------
 

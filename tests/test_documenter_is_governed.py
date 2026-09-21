@@ -36,13 +36,25 @@ Every absence asserted here carries a demonstration that it can fail:
   * "an unset key resolves the confinement out" sits beside the same load with
     one and with two documents configured;
   * "the verifier slot no longer calls the record documentation files" sits
-    beside the old wording, constructed here, which the same check reports.
+    beside the old wording, constructed here, which the same check reports;
+  * "no confined stage's template still says an outside edit stands when the
+    suite needs it" sits beside the paragraph those templates carried before
+    story-184, constructed here, which the same scan reports.
+
+Since story-184 the prompts are held to the check as well as the runs: every
+stage the shipped story workflow confines is told, on an ordinary turn, what
+the coordinator does with an edit outside its confinement — undone whether or
+not the suite needs it, the stage's version kept, a needed edit routed to the
+stage that owns it — and the paragraph saying so is asserted to be character
+for character the same in each confined stage's template, since the story
+chose an exact duplicate held by a test over a shared partial.
 
 Nothing here invokes a model: every run goes through the fake runner below.
 """
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -1016,6 +1028,18 @@ def rendered_template(target_root: Path, template: str, workflow: str) -> str:
         context_assembler.load_template(REPO_ROOT, template), context)
 
 
+#: The sentence the documenter's correction-pass paragraph carried before
+#: story-184, which told the pass an outside edit stood when the suite needed
+#: it — the disposition story-175 removed. Written here so the assertions
+#: below are shown to report it, and never read off any template.
+THE_OLD_CORRECTION_SENTENCE = (
+    "An edit to any other file is put to the revert check after your turn "
+    "ends, and undone if the suite is green without it — so if a correction "
+    "cannot land in a file you may change, report that in "
+    "documentation-report.md rather than attempting it elsewhere."
+)
+
+
 def test_the_documenter_prompt_on_a_pass_states_the_grant_and_the_check(pass_run):
     _, runner, _ = pass_run
     first, on_pass = runner.prompts[DOCUMENTING]
@@ -1023,14 +1047,173 @@ def test_the_documenter_prompt_on_a_pass_states_the_grant_and_the_check(pass_run
     assert "files the findings name are yours to change for this pass" in paragraph
     assert "architecture documents always are" in paragraph
     assert "put to the revert check" in paragraph
-    assert "undone if the suite is green without it" in paragraph
+    # Moved by story-184 from the superseded sentence to the current one: an
+    # outside edit on a pass is undone whether or not the suite needs it.
+    assert "undone whether or not the suite needs it" in paragraph
+    assert "undone if the suite is green without it" not in paragraph
+    assert "undone if the suite is green without it" in flowed(
+        THE_OLD_CORRECTION_SENTENCE)
+    assert "report that in documentation-report.md" in paragraph
     assert "approved story artifact is never edited" in paragraph
+    # The pass is told the same thing the confinement paragraph above it says,
+    # so the two sentences in one prompt cannot disagree.
+    assert flowed(confinement_paragraph_of(
+        template_of(DOCUMENTING_STAGE))) in paragraph
     # The same template carried the same words on the first entry: the
     # paragraph is the prompt's, and what the pass changes is the record
     # injected beneath it.
     assert "put to the revert check" in flowed(first)
     assert FINDING["finding"] in on_pass
     assert FINDING["finding"] not in first
+
+
+# --------------------------------------------------------------------------
+# Every confined stage is told what the check does with an outside edit
+# --------------------------------------------------------------------------
+
+#: The placeholder the workflow's restrictions are rendered into, and the one
+#: place it is spelled: the confinement paragraph is *found* as the paragraph
+#: that follows it rather than by any words of its own.
+RESTRICTIONS_PLACEHOLDER = "{{stage_path_restrictions}}"
+
+#: Every stage the shipped story workflow confines, found by the declaration
+#: and never named. The documenter is one of them; whichever other stage the
+#: definition confines is held to the same paragraph.
+CONFINED_STAGES = [stage for stage in RAW["stages"] if CONFINEMENT in stage]
+
+#: The phrases the superseded paragraph stated the removed disposition in.
+#: Each is asserted absent from every confined stage's template below, and
+#: each is shown present in the superseded text constructed beneath.
+SUPERSEDED_PHRASES = (
+    "earns its place",
+    "stands only if the suite fails without it",
+    "undone if the suite is green without it",
+)
+
+#: The confinement paragraph the tester's template carried before story-184.
+#: It said a necessary edit stood — the disposition story-175 removed — and is
+#: written here as the control for the scan that says no template still does.
+THE_OLD_CONFINEMENT_PARAGRAPH = """\
+A restriction confining a stage to the paths it names governs every repository
+path outside them: an edit you make outside the paths this stage is confined
+to is not forbidden, but it is watched. Creating a file there stops the run.
+Modifying or deleting one there is put to the revert check — your edits are
+undone in a clone and the suite is run again — and it stands only if the suite
+fails without it. If the suite does not need it, the run is not stopped: the
+edit is undone in the working tree, your own version is kept in the run
+directory as evidence, and the run carries on without it. So an edit you make
+outside those paths either earns its place by being necessary or quietly does
+not survive, and your changed-files record must name it either way — the
+record is left exactly as you wrote it and the revert is recorded beside it.
+"""
+
+
+def template_of(stage: dict) -> str:
+    """A shipped stage's template as it ships, read by the name the stage
+    declares."""
+    return context_assembler.load_template(REPO_ROOT, stage["prompt"])
+
+
+def paragraphs_of(template: str) -> list[str]:
+    return [paragraph.strip() for paragraph in re.split(r"\n\s*\n", template)]
+
+
+def confinement_paragraph_of(template: str) -> str:
+    """The paragraph that follows the rendered restrictions in a template.
+
+    Found by position rather than by content, so the assertions about what it
+    says cannot be satisfied by the same words sitting somewhere else in the
+    prompt.
+    """
+    paragraphs = paragraphs_of(template)
+    assert paragraphs.count(RESTRICTIONS_PLACEHOLDER) == 1, template[:80]
+    return paragraphs[paragraphs.index(RESTRICTIONS_PLACEHOLDER) + 1]
+
+
+def superseded_phrases_in(text: str) -> list[str]:
+    return [phrase for phrase in SUPERSEDED_PHRASES if phrase in flowed(text)]
+
+
+def loaded_stages(target_root: Path) -> list[dict]:
+    """The story workflow as the fixture target loads it, which is the
+    definition `rendered_template` renders against."""
+    return harness_config.load_workflow(
+        REPO_ROOT, RUN_WORKFLOW, harness_config.load_config(target_root)
+    )["stages"]
+
+
+def test_the_shipped_story_workflow_confines_the_documenter_and_another_stage():
+    """The premise under the assertions below: there is more than one confined
+    stage to hold to one paragraph, and the documenter is among them."""
+    assert DOCUMENTING in [stage["name"] for stage in CONFINED_STAGES]
+    assert len(CONFINED_STAGES) >= 2
+    assert len({stage["prompt"] for stage in CONFINED_STAGES}) == len(CONFINED_STAGES)
+
+
+@pytest.mark.parametrize("stage", CONFINED_STAGES, ids=lambda s: s["name"])
+def test_each_confined_stages_prompt_on_an_ordinary_turn_carries_the_restrictions(
+    stage, target,
+):
+    """No correction pass, no repair pass, no retry: `rendered_template`
+    renders with retry_count zero and no pass record, and what the stage is
+    told about its confinement is in the prompt on that turn rather than only
+    inside the correction-pass paragraph. The wordings are the restrictions'
+    own, off the workflow as the fixture loads it."""
+    rendered = flowed(rendered_template(target, stage["prompt"], RUN_WORKFLOW))
+    wordings = [restriction.wording for restriction
+                in story_coordinator.stage_restrictions(loaded_stages(target))]
+    own = [w for w in wordings if w.startswith(f"{stage['name']} ")]
+    assert own
+    for wording in wordings:
+        assert wording in rendered
+    assert RESTRICTIONS_PLACEHOLDER not in rendered
+    assert "{{" not in rendered
+
+
+@pytest.mark.parametrize("stage", CONFINED_STAGES, ids=lambda s: s["name"])
+def test_each_confined_stages_prompt_states_what_the_check_does_since_story_175(
+    stage, target,
+):
+    """The paragraph, on the rendered prompt: an outside edit is undone whether
+    or not the suite needs it, the stage's version is kept under the discarded
+    directory, a needed edit is routed to the owning stage, a creation stops
+    the run, and the record must still name an undone edit."""
+    rendered = flowed(rendered_template(target, stage["prompt"], RUN_WORKFLOW))
+    paragraph = flowed(confinement_paragraph_of(template_of(stage)))
+    assert paragraph in rendered
+    assert "Creating a file there stops the run" in paragraph
+    assert "undone in the working tree whether or not the suite needs it" \
+        in paragraph
+    assert "kept under the discarded directory" in paragraph
+    assert "routed to the stage that owns the work" in paragraph
+    assert "rather than your edit standing" in paragraph
+    assert "changed-files record must name the edit" in paragraph
+
+
+def test_the_confinement_paragraph_is_identical_in_every_confined_stages_template():
+    """Character for character, off the templates as they ship: the story
+    chose an exact duplicate held here over a shared partial, and this is
+    what holds it."""
+    paragraphs = {stage["prompt"]: confinement_paragraph_of(template_of(stage))
+                  for stage in CONFINED_STAGES}
+    assert len(paragraphs) >= 2
+    (first, *rest) = paragraphs.values()
+    for other in rest:
+        assert other == first
+    # The control: the paragraph each template carried before story-184 is
+    # not the one they carry now, so "identical" is not "both unchanged".
+    assert first.strip() != THE_OLD_CONFINEMENT_PARAGRAPH.strip()
+
+
+def test_no_confined_stages_template_still_says_a_needed_edit_stands():
+    """The absence, with its control beneath: the superseded paragraph and the
+    superseded correction-pass sentence, constructed above, carry every phrase
+    the scan looks for."""
+    for stage in CONFINED_STAGES:
+        assert superseded_phrases_in(template_of(stage)) == [], stage["prompt"]
+    assert set(superseded_phrases_in(
+        THE_OLD_CONFINEMENT_PARAGRAPH + THE_OLD_CORRECTION_SENTENCE
+    )) == set(SUPERSEDED_PHRASES)
 
 
 def verifier_of(name: str) -> str:

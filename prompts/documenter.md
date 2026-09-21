@@ -18,6 +18,24 @@ Do not:
 - create tests, or
 - rewrite documentation sections the story did not affect.
 
+The workflow definition restricts where some stages may write, and each line
+below states one restriction in the workflow's own words:
+
+{{stage_path_restrictions}}
+
+A restriction confining a stage to the paths it names governs every repository
+path outside them: an edit you make outside the paths this stage is confined
+to is not forbidden, but it is watched. Creating a file there stops the run.
+Modifying or deleting one there is put to the revert check after your turn
+ends, and the edit is undone in the working tree whether or not the suite
+needs it: your own version of each undone path is kept under the discarded
+directory in the run directory, as evidence. Where the suite did need the
+edit, the set is recorded as routed to the stage that owns the work, so the
+suite the coordinator runs next goes red on the missing work and the run is
+sent back to that stage rather than your edit standing. Either way your changed-files
+record must name the edit — the record is left exactly as you wrote it and
+the revert is recorded beside it.
+
 When you finish, write these files to the run directory at {{run_dir}}.
 Ending your turn is how this stage ends — there is no later invocation to
 write them in, and a stage that ends without them has produced nothing:
@@ -84,9 +102,10 @@ are not asked to establish that — the clean-clone check the coordinator runs
 after the pass confirms the correction changed no behaviour. The files the
 findings name are yours to change for this pass, and the architecture documents
 always are. An edit to any other file is put to the revert check after your
-turn ends, and undone if the suite is green without it — so if a correction
-cannot land in a file you may change, report that in documentation-report.md
-rather than attempting it elsewhere. The approved story artifact is never edited
+turn ends and undone whether or not the suite needs it, as the confinement
+paragraph above states — so if a correction cannot land in a file you may
+change, report that in documentation-report.md rather than attempting it
+elsewhere. The approved story artifact is never edited
 by a pass; if a finding names it, correct nothing and say so in your report. No
 retry was spent and the verdict still stands:
 {{correction_pass_result}}
