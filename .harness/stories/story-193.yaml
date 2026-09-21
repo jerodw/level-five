@@ -1,0 +1,196 @@
+story:
+  id: story-193
+  title: The repair pass records every repairable finding a verdict carries, tells a repaired stage only what ran, bounds what a repairable finding may name, and expires its grant with the pass
+  description: |
+    When a verification passes but records small findings it wants fixed, the
+    harness re-runs part of the workflow to fix them: a correction pass for
+    fixes to prose alone, and a repair pass for a one-line fix in a file one
+    stage owns. Several things about the repair pass are loose. A verdict
+    that carries both kinds of finding takes the correction pass and silently
+    forgets the repairable ones. A stage entered by a repair pass is told, in
+    the coordinator's own voice, that the suite passed in a fresh clone, even
+    under a workflow that never ran that check. A verdict carrying a
+    malformed repairable finding pays for a whole suite run in a fresh clone
+    before the run stops on a defect it could have seen in the JSON. Once a
+    pass grants a stage a file, that permission lingers into a later re-entry
+    of the same stage made by the other kind of pass, and the pass record is
+    injected into every later prompt of the run whether or not it still
+    applies. A finding whose path ends in a slash grants a whole directory
+    where the rule says one file. A finding naming a file the harness blocks
+    for every stage is routed, granted, edited, and only then stops the run.
+    And a pass record the coordinator cannot read back silently grants
+    nothing rather than stopping.
+
+    This story closes each of those. A verdict carrying both kinds records
+    the repairable findings it defers, in the routing event and in the
+    correction record the returning verifier is handed, and both verifier
+    prompts say so. Category validation for both kinds and the check for a
+    directory-shaped path run before the clean-clone check, so a malformed
+    verdict stops before the expensive part. The repair record says whether a
+    clean-clone check ran, and the statement the entered stage reads and the
+    slot in each writing-stage prompt say the check passed only when it did.
+    Each pass record carries both pass counts at the moment it was written,
+    and a grant, and the prompt injection of the same record, applies only
+    while those counts and the attempt still match, so a pass's permission
+    ends when another pass routes. A repairable finding under a
+    repository-blocked path is refused before the pass is routed, with the
+    bound named, the way an out-of-scope extension already is, and both
+    verifier prompts tell the verifier that. A pass record that is missing or
+    unreadable when the state says a pass was taken raises. The two readings
+    of what a slash-less path value covers become one.
+
+    It deliberately leaves alone the correction pass's own routing and record
+    except where the deferred repairable half is carried; the one-stage-one-
+    file bound and the scope-extension mechanism, except that its blocked-path
+    question is now asked of every repairable finding; the retry and attempt
+    machinery; and the position of the repair block below the clean-clone
+    check. The pre-flight is not changed: a workflow declaring a repair pass
+    without a clean-clone check stays a valid shape, and the developer
+    declined to have the harness decide that for future workflows.
+
+    Planned from the brief filed under 272, which covers the work filed as
+    #186, #189, #178, #187, #181, #330, #175 and #316.
+
+    In the coordinator, orchestration/story_coordinator.py, the pieces are
+    the verifier's passing branch in run_story (the correction block, the
+    clean-clone block and the repair block, in that order), the record
+    readers correction_pass_grants and _repair_pass_findings, the prompt
+    injection of correction_pass_result and repair_pass_result,
+    repair_pass_statement, _correction_pass_routed, scope_extension_check,
+    and the pair _inside and grant_covers. The prompts are the correctable
+    and repairable sections of prompts/story-verifier.md and
+    prompts/refactor-verifier.md, and the repair-pass slot paragraph in
+    prompts/story-implementer.md, prompts/story-tester.md,
+    prompts/documenter.md and prompts/refactor-implementer.md. The schemas
+    are schemas/correction-pass.schema.json, which the repair record shares,
+    and the path descriptions in schemas/verification-result.schema.json.
+  workflow: story-workflow
+
+tasks:
+  - Validate the categories of both correctable_findings and repairable_findings, and refuse a directory-shaped path in either, above the clean-clone check in the verifier's passing branch, so a malformed verdict escalates through _escalate before any suite run and before any pass is routed; the routing and budget decisions for each kind stay where they are.
+  - When a passing verdict carries both correctable_findings and repairable_findings and the correction pass routes, name the deferred repairable findings in the correction-pass-routed event and carry them verbatim in the correction record under a key of their own, so the verifier the pass returns to is handed them in the injected record; declare the key in schemas/correction-pass.schema.json.
+  - Record on every pass record, correction and repair alike, the correction_pass_count and repair_pass_count at the moment the record was written, declared in schemas/correction-pass.schema.json, and make one predicate decide whether a record is live: its attempt is the attempt now running and both recorded counts equal the state's. correction_pass_grants and repair_pass_grants grant nothing from a record that is not live, and the injection of correction_pass_result and repair_pass_result renders None for one.
+  - Record on the repair record whether a clean-clone check ran on the routing verdict, and have repair_pass_statement say the check passed only when it did; reword the repair-pass slot paragraph in the four writing-stage prompts so it does not assert the suite passed where the code ships unconditionally.
+  - Ask the execution rules' blocked-path bound of every repairable finding, not only of one carrying scope_extension, so a finding whose path is under a blocked prefix is refused before the pass is routed, dropped from the pass, accounted as declined with the bound as its reason, and announced with the existing refusal event and wording; the other two bounds stay asked of extension findings alone.
+  - Make correction_pass_grants and _repair_pass_findings raise, rather than return nothing, when the state says a pass was taken and the record is absent or unreadable.
+  - Make grant_covers and _inside one reading, with one of them delegating to the other, so a slash-less value means one file in both.
+  - In both verifier prompts, tell the verifier that a verdict carrying both kinds routes the correction pass and defers the repairable findings, which are named in the record the returning verification reads; that a repairable finding may not name any path the execution rules block for every stage, because a grant cannot reach one; and that path is one file, never a directory, and a trailing slash stops the run.
+  - Update the path descriptions in schemas/verification-result.schema.json to say a directory-shaped value is refused and the grant is bounded to the pass that made it.
+  - Write the tests that hold each of the above, and adapt the existing assertions on the repair statement's wording and the correction-then-repair sequence in tests/test_repair_pass.py.
+  - Update .harness/docs/ARCHITECTURE.md where it states the attempt-alone bound, says the repair block does not gate on a clean-clone declaration, and describes the record and the prompt injection.
+
+acceptance_criteria:
+  - A passing verdict carrying a correctable finding whose category the table defines and a repairable finding whose category it does not define escalates naming the unknown category, and events.log carries no clean-clone-passed event and no correction-pass-routed event for that verdict.
+  - A passing verdict carrying a repairable finding whose category is undefined escalates before any suite run: the clean-clone check's command is never invoked for that verdict.
+  - A passing verdict carrying a correctable or repairable finding whose path ends in a slash escalates naming that path, before the clean-clone check runs, and no pass record is written.
+  - A passing verdict carrying both correctable and repairable findings routes the correction pass, the correction-pass-routed event names each deferred repairable finding by its location, and the correction record carries those findings verbatim under their own key, which validates against schemas/correction-pass.schema.json.
+  - Every correction record and every repair record carries the correction_pass_count and the repair_pass_count at the time it was written, and both validate against schemas/correction-pass.schema.json.
+  - In a run that takes a correction pass granting the documenter a file and then a repair pass in the same attempt that re-enters at the implementer and runs forward through the documenter, the documenter's post-stage checks at its second run treat that file as governed, and no correction-pass-grant-applied event is appended for it; the mirror holds for a repair grant followed by a correction pass in the same attempt.
+  - A stage running after a retry that moved the attempt is told None for correction_pass_result and repair_pass_result, and a stage running within the pass that wrote the record is told the record.
+  - The repair record records whether a clean-clone check ran on the routing verdict; under a workflow declaring repair_pass and no clean_clone, the statement in the record does not say a clean-clone check passed, and under a workflow declaring both it does.
+  - The repair-pass slot paragraph in prompts/story-implementer.md, prompts/story-tester.md, prompts/documenter.md and prompts/refactor-implementer.md does not assert that the suite passed where the code ships.
+  - A passing verdict carrying a repairable finding with no scope_extension whose path is under a blocked prefix from the execution rules routes the pass without that finding, appends the existing refusal event naming the blocked prefix, records the finding as declined with that bound as its reason, and the run does not escalate for it.
+  - correction_pass_grants and _repair_pass_findings raise when the state's pass count is non-zero and the record is absent or unparseable, and still grant nothing when the count is zero or the workflow declares no pass.
+  - grant_covers and _inside give the same answer for every value: one of them is defined in terms of the other, and a test that drives both over a slash-terminated value, a slash-less value and a sibling path holds them equal.
+  - Both verifier prompts state, in the repairable-findings section, that a verdict carrying both kinds is routed as a correction pass with the repairable findings deferred and named in the returning verification's record; that a repairable finding may not name any path the execution rules block for every stage; and that path is one file, never a directory, and a trailing slash stops the run. A test asserts each of the three appears in both prompts.
+  - Both verifier prompts' correctable-findings sections also state that a trailing slash in path stops the run.
+  - The path descriptions in schemas/verification-result.schema.json for correctable_findings and repairable_findings say a directory-shaped value is refused and the grant is bounded to the pass that made it.
+  - .harness/docs/ARCHITECTURE.md no longer says a grant is bounded to the attempt alone, no longer says the repair block gates on nothing but the declaration and the findings, and describes the deferred findings, the recorded counts, the clean-clone flag and the blocked-path refusal.
+  - The existing suite passes with no assertion weakened, with tests/test_repair_pass.py's assertion on the repair statement's wording adapted to the conditional statement.
+
+technical_plan:
+  implementation_steps:
+    - In run_story's verifier passing branch, hoist the category validation for correctable_findings and add the same for repairable_findings above the correction block, together with a check that no finding of either kind carries a path ending in a slash; each escalates through _escalate with retry_count untouched and nothing archived, naming the categories or the path.
+    - In the correction block, when the verdict also carries repairable_findings, add them verbatim to the correction record under a deferred_repairable_findings key and extend _correction_pass_routed to name them by location in the same event.
+    - Add correction_pass_count and repair_pass_count to both records at the point they are written, and write a pass_record_is_live(record, state, attempt) predicate; correction_pass_grants, _repair_pass_findings and the two prompt-injection reads all go through it.
+    - Replace the try/except that returns nothing in correction_pass_grants and _repair_pass_findings with a raise when the state's count says a record should exist, keeping the early returns for a zero count and an undeclared pass.
+    - Add a clean_clone_checked boolean to the repair record, read off whether the clean_clone declaration was present on the stage, and give repair_pass_statement a parameter that selects the conditional opening.
+    - In scope_extension_check, ask is_blocked of every finding's path before the scope_extension test, so a blocked path is refused whether or not the finding carries an extension; leave the restriction bound and the do_not_modify bound behind the extension test.
+    - Define grant_covers in terms of _inside, or the reverse, and update both docstrings.
+    - Edit the two verifier prompts' correctable and repairable sections and the four writing-stage slot paragraphs; update the two schema path descriptions and schemas/correction-pass.schema.json.
+    - Write the tests under tests/ and update the architecture document.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the validation order in the passing branch, the deferred findings in the correction record and event, the recorded counts and the liveness predicate, the raise on an unreadable record, the clean-clone flag and conditional statement, the blocked-path bound on every repairable finding, and the grant_covers/_inside unification
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: the correctable and repairable sections gain the deferral rule, the blocked-path bound and the one-file-never-a-directory rule
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: the same three statements as the story verifier, so the two prompts carry the same bounds
+    - file: prompts/story-implementer.md
+      stage: implementer
+      reason: the repair-pass slot paragraph no longer asserts the suite passed where the code ships
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: the same slot paragraph
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: the same slot paragraph
+    - file: prompts/refactor-implementer.md
+      stage: implementer
+      reason: the same slot paragraph
+    - file: schemas/correction-pass.schema.json
+      stage: implementer
+      reason: declares the two recorded pass counts, the optional deferred_repairable_findings list, and the repair record's clean_clone_checked flag
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: the path descriptions say a directory-shaped value is refused and the grant is bounded to the pass that made it
+    - file: tests/test_repair_pass.py
+      stage: tester
+      reason: the assertion on the repair statement's wording and the correction-then-repair sequence test adapt to the conditional statement and gain the grant assertions
+    - file: tests/test_pass_grants_expire_with_the_pass.py
+      stage: tester
+      reason: the new assertions for the validation order, the deferred findings, the liveness of a record, the conditional statement, the blocked-path refusal, the raise on an unreadable record, the prompt statements and the one reading of a path value
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the repair-pass and grant sections state the pass-bounded grant, the recorded counts, the deferred findings, the clean-clone flag and the blocked-path refusal
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - prompts/story-implementer.md
+    - prompts/story-tester.md
+    - prompts/documenter.md
+    - prompts/refactor-implementer.md
+    - schemas/correction-pass.schema.json
+    - schemas/verification-result.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json and workflows/refactor-workflow.json (both already declare clean_clone beside repair_pass; the developer declined to make the pre-flight decide that shape for future workflows, so no declaration changes)
+    - repair_pass_problems in orchestration/story_coordinator.py (the developer rejected refusing a repair_pass declared without clean_clone at pre-flight; the statement is made conditional instead)
+    - schemas/execution-history.schema.json (no new event kind: the deferred findings ride in the existing correction-pass-routed event, the blocked-path refusal reuses the existing refusal event, and the escalations reuse _escalate)
+    - the restriction bound and the do_not_modify bound in scope_extension_check (only the blocked-path question is widened to every finding; the other two stay asked of extension findings alone)
+    - the attempt and retry_count machinery, archive_attempt and the retry-history record (a pass still spends nothing a retry spends)
+    - the position of the repair block below the clean-clone check (a repair may change behaviour and is built on a verified tree where one is declared; only the validation moves above the check)
+    - the RunState field set (the liveness key is recorded on the pass records and compared to the existing counts, so no new state field is needed and the tests that pin the field set stay as they are)
+    - orchestration/schema_validator.py (the validator subset has no pattern support and gaining it is a separate story; the directory-shaped path is the coordinator's decision)
+
+verification_requirements:
+  - Confirm from events.log fixtures in the tests that an undefined category in either kind, and a slash-terminated path in either kind, escalate with no clean-clone-passed event and no pass record written.
+  - Confirm the correction-then-repair sequence test and its mirror assert which paths were exempt at the re-entered stage's second run, not only the counts and the call order.
+  - Confirm the correction record and the repair record written by a driven run validate against schemas/correction-pass.schema.json with the new keys present.
+  - Confirm the repair statement is conditional on the recorded flag and that tests/test_repair_pass.py's wording assertion was adapted rather than removed.
+  - Confirm the blocked-path refusal test drives a finding with no scope_extension and reads the declined entry off the accounting artifact.
+  - Confirm each of the three new statements appears in both verifier prompts, held by a test that reads both files.
+  - Confirm no existing assertion was weakened or skipped and the full suite passes.
+
+constraints:
+  - The coordinator stays deterministic: no model call is added, and every new routing decision is reconstructable from state.json, events.log and the pass records.
+  - No stage name, retry category or artifact name is written into orchestration source for this; the entry stage, the categories and the record names come off the loaded workflow definition as today.
+  - A workflow declaring no repair_pass, or no correction_pass, routes a passing verdict exactly as it does today, and its events.log is unchanged.
+  - A pass still spends nothing a retry spends: no retry_count increment, no attempts/attempt-N/ archive, no retry-history entry.
+  - Standard library only; type hints on public functions; fail loudly on unexpected state.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 14:54:30
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 272
