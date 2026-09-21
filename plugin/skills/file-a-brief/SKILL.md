@@ -54,9 +54,10 @@ Two things come with it. The behaviour has to pick this work out from the work
 beside it — `The queue report is better` is an end state that fits anything, and
 a title that vague is underspecified rather than badly framed, so make the
 behaviour sharper instead of reaching back for the fault. And where the brief
-reports a defect, open the body by saying what is wrong today: that is the case
-for the work, the file:line evidence is already there, and `category` and
-`severity` are the fields a board sorts on to know something is broken.
+reports a defect, open the body by saying what is wrong today in plain terms:
+that is the case for the work, the file:line evidence follows in the paragraphs
+after the opening, and `category` and `severity` are the fields a board sorts
+on to know something is broken.
 
 ### The body
 

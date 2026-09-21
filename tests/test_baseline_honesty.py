@@ -3274,6 +3274,22 @@ DECLARED_HISTORY_READERS = {
         "module builds with conftest.constructed_story — one story respecting "
         "that path and one editing it — so an empty diff here is the story "
         "having left it alone rather than a range bounded at the wrong commits",
+    "test_a_briefs_evidence_follows_its_opening.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story placing a brief's file:line evidence "
+        "after its opening left prompts/prose-layer.md, prompts/assist.md, "
+        "schemas/story.schema.json and orchestration/ alone, because those "
+        "already say what the repaired sentences were brought to and a scan "
+        "of the shipped text cannot tell a sentence that was never touched "
+        "from one rewritten into the same words. No constructed repository "
+        "can say what this story did not touch, and the comparison is made "
+        "through conftest.story_diff over the story's own range rather than "
+        "against HEAD, which would go vacuously green the moment the working "
+        "tree is committed. The diff of a path the story did rewrite is "
+        "asserted non-empty beside it, so an empty diff is about those paths "
+        "rather than about a resolution that has stopped seeing anything. "
+        "Everything else in the module is read from the shipped documents as "
+        "its subject or rendered under tmp_path",
     "test_a_repair_reaches_outside_the_storys_scope_within_bounds.py":
         "one of its criteria is a claim about this repository's own change and "
         "nothing else: that the story letting a repair reach outside a story's "

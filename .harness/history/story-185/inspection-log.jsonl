@@ -1,0 +1,3 @@
+{"story_id": "story-185", "mode": "narrow", "cost_usd": 1.9699525000000002, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-21 09:27:29", "findings": 0, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-185", "mode": "narrow", "cost_usd": 2.4844279999999994, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-21 09:54:37", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-185", "timestamp": "2026-09-21 09:56:27", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 1}

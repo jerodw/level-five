@@ -210,8 +210,9 @@ which report, saying what, about which entries — and do not fall back on
 naming the fault to make it specific.
 
 What is wrong today still has to be said, and it is said in the body's
-opening line: that is the case for the work, and it is where your
-file:line evidence already goes. `category` and `severity` are what carry
+opening, in plain terms: that is the case for the work, and your
+file:line evidence follows in the paragraphs after it. `category` and
+`severity` are what carry
 the fact that something is broken now, being fields a board can sort and
 filter on rather than a tone you put in a sentence.
 
