@@ -48,7 +48,11 @@ Every absence asserted here carries a demonstration that it can fail:
   * "completion_commits does not match the record commit" sits beside the
     completion commit, which the same call must match;
   * "the framing does not render as None" sits beside the same extraction over
-    a rendering with the value removed, which must report it.
+    a rendering with the value removed, which must report it;
+  * "an undeclared file beside a changed declared document is not in scope"
+    sits beside the declared file in the same directory, which is — and "a
+    declared document is not named as left out" sits beside the same run
+    against a target declaring no documents, where it is.
 
 Since story-147 this is one of two positions the inspection can run in, and
 this module is the one that stays. A workflow whose stages declare an
@@ -196,6 +200,23 @@ IGNORED_FILE = f"{SOURCE_DIR}ignored.py"
 #: A path under a scope key that has never existed in this fixture in any form.
 NEVER_EXISTED = f"{SOURCE_DIR}never-existed.py"
 
+#: The configuration key a target declares its architecture documents under.
+#: Read with the same literal the harness reads it with, since no module
+#: exports a constant for it, and the schema test below asserts the key is
+#: declared under exactly this name.
+DOCUMENTS_KEY = "architecture_docs"
+
+#: Two documents a target may declare under that key, and — in
+#: `OUT_OF_SCOPE_FILE`, which already sits in the same directory — the file
+#: beside them it does not. Both are tracked in every fixture target and
+#: declared in none unless a case passes `declaring(...)`, so every other
+#: expansion in this module is computed over a target declaring only what
+#: conftest's config declares. Sharing the directory with `OUT_OF_SCOPE_FILE`
+#: is what makes "a neighbour that is not itself declared stays out" a fact
+#: about the declaration deciding rather than about the directory.
+DECLARED_DOCUMENT = "docs/how-it-works.md"
+DECLARED_NEIGHBOUR = "docs/decisions.md"
+
 TRACKED = {
     CHANGED_SOURCE: "def a():\n    return 1\n",
     SIBLING_SOURCE: "def b():\n    return 2\n",
@@ -206,7 +227,21 @@ TRACKED = {
     CHANGED_TEST: "def check_a():\n    assert True\n",
     SIBLING_TEST: "def check_b():\n    assert True\n",
     OUT_OF_SCOPE_FILE: "# how the thing works\n",
+    DECLARED_DOCUMENT: "# How it works\n\nOne module, one job.\n",
+    DECLARED_NEIGHBOUR: "# Decisions\n\nWe chose the simple one.\n",
 }
+
+
+def declaring(*documents: str) -> dict:
+    """The configuration keys that declare `documents` as the target's
+    architecture documents, in the shape `build_target` writes them.
+
+    The parser reads a key whose value is empty as a list of the `- ` lines
+    beneath it, and a repeated key replaces the earlier one, so this replaces
+    conftest's declaration rather than adding to it. Called with nothing it
+    declares an empty list, which is the target that declares no documents.
+    """
+    return {DOCUMENTS_KEY: "".join(f"\n  - {one}" for one in documents)}
 
 #: What the fixture allows one inspection to take into scope. Larger than the
 #: whole expansion, so the runs below are not silently trimmed; the cap's own
@@ -1145,7 +1180,7 @@ def changed_set(tmp_path: Path, records: dict) -> set[str]:
 
 
 def expanded_against(tmp_path: Path, harness: Path, records: dict,
-                     name: str = "expanded", prepare=None):
+                     name: str = "expanded", prepare=None, **config_keys):
     """The target the expansion was computed over, and the expansion.
 
     Nothing here invokes anything: the whole computation is one `git ls-files`
@@ -1156,9 +1191,12 @@ def expanded_against(tmp_path: Path, harness: Path, records: dict,
     so whatever it does to the tree is uncommitted and unstaged — which is the
     condition the stage loop leaves a tree in, and the only one in which a file
     the story created can be told from a file the index already knew about.
+
+    `config_keys` reach the target's configuration as `build_target` takes
+    them, which is how a case declares the documents the target inspects.
     """
     journal = tmp_path / f"{name}-journal.txt"
-    target = build_target(tmp_path / name, journal)
+    target = build_target(tmp_path / name, journal, **config_keys)
     config = harness_config.load_config(target)
     (target / DELETED_FILE).unlink()
     _git(target, "add", "-A")
@@ -1170,9 +1208,10 @@ def expanded_against(tmp_path: Path, harness: Path, records: dict,
 
 
 def expanded(tmp_path: Path, harness: Path, records: dict,
-             name: str = "expanded", prepare=None):
+             name: str = "expanded", prepare=None, **config_keys):
     """The expansion alone, for a case with nothing to ask of the target."""
-    return expanded_against(tmp_path, harness, records, name, prepare)[1]
+    return expanded_against(tmp_path, harness, records, name, prepare,
+                            **config_keys)[1]
 
 
 RECORDS_NAMING_EVERY_CASE = {
@@ -1277,6 +1316,189 @@ def test_a_path_the_tree_does_not_hold_contributes_nothing_but_its_directory(
 
     assert f"{SOURCE_DIR}never-existed.py" not in found.paths
     assert SIBLING_SOURCE in found.paths
+
+
+# ==========================================================================
+# story-186: a declared architecture document is inspected as source is
+#
+# The document a story changes lives outside both scope keys, so until this
+# story the expansion dropped it on every run. A target's declared documents
+# are now in scope as exact paths — the document itself and nothing beside it
+# that is not likewise declared — on the same terms as a changed source file.
+# Each case below is driven at the expansion against a target this module
+# declares the documents for, and each absence sits beside the same reading
+# over a target that declares them differently.
+# ==========================================================================
+
+
+#: A story that changed a source file and one declared document.
+RECORDS_CHANGING_A_DOCUMENT = {
+    WRITING: {"modified": [CHANGED_SOURCE, DECLARED_DOCUMENT], "created": [],
+              "deleted": []},
+}
+
+#: The same story with the document left alone.
+RECORDS_LEAVING_THE_DOCUMENTS_ALONE = {
+    WRITING: {"modified": [CHANGED_SOURCE], "created": [], "deleted": []},
+}
+
+
+def test_the_fixture_declares_the_documents_it_says_it_does(tmp_path):
+    """The premise of every case below, asserted rather than assumed: the
+    override reaches the parsed configuration as the list this module wrote,
+    replacing conftest's declaration, and declaring nothing parses as an empty
+    list rather than as a missing key or as the conftest list surviving."""
+    both = build_target(tmp_path / "declared", tmp_path / "declared.txt",
+                        **declaring(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR))
+    assert harness_config.load_config(both)[DOCUMENTS_KEY] == \
+        [DECLARED_DOCUMENT, DECLARED_NEIGHBOUR]
+
+    none = build_target(tmp_path / "undeclared", tmp_path / "undeclared.txt",
+                        **declaring())
+    assert harness_config.load_config(none)[DOCUMENTS_KEY] == []
+
+    # And the three files share one directory, which is what makes the
+    # neighbour case below a fact about the declaration rather than the tree.
+    assert len({story_inspection.containing_directory(one) for one in
+                (DECLARED_DOCUMENT, DECLARED_NEIGHBOUR, OUT_OF_SCOPE_FILE)}) == 1
+
+
+def test_a_changed_declared_document_is_in_the_changed_set_and_not_left_out(
+        tmp_path, harness):
+    """The case the story exists for.
+
+    The control is the same record against a target that declares no
+    documents, where the same path is dropped and named as outside the scope —
+    so what put it in above is the declaration and not the directory.
+    """
+    found = expanded(tmp_path, harness, RECORDS_CHANGING_A_DOCUMENT,
+                     name="declared", **declaring(DECLARED_DOCUMENT))
+
+    assert DECLARED_DOCUMENT in found.changed
+    assert excluding(found, DECLARED_DOCUMENT) == [], found.excluded
+
+    undeclared = expanded(tmp_path, harness, RECORDS_CHANGING_A_DOCUMENT,
+                          name="undeclared", **declaring())
+    assert DECLARED_DOCUMENT not in undeclared.paths
+    assert excluding(undeclared, DECLARED_DOCUMENT), undeclared.excluded
+
+
+def test_the_declaration_changes_the_changed_set_by_the_document_alone(
+        tmp_path, harness):
+    """A target declaring no documents computes what it computed before the
+    documents were in scope, and the declared document is the *only* thing the
+    declaration adds: the siblings are identical, because the document's
+    directory contributes nothing that is not itself declared."""
+    declared = expanded(tmp_path, harness, RECORDS_CHANGING_A_DOCUMENT,
+                        name="declared", **declaring(DECLARED_DOCUMENT))
+    undeclared = expanded(tmp_path, harness, RECORDS_CHANGING_A_DOCUMENT,
+                          name="undeclared", **declaring())
+
+    assert set(declared.changed) - set(undeclared.changed) == \
+        {DECLARED_DOCUMENT}
+    assert declared.siblings == undeclared.siblings
+    assert set(undeclared.excluded) - set(declared.excluded) == \
+        set(excluding(undeclared, DECLARED_DOCUMENT))
+
+
+def test_a_declared_document_the_story_did_not_change_is_not_pulled_in(
+        tmp_path, harness):
+    """Declared is not changed: a story that left the documents alone computes
+    exactly the expansion a target declaring none computes, with neither
+    document in it. The control is the same declaration with the document
+    changed, where it is in."""
+    declared = expanded(tmp_path, harness, RECORDS_LEAVING_THE_DOCUMENTS_ALONE,
+                        name="declared",
+                        **declaring(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR))
+    undeclared = expanded(tmp_path, harness,
+                          RECORDS_LEAVING_THE_DOCUMENTS_ALONE,
+                          name="undeclared", **declaring())
+
+    assert DECLARED_DOCUMENT not in declared.paths
+    assert DECLARED_NEIGHBOUR not in declared.paths
+    assert declared == undeclared
+
+    changed = expanded(tmp_path, harness, RECORDS_CHANGING_A_DOCUMENT,
+                       name="changed",
+                       **declaring(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR))
+    assert DECLARED_DOCUMENT in changed.changed
+
+
+def test_a_file_beside_a_changed_document_is_a_sibling_only_where_declared(
+        tmp_path, harness):
+    """The document is in scope as itself and not as its directory.
+
+    The three files share one directory. The declared neighbour is among the
+    siblings, which is the control: the directory *was* looked at, and what
+    kept the undeclared file out is that it is not declared.
+    """
+    found = expanded(tmp_path, harness, RECORDS_CHANGING_A_DOCUMENT,
+                     name="beside",
+                     **declaring(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR))
+
+    assert DECLARED_NEIGHBOUR in found.siblings
+    assert OUT_OF_SCOPE_FILE not in found.paths
+    assert OUT_OF_SCOPE_FILE in TRACKED, "the neighbour is not there to find"
+
+
+def test_a_changed_document_is_ordered_among_the_changed_files_and_capped_as_one(
+        tmp_path, harness):
+    """On the same terms as a changed source file.
+
+    The document is in `changed` at its sorted place among them and not
+    appended or held apart, so the cap trims the siblings before it — and
+    where the changed files alone exceed the cap, the document is trimmed on
+    the same terms as the source file beside it, at whichever position it
+    holds. Both are read off the cap's own answer, and the uncapped expansion
+    is the control for both.
+    """
+    found = expanded(tmp_path, harness, {
+        WRITING: {"modified": [CHANGED_SOURCE, DECLARED_DOCUMENT,
+                               DECLARED_NEIGHBOUR],
+                  "created": [], "deleted": []}},
+        name="capped", **declaring(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR))
+
+    assert found.changed == tuple(sorted(
+        (DECLARED_NEIGHBOUR, DECLARED_DOCUMENT, CHANGED_SOURCE)))
+    assert found.siblings == (SIBLING_SOURCE,)
+
+    kept, trimmed = story_inspection.cap_paths(found, len(found.changed))
+    assert kept == found.changed
+    assert trimmed == (SIBLING_SOURCE,)
+
+    kept, trimmed = story_inspection.cap_paths(found, 1)
+    assert kept == found.changed[:1]
+    assert trimmed == found.changed[1:] + found.siblings
+    assert {DECLARED_DOCUMENT, CHANGED_SOURCE} <= set(trimmed)
+
+    kept, trimmed = story_inspection.cap_paths(found, ROOMY_CAP)
+    assert kept == found.paths
+    assert trimmed == ()
+
+
+def test_a_declared_document_the_tree_does_not_hold_is_named_as_any_unheld_path(
+        tmp_path, harness):
+    """A declared document the tree lacks is excluded with the very words a
+    source path the tree lacks is excluded with, and its directory contributes
+    what it holds — here the declared neighbour — as a deleted source file's
+    directory does. The wording is compared against the source path's in the
+    same expansion rather than spelled here."""
+    gone = f"{story_inspection.containing_directory(DECLARED_DOCUMENT)}" \
+           "/never-written.md"
+    found = expanded(tmp_path, harness, {
+        WRITING: {"modified": [gone, MISSING_CHANGE], "created": [],
+                  "deleted": []}},
+        name="unheld", **declaring(gone, DECLARED_NEIGHBOUR))
+
+    assert gone not in found.paths
+    assert DECLARED_NEIGHBOUR in found.siblings
+
+    def reason(path: str) -> str:
+        named = excluding(found, path)
+        assert len(named) == 1, found.excluded
+        return named[0][len(f"{path}:"):]
+
+    assert reason(gone) == reason(MISSING_CHANGE)
 
 
 # ==========================================================================
@@ -1713,6 +1935,73 @@ def test_the_paths_the_expansion_left_out_are_named_in_the_runs_own_log(
     assert CHANGED_SOURCE in rendered_paths(inspector.prompt)
 
 
+def test_a_run_that_changed_a_declared_document_hands_it_to_the_inspection(
+        tmp_path, harness, monkeypatch):
+    """story-186, against a run: the document a run's stage recorded changing
+    is in the scope the invocation is handed, and neither the run's own log
+    nor its events.log line names it as left out.
+
+    The control is the same run against a target that declares no documents,
+    where the same path is left out and named — which is what every run had
+    been recording before this story.
+    """
+    target, _journal, code, inspector, _runner = completing_run(
+        tmp_path, harness, monkeypatch, name="doc-declared",
+        findings=[finding()], extra_changed=(DECLARED_DOCUMENT,),
+        **declaring(DECLARED_DOCUMENT))
+
+    assert code == 0
+    assert DECLARED_DOCUMENT in rendered_paths(inspector.prompt)
+    left_out = "\n".join(
+        detail_under(in_the_runs_tree(target), LEFT_OUT_LABEL))
+    assert DECLARED_DOCUMENT not in left_out, left_out
+    assert DECLARED_DOCUMENT not in inspection_line(target)
+
+    target, _journal, code, inspector, _runner = completing_run(
+        tmp_path, harness, monkeypatch, name="doc-undeclared",
+        findings=[finding()], extra_changed=(DECLARED_DOCUMENT,),
+        **declaring())
+
+    assert code == 0
+    assert DECLARED_DOCUMENT not in rendered_paths(inspector.prompt)
+    left_out = "\n".join(
+        detail_under(in_the_runs_tree(target), LEFT_OUT_LABEL))
+    assert DECLARED_DOCUMENT in left_out, left_out
+
+
+def test_a_trimmed_document_is_named_in_the_runs_own_log_as_any_trimmed_file(
+        tmp_path, harness, monkeypatch):
+    """The cap bites on a changed document exactly where it bites on a changed
+    source file, and the record names it under the same label.
+
+    Two declared documents and the source file are changed and the cap admits
+    one, so the invocation is handed the first of the changed files in their
+    order and the rest — a document and the source file among them — are named
+    as trimmed. The control is the other side of the same run: nothing the
+    invocation was handed is under the label.
+    """
+    cap = 1
+    target, _journal, code, inspector, _runner = completing_run(
+        tmp_path, harness, monkeypatch, name="doc-trimmed",
+        findings=[finding()],
+        extra_changed=(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR),
+        **declaring(DECLARED_DOCUMENT, DECLARED_NEIGHBOUR),
+        **{story_inspection.MAX_FILES_KEY: cap})
+
+    assert code == 0
+    listed = rendered_paths(inspector.prompt)
+    assert len(listed) == cap, listed
+    changed = sorted((DECLARED_DOCUMENT, DECLARED_NEIGHBOUR, CHANGED_SOURCE,
+                      CHANGED_TEST))
+    assert listed == changed[:cap]
+
+    trimmed = detail_under(in_the_runs_tree(target), TRIMMED_LABEL)
+    for path in changed[cap:]:
+        assert path in trimmed, (path, trimmed)
+    for path in listed:
+        assert path not in trimmed, (path, trimmed)
+
+
 def test_the_summary_counts_what_it_no_longer_names_and_names_the_log(
         tmp_path, harness, monkeypatch):
     """The line is the size a reader can take in, and it says where the rest is.
@@ -1977,6 +2266,58 @@ def test_the_post_story_prompt_asks_whether_the_change_left_a_defect(
     assert framing == story_inspection.POST_STORY_FRAMING
     assert "defect" in framing
     assert framing != inspection.BROAD_FRAMING
+
+
+def says_what_a_document_finding_is(framing: str) -> bool:
+    """Whether one framing tells the Inspector what a finding about a declared
+    document is — a contradiction, within the document or with the code, or a
+    fact stated more than once — and that wording it would have chosen
+    differently is not one. Read for the substance rather than for one
+    sentence's exact words, so the wording can be edited without this module
+    re-spelling it."""
+    lowered = framing.lower()
+    return ("document" in lowered
+            and "contradicts" in lowered
+            and "more than once" in lowered
+            and "not a finding" in lowered)
+
+
+def test_the_post_story_prompt_says_what_a_finding_about_a_document_is(
+        tmp_path, harness, monkeypatch):
+    """story-186: a declared document the story changed is among the files the
+    Inspector reads, so the framing it is rendered says what counts as a
+    finding about one and what does not — read off the rendered prompt rather
+    than off the constant. Broad mode's framing, which inspects no change and
+    says nothing about documents, is the control for the reading."""
+    _target, _journal, _code, inspector, _runner = completing_run(
+        tmp_path, harness, monkeypatch, name="doc-framed",
+        findings=[finding()], extra_changed=(DECLARED_DOCUMENT,),
+        **declaring(DECLARED_DOCUMENT))
+
+    assert says_what_a_document_finding_is(
+        rendered_field(inspector.prompt, "framing"))
+    assert not says_what_a_document_finding_is(inspection.BROAD_FRAMING)
+
+
+def test_the_pre_stage_framing_says_the_same_and_both_render_as_one_line():
+    """The pre-stage inspection shares the expansion — asserted at the call
+    site in `tests/test_inspection_findings_reach_the_story.py`, where both
+    positions are shown reaching the scope through one call — so a changed
+    document reaches it on the same terms, and its framing must say the same
+    thing about one. Both framings stay a single line, which is the shape the
+    fixture template's one-line-per-field reading depends on: a framing that
+    grew a line break would render its second line where the next label is
+    read, and the rendered comparison above would stop matching."""
+    assert says_what_a_document_finding_is(story_inspection.PRE_STAGE_FRAMING)
+    assert says_what_a_document_finding_is(story_inspection.POST_STORY_FRAMING)
+    for framing in (story_inspection.PRE_STAGE_FRAMING,
+                    story_inspection.POST_STORY_FRAMING):
+        assert "\n" not in framing
+        # Each is still its own question, with the document sentence added
+        # rather than the two collapsed into one.
+        assert framing != inspection.BROAD_FRAMING
+    assert story_inspection.PRE_STAGE_FRAMING != \
+        story_inspection.POST_STORY_FRAMING
 
 
 def test_a_broad_mode_invocation_asks_its_own_question_and_neither_is_none(
@@ -2300,3 +2641,43 @@ def test_this_repository_declares_the_key_and_the_template_carries_it():
     commented = [line for line in template.splitlines()
                  if line.startswith(f"# {story_inspection.MAX_FILES_KEY}:")]
     assert len(commented) == 1, commented
+
+
+def states_the_old_bound(text: str) -> bool:
+    """Whether one sentence states the inspection's bound as the two scope
+    keys alone: both keys named, and the documents key not.
+
+    Sentence by sentence, because the new descriptions still name the two
+    keys — as the prefix half of the bound — in the sentence that goes on to
+    name the documents beside them.
+    """
+    return any(
+        inspection.SOURCE_DIRS_KEY in sentence
+        and inspection.TESTS_DIR_KEY in sentence
+        and DOCUMENTS_KEY not in sentence
+        for sentence in sentences(text)
+    )
+
+
+def test_the_schema_describes_the_documents_as_inspected_when_changed():
+    """story-186: the shipped schema is the subject here, so it is read.
+
+    The file cap's description no longer states the bound as the two scope
+    keys alone, and the documents key's description says a declared document
+    is in the scope of an inspection of a story that changed it. The reading
+    is shown able to report the old bound against the sentence it used to
+    carry, so "no sentence states it" is the descriptions and not the reader.
+    """
+    properties = schema_validator.load_schema(
+        harness_config.CONFIG_SCHEMA_NAME)["properties"]
+    cap = properties[story_inspection.MAX_FILES_KEY]["description"]
+    documents = properties[DOCUMENTS_KEY]["description"]
+
+    assert not states_the_old_bound(cap), cap
+    assert DOCUMENTS_KEY in cap
+    assert "changed" in documents and "inspect" in documents, documents
+
+    planted = (f"Bounded to {inspection.SOURCE_DIRS_KEY} and "
+               f"{inspection.TESTS_DIR_KEY} and with the blocked paths "
+               "excluded.")
+    assert states_the_old_bound(planted)

@@ -134,6 +134,19 @@ FILED_EVENT = "inspection-filed"
 COST_STAGE = "inspection"
 COST_ATTEMPT = 0
 
+#: What a finding about a declared architecture document is, said once and
+#: carried by both framings below. A document the story changed may be among
+#: the files listed, and it is inspected as a document: the sentence says what
+#: counts and, so a large document in scope does not become a brief per
+#: paragraph, what does not.
+DOCUMENT_FRAMING = (
+    "An architecture document the target declares and the story changed may "
+    "be among the files listed. A finding about it is a claim the document "
+    "contradicts elsewhere in itself, a claim the code contradicts, or a fact "
+    "the document states more than once; a paragraph you would have worded "
+    "differently is not a finding."
+)
+
 #: The question this mode asks, supplied from here because it is this caller's
 #: question. Broad mode's is `inspection.BROAD_FRAMING` and is supplied from
 #: there for the same reason.
@@ -143,7 +156,8 @@ POST_STORY_FRAMING = (
     "with the files beside it that it did not change, and whether anything it "
     "touched now contradicts something it did not. The files the story changed "
     "are listed first below and the files beside them follow; the change is "
-    "your subject and its neighbours are the evidence you judge it against."
+    "your subject and its neighbours are the evidence you judge it against. "
+    + DOCUMENT_FRAMING
 )
 
 #: What a brief filed from here carries as its provenance. Payload and never
@@ -162,7 +176,8 @@ PRE_STAGE_FRAMING = (
     "whether anything it touched now contradicts something it did not. The "
     "files the story changed are listed first below and the files beside them "
     "follow; the change is your subject and its neighbours are the evidence "
-    "you judge it against."
+    "you judge it against. "
+    + DOCUMENT_FRAMING
 )
 
 #: The subject the record commit carries. It leads with the harness rather
@@ -306,13 +321,19 @@ def containing_directory(path: str) -> str:
 
 
 def scope_prefixes(config: dict) -> tuple[str, ...]:
-    """The parts of the tree a post-story inspection is bounded to.
+    """The directory prefixes an inspection's scope is bounded to.
 
     `source_dirs` plus `tests_dir`, which is the same pair broad mode covers.
     A target that declares neither is bounded to its whole working tree rather
     than to nothing — the reading `inspection.scopes` already takes, and the
     alternative would silently inspect nothing in every target that has not
     declared a source layout.
+
+    These are the *prefix* half of the scope and not the whole of it: the
+    documents the target declares under `architecture_docs` are in scope too,
+    as exact paths rather than prefixes, through `declared_documents` beside
+    this. They are kept apart because a prefix pulls a directory in and a
+    document pulls in itself alone.
     """
     declared = list(config.get(inspection.SOURCE_DIRS_KEY) or [])
     tests_dir = config.get(inspection.TESTS_DIR_KEY)
@@ -322,6 +343,25 @@ def scope_prefixes(config: dict) -> tuple[str, ...]:
         one for one in (_prefix(entry) for entry in declared) if one
     )
     return found or ("",)
+
+
+def declared_documents(config: dict) -> tuple[str, ...]:
+    """The architecture documents the target declares, as exact paths.
+
+    Each entry of `architecture_docs` is in scope as itself and nothing more:
+    a changed declared document is kept in the changed set, and a file beside
+    it in the same directory is a sibling only where it is itself declared —
+    the document is inspected as a declared document, not reclassified as
+    source, so its directory is not pulled in wholesale. A target declaring
+    none computes exactly the scope it computed before the documents were in
+    it. The key is fetched under the same literal name every other reader and
+    the declared-keys scan use; each entry is matched as one exact path, and
+    no directory convention is applied to it here.
+    """
+    declared = config.get("architecture_docs") or []
+    return tuple(
+        one for one in (str(entry).strip() for entry in declared) if one
+    )
 
 
 def _prefix(path: str) -> str:
@@ -344,8 +384,13 @@ def expansion(target_root: Path, config: dict, harness_root: Path,
     The changed paths, plus for each of them the files the target tree holds
     *directly* in its containing directory — one level and not recursively, so
     a populated subdirectory beneath a changed file's directory is not pulled
-    in. Bounded to the scope keys and with the execution rules' blocked
-    prefixes excluded.
+    in. Bounded to the `source_dirs` and `tests_dir` prefixes plus the exact
+    paths the target declares under `architecture_docs`, and with the
+    execution rules' blocked prefixes excluded. A declared document is on the
+    same terms as a changed source file: changed, it is in the changed set;
+    unchanged, it joins the siblings only where it sits directly beside a
+    changed file; and a file beside a changed document that is neither under
+    a prefix nor itself declared stays out.
 
     The scope is what the tree *holds* rather than what the index tracks, and
     the difference is the whole of what makes this answer for both callers. A
@@ -366,12 +411,17 @@ def expansion(target_root: Path, config: dict, harness_root: Path,
     """
     held = frozenset(_held(target_root))
     prefixes = scope_prefixes(config)
+    documents = frozenset(declared_documents(config))
     blocked = tuple(
         _prefix(one) for one in inspection.blocked_prefixes(harness_root) if one
     )
 
     def in_scope(path: str) -> bool:
-        return _under(path, prefixes) and not _under(path, blocked)
+        # A declared document is an exact-path entry beside the prefixes, so
+        # it holds for the document and not for its directory; the blocked
+        # exclusion applies after it exactly as it applies to a prefix.
+        return ((_under(path, prefixes) or path in documents)
+                and not _under(path, blocked))
 
     kept: list[str] = []
     directories: list[str] = []
