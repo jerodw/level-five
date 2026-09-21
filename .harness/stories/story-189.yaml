@@ -1,0 +1,152 @@
+story:
+  id: story-189
+  title: The assist agent and the Inspector learn the brief's shape from one source
+  description: |
+    The harness has two agents that write briefs, and they are told what a
+    brief looks like in two different ways. The Inspector is handed the brief
+    schema file itself and the list of workflows the harness actually defines,
+    so a field added to the schema or a workflow added to the harness reaches
+    it with no prompt edit. The assist agent is instead given a prose
+    paragraph that lists the brief's fields by hand and says only that the
+    workflow is named "as the workflow definitions name themselves", without
+    naming any. The prose and the schema agree today, but nothing checks that
+    they go on agreeing: a new schema field would leave the assist agent
+    describing a shape that no longer exists, and an assist agent that has to
+    guess a workflow name gets refused at filing time and has to try again.
+
+    This story gives the assist agent the same two things the Inspector gets.
+    Its launcher already renders the prompt through the shared helper, so the
+    schema and the workflow list are two more values handed to that render,
+    and the prompt carries the schema file verbatim and the defined workflows
+    by name. The prose sentence that enumerated the fields is trimmed to the
+    parts that state a rule the schema does not decide for the agent — how a
+    title is pitched, how a slug is derived, how the body opens, that severity
+    and confidence are separate axes, that paths are bare — and the parts the
+    schema now carries word for word are dropped from it.
+
+    It deliberately leaves alone the other shared prompt partial, the one that
+    tells tree-mutating stages which paths they may not write: the assist
+    agent still receives none of it. It leaves the filing skill alone, since
+    that states the procedure for filing rather than the brief's shape, and it
+    leaves the Inspector's prompt alone, since that prompt already does what
+    the assist prompt is being brought up to.
+
+    In the harness's own terms: scripts/l5-assist builds its context as
+    context_assembler.schema_context(HARNESS_ROOT) — the call scripts/l5-plan
+    already makes — adds workflow_candidates from
+    workflow_selection.candidate_block(workflow_selection.candidates(HARNESS_ROOT)),
+    then resolves the prose partial into it as it does now. prompts/assist.md
+    gains {{story_brief_schema}} and {{workflow_candidates}}, placed the way
+    prompts/inspector.md places its own at lines 155 and 277, and its "A brief
+    carries a title ..." sentence keeps every clause a standing test holds
+    while the enumeration of category, effort, the two optional fields and the
+    workflow clause give way to the injected text. The launcher's comment
+    saying its context is as narrow as the planner's is rewritten, since it
+    no longer is.
+
+    Two standing tests hold the state this story changes and are adapted by
+    the implementer as forced changes: tests/test_artifact_schemas.py lists
+    assist.md among the prompts carrying no schema placeholder, and
+    tests/test_the_assist_agent_files_a_brief.py compares the appended prompt
+    against a render whose context is the prose partial alone. The tester
+    writes the new assertion in a module of its own. The sweep for every text
+    stating the assist prompt's shape found, beyond those two, the clause
+    holders in tests/test_a_brief_is_not_only_a_defect.py,
+    tests/test_a_brief_is_titled_for_its_end_state.py,
+    tests/test_every_story_and_brief_opens_in_plain_english.py and
+    tests/test_inspection.py — all of which the trimmed sentence keeps green
+    — and .harness/docs/ARCHITECTURE.md, whose story-104 paragraph says the
+    assist context is as narrow as the planner's.
+
+    This story was planned from the brief filed under key 14.
+  workflow: story-workflow
+
+tasks:
+  - In scripts/l5-assist, build the render context from context_assembler.schema_context(HARNESS_ROOT), add a workflow_candidates value from workflow_selection.candidate_block(workflow_selection.candidates(HARNESS_ROOT)), then resolve the prose partial into that context as the launcher does today, and hand the render to --append-system-prompt exactly as before. Rewrite the comment above the render that says the context is as narrow as the planner's.
+  - In prompts/assist.md, add a {{story_brief_schema}} placeholder introduced as the shape every brief must satisfy, and a {{workflow_candidates}} placeholder introduced as the workflows a brief's workflow field may name, each spelled exactly as the Inspector prompt spells them, so the assist prompt carries the schema file and the defined workflow names rather than restating them.
+  - In the same file, trim the "A brief carries a title ..." sentence so that it no longer enumerates the category, effort's S, M or L, the two optional fields, or the workflow "named as the workflow definitions name themselves", and instead points at the injected schema and the injected list. Keep word for word the clauses standing tests hold: the title clause, the slug clause, the body clause that opens "a body making the case" and closes "code that exists;", the severity and confidence wording, the phrase "bare repository-relative paths", the file:line rule, the path schemas/story-brief.schema.json, and the sentence naming the three kinds of brief.
+  - Adapt tests/test_artifact_schemas.py so its "prompts this story leaves alone carry no schema placeholders" check no longer lists assist.md, saying in its comment which story injected the schema there, as its comment already does for planner.md and documenter.md.
+  - Adapt tests/test_the_assist_agent_files_a_brief.py so its equality check on the appended prompt renders against the same context the launcher now assembles — every schema, the workflow candidates and the prose partial — rather than the prose partial alone.
+  - Write a new test module under tests/ that reads what scripts/l5-assist would hand claude, with execvp intercepted as the existing modules do, and asserts that the appended prompt carries schemas/story-brief.schema.json verbatim, carries the name of every workflow the harness defines, carries no unresolved placeholder, and still carries none of the harness-layer partial; each positive assertion beside a control showing the same search reports its absence over a launcher that renders with the prose partial alone.
+  - Update .harness/docs/ARCHITECTURE.md so the story-104 paragraph no longer says the assist context is as narrow as the planner's, and record this story beside it.
+
+acceptance_criteria:
+  - The text scripts/l5-assist passes to --append-system-prompt contains the full text of schemas/story-brief.schema.json and contains the name of every workflow definition under workflows/, and matches no {{...}} placeholder.
+  - The same text contains none of the harness-layer partial: no "[Harness Layer]" heading and no "All work must:" line.
+  - prompts/assist.md contains {{story_brief_schema}} and {{workflow_candidates}} and {{prose_layer}}, and contains no {{harness_layer}}.
+  - prompts/assist.md no longer says that the workflow is named as the workflow definitions name themselves, and no longer lists effort's S, M or L values or the category in the sentence describing what a brief carries.
+  - Every standing test that holds a clause of the assist prompt passes unchanged: the tests in tests/test_a_brief_is_not_only_a_defect.py, tests/test_a_brief_is_titled_for_its_end_state.py, tests/test_every_story_and_brief_opens_in_plain_english.py and tests/test_inspection.py that read prompts/assist.md are not edited by this story.
+  - tests/test_artifact_schemas.py and tests/test_the_assist_agent_files_a_brief.py are edited only where the two named assertions held the state this story changes, and no assertion in either file is deleted or weakened beyond that.
+  - A new test module under tests/ holds the first two criteria against the launcher's real output, with a control for each positive assertion.
+  - plugin/skills/file-a-brief/SKILL.md, prompts/inspector.md, prompts/harness-layer.md, prompts/prose-layer.md and orchestration/brief_filing.py are unchanged.
+
+technical_plan:
+  implementation_steps:
+    - Read prompts/inspector.md lines 150 through 160 and 270 through 285 for how the two placeholders are introduced there, and scripts/l5-plan lines 288 through 296 and 605 through 612 for how the planner and selector assemble the same context.
+    - Change scripts/l5-assist so context starts as context_assembler.schema_context(HARNESS_ROOT), gains workflow_candidates from workflow_selection, and then gains prose_layer from resolved_partial as it does today; import workflow_selection beside context_assembler. Rewrite the comment block above it.
+    - Edit prompts/assist.md as the tasks describe, keeping the held clauses byte-for-byte.
+    - Adapt the two standing tests named in the tasks, and only those assertions.
+    - Confirm the clause holders in the four untouched test modules still pass over the trimmed sentence before handing off.
+  likely_file_changes:
+    - file: scripts/l5-assist
+      stage: implementer
+      reason: the launcher assembles the context the assist prompt is rendered against, and it is where the schema and the workflow list are added
+    - file: prompts/assist.md
+      stage: implementer
+      reason: gains the two placeholders and loses the enumeration the injected text now carries
+    - file: tests/test_artifact_schemas.py
+      stage: implementer
+      reason: its list of prompts carrying no schema placeholder names assist.md, which this story deliberately changes
+      reverting_breaks_the_suite: with the placeholder injected into assist.md, the shipped assertion that assist.md carries no "_schema}}" text fails, so reverting this adaptation reddens the suite
+    - file: tests/test_the_assist_agent_files_a_brief.py
+      stage: implementer
+      reason: its equality check renders the assist template against the prose partial alone, which is no longer what the launcher appends
+      reverting_breaks_the_suite: the launcher now appends a render carrying every schema and the workflow list, so the shipped equality against a prose-only render fails and reverting this adaptation reddens the suite
+    - file: tests/test_the_assist_agent_receives_the_brief_schema_and_the_workflows.py
+      stage: tester
+      reason: the new standing assertion that what the launcher hands the session carries the schema file verbatim and every defined workflow name, with controls
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the story-104 paragraph says the assist context is as narrow as the planner's, which stops being true
+
+scope:
+  modify:
+    - scripts/l5-assist
+    - prompts/assist.md
+    - tests/test_artifact_schemas.py
+    - tests/test_the_assist_agent_files_a_brief.py
+    - tests/ (the tester's new module)
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/harness-layer.md and the reach of the harness-layer partial (the assist agent mutates no tree and is deliberately given none of it; the brief names this as what to leave alone)
+    - plugin/skills/file-a-brief/SKILL.md (it states the filing procedure rather than the brief's shape; the brief names it as what to leave alone)
+    - prompts/inspector.md (it already carries both placeholders and is the shape the assist prompt is being brought up to; the developer confirmed there is nothing in it to change)
+    - prompts/prose-layer.md (the partial carries no placeholder of its own by design and nothing here needs one)
+    - orchestration/context_assembler.py and orchestration/workflow_selection.py (both already provide what the launcher needs; a new helper would be a second answer to a question they answer)
+    - orchestration/brief_filing.py (its refusal of an undefined workflow name is the backstop this story reduces the need for, and stays as the enforcement)
+    - schemas/story-brief.schema.json (the story makes the schema reach the assist agent; it does not change what the schema says)
+    - prompts/workflow-selector.md and scripts/l5-plan (the planner and the selector already receive the schema and the candidates; they are the precedent, not the subject)
+    - tests/test_a_brief_is_not_only_a_defect.py, tests/test_a_brief_is_titled_for_its_end_state.py, tests/test_every_story_and_brief_opens_in_plain_english.py and tests/test_inspection.py (each holds a clause of the assist prompt the developer chose to keep word for word, so a change there would mean the prompt edit went wider than approved)
+
+verification_requirements:
+  - Confirm, by reading what scripts/l5-assist hands claude with execvp intercepted, that the appended prompt carries the full text of schemas/story-brief.schema.json, the name of every workflow definition under workflows/, no unresolved placeholder, and no harness-layer text.
+  - Confirm prompts/assist.md carries the two new placeholders and no longer carries the workflow clause or the effort and category enumeration, and that every clause listed in the third task is still present byte-for-byte.
+  - Confirm the four test modules named in do_not_modify are unchanged in the diff and pass.
+  - Confirm the edits to tests/test_artifact_schemas.py and tests/test_the_assist_agent_files_a_brief.py are confined to the two assertions named, and that reverting either edit alone reddens the suite.
+  - Confirm the new test module holds a control for each positive assertion and that the whole suite passes under the configured test_command.
+
+constraints:
+  - scripts/l5-assist keeps loading the shipped plugin directory, exporting L5_HARNESS_ROOT, forwarding a command-line question and replacing the process with os.execvp exactly as it does today.
+  - The prose partial is resolved after the schema and candidate values are in the context, and the assist prompt still carries {{prose_layer}} resolved.
+  - No new placeholder resolution or rendering helper is added; the launcher uses context_assembler.schema_context, workflow_selection.candidates and workflow_selection.candidate_block as they exist.
+  - No test's existing assertion is weakened or skipped; the two adapted assertions are updated to the new state and hold it as strictly as before.
+  - Nothing under .harness/runs/ or rules/ is touched, and the coordinator makes no model call.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:35:56
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 14
