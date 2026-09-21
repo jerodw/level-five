@@ -1,0 +1,171 @@
+story:
+  id: story-187
+  title: An unusable area suggestion is named where the inspection reports its other drops, and the briefs beside it still report the area they are missing
+  description: |
+    Planned from the brief filed under 120, which also covers the work
+    filed as 121.
+
+    When the Inspector writes a suggestion about a brief it could name no
+    area for, and that suggestion is malformed — a missing `concerns`, a
+    null, a stray string — the harness throws it away without a word. That
+    is worse than it sounds, because a usable suggestion is one of only two
+    clues the harness has that the target declares an area vocabulary at
+    all. So when every brief in an inspection named no area and the only
+    suggestion is broken, the report also stops saying "these briefs were
+    filed with no area", which is the one thing the field was added to
+    guarantee. A slip in the sentence that was meant to explain the gap
+    silences the report of the gap.
+
+    A second gap of the same shape sits in the same schema: a finding
+    written as a string or a null rather than an object still fails the
+    whole envelope, so every good finding in that scope is discarded as
+    "no findings artifact", even though the loop that judges findings one
+    at a time already handles a non-object entry and would drop just that
+    one and name it.
+
+    This story makes a refused suggestion a named drop, in the same list
+    where the inspection already reports its other drops, saying which
+    entry and what was wrong with it, so it shows up in l5-inspect's
+    dropped list and in the post-story summary line. A refused suggestion
+    also counts as evidence that the target declares areas, so the
+    area-less briefs beside it are still reported. And the findings array
+    stops typing its items in the envelope, so a non-object finding is
+    dropped alone and named by position, the way a finding missing a field
+    already is. A suggestion still reaches no brief, no payload, no outbox
+    entry and no tracker; the Inspector prompt, which already tells the
+    model the right shape, is unchanged; and nothing about how an area is
+    written to the board changes.
+
+    In the code: `_area_suggestions` in orchestration/inspection.py stops
+    `continue`-ing past a refused entry and instead records a `Drop` under
+    a new reason constant beside `MALFORMED` (an "unusable area
+    suggestion"), with a detail naming the entry by its slug where it has a
+    readable one and otherwise as "the suggestion at position N", mirroring
+    `_describe`, and saying what was wrong — not an object, `slug` or
+    `concerns` missing or not a string, or blank. An `area_suggestions`
+    field that is not a list at all is recorded as one such drop rather
+    than a per-entry one. Those drops land in `_ScopeResult.dropped` so
+    they travel to `Report.dropped` on both paths, where scripts/l5-inspect
+    already prints every drop and needs no edit. `Report.unnamed_areas`
+    reads `declares_areas` as true where any suggestion was written, usable
+    or refused — `self.dropped_for(<the new reason>)` beside the usable
+    ones and the sibling filings that named an area — so the area-less
+    block is no longer silenced by the slip. orchestration/story_inspection.py
+    adds the new reason to `NOT_A_FINDING`, so a refused suggestion is not
+    counted as a finding, and to the reasons `_summary` names with a count.
+
+    In the schema: schemas/inspection-findings.schema.json drops `items`
+    from the `findings` property, keeping `"type": "array"` and the
+    `required` list, and rewrites the envelope description and the
+    `findings` description so they no longer claim the items are typed as
+    objects and instead say each entry is held by the loop that judges
+    findings one at a time; the `area_suggestions` description stops
+    saying a refused entry "yields nothing" and says it is dropped and
+    named, exactly as a malformed finding is.
+
+    Two standing test modules pin today's behaviour and are adapted by the
+    tester rather than loosened: tests/test_inspection.py asserts
+    `items == {"type": "object"}` and that a non-object finding is refused
+    by the envelope, and tests/test_a_brief_names_its_area.py asserts an
+    unusable suggestion leaves no trace on the report or the printed text.
+    Each becomes an assertion of the new rule with its assertion count
+    held. The documenter updates the story-138 section of
+    .harness/docs/ARCHITECTURE.md, which says the filter "did not change"
+    and that the envelope types its items as objects.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/inspection.py, declare a drop reason constant for an unusable area suggestion beside MALFORMED, and change _area_suggestions so that each refused entry — not an object, slug or concerns missing or not a string, or blank — and an area_suggestions field that is not a list produce a Drop under that reason whose detail names the entry (by its slug where it carries a readable one, else by its position) and says what was wrong, while the usable entries beside it are still returned; route those drops into _ScopeResult.dropped in inspect_scope.
+  - In orchestration/inspection.py, change Report.unnamed_areas so declares_areas is true where any suggestion was written, usable or refused, in addition to a sibling filing that named an area; update its docstring, the _area_suggestions docstring and the AreaSuggestion docstring to state the new rule.
+  - In orchestration/story_inspection.py, add the new drop reason to NOT_A_FINDING and to the reasons _summary names with a count, so the post-story summary line carries how many suggestions were unusable and no such drop is counted as a finding.
+  - In schemas/inspection-findings.schema.json, remove the items declaration from the findings property, keeping its type and the required list, and rewrite the envelope description, the findings description and the area_suggestions description so they state that a finding or a suggestion is judged one entry at a time by the reader, that a refused entry of either kind is dropped and named, and that the entries beside it are filed or reported exactly as they would have been.
+  - Write tests that drive a broad inspection and a post-story inspection with one well-formed finding naming no area beside an unusable suggestion, and assert the drop is named on both surfaces with what was wrong, the filed brief is still reported as area-less, and the suggestion reaches no queue entry.
+  - Write tests that drive an inspection whose findings array carries a string and a null beside a well-formed finding, and assert the well-formed finding is filed, each non-object entry is dropped under MALFORMED named by its position, and no NO_ARTIFACT drop is recorded.
+  - Adapt the tests in tests/test_inspection.py and tests/test_a_brief_names_its_area.py that pin the items declaration and the silent refusal so they assert the new rule, with each module's assertion count held rather than reduced.
+  - Update the story-138 section of .harness/docs/ARCHITECTURE.md and add a section recording this story's change.
+
+acceptance_criteria:
+  - An inspection whose envelope carries one well-formed finding and one area_suggestions entry that is not a usable pair files the finding, records a Drop under the new unusable-suggestion reason whose detail names the entry and says what was wrong, and records no NO_ARTIFACT drop.
+  - An inspection whose area_suggestions field is not a list records exactly one Drop under the new reason and files every well-formed finding beside it.
+  - Where every filed brief named no area and the only suggestion written was refused, Report.unnamed_areas returns each filed brief with an empty suggestion, scripts/l5-inspect prints the area-less block naming each such brief, and the post-story report writes its no-area-was-named note for each.
+  - scripts/l5-inspect prints the new drop in its dropped list, and the post-story summary line written to events.log names the new reason with its count, on the same terms as MALFORMED.
+  - A drop under the new reason is not counted as a finding by _counts in orchestration/story_inspection.py.
+  - A refused suggestion still reaches no brief, no payload, no outbox entry and no tracker, and its text does not appear in the queue.
+  - An inspection of a target that declares no area vocabulary — no suggestion written, usable or refused, and no filed brief naming an area — prints the report it printed before this story, with no area-less block.
+  - The findings property of schemas/inspection-findings.schema.json carries no items declaration, still declares type array, and findings is still required, so an envelope with findings absent or not an array is still refused by the envelope.
+  - An inspection whose findings array carries a string and a null beside a well-formed finding files the well-formed finding, records a MALFORMED drop for each non-object entry naming it by its position, and records no NO_ARTIFACT drop.
+  - The envelope description no longer states that its items are typed as objects; it and the area_suggestions description state that a refused entry of either kind is dropped and named while the entries beside it are unaffected.
+  - The assertion count of tests/test_inspection.py and of tests/test_a_brief_names_its_area.py does not fall; the tests that pinned the items declaration and the silent refusal assert the new rule instead.
+  - All existing tests pass alongside the new ones.
+
+technical_plan:
+  implementation_steps:
+    - Add the drop reason constant in orchestration/inspection.py beside MALFORMED and NO_ARTIFACT.
+    - Rework _area_suggestions to return the usable suggestions and the drops together (or accept the result to append to), naming each refused entry by slug or position and stating the failed condition; call it so the drops reach result.dropped in inspect_scope, on both the broad and the post-story path.
+    - Extend declares_areas in Report.unnamed_areas to read the refused-suggestion drops, and rewrite the docstrings that state the gate and the filter.
+    - Add the reason to NOT_A_FINDING and the _summary reasons list in orchestration/story_inspection.py.
+    - Remove items from the findings property in the schema and rewrite the three descriptions.
+    - Tester adapts the pinned tests in tests/test_inspection.py and tests/test_a_brief_names_its_area.py and adds the new modules or tests; a new module reading the schema live must be declared in tests/test_baseline_honesty.py's reader lists, or the new tests are added to tests/test_a_brief_names_its_area.py, which is already declared.
+    - Documenter records the change in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: the new drop reason, the filter that records a refused entry as a drop, and the gate that counts a refused suggestion as evidence of a vocabulary
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: NOT_A_FINDING and the summary line's reasons list carry the new reason
+    - file: schemas/inspection-findings.schema.json
+      stage: implementer
+      reason: the findings items declaration is removed and the three descriptions state the per-entry rule
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: two tests pin items == {"type": "object"} and that a non-object finding is refused by the envelope; both are re-pointed at the new rule with the assertion count held
+      reverting_breaks_the_suite: the schema no longer carries the items declaration these tests assert, so reverting the adaptation reddens them
+    - file: tests/test_a_brief_names_its_area.py
+      stage: tester
+      reason: two tests assert an unusable suggestion leaves no trace on the report and the printed text; they are re-pointed at the named drop and the surviving area-less block, and the new driven cases are added beside them
+      reverting_breaks_the_suite: the report now carries a drop and the printed text an area-less block where these tests assert neither, so reverting the adaptation reddens them
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the story-138 section says the filter did not change and the envelope types its items as objects; a section records this story
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - schemas/inspection-findings.schema.json
+    - tests/test_inspection.py
+    - tests/test_a_brief_names_its_area.py
+    - tests/ (new test modules or tests for this story)
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - scripts/l5-inspect (it prints every drop generically and follows Report.unnamed_areas, so the new drop and the surviving area-less block appear with no edit)
+    - prompts/inspector.md (it already tells the model the shape of a suggestion and when to write one; nothing in it is wrong)
+    - orchestration/schema_validator.py (the relaxation is stated by the schema that ships, not by the validator, as story-138 held)
+    - templates/scripts/github.sh and the installed copy (how an area reaches the board is unchanged)
+    - schemas/story-brief.schema.json (a finding is still held to the brief schema exactly as before)
+
+verification_requirements:
+  - Confirm a driven inspection with one well-formed finding beside an unusable suggestion files the finding and records a named drop under the new reason with no NO_ARTIFACT drop, on both the broad and the post-story path.
+  - Confirm that where every filed brief named no area and the only suggestion was refused, both report surfaces still report the area-less briefs.
+  - Confirm the summary line names the new reason with its count and that _counts does not count such a drop as a finding.
+  - Confirm a target declaring no vocabulary prints the same report it printed before this story.
+  - Confirm a findings array carrying a non-object entry beside a well-formed finding files the well-formed one and drops the other under MALFORMED named by position, and that an envelope with findings absent or not an array is still refused.
+  - Confirm no existing assertion was weakened, skipped or removed, and that the assertion counts of the two adapted modules did not fall.
+  - Confirm the full suite passes.
+
+constraints:
+  - A suggestion, usable or refused, reaches no brief, no payload, no outbox entry and no tracker.
+  - Nothing here may stop, delay or fail an inspection; a refused suggestion costs the report a line and nothing else.
+  - A finding is still held to schemas/story-brief.schema.json one at a time by the findings loop; no field of the brief is restated in the envelope schema.
+  - The report of a target that declares no area vocabulary is unchanged.
+  - Standard library only; no third-party runtime dependency.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:25:34
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 120
