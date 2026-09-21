@@ -1,2 +1,3 @@
 {"story_id": "story-186", "mode": "narrow", "cost_usd": 2.5858630000000007, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-21 09:43:35", "findings": 2, "filed": 0, "dropped": 0, "dedupe_ran": true}
 {"story_id": "story-186", "timestamp": "2026-09-21 09:45:50", "filed": 0, "dropped": 0, "routed": 2, "acted_on": 1}
+{"story_id": "story-186", "timestamp": "2026-09-21 10:11:47", "filed": 1, "dropped": 0}
