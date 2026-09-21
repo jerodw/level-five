@@ -1916,14 +1916,23 @@ def _revision(root: Path, revision: str = "HEAD") -> str:
 
 
 def same_repository(target_root: Path, harness_root: Path) -> bool:
-    """Whether both roots are one git repository.
+    """Whether both roots are one working tree, decided by toplevel equality.
 
     Decided from `git rev-parse --show-toplevel` in each root: shared only when
-    both invocations succeed and report the same path. A failing invocation on
-    either side is the not-established answer and returns False, which is the
-    same one-directional bias `_revision`, `dirty_paths`, `completion_commits`
-    and `base_problems` already take — a root that is not a git repository
-    reports not-shared rather than a false shared.
+    both invocations succeed and report the same path. That is a question about
+    the working tree and not about the repository: a linked worktree and its
+    primary share one repository — one object store, one set of refs — and
+    resolve to two toplevels, so they are not one tree here and the guard puts
+    them to the recorded-revision comparison, which is the answer it needs. The
+    revision read from the harness root is what that comparison is about, and
+    under two trees of one repository it is a fact the run's own commits do
+    not move.
+
+    A failing invocation on either side is the not-established answer and
+    returns False, which is the same one-directional bias `_revision`,
+    `dirty_paths`, `completion_commits` and `base_problems` already take — a
+    root that is not a git repository reports not-shared rather than a false
+    shared.
     """
     target = _git(target_root, "rev-parse", "--show-toplevel")
     harness = _git(harness_root, "rev-parse", "--show-toplevel")
@@ -2421,36 +2430,6 @@ def branch_behind(target_root: Path, branch: str, base: str) -> int | None:
         return int(result.stdout.strip())
     except ValueError:
         return None
-
-
-def _checkout_story_branch(
-    target_root: Path, branch: str, start_point: str | None = None
-) -> list[str]:
-    """Stand the run on its branch, reporting what git refused rather than raising.
-
-    Returns the problems git named, one per line of its own message, and the
-    empty list when the checkout was made. That shape is the one
-    `base_problems` and `prune_history`'s `problems` already use, so the caller
-    refuses through the shared `refuse()` like every neighbouring pre-flight
-    rather than letting a `RuntimeError` out of a run that has already begun.
-    """
-    exists = _git(target_root, "rev-parse", "--verify", branch).returncode == 0
-    if exists:
-        args = ["checkout", branch]
-    else:
-        # A declared base is branched from explicitly. With no declaration the
-        # start point is HEAD, exactly as before, and the pre-flight above is
-        # what establishes that HEAD is the base.
-        args = ["checkout", "-b", branch] + ([start_point] if start_point else [])
-    result = _git(target_root, *args)
-    if result.returncode == 0:
-        return []
-    # Git's own words, split into one problem per line so the refusal lists the
-    # paths it named the way every other refusal lists what it found. A git
-    # that said nothing still reports something, because a refusal with no
-    # problems under it would say only that something went wrong.
-    problems = [line.strip() for line in result.stderr.splitlines() if line.strip()]
-    return problems or ["git refused the checkout without saying why"]
 
 
 @dataclass(frozen=True)
@@ -8749,26 +8728,25 @@ def unchanged_since_escalation(
     rather than here, so this function's text and its three comparisons stay as
     they are.
 
-    The third comparison has two forms, decided by whether the harness and the
-    target are one checkout. When they are separate — the deployment the guard
-    was written for — it is the recorded-revision comparison, unchanged. When
-    they are one tree, what leg two established covers the harness source only
-    while the working tree is standing on the branch it spoke about: leg two
-    says that branch is exactly the escalation commit, and the `status
-    --porcelain` leg beside it says the tree is clean, not that it is that
-    branch's tree. So the shared-checkout form requires the tree to resolve to
-    `state.branch`, and standing anywhere else it establishes nothing and the
-    resume proceeds. The recorded revision cannot be reached for instead — it
-    is recorded as the first act of `_escalate`, before the two escalation
-    commits move HEAD, so a shared-root comparison of it always differs and the
-    guard could never refuse.
-
-    What that gives up is deliberate and chosen: under one checkout an
-    off-branch resume with genuinely nothing changed is no longer refused,
-    because the guard cannot tell that case from a harness fixed on the base
-    without a second definition of "has the harness changed". Permitting a
-    pointless resume is the direction the guard's one-directional bias already
-    takes; refusing a needed one is not.
+    The third comparison has two forms, decided by whether the tree the run
+    works in and the harness root are one working tree. The harness is read
+    from `harness_root` for the whole run — the tree the developer invoked it
+    in, since story-117 — and `target_root` here is the run root that
+    `resolve_run_root` chose. When the two are one toplevel, the run root *is*
+    the harness tree, and `resolve_run_root` guarantees that tree stands on
+    `state.branch`: it returns the invoked tree only when it already stands on
+    the story branch. Leg two has then established that the branch is exactly
+    the escalation commit and the `status --porcelain` leg beside it that the
+    tree is clean, so the harness source is covered and the leg appends its
+    evidence and returns. Otherwise — a separate checkout, or a worktree of the
+    same repository, which is the ordinary shape of a run here — the recorded
+    revision of `harness_root` is compared, character for character as the
+    separate-repository deployment always had it. Under a worktree that
+    comparison is sound because the escalation commits land in the run root
+    and move the harness tree's revision not at all: a developer who fixes the
+    harness on the base and re-runs has moved it, and is admitted; one who
+    re-runs with nothing changed has not, and is refused naming the recorded
+    revision.
 
     The branch comparison resolves `state.branch~1` rather than `HEAD~1`,
     because the story branch is what it means and HEAD is only the same thing
@@ -8830,32 +8808,26 @@ def unchanged_since_escalation(
         f"{state.escalation_commit[:12]}, with nothing uncommitted"
     )
 
-    # Under one checkout the branch comparison above stands for the harness
-    # comparison only while the working tree is standing on the branch it spoke
-    # about. Leg two established that `state.branch` is exactly the escalation
-    # commit, and the `status --porcelain` leg beside it established that the
-    # tree is clean — neither says the tree is *that* branch's, so a developer
-    # who checked out the base and committed a harness fix there is standing in
-    # a tree the two legs above have said nothing about. Standing anywhere else
-    # this leg therefore establishes nothing and the resume proceeds, which
-    # permits a pointless resume where nothing changed rather than refusing a
-    # needed one where the harness did.
-    #
-    # Both revisions go through `_revision`, so one that cannot be read is ""
-    # and falls to the not-established answer the rest of the guard gives.
-    # The recorded revision cannot serve here — it is recorded before the
-    # escalation commits move HEAD, so it always differs — and a tree hash over
-    # the harness's source directories was rejected rather than reached for: it
-    # is a second definition of "has the harness changed" beside the one already
-    # answering it, and it would have to choose which directories count.
+    # The harness is read from `harness_root` for the whole run. When that is
+    # the tree the run works in — `target_root` here is the run root, and
+    # `resolve_run_root` returns the invoked tree only when it already stands on
+    # `state.branch` — the branch comparison above already covers the harness
+    # source: leg two established that the branch is exactly the escalation
+    # commit and the `status --porcelain` leg that the tree is clean, and the
+    # tree is that branch's by construction. So the leg appends its evidence
+    # and returns. Otherwise — a separate checkout, or a worktree of the same
+    # repository, which `same_repository` answers False for because it decides
+    # by toplevel — the recorded revision of `harness_root` is compared below.
+    # Under a worktree the escalation commits land in the run root and do not
+    # move the harness tree, so the recorded revision is exactly what to compare
+    # against. A tree hash over the harness's source directories was rejected
+    # rather than reached for: it is a second definition of "has the harness
+    # changed" beside the one already answering it, and it would have to choose
+    # which directories count.
     if same_repository(target_root, harness_root):
-        standing = _revision(target_root)
-        if not standing or standing != _revision(target_root, state.branch):
-            return []
         evidence.append(
-            f"the harness is the same checkout as the target and the working "
-            f"tree is standing on {state.branch}, so it is covered by the "
-            f"branch comparison above"
+            f"the harness is the same checkout as the target, standing on "
+            f"{state.branch}, so it is covered by the branch comparison above"
         )
         return evidence
 
@@ -9963,7 +9935,8 @@ def run_story(
         return refuse_bad_story(story_path, exception_problems)
 
     # Pre-flight: refuse a run onto a branch that already holds this story's
-    # finished work. `_checkout_story_branch` reuses an existing branch rather
+    # finished work. `resolve_run_root` returns to an existing worktree for the
+    # branch, and `worktrees.add` cuts a new one onto the existing branch rather
     # than resetting it, so deleting only the run directory puts the implementer
     # in a repository where the story is already done, the tester finds the
     # tests written and passing, the verifier verifies a tree that genuinely
@@ -10061,9 +10034,11 @@ def run_story(
             return _refuse_dirty_tree(run_root.path, dirty)
 
     if state and state.status == "completed":
-        # Name the branch as well as the run directory. _checkout_story_branch
-        # reuses an existing branch rather than resetting it, so deleting only
-        # the run directory re-runs the story on top of the finished work — the
+        # Name the branch as well as the run directory. resolve_run_root and
+        # worktrees.add reuse an existing branch rather than resetting it — the
+        # run returns to the worktree already standing on it, or cuts a new one
+        # onto it — so deleting only the run directory re-runs the story on top
+        # of the finished work: the
         # implementer opens a repository where the story is already done, and
         # the run reports success having changed nothing. This guard is about
         # finished work; an escalated run resumes below, because its work is

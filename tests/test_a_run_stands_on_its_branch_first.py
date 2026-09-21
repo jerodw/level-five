@@ -28,11 +28,9 @@ the violation it exists to catch:
   * "a refused checkout writes nothing" is paired, in both refusal fixtures,
     with the identical run whose checkout is not refused, which does write all
     of it;
-  * "`_checkout_story_branch` raises nothing on a refused checkout" is an AST
-    scan whose control is the same scan over the function with a raise put
-    back;
-  * "`run_story` is the helper's only caller" is a scan whose control is a
-    source with a second caller written into it, which the same scan reports;
+  * "nothing in the coordinator checks a branch out in the invoked tree" is an
+    AST scan for a `_git` call passing `checkout`, whose control is a source
+    with one such call written into it, which the same scan reports;
   * "the guard resolves the story branch rather than HEAD" is asserted from a
     resume standing off the branch, and its control is a mutant of today's
     coordinator with the comparison pointed back at HEAD, which establishes
@@ -55,6 +53,7 @@ import pytest
 import conftest
 import harness_config
 import story_coordinator
+import worktrees
 from agent_runner import AgentResult
 
 COORDINATOR_PATH = Path(story_coordinator.__file__)
@@ -424,22 +423,6 @@ def committed_history(target_root: Path,
             if relative.startswith(directory)]
 
 
-def conflicting_history(target_root: Path) -> list[str]:
-    """The branch's own history files, written differently on the branch stood on.
-
-    The observed instance, reconstructed: `.harness/history` is tracked, the
-    story branch carries records the base does not, and a run standing on the
-    base that writes there before checking out leaves git a file it will not
-    overwrite.
-    """
-    conflicting = committed_history(target_root)
-    assert conflicting, "the escalation committed no cross-run history"
-    for relative in conflicting:
-        write(target_root / relative,
-              "a record written while standing on the base\n")
-    return conflicting
-
-
 def tracked_at(target_root: Path, revision: str, relative: str) -> str | None:
     """A file's text at a revision, or None where that revision carries none."""
     shown = git(target_root, "show", f"{revision}:{relative}", check=False)
@@ -737,98 +720,59 @@ def test_the_shipped_ordering_holds_whole():
 
 
 # --------------------------------------------------------------------------
-# The helper reports what git refused rather than raising
+# Nothing checks a branch out in the invoked tree
 # --------------------------------------------------------------------------
 
 
-CHECKOUT_HELPER = "_checkout_story_branch"
+#: The git subcommand that moves a working tree onto a branch. A run that
+#: passed it to `_git` would be moving the tree the developer invoked it from,
+#: which since story-117 no run does: the branch is stood on in a worktree of
+#: the run's own, cut by `worktrees.add`.
+CHECKOUT_SUBCOMMAND = "checkout"
 
 
-def raises_in(source: str, name: str) -> list[str]:
-    """Every `raise` written in the named top-level function of `source`."""
-    return [ast.dump(node)
-            for node in ast.walk(ast.parse(conftest.function_source(source, name)))
-            if isinstance(node, ast.Raise)]
-
-
-def callers_of(source: str, called: str) -> set[str]:
-    """Every top-level function of `source` whose body calls `called`."""
-    tree = ast.parse(source)
-    names = set()
-    for node in tree.body:
+def git_calls_passing(source: str, word: str) -> list[str]:
+    """Every top-level function of `source` with a `_git` call that passes
+    `word` as a literal argument, one entry per call."""
+    found = []
+    for node in ast.parse(source).body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for inner in ast.walk(node):
-            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) \
-                    and inner.func.id == called:
-                names.add(node.name)
-    return names
-
-
-def test_the_checkout_helper_writes_no_raise_on_a_refused_checkout():
-    """The absence, with its control: the same scan over the helper with a
-    raise put back reports it, so a scan that has stopped seeing the function
-    cannot pass as an absence."""
-    source = COORDINATOR_PATH.read_text(encoding="utf-8")
-
-    assert raises_in(source, CHECKOUT_HELPER) == []
-
-    put_back = source.replace(
-        "    result = _git(target_root, *args)",
-        "    result = _git(target_root, *args)\n"
-        "    if result.returncode != 0:\n"
-        "        raise RuntimeError(branch)",
-        1,
-    )
-    assert put_back != source
-    assert raises_in(put_back, CHECKOUT_HELPER) != []                 # control
+            if not (isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Name)
+                    and inner.func.id == "_git"):
+                continue
+            if any(isinstance(arg, ast.Constant) and arg.value == word
+                   for arg in inner.args):
+                found.append(node.name)
+    return found
 
 
 def test_no_function_checks_the_story_branch_out_in_the_invoked_tree():
     """Since story-117 nothing does, because a run works in a worktree.
 
-    The helper is kept and still reports rather than raising — the test above
-    and the four below it are what hold that — but no caller reaches it, so a
-    run cannot move the branch the developer's checkout stands on. The control
-    is a source carrying a caller, which the same scan reports, so an empty
-    answer is the absence rather than a scan that has stopped looking.
+    Asserted as the property itself: no call in the coordinator passes
+    `checkout` to `_git`, so a run cannot move the branch the developer's
+    checkout stands on. The helper that used to make that call, and that
+    nothing reached since story-117, is gone with story-195. The control is a
+    source carrying one such call, which the same scan reports by the function
+    it is written in — so an empty answer is the absence rather than a scan
+    that has stopped looking.
     """
     source = COORDINATOR_PATH.read_text(encoding="utf-8")
 
-    assert callers_of(source, CHECKOUT_HELPER) == set()
+    assert git_calls_passing(source, CHECKOUT_SUBCOMMAND) == []
 
     with_one = source + (
-        "\n\ndef _a_caller(target_root, branch):\n"
-        f"    return {CHECKOUT_HELPER}(target_root, branch)\n"
+        "\n\ndef _a_checkout(target_root, branch):\n"
+        f"    return _git(target_root, {CHECKOUT_SUBCOMMAND!r}, branch)\n"
     )
-    assert callers_of(with_one, CHECKOUT_HELPER) == {"_a_caller"}      # control
+    assert git_calls_passing(with_one, CHECKOUT_SUBCOMMAND) == ["_a_checkout"]
 
-
-def test_the_helper_returns_the_problems_git_named(target, harness_root):
-    """The helper, called directly on a checkout git refuses.
-
-    It returns git's own words rather than raising, leaves the repository
-    standing where it was, and the control beside it is the same call on a
-    checkout git makes, which returns nothing and does move the branch.
-    """
-    escalated_and_fixed(target, harness_root)
-    released_from_its_worktree(target)
-    conflicting = conflicting_history(target)
-
-    problems = story_coordinator._checkout_story_branch(target, STORY_BRANCH)
-
-    assert problems
-    assert all(problem.strip() for problem in problems)
-    assert any(relative in problem
-               for relative in conflicting for problem in problems)
-    assert current_branch(target) == DEFAULT_BRANCH
-
-    # The control: the same call once the conflict is cleared, which reports
-    # nothing and stands the repository on the branch.
-    for relative in conflicting:
-        (target / relative).unlink()
-    assert story_coordinator._checkout_story_branch(target, STORY_BRANCH) == []
-    assert current_branch(target) == STORY_BRANCH
+    # The scan sees `_git` calls at all: the coordinator makes many, and a word
+    # it does pass is found by the same scan.
+    assert git_calls_passing(source, "rev-parse") != []
 
 
 # --------------------------------------------------------------------------
@@ -866,8 +810,12 @@ def test_a_fresh_run_whose_checkout_is_refused_creates_nothing(
     assert git(refused_target, "status", "--porcelain").stdout.strip() == ""
 
     assert branch in message
-    for problem in story_coordinator._checkout_story_branch(
-            refused_target, branch):
+    # The words git refused with, obtained the way the run obtains them: by
+    # asking for a worktree on that branch, at a path the run never used.
+    problems = worktrees.add(refused_target, tmp_path / "refused-tree", branch,
+                             DEFAULT_BRANCH).problems
+    assert problems
+    for problem in problems:
         assert f"  - {problem}" in message
     assert "run the story again" in message
 

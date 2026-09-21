@@ -403,7 +403,8 @@ def rerun_after_deleting_the_run_directory(target_root: Path,
     """The move that produced the defect: delete the run directory and re-run.
 
     The branch is left exactly as the finished run left it, because that is the
-    whole point — `_checkout_story_branch` reuses it rather than resetting it.
+    whole point — `resolve_run_root` returns to the worktree already standing
+    on it, or `worktrees.add` cuts a new one onto it, and neither resets it.
     """
     shutil.rmtree(run_dir_of(target_root))
     git(target_root, "checkout", "-q", on)

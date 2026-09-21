@@ -740,9 +740,12 @@ def test_the_escalation_commit_is_recorded_on_state_and_is_on_the_branch(
     ancestor establishes exactly as a tip would.
 
     The relationship is asserted rather than left implicit because two other
-    things are derived from it: the guard compares HEAD~1 and the undo command
-    names HEAD~2. A recorded commit that were two back, or on no branch at all,
-    would leave both silently wrong while this field still looked populated.
+    things are derived from it: the recorded commit is the story branch tip's
+    parent, so the resume guard compares `state.branch~1` against it and the
+    undo command names two commits back. A recorded commit that were two back,
+    or on no branch at all, would leave both silently wrong while this field
+    still looked populated. The rev-parse below asks the tree the run worked
+    in, which is standing on the story branch, so its HEAD~1 is that parent.
     """
     escalate(target, harness_root)
     state = state_of(target)

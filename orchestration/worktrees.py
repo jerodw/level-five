@@ -51,9 +51,9 @@ class WorktreeResult:
 
     `problems` empty is the whole of "it is there": either it was created now,
     or the caller asked for one that already stood at that path. Anything else
-    is git's own words, one problem per line, in the shape `base_problems` and
-    `_checkout_story_branch` already use, so a caller refuses through the shared
-    refusal rather than composing its own wording.
+    is git's own words, one problem per line, in the shape `base_problems`
+    already uses and `_refuse_checkout` prints, so a caller refuses through the
+    shared refusal rather than composing its own wording.
     """
 
     path: Path

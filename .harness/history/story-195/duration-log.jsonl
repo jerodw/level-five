@@ -1,0 +1,9 @@
+{"story_id": "story-195", "operation": "implementer", "duration_seconds": 799.959, "timestamp": "2026-09-21 15:28:19"}
+{"story_id": "story-195", "operation": "suite-run", "duration_seconds": 546.632, "timestamp": "2026-09-21 15:51:06"}
+{"story_id": "story-195", "operation": "tester", "duration_seconds": 1366.789, "timestamp": "2026-09-21 15:51:06"}
+{"story_id": "story-195", "operation": "documenter", "duration_seconds": 128.667, "timestamp": "2026-09-21 15:53:14"}
+{"story_id": "story-195", "operation": "inspection", "duration_seconds": 189.596, "timestamp": "2026-09-21 15:56:24"}
+{"story_id": "story-195", "operation": "verifier", "duration_seconds": 359.335, "timestamp": "2026-09-21 15:59:14"}
+{"story_id": "story-195", "operation": "documenter", "duration_seconds": 44.389, "timestamp": "2026-09-21 15:59:58"}
+{"story_id": "story-195", "operation": "verifier", "duration_seconds": 234.162, "timestamp": "2026-09-21 16:03:52"}
+{"story_id": "story-195", "operation": "clean-clone", "duration_seconds": 806.018, "timestamp": "2026-09-21 16:31:17"}

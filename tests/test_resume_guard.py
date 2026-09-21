@@ -2,19 +2,29 @@
 harness is its own target.
 
 The subject is one leg of `unchanged_since_escalation`. Before this story its
-third comparison read `state.harness_revision`, which is recorded as the first
-act of `_escalate` and therefore always differs afterwards in a repository
-where the harness *is* the target — so in this repository the guard could
-never refuse. After it, a shared root defers the third comparison to the
-second.
+third comparison read `state.harness_revision` in every deployment, and when
+the run worked in the very checkout the harness was read from that revision
+was recorded as the first act of `_escalate` and moved by the two escalation
+commits that followed — so in that shape the guard could never refuse. After
+it, the guard asks whether the tree the run works in and the harness root are
+one working tree, and when they are it defers the third comparison to the
+second: leg two has established that `state.branch` is exactly the escalation
+commit and the tree is clean, and since story-117 `resolve_run_root` hands a
+run its invoked tree only when that tree already stands on `state.branch`, so
+the branch comparison covers the harness source. When they are two trees — a
+separate checkout, or a worktree of one repository, which is where a run works
+now — the recorded revision is compared as it always was; the escalation
+commits land in the run's tree and do not move it. The worktree case is
+validated in `tests/test_the_resume_guard_asks_about_the_tree_the_harness_is_read_from.py`.
 
 Almost nothing here is asserted from prose. Two fixtures are built under
 tmp_path and driven with a fake agent runner:
 
   * `shared_root` — one git checkout carrying both a target project and a
-    harness root materialized from the workflow this module builds, handed to
-    `run_story` as both `harness_root` and `target_root`. This is the shape the
-    harness is developed under and the one the story is about.
+    harness root materialized from the workflow this module builds, standing
+    on the story branch and handed to `run_story` as both `harness_root` and
+    `target_root`, so the run works in it. This is the shape the story is
+    about.
   * `separate_root` — a target repository and a harness checkout beside it, the
     deployment the guard was written for, which this story must leave alone.
 
@@ -495,13 +505,9 @@ def executable_source(text: str) -> str:
 #: removal really does reconstruct it is
 #: `test_removing_the_shared_root_leg_reproduces_the_pre_story_guard`.
 SHARED_ROOT_LEG = """    if same_repository(target_root, harness_root):
-        standing = _revision(target_root)
-        if not standing or standing != _revision(target_root, state.branch):
-            return []
         evidence.append(
-            f"the harness is the same checkout as the target and the working "
-            f"tree is standing on {state.branch}, so it is covered by the "
-            f"branch comparison above"
+            f"the harness is the same checkout as the target, standing on "
+            f"{state.branch}, so it is covered by the branch comparison above"
         )
         return evidence
 
