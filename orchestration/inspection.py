@@ -117,7 +117,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import agent_runner
@@ -548,6 +548,30 @@ local_index = outbox.local_index
 
 
 @dataclass(frozen=True)
+class Recorded:
+    """What recording an inspection did, or why it did nothing.
+
+    The shape `plan_mandate.commit_records` already has, kept here rather
+    than shared with it: sharing the class would couple the inspection to the
+    planner for no gain. `written` says the record's line reached the history;
+    `committed` says the commit that makes it durable landed; `detail` says
+    why not where either is false, in git's own words where git had any. The
+    default instance means no record was attempted, which is what a dry run's
+    report carries.
+
+    A record that was written and not committed is left in the working tree
+    with nothing staged — the tree the commit found, restored rather than
+    repaired — and that is what the detail is for: the next run's clean-tree
+    pre-flight refuses on exactly that tree, and this is the one line that
+    connects the refusal to the inspection that caused it.
+    """
+
+    written: bool = False
+    committed: bool = False
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class Report:
     """What one inspection inspected, filed and dropped.
 
@@ -584,6 +608,12 @@ class Report:
     #: to the report because both report surfaces print it beside the briefs it
     #: is about, and filed by nothing: see `AreaSuggestion`.
     area_suggestions: tuple[AreaSuggestion, ...] = ()
+    #: What recording this inspection did — written, committed, or why not.
+    #: Defaulted to "no record was attempted", which is what a dry run and
+    #: every construction that predates the field carry; `inspect` attaches
+    #: the result of `record` on a non-dry run, so `scripts/l5-inspect` can
+    #: say on every real inspection whether the record commit landed.
+    record: Recorded = Recorded()
 
     def dropped_for(self, reason: str) -> tuple[Drop, ...]:
         """Everything dropped one way, so a caller can say each way once."""
@@ -1298,8 +1328,83 @@ def record_paths(target_root: Path, config: dict, *, story_id: str = "",
     ))
 
 
-def record(target_root: Path, config: dict, report: Report) -> None:
-    """Write one line for this inspection and commit it, or cost only the line.
+def _git_said(completed) -> str:
+    """What a git call said on stderr, or its exit status where it said nothing.
+    """
+    said = (completed.stderr or "").strip()
+    return said if said else f"exit status {completed.returncode}"
+
+
+def commit_record_paths(target_root: Path, paths, subject: str) -> Recorded:
+    """Stage the named record paths and commit them, checking what git returned.
+
+    The one commit both modes make, written once so the two cannot disagree
+    about what a record commit does. The paths are staged **by name** and
+    never with `git add -A`, so a file an inspection agent changed elsewhere
+    is left in the working tree rather than folded into a commit this made.
+    Both git return codes are checked. A commit that fails — a pre-commit
+    hook that rejects it, a git with no identity to commit as — unstages
+    exactly the paths that were staged, with `git restore --staged`, so the
+    working tree is left as the commit found it: modified, with nothing
+    staged. That is restoring what the commit found, not fixing the commit:
+    nothing here retries, amends, resets past the staged paths or pushes.
+
+    Returns a `Recorded` with `written` already true, since a caller reaches
+    this only once the record is on disk. Nothing staged is reported as not
+    committed too, since a record that reached no commit is not durable
+    whatever the reason — and it is what a target tracking no record path
+    gets, so the detail says so rather than calling it a failure.
+
+    This raises on nothing but a subprocess that cannot be spawned at all;
+    each caller guards for that, because each producer may not raise.
+    """
+    paths = tuple(paths)
+    if not paths:
+        return Recorded(
+            written=True, committed=False,
+            detail="nothing staged: no record path is tracked",
+        )
+    argv = ["git", "-C", str(target_root)]
+    added = subprocess.run(  # noqa: S603 - a fixed argument list
+        [*argv, "add", "--", *paths], capture_output=True, text=True
+    )
+    if added.returncode != 0:
+        return Recorded(
+            written=True, committed=False,
+            detail=f"git add failed: {_git_said(added)}",
+        )
+    staged = subprocess.run(  # noqa: S603 - a fixed argument list
+        [*argv, "diff", "--cached", "--quiet", "--", *paths],
+        capture_output=True, text=True,
+    )
+    if staged.returncode == 0:
+        # Nothing of ours is staged, so there is nothing to commit: an empty
+        # commit here would be a commit about a record that is not there.
+        return Recorded(
+            written=True, committed=False,
+            detail="nothing staged: the record paths are unchanged",
+        )
+    committed = subprocess.run(  # noqa: S603 - a fixed argument list
+        [*argv, "commit", "-m", subject, "--", *paths],
+        capture_output=True, text=True,
+    )
+    if committed.returncode == 0:
+        return Recorded(written=True, committed=True)
+    # Put the index back as the commit found it: the same paths, and only
+    # those, unstaged. The working tree keeps the record; the next run's
+    # pre-flight refuses on it and the detail says which inspection left it.
+    subprocess.run(  # noqa: S603 - a fixed argument list
+        [*argv, "restore", "--staged", "--", *paths],
+        capture_output=True, text=True,
+    )
+    return Recorded(
+        written=True, committed=False,
+        detail=f"git commit failed: {_git_said(committed)}",
+    )
+
+
+def record(target_root: Path, config: dict, report: Report) -> Recorded:
+    """Write one line for this inspection and commit it, and say what happened.
 
     The record goes through the coordinator's own per-log append with the
     history directory resolved exactly as a run resolves it and passed
@@ -1312,14 +1417,17 @@ def record(target_root: Path, config: dict, report: Report) -> None:
 
     It is committed because the cross-run history is versioned, so a record left
     in the working tree is a dirty tree the next run's pre-flight refuses on.
-    The declared paths are staged **by name** and never with `git add -A`, so a
-    file the inspection agent changed elsewhere is left in the working tree
-    rather than folded into a commit this module made.
+    The commit is `commit_record_paths`: staged by name, both return codes
+    checked, and unstaged again where the commit fails so the tree is left as
+    the commit found it.
 
     Both halves are guarded, and separately: a history directory that cannot be
     written and a git call that fails each cost the record and nothing else.
     The inspection has already happened and has already filed what it found, and
-    a failure to write down what that cost may not undo any of it.
+    a failure to write down what that cost may not undo any of it. What each
+    path returns is a `Recorded` saying what was done or why it was not — a
+    raise on either half becomes a not-committed result carrying the exception
+    — so the report a developer is reading can say it. Nothing here raises.
 
     The imports are inside the body, the idiom the queue module already uses for
     its own coordinator import: the coordinator reaches this module through
@@ -1353,39 +1461,23 @@ def record(target_root: Path, config: dict, report: Report) -> None:
         written = story_coordinator.append_history_records(
             harness_config.history_dir(target_root, config), entry, "", []
         )
-    except Exception:  # noqa: BLE001 - a record that cannot be written costs
-        return                                   # the record and nothing else
+    except Exception as error:  # noqa: BLE001 - a record that cannot be
+        # written costs the record and nothing else
+        return Recorded(detail=f"the record could not be written: {error}")
 
+    if not written:
+        return Recorded(detail="the record could not be written: the history "
+                               "declaration routes an inspection to no log")
     try:
-        if not written:
-            return
         # The segment is the one the append resolved for a record with no
         # story: named for the moment it was written, so it is read off what
         # was written rather than derived a second time.
         paths = record_paths(target_root, config, segment=written[0].parent)
-        if not paths:
-            return
-        argv = ["git", "-C", str(target_root)]
-        added = subprocess.run(  # noqa: S603 - a fixed argument list
-            [*argv, "add", "--", *paths], capture_output=True, text=True
-        )
-        if added.returncode != 0:
-            return
-        staged = subprocess.run(  # noqa: S603 - a fixed argument list
-            [*argv, "diff", "--cached", "--quiet", "--", *paths],
-            capture_output=True, text=True,
-        )
-        if staged.returncode == 0:
-            # Nothing of ours is staged, so there is nothing to commit: an
-            # empty commit here would be a commit about a record that is not
-            # there.
-            return
-        subprocess.run(  # noqa: S603 - a fixed argument list
-            [*argv, "commit", "-m", COMMIT_SUBJECT, "--", *paths],
-            capture_output=True, text=True,
-        )
-    except Exception:  # noqa: BLE001 - the commit is the record's durability,
-        return                                       # never the inspection's
+        return commit_record_paths(target_root, paths, COMMIT_SUBJECT)
+    except Exception as error:  # noqa: BLE001 - the commit is the record's
+        # durability, never the inspection's
+        return Recorded(written=True, committed=False,
+                        detail=f"the record could not be committed: {error}")
 
 
 def inspect(target_root: Path, config: dict, harness_root: Path, *,
@@ -1474,5 +1566,8 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
     # dry run has not asked for. The cost of leaving it out is one real spend
     # missing from the corpus, which is the cheaper of the two.
     if not dry_run:
-        record(target_root, config, report)
+        # Attached rather than printed, so the report can say on every real
+        # inspection whether the record landed; a dry run's report keeps the
+        # default, which says no record was attempted.
+        report = replace(report, record=record(target_root, config, report))
     return report

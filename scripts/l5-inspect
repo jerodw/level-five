@@ -207,6 +207,22 @@ def report(found, dry_run: bool) -> int:
             "nothing has reached a tracker: a brief is filed into the outbox, "
             "which is drained by l5-sync or by the sweeps a run makes"
         )
+
+    # The record, on every real inspection: committed, or NOT committed and
+    # why, in the detail's own words. A record left in the working tree is
+    # what the next run's clean-tree pre-flight refuses on, and this line is
+    # what connects that refusal to the inspection that caused it. A dry run
+    # attempts no record and says nothing about one.
+    if not dry_run:
+        recorded = found.record
+        if recorded.committed:
+            print("the record of this inspection was committed")
+        elif recorded.written:
+            print("the record of this inspection was written but NOT "
+                  f"committed: {recorded.detail}")
+        else:
+            print("the record of this inspection was NOT committed, because "
+                  f"it was not written: {recorded.detail}")
     return 0
 
 

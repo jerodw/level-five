@@ -643,44 +643,53 @@ def record_paths(target_root: Path, config: dict,
         return ()
 
 
-def commit_record(target_root: Path, config: dict, story_id: str,
-                  subject: str = COMMIT_SUBJECT) -> None:
-    """Commit the record this inspection wrote, and only the record.
+def commit_record(run_dir: Path, target_root: Path, config: dict,
+                  story_id: str,
+                  subject: str = COMMIT_SUBJECT) -> inspection.Recorded:
+    """Commit the record this inspection wrote, and say when it did not.
 
-    The paths are staged **by name** and never with `git add -A`, so an edit
-    the inspection agent made elsewhere in the repository is left in the
-    working tree rather than folded into this commit. The commit is skipped
-    entirely where staging left the index empty — a target tracking no record
-    path gains no commit — and the subject carries no completion marker and
-    matches neither the completion, escalation nor pause shape, so nothing
-    that reads a branch for one of those reads this.
+    The commit is `inspection.commit_record_paths`, the one commit both modes
+    make: the paths are staged **by name** and never with `git add -A`, so an
+    edit the inspection agent made elsewhere in the repository is left in the
+    working tree rather than folded into this commit; both git return codes
+    are checked; and a commit that fails unstages exactly what it staged, so
+    the tree is left as the commit found it. The commit is skipped where
+    staging left the index empty — a target tracking no record path gains no
+    commit — and the subject carries no completion marker and matches neither
+    the completion, escalation nor pause shape, so nothing that reads a branch
+    for one of those reads this.
+
+    Whenever the record was not committed — a failed add, a failed commit, a
+    raise, or nothing staged — one note goes into the run's events.log
+    through `_note`, naming which and quoting git's stderr where there is any.
+    events.log already carries the record line the inspection wrote, so a
+    commit that landed adds nothing there. This is the whole reason
+    `run_dir` is a parameter: without it a record left uncommitted was
+    reported nowhere, and the next run refused to start on a dirty tree with
+    nothing connecting the refusal to the inspection that caused it.
+
+    Guarded whole, because this producer may not raise: a raise anywhere in
+    it becomes a not-committed result carrying the exception, noted the same
+    way. Nothing retries, amends, resets past the staged paths or pushes.
 
     `subject` is the post-story inspection's by default; the completion
     filing passes its own, so the two records a branch can carry are told
     apart by what each commit says about itself.
     """
-    paths = record_paths(target_root, config, story_id)
-    if not paths:
-        return
-    argv = ["git", "-C", str(target_root)]
-    added = subprocess.run(  # noqa: S603 - a fixed argument list
-        [*argv, "add", "--", *paths], capture_output=True, text=True
-    )
-    if added.returncode != 0:
-        return
-    staged = subprocess.run(  # noqa: S603 - a fixed argument list
-        [*argv, "diff", "--cached", "--quiet", "--", *paths],
-        capture_output=True, text=True,
-    )
-    if staged.returncode == 0:
-        # Nothing of ours is staged, so there is nothing to commit. An empty
-        # commit here would be a commit about a record that does not exist.
-        return
-    subprocess.run(  # noqa: S603 - a fixed argument list
-        [*argv, "commit", "-m", subject.format(story_id=story_id),
-         "--", *paths],
-        capture_output=True, text=True,
-    )
+    try:
+        paths = record_paths(target_root, config, story_id)
+        recorded = inspection.commit_record_paths(
+            target_root, paths, subject.format(story_id=story_id)
+        )
+    except Exception as error:  # noqa: BLE001 - the totality is the guarantee
+        recorded = inspection.Recorded(
+            written=True, committed=False,
+            detail=f"the record could not be committed: {error}",
+        )
+    if not recorded.committed:
+        _note(run_dir, f"inspection record of {story_id} NOT committed: "
+                       f"{recorded.detail}")
+    return recorded
 
 
 # --------------------------------------------------------------------------
@@ -1192,7 +1201,7 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
                 # scope list would give would say dedupe ran when nothing asked.
                 dedupe_ran=False,
             )
-            commit_record(target_root, config, story_id)
+            commit_record(run_dir, target_root, config, story_id)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
             pass
 
@@ -1216,7 +1225,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         _say(run_dir, f"{label}: {prepared.problem}",
              findings=0, filed=0, dropped=0,
              scope_files=0, invocations=0, dedupe_ran=False)
-        commit_record(target_root, config, story_id)
+        commit_record(run_dir, target_root, config, story_id)
         return
 
     scope, result, took = _invoke(
@@ -1251,7 +1260,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
     )
     _report(run_dir, target_root, config, story_id, label, prepared, report,
             result, 0, duration_seconds=took)
-    commit_record(target_root, config, story_id)
+    commit_record(run_dir, target_root, config, story_id)
 
 
 # The same guarantee, made again for the caller that runs inside the stage
@@ -1958,7 +1967,8 @@ def file_at_completion(run_dir: Path, target_root: Path, config: dict,
             # that cannot be made costs the commit and not the run, and a
             # record left uncommitted is what the next run's clean-tree
             # pre-flight refuses on.
-            commit_record(target_root, config, story_id, FILED_COMMIT_SUBJECT)
+            commit_record(run_dir, target_root, config, story_id,
+                          FILED_COMMIT_SUBJECT)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
             pass
 
@@ -1991,7 +2001,8 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
              f"verdict on attempt {attempt}; 0 filed, "
              f"{len(held) + len(remainder)} dropped: {problem}",
              kind=FILED_EVENT, filed=0, dropped=len(held) + len(remainder))
-        commit_record(target_root, config, story_id, FILED_COMMIT_SUBJECT)
+        commit_record(run_dir, target_root, config, story_id,
+                      FILED_COMMIT_SUBJECT)
         return
 
     scope = inspection.Scope(
@@ -2035,6 +2046,7 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     # The record reaches the tracked cross-run log after the completion
     # commit, so it is committed the way the post-story inspection commits
     # its own: by name, and under a subject of its own.
-    commit_record(target_root, config, story_id, FILED_COMMIT_SUBJECT)
+    commit_record(run_dir, target_root, config, story_id,
+                  FILED_COMMIT_SUBJECT)
 
 

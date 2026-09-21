@@ -1858,8 +1858,15 @@ def test_an_inspection_with_nothing_in_scope_still_writes_what_it_left_out(
     said = [line.split("] ", 1)[-1] for line
             in (run_dir / "events.log").read_text(encoding="utf-8").splitlines()
             if line.strip()]
-    assert len(said) == 1, said
-    assert OUT_OF_SCOPE_FILE not in said[0], said
+    # Since story-188 the record commit says so in events.log when it staged
+    # nothing, which on a run directory outside any run it always does; that
+    # line is about the commit and not about what was left out, so what is
+    # held to one line is the inspection's own account.
+    inspection_said = [line for line in said
+                       if line.startswith(f"post-story inspection of {STORY_ID}")]
+    assert len(inspection_said) == 1, said
+    assert OUT_OF_SCOPE_FILE not in inspection_said[0], said
+    assert all(OUT_OF_SCOPE_FILE not in line for line in said), said
 
 
 def rendered_paths(prompt: str) -> list[str]:
