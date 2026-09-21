@@ -1,0 +1,162 @@
+story:
+  id: story-195
+  title: The resume guard says which tree it asks about, the dead checkout is gone, and a test shows a harness fix on the base reaches the resumed stage
+  description: |
+    When a story escalates and the developer fixes the harness on their own
+    branch before re-running it, the harness has to decide whether anything
+    changed since the escalation — and, in this repository, where the harness
+    and the target are one project, which tree it is reading the harness out
+    of. Since story-117 a run works in a worktree of its own and reads the
+    harness from the tree the developer invoked it in, for the whole run; the
+    guard already asks about that tree's commit. But nothing tests that, and
+    the code and its prose still carry an older design: a checkout helper
+    nothing calls, a condition story-103 added that no run can now fail, and
+    comments and test docstrings describing a run that checked out the story
+    branch underneath itself and could lose a fix made under prompts/.
+
+    This story removes the two leftovers, rewrites the prose at the guard so
+    it says what the guard decides now, and writes the missing assertions: a
+    resume from the base with a prompt fixed there hands the fixed prompt to
+    the resumed stage, and the same resume with nothing changed is refused,
+    naming the recorded revision. It leaves the guard's artifact and branch
+    legs and the budget exemptions ahead of them alone.
+
+    Where the leftovers are. _checkout_story_branch at
+    orchestration/story_coordinator.py:2426-2453 has no caller since story-117
+    replaced it with worktrees.add; two comments in run_story (:9954, :10052)
+    and the worktrees.add docstring (orchestration/worktrees.py:55) still
+    name it. The shared-tree leg of unchanged_since_escalation (:8839-8848)
+    requires the run's tree to resolve to state.branch before deferring to the
+    branch comparison; resolve_run_root (:2474) already guarantees the tree
+    the guard is put to stands on that branch, so the condition can only be
+    failed by calling the guard by hand. The guard's docstring (:8740-8759)
+    and the leg comment (:8821-8838) say the recorded revision "cannot be
+    reached for" under a shared root and that an off-branch shared resume
+    proceeds unrefused; under a worktree the escalation commits land in the
+    run root and the harness tree's revision is exactly what is compared, so
+    both claims are false. same_repository (:1918-1929) says it decides "one
+    git repository" when it decides one working tree by toplevel — a linked
+    worktree and its primary are one repository and it answers False, which is
+    the answer the guard needs.
+
+    What holds the old shape in the suite. tests/test_a_run_stands_on_its_branch_first.py:768,
+    :787 and :807 call or scan the helper. tests/test_the_harness_leg_checks_the_tree_it_will_run.py
+    exists to validate the standing condition, keys its mutant on the
+    condition's text (STANDING_CONDITION) and drives the guard directly
+    against a tree run_story would never resolve. tests/test_resume_guard.py
+    holds the leg's text as the SHARED_ROOT_LEG mutant anchor (:470) and its
+    module docstring (:8-9) says a shared root defers outright. Stale prose
+    also stands at tests/test_escalation_resume.py:743 (the guard compares
+    HEAD~1) and tests/test_rerun_refusal.py:405-406 (the helper reuses the
+    branch). tests/test_resume_guard.py:1024 scans the guard for the tree-hash
+    rejection and :1002 asserts _escalate's recording is unmoved; both stay.
+
+    This story was planned from the brief filed under 301, which covers the
+    briefs filed as #3, #9, #10 and #12.
+  workflow: story-workflow
+
+tasks:
+  - Delete _checkout_story_branch from orchestration/story_coordinator.py, and reword the two run_story comments that explain the completed-run refusal by it and the worktrees.add docstring that cites it as a shape, so each names what does reuse an existing story branch today (resolve_run_root and worktrees.add).
+  - Delete the standing condition from the shared-tree leg of unchanged_since_escalation, so the leg appends its evidence and returns whenever the run's tree and the harness root are one toplevel; the evidence line keeps the phrase "the same checkout as the target" and still names state.branch.
+  - Rewrite unchanged_since_escalation's docstring and the leg comment to say what the leg decides now: the harness is read from harness_root for the whole run; when that is the tree the run works in — which resolve_run_root guarantees stands on state.branch — leg two covers it; otherwise, a separate checkout or a worktree of the same repository alike, the recorded revision of harness_root is compared, and the escalation commits do not move it because they land in the run root. Remove the claims that the recorded revision cannot be reached for and that an off-branch shared resume proceeds unrefused; keep the tree-hash rejection and the words "which directories".
+  - Rewrite same_repository's docstring to say it decides one working tree by toplevel equality, so a linked worktree and its primary are not one tree and fall to the recorded-revision form.
+  - Every test change is the tester's: the deletions above leave tests/test_the_harness_leg_checks_the_tree_it_will_run.py, tests/test_resume_guard.py and tests/test_a_run_stands_on_its_branch_first.py red, and the tester resolves that as the tasks below say; no test adaptation is predicted for any earlier stage.
+  - Retire tests/test_the_harness_leg_checks_the_tree_it_will_run.py, whose subject is the deleted condition, and write this story's module in its place: on a shared repository escalated from the base and resumed from the base, with the run in a worktree — a prompt file fixed and committed on the base makes the resume reach its stage with the fake runner's prompt carrying the fixed text; nothing changed makes the resume exit 1, invoke no agent and name the recorded revision in its third evidence line; the same fix left uncommitted is still refused, recording the guard's bias as it stands. Each assertion carries a control.
+  - In tests/test_resume_guard.py, repoint the SHARED_ROOT_LEG anchor at the leg's new text and correct the module docstring so it no longer says a shared root defers the third comparison outright.
+  - In tests/test_a_run_stands_on_its_branch_first.py, retire the two tests that call or scan _checkout_story_branch and rewrite test_no_function_checks_the_story_branch_out_in_the_invoked_tree to assert the property directly — no call in orchestration/story_coordinator.py passes "checkout" to _git — with a mutant control the same scan reports.
+  - Correct the docstrings at tests/test_escalation_resume.py:735-746, so the relationship asserted is that the recorded commit is the story branch tip's parent and the guard compares state.branch~1, and at tests/test_rerun_refusal.py:405-406, so it names what reuses the branch today.
+  - Record in .harness/docs/ARCHITECTURE.md that the helper and the story-103 condition are gone and why the worktree case of a shared repository is the recorded-revision form, and mark the "what a shared-checkout deployment gives up" paragraph and the story-103 lesson in the lessons list as describing the shape before story-117.
+
+acceptance_criteria:
+  - No function named _checkout_story_branch exists in orchestration/story_coordinator.py, and no call in that module passes "checkout" to _git.
+  - The shared-tree leg of unchanged_since_escalation appends its evidence and returns whenever same_repository answers True, with no comparison of the tree's revision against state.branch; its evidence line contains "the same checkout as the target" and names state.branch.
+  - Neither the docstring nor the comments of unchanged_since_escalation says the recorded revision cannot be reached for under a shared root, or that an off-branch shared-checkout resume proceeds; both say the harness is read from harness_root for the whole run and that a worktree of the same repository falls to the recorded-revision comparison; the docstring still records the rejected tree hash and the words "which directories".
+  - same_repository's docstring says it decides one working tree by toplevel equality and that a linked worktree and its primary are not one tree.
+  - A test drives run_story on a shared repository from the base after an escalation, with a prompt file fixed and committed on the base, and asserts the resume exits 0, the resumed stage is the recorded stage, and the prompt the fake runner received contains the fixed text; a control shows the same resume before the fix is refused.
+  - A test drives the same resume with nothing changed and asserts exit 1, no agent invoked, state.json unchanged, and a third evidence line naming the recorded revision rather than "the same checkout as the target".
+  - A test drives the same resume with the harness fix uncommitted on the base and asserts it is refused.
+  - tests/test_the_harness_leg_checks_the_tree_it_will_run.py no longer exists, and no module under tests/ keys a mutant on the deleted standing condition.
+  - The SHARED_ROOT_LEG anchor in tests/test_resume_guard.py matches the leg's text, and test_removing_the_shared_root_leg_reproduces_the_pre_story_guard still reconstructs the story-034 baseline.
+  - tests/test_a_run_stands_on_its_branch_first.py has no test calling or scanning for _checkout_story_branch, and asserts that the coordinator passes no "checkout" to _git, with a control.
+  - The docstrings at tests/test_escalation_resume.py (the recorded-commit test) and tests/test_rerun_refusal.py (the re-run helper) no longer name HEAD~1 as the guard's comparison or _checkout_story_branch as what reuses the branch; the assertions beneath them are unchanged.
+  - _escalate is unchanged, and test_the_story_did_not_move_where_the_harness_revision_is_recorded, test_the_rejected_alternative_is_recorded_at_the_comparison and every other test in tests/test_resume_guard.py passes.
+  - .harness/docs/ARCHITECTURE.md records the deletions, the reason the worktree case is the recorded-revision form, and marks the pre-story-117 paragraphs as such.
+
+technical_plan:
+  implementation_steps:
+    - Remove _checkout_story_branch and reword the three places that name it as live (two run_story comments, the worktrees.add docstring); _refuse_checkout stays, because worktrees.add refuses through it.
+    - Remove the three lines of the standing condition at the shared-tree leg and adjust the evidence f-string to a sentence that keeps "the same checkout as the target" and state.branch.
+    - Rewrite the guard's docstring paragraphs about the third comparison and the leg comment; rewrite same_repository's docstring. Change no other line of either function.
+    - Tester: delete tests/test_the_harness_leg_checks_the_tree_it_will_run.py and write the new module using tests/test_resume_guard.py's fixtures (build_target with harness_inside and a gitignored run directory, escalate, Runner) and conftest's worktree helpers; the prompt file under the fixture's prompts/ is the harness source edited, and the runner records the prompt it was handed.
+    - Tester: update the SHARED_ROOT_LEG anchor and the module docstring in tests/test_resume_guard.py; retire and rewrite the helper tests in tests/test_a_run_stands_on_its_branch_first.py; correct the two stale docstrings.
+    - Documenter: record the story in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: _checkout_story_branch deleted; the standing condition deleted from the shared-tree leg; the guard's docstring, the leg comment, same_repository's docstring and two run_story comments rewritten.
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: The worktrees.add docstring cites _checkout_story_branch as the shape its problems list follows; it names base_problems and _refuse_checkout instead.
+    - file: tests/test_the_harness_leg_checks_the_tree_it_will_run.py
+      stage: tester
+      reason: Retired; its subject is the deleted standing condition and its mutant anchor no longer occurs.
+    - file: tests/test_the_resume_guard_asks_about_the_tree_the_harness_is_read_from.py
+      stage: tester
+      reason: New module holding this story's assertions — the prompt fix on the base reaches the resumed stage, the unchanged resume is refused naming the recorded revision, the uncommitted fix is refused; the name is the tester's to settle.
+    - file: tests/test_resume_guard.py
+      stage: tester
+      reason: SHARED_ROOT_LEG repointed at the new leg text; module docstring corrected.
+    - file: tests/test_a_run_stands_on_its_branch_first.py
+      stage: tester
+      reason: Two helper tests retired; the no-checkout property asserted directly with a control.
+    - file: tests/test_escalation_resume.py
+      stage: tester
+      reason: The docstring saying the guard compares HEAD~1 corrected; no assertion changes.
+    - file: tests/test_rerun_refusal.py
+      stage: tester
+      reason: The docstring saying _checkout_story_branch reuses the branch corrected; no assertion changes.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The record of what the story removed, what the leg now means, and which earlier paragraphs describe the pre-story-117 shape.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/worktrees.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - _escalate in orchestration/story_coordinator.py (where the harness revision is recorded is asserted unchanged at tests/test_resume_guard.py:1002, and the recording is what the worktree case compares against)
+    - The artifact leg, the branch leg, the porcelain leg and the budget exemptions of unchanged_since_escalation, and the cost-ceiling exemption at its call site (the brief names them as left alone; the change is the third leg and its prose)
+    - _refuse_checkout in orchestration/story_coordinator.py (live — worktrees.add's problems are refused through it)
+    - orchestration/worktrees.py beyond the one docstring (its checkout -b at line 426 is worktree creation, not the coordinator checking a branch out under itself)
+    - orchestration/context_assembler.py (every read it makes is from harness_root, which is already the tree the guard asks about)
+    - tests/history-fixtures/ (frozen texts; the story-034 pair is still read by tests/test_resume_guard.py:86 and must not be edited to match new code)
+    - The evidence-line phrase "the same checkout as the target" and the tree-hash rejection in the guard's docstring (tests/test_resume_guard.py scans for both, and the separate-root control tells the two forms apart by the phrase)
+    - Prompts, workflows, schemas and scripts (nothing the story changes is read by a stage or a schema; the change is coordinator code, its prose, and its validation)
+
+verification_requirements:
+  - Confirm _checkout_story_branch is absent from orchestration/story_coordinator.py and that the module passes no "checkout" argument to _git, by the rewritten test and its control.
+  - Confirm the shared-tree leg has no standing condition and its evidence line keeps the phrase and the branch name, by reading the leg and by the SHARED_ROOT_LEG anchor matching.
+  - Confirm the new module's three cases each pass with their controls, and that each drives run_story with the run in a worktree of a shared repository rather than calling the guard against a hand-chosen tree.
+  - Confirm the guard's docstring, the leg comment and same_repository's docstring say what the acceptance criteria require and no longer carry the two false claims.
+  - Confirm tests/test_the_harness_leg_checks_the_tree_it_will_run.py is gone and no module keys a mutant on the deleted condition.
+  - Confirm _escalate, the artifact leg, the branch leg, the porcelain leg and the exemptions are unchanged, and that every test in tests/test_resume_guard.py passes.
+  - Confirm no file under prompts/, workflows/, schemas/ or scripts/ changed.
+  - Confirm .harness/docs/ARCHITECTURE.md records the deletions and the reason for the worktree case, and marks the pre-story-117 paragraphs.
+
+constraints:
+  - The guard's decision is unchanged for every case a run can reach: a shared repository resumed from its own story-branch tree is refused as before; a run in a worktree compares the invoked tree's recorded revision as before; a separate checkout is unchanged character for character in the recorded-revision comparison.
+  - Every test change in this story is the tester's work, as the likely_file_changes predict; the suite is expected to be red between the deletions and the tester's stage.
+  - No new test invokes a model; every run goes through a fake agent runner.
+  - Reconstructing the story-034 baseline in tests/test_resume_guard.py must still succeed once the leg's anchor is repointed; the reconstruction removes the leg, the budget exemption and undoes the branch comparison, and nothing new stands between today's text and that one.
+  - No message printed by l5-run's pre-flight or by the resume refusal changes, apart from the shared-tree evidence line.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 15:14:35
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 301
