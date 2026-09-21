@@ -367,7 +367,7 @@ AREA_FIELD="${L5_SYNC_AREA_FIELD:-Area}"
 # against anything, exactly as it holds none of the field names above.
 REVIEW_COLUMN="${L5_SYNC_REVIEW_COLUMN:-Inbox}"
 DEFERRED_COLUMN="${L5_SYNC_DEFERRED_COLUMN:-Deferred}"
-DEFERRING_CATEGORIES="${L5_SYNC_DEFERRING_CATEGORIES:-docs-drift standards-drift complexity refactor}"
+DEFERRING_CATEGORIES="${L5_SYNC_DEFERRING_CATEGORIES:-docs-drift standards-drift complexity refactor structural-duplication}"
 OVERRIDING_PATH_PREFIXES="${L5_SYNC_OVERRIDING_PATH_PREFIXES:-prompts/ plugin/ templates/ .harness/standards/}"
 
 # The label a brief's category is applied under: this prefix followed by the
