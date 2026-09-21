@@ -1,0 +1,153 @@
+story:
+  id: story-184
+  title: Every confined stage, both verifiers and the revert-check schema say what the coordinator does with an edit outside a confinement
+  description: |
+    Since story-175, when a stage that is confined to certain paths (the
+    tester to the tests directory, the documenter to the architecture
+    documents) edits a file outside them, the coordinator always undoes that
+    edit, whether or not the test suite needed it. It keeps the stage's own
+    version in the run directory, and when the suite did need the edit it
+    records the set as routed, so the stage that owns that file receives the
+    work on a retry rather than having another stage's version accepted.
+    Creating a new file outside the confinement stops the run outright.
+
+    Every text that tells an agent or a reader about this check says
+    something else. The tester is told that an outside edit earns its place
+    by being necessary, which is the exact behaviour story-175 was filed to
+    stop. The documenter is told nothing about the check on an ordinary turn,
+    and inside its correction-pass paragraph it is told the weaker form of
+    the same removed rule. The refactor verifier is never shown the
+    revert-check record at all, although a refactor run writes one for its
+    documenter. And the schema describing the record knows only two
+    dispositions, so a routed record validates while contradicting the
+    schema's own prose. This story brings all of those texts to what the
+    coordinator does, and writes the assertions that hold them there.
+
+    It leaves the coordinator alone, because the check's behaviour is
+    story-175's and is what these texts are being brought to. It leaves the
+    story verifier's prompt alone, because story-175 already rewrote it and
+    it is the text this story copies from. This story was planned from the
+    brief filed under 241, which replaced #239, #238 and #176 (itself
+    covering #169), since landing them apart would have had one story undo
+    part of another.
+
+    The texts and where they stand. The routed disposition is defined on
+    RevertCheckResult in orchestration/story_coordinator.py, whose docstring
+    names the three dispositions and whose as_record writes a `routed` key
+    beside a `reverted` block and `permitted` true. The tester's confinement
+    paragraph is the one following {{stage_path_restrictions}} in
+    prompts/story-tester.md. prompts/documenter.md renders no
+    {{stage_path_restrictions}} today though orchestration/context_assembler.py
+    builds it for every stage, and its only sentence about the check sits in
+    the correction-pass paragraph ("put to the revert check after your turn
+    ends, and undone if the suite is green without it"), which
+    tests/test_documenter_is_governed.py pins verbatim in
+    test_the_documenter_prompt_on_a_pass_states_the_grant_and_the_check.
+    prompts/refactor-verifier.md carries no {{revert_check_result}} though
+    context_assembler builds that too and workflows/refactor-workflow.json
+    gives the refactor documenter a revert_check. The paragraph to copy into
+    it is the story verifier's, introducing {{revert_check_result}} in
+    prompts/story-verifier.md. schemas/revert-check-result.schema.json
+    declares no routed property, its reverted description says the block is
+    present only when permitted is false, and its top-level description opens
+    with edits being permitted iff reverting them makes the suite fail.
+
+    Two decisions taken at planning. The confinement paragraph is duplicated
+    exactly in the tester and documenter templates rather than shared through
+    a new partial, because a partial would need a new placeholder in
+    context_assembler and widen the story into orchestration for no behaviour
+    gain; an assertion that the two templates carry the identical paragraph
+    is what stops them drifting apart. And .harness/docs/ARCHITECTURE.md
+    records the documenter's old correction-pass sentence as a fact about the
+    prompt, in the paragraph headed "The prompts say what the checks do";
+    bringing that record to the new wording is the documenter's ordinary work
+    under this workflow rather than a task of its own.
+  workflow: story-workflow
+
+tasks:
+  - Rewrite the confinement paragraph in prompts/story-tester.md, the one following {{stage_path_restrictions}}, so it states what the coordinator does since story-175. It says that an edit outside the paths this stage is confined to is not forbidden but is watched; that creating a file there stops the run; that modifying or deleting a file there is undone after the turn whether or not the suite needs it, with the stage's own version kept under the discarded directory in the run directory; that where the suite did need it the set is recorded as routed to the stage that owns the work, so the suite after this turn goes red and the verifier routes the work there rather than the edit standing; and that the changed-files record must still name the edit either way, because the record is left as written and the revert is recorded beside it. It no longer says an edit stands only if the suite fails without it, or that an edit earns its place by being necessary.
+  - Add {{stage_path_restrictions}} to prompts/documenter.md in the role layer, introduced as the tester template introduces it, followed by the confinement paragraph verbatim as the tester template carries it after this story, so the documenter reads it on every turn and not only inside the correction-pass paragraph.
+  - Rewrite the correction-pass paragraph in prompts/documenter.md so the sentence about an edit to any other file no longer says it is undone if the suite is green without it. It says such an edit is undone after the turn whether or not the suite needs it, as the confinement paragraph above it states, and keeps the instruction that a correction which cannot land in a file the documenter may change is reported in documentation-report.md rather than attempted elsewhere.
+  - Add {{revert_check_result}} to the runtime state layer of prompts/refactor-verifier.md, introduced by the story verifier's revert-check paragraph copied from prompts/story-verifier.md, the one that describes a permitted record, a reverted block with permitted false, and a permitted record beside a reverted block and a routed key, and says nothing there says an edit stands.
+  - Add a routed property to schemas/revert-check-result.schema.json, of type string, described as the wording of the restriction that routed the set, present exactly when the edits were needed and were undone anyway because that restriction says they are another stage's work, and absent otherwise. Rewrite the reverted description so the block is present when the check undid the edits for either reason, with permitted telling the two apart, rather than only when permitted is false. Rewrite the top-level description so it states the third disposition beside the two it already states, in the terms the coordinator's module docstring uses.
+  - Tester, in tests/test_documenter_is_governed.py, moves the verbatim pin of the correction-pass sentence to the new wording, with a control showing the old sentence is gone, and adds assertions over the documenter prompt rendered on an ordinary turn that it carries the rendered stage path restrictions and the confinement paragraph, and over the tester prompt rendered on an ordinary turn that it carries the same, and that the confinement paragraph in the two shipped templates is character for character the same.
+  - Tester, in tests/test_revert_check.py, adds assertions that a routed record, built the way the coordinator builds one through RevertCheckResult.as_record with a reverted block, permitted true and a routed key, validates against the shipped schema, that routed is a declared property of that schema, that the reverted description no longer says the block is present only when permitted is false, and that the top-level description names the routed disposition; and adds an assertion that the rendered refactor verifier prompt carries the revert-check record injected under revert_check_result, deriving the template name from the refactor workflow's verifier stage rather than writing it.
+
+acceptance_criteria:
+  - The tester prompt rendered against the story workflow on an ordinary turn (no correction pass, no repair pass, no retry) contains the rendered stage path restrictions and a paragraph stating that an edit outside the confinement is undone whether or not the suite needs it, that the stage's version is kept under the discarded directory, that a needed edit is routed to the owning stage, that creating a file outside the confinement stops the run, and that the changed-files record must still name an undone edit.
+  - The documenter prompt rendered against the story workflow on an ordinary turn contains the rendered stage path restrictions and the same paragraph, and the paragraph in prompts/documenter.md is character for character the paragraph in prompts/story-tester.md.
+  - Neither prompts/story-tester.md nor prompts/documenter.md contains the phrases "earns its place", "stands only if the suite fails without it" or "undone if the suite is green without it".
+  - The refactor verifier prompt rendered against the refactor workflow contains the revert-check record injected under revert_check_result, introduced by a paragraph that describes a permitted record, a reverted block with permitted false, and a permitted record beside a reverted block and a routed key.
+  - schemas/revert-check-result.schema.json declares a routed property whose description says it is the wording of the restriction that routed the set; its reverted description says the block is present when the check undid the edits for either reason with permitted telling them apart; and its top-level description states the routed disposition beside the permitted and refused ones.
+  - A record carrying permitted true, a reverted block and a routed key, written by RevertCheckResult.as_record, validates against the shipped revert-check-result schema.
+  - The verbatim pin of the documenter's correction-pass sentence in tests/test_documenter_is_governed.py asserts the new wording, and no existing assertion is weakened or removed to make the suite pass.
+  - The whole suite passes.
+
+technical_plan:
+  implementation_steps:
+    - Read the routed disposition as the coordinator states it, in the module docstring of orchestration/story_coordinator.py and the RevertCheckResult docstring, and write the confinement paragraph from that text so the prompt and the code agree.
+    - Rewrite the confinement paragraph in prompts/story-tester.md in place, keeping {{stage_path_restrictions}} and its introduction above it.
+    - Insert the restrictions introduction, {{stage_path_restrictions}} and the identical paragraph into the role layer of prompts/documenter.md, after the responsibilities and before the output-file instructions, and rewrite the correction-pass sentence so it agrees with the paragraph.
+    - Copy the story verifier's revert-check paragraph and {{revert_check_result}} into the runtime state layer of prompts/refactor-verifier.md, beside the documenter changed-files slot it explains.
+    - Edit schemas/revert-check-result.schema.json to add the routed property and rewrite the reverted and top-level descriptions; the record shape the coordinator writes is unchanged, so no orchestration edit is needed.
+    - The tester moves the pinned sentence in tests/test_documenter_is_governed.py and writes the new assertions there and in tests/test_revert_check.py, using the rendered_template helper and the shipped-workflow fixtures those modules already carry rather than writing stage or template names.
+  likely_file_changes:
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: The confinement paragraph states the disposition story-175 removed and is rewritten to the current one.
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: Gains {{stage_path_restrictions}} and the confinement paragraph on every turn, and its correction-pass sentence stops saying a needed edit is kept.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: Gains {{revert_check_result}} with the story verifier's paragraph above it, so a refactor verifier sees the record its documenter's revert check writes.
+    - file: schemas/revert-check-result.schema.json
+      stage: implementer
+      reason: Declares the routed property and describes the third disposition, so the schema and the verifier prompt agree about one artifact.
+    - file: tests/test_documenter_is_governed.py
+      stage: tester
+      reason: The verbatim pin of the correction-pass sentence moves to the new wording, and assertions over the rendered tester and documenter prompts on an ordinary turn are added.
+    - file: tests/test_revert_check.py
+      stage: tester
+      reason: Assertions that a routed record validates against the schema with routed declared, that the schema's descriptions state the third disposition, and that the rendered refactor verifier prompt carries the record.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The paragraph recording that the documenter's correction-pass sentence says an edit is undone if the suite is green without it is brought to the new wording, and the story's change is recorded.
+
+scope:
+  modify:
+    - prompts/story-tester.md
+    - prompts/documenter.md
+    - prompts/refactor-verifier.md
+    - schemas/revert-check-result.schema.json
+    - tests/test_documenter_is_governed.py
+    - tests/test_revert_check.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py (the check's behaviour is story-175's and is what the texts are being brought to; the record shape is unchanged)
+    - prompts/story-verifier.md (already rewritten by story-175; it is the text the refactor verifier's paragraph is copied from)
+    - orchestration/context_assembler.py (stage_path_restrictions and revert_check_result are already built for every stage; only the templates need to consume them, and a shared partial was declined in favour of an exact duplicate held by a test)
+    - workflows/ (no stage declaration changes; the refactor documenter's existing revert_check is what makes the verifier slot meaningful)
+
+verification_requirements:
+  - Confirm from the rendered tester and documenter prompts on an ordinary turn that both carry the rendered stage path restrictions and a confinement paragraph stating the current disposition, and that the paragraph is identical in the two templates.
+  - Confirm that neither prompts/story-tester.md nor prompts/documenter.md still says an outside edit stands only if the suite fails without it, earns its place by being necessary, or is undone if the suite is green without it.
+  - Confirm from the rendered refactor verifier prompt that the revert-check record is injected under revert_check_result and introduced by the three-disposition paragraph.
+  - Confirm that schemas/revert-check-result.schema.json declares routed, that a routed record as RevertCheckResult.as_record writes it validates, and that the reverted and top-level descriptions state the third disposition.
+  - Confirm that the assertion pinning the documenter's correction-pass sentence was moved to the new wording rather than deleted, and that the suite's assertion count did not fall.
+  - Confirm the whole suite passes.
+
+constraints:
+  - The coordinator's behaviour and the shape of the record it writes are unchanged; this story changes prose in prompts, a schema's descriptions and one declared property, and the assertions holding them.
+  - The confinement paragraph is written from the disposition the coordinator's docstrings state, and the refactor verifier's paragraph is copied from prompts/story-verifier.md rather than written afresh, so the texts agree with the code and with each other.
+  - Existing assertions are moved to the new wording, never weakened or removed.
+  - A test derives stage names, template names and artifact names from the workflow definition or a fixture rather than writing them.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 08:11:00
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 241
