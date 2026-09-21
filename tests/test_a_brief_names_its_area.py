@@ -63,9 +63,14 @@ Every absence asserted here carries a demonstration that it can fail:
     drop naming the scope as having produced no usable artifact" sits beside
     the same inspection of the same fixture over an envelope whose findings are
     absent and whose findings are not an array, both of which do record one;
-  * "an unusable suggestion is printed nowhere and reaches no queue entry" sits
-    beside the filed finding's own slug, which the identical reads of the
-    identical report and queue do find;
+  * "an unusable suggestion's words reach no report line and no queue entry"
+    sits beside the filed finding's own slug, which the identical reads of the
+    identical report and queue do find — and, since story-187, beside the drop
+    that names the entry, which the same read of the same report does print;
+  * "a refused suggestion is read as evidence of a vocabulary" sits beside the
+    same constructed report with the drop taken off, which reports nothing,
+    and with a malformed-finding drop in its place, which reports nothing
+    either — so it is that reason and not any drop that opens the gate;
   * "the filter's docstring no longer concedes that the envelope schema
     refused everything first" sits beside that same docstring with the
     conceding sentence spliced back onto it, which the identical search finds;
@@ -87,7 +92,8 @@ Every absence asserted here carries a demonstration that it can fail:
 One reading is written down here rather than left implicit, because two
 criteria pull against each other and the constraints decide which wins: an
 area-less filing is reported **where that inspection shows the target declares
-a vocabulary at all**, which is either a suggestion the Inspector wrote or a
+a vocabulary at all**, which is either a suggestion the Inspector wrote —
+usable or, since story-187, refused and recorded as a named drop — or a
 sibling filing that named an area. The harness may read no target's vocabulary,
 so those are the only things that tell a target which declared one from a target
 which declared none — and a line per area-less filing regardless would put a
@@ -130,6 +136,7 @@ from test_an_inspection_records_what_it_cost import (  # noqa: F401 - shared
     Inspector,                                        # idioms and fixtures
     ROOMY_CAP,
     Runner,
+    SOURCE_DIR,
     build_target,
     finding,
     harness,
@@ -365,8 +372,9 @@ def test_the_envelope_declares_the_suggestions_by_their_description_alone():
     declaration — because it is read for the report and filed by nothing, so a
     slip in one entry may not cost a whole scope the findings beside it. What
     the removed declarations said is required to be said in the description
-    instead: the shape expected of an entry, and that an entry failing it
-    yields nothing of its own and costs the entries beside it nothing.
+    instead: the shape expected of an entry, that an entry failing it is
+    dropped and named rather than silently skipped — the rule since story-187
+    — and that it costs the entries beside it nothing.
     """
     declared = ENVELOPE_SCHEMA["properties"][SUGGESTIONS]
 
@@ -377,7 +385,16 @@ def test_the_envelope_declares_the_suggestions_by_their_description_alone():
     assert "read for the report and filed by nothing" in said, said
     assert "slug" in said and "concerns" in said, said
     assert "holds the field to none of that" in said, said
+    assert "dropped and named" in said, said
     assert "cost the entries beside them nothing" in said, said
+    assert "yields nothing" not in said, said
+
+    envelope_said = flattened(ENVELOPE_SCHEMA["description"])
+    assert "dropped and named" in envelope_said, envelope_said
+    assert "typed as objects" not in envelope_said, envelope_said
+    assert "typed as objects" in flattened(
+        f"{ENVELOPE_SCHEMA['description']} ITS ITEMS ARE TYPED AS OBJECTS."
+    ), "the search for the retired claim finds nothing even when it is there"
 
 
 def test_an_envelope_carrying_only_findings_still_validates():
@@ -441,11 +458,12 @@ def test_the_same_validator_still_reports_a_malformed_findings_array():
     """The control for the acceptances above, and the story's own boundary.
 
     "The schema accepts an unusable suggestion" passes just as happily against
-    a validator that has stopped reading `required` and `items` at all. Here
+    a validator that has stopped reading `required` and `type` at all. Here
     the identical call is made against the same shipped envelope with the
     findings absent and with the findings not an array, both of which it
-    reports — so what was relaxed is the suggestions declaration and not the
-    validator's handling of items or of required properties.
+    reports — so what was relaxed is the suggestions declaration (and, since
+    story-187, the findings' item declaration) and not the validator's
+    handling of types or of required properties.
     """
     absent = schema_validator.validate(
         {SUGGESTIONS: [a_suggestion(A_SLUG)]}, ENVELOPE_SCHEMA)
@@ -588,7 +606,8 @@ def test_a_filed_briefs_record_carries_the_area_that_brief_named(tmp_path,
 
 
 # ==========================================================================
-# One unusable suggestion costs itself and leaves the findings beside it filed
+# One unusable suggestion costs itself, is named, and leaves the findings
+# beside it filed
 #
 # The schema section above says the relaxed envelope accepts such a suggestion.
 # What that buys is only visible through the code that reads an envelope: an
@@ -597,6 +616,13 @@ def test_a_filed_briefs_record_carries_the_area_that_brief_named(tmp_path,
 # findings loop ran, so every brief the invocation actually wrote was gone and
 # the spend was paid for and discarded. These drive real inspections against an
 # invocation that writes the envelope, on both surfaces that read one.
+#
+# Since story-187 the refused entry is not thrown away without a word: it is a
+# drop under its own reason, named — by its slug where it carries a readable
+# one, else by its position, and the field itself where it is not a list — with
+# what was wrong, in the same list as the inspection's other drops. And it is
+# still read as evidence that the target declares a vocabulary, so the
+# area-less briefs beside it are reported rather than silenced by the slip.
 # ==========================================================================
 
 
@@ -634,11 +660,22 @@ class Planting(Inspecting):
 
 def broad_planting(target: Path, harness_root: Path, *,
                    findings=(), envelope=()):
-    """One whole broad inspection whose invocation writes that envelope."""
+    """One broad inspection over one scope, whose invocation writes that
+    envelope.
+
+    The scope is named rather than left to the target's declaration, because
+    the fixture declares two and `Planting` writes the same envelope on every
+    invocation: a refused entry is a drop once per envelope that carries it, on
+    the same terms as a malformed finding, so an inspection over both scopes
+    would read the entry twice and record two drops for one refusal. Naming the
+    source scope is what makes "one envelope" true, so the tests below can say
+    "exactly one drop" about the one entry they wrote.
+    """
     config = harness_config.load_config(target)
     inspector = Planting(target, config, findings=list(findings),
                          envelope=envelope)
     return inspection.inspect(target, config, harness_root,
+                              arguments=(SOURCE_DIR,),
                               runner=inspector), inspector
 
 
@@ -672,19 +709,54 @@ UNREADABLE_ENVELOPES = {
 }
 
 
+#: How each unusable case is named in its drop, and what the drop says was
+#: wrong: an entry carrying a readable slug is named by it, one carrying none
+#: by its position, and a field that is not a list by the field. The "what was
+#: wrong" half names the offending key where there is one and the shape where
+#: there is not.
+HOW_EACH_IS_NAMED = {
+    "an entry with no concerns key": (A_SLUG, "concerns"),
+    "an entry with no slug key": ("the suggestion at position 1", "slug"),
+    "an entry whose concerns is null": (A_SLUG, "concerns"),
+    "an entry that is a string rather than an object":
+        ("the suggestion at position 1", "not an object"),
+    "a field that is not a list at all": (SUGGESTIONS, "not a list"),
+}
+
+
+def test_every_unusable_case_has_a_name_its_drop_is_expected_to_carry():
+    """The two tables above are one parametrization split in two, so a case
+    added to one and not the other is reported rather than silently unnamed."""
+    assert set(HOW_EACH_IS_NAMED) == set(UNUSABLE_SUGGESTIONS)
+
+
+def the_one_unusable_drop(report) -> inspection.Drop:
+    """The single drop an inspection over one refused entry records, and the
+    assertion that there is exactly one of them."""
+    dropped = report.dropped_for(inspection.UNUSABLE_SUGGESTION)
+    assert len(dropped) == 1, report.dropped
+    return dropped[0]
+
+
 @pytest.mark.parametrize("described", sorted(UNUSABLE_SUGGESTIONS))
 def test_an_inspection_files_the_finding_beside_an_unusable_suggestion(
         described, tmp_path, harness):
-    """The regression this story exists for, driven rather than reasoned about.
+    """The regression story-138 exists for, driven rather than reasoned about,
+    with the rule story-187 added on top.
 
     One well-formed finding is written beside a suggestion the reader will
     refuse, and the claim is that the finding is filed — named, so a report
     that filed something else could not pass — and that nothing reports the
     scope as having produced no usable artifact. The suggestions the report
-    carries are empty because the entry yielded nothing of its own, and the
+    carries are empty because the entry yielded nothing usable, and the
     control for that emptiness is
     `test_the_suggestions_an_envelope_carries_reach_the_report`, where the same
     reading of the same fixture carries a well-formed one.
+
+    What the entry does yield is one drop under its own reason, naming the
+    entry and saying what was wrong with it — and, because a suggestion is
+    written only where the Inspector was handed a vocabulary, the filed brief
+    beside it is still reported as area-less, with no suggestion to carry.
     """
     target = a_target(tmp_path, f"unusable-{as_a_path(described)}")
     report, inspector = broad_planting(
@@ -695,6 +767,67 @@ def test_an_inspection_files_the_finding_beside_an_unusable_suggestion(
     assert filed_slugs(report) == {finding(1)["slug"]}, report.dropped
     assert report.dropped_for(inspection.NO_ARTIFACT) == (), report.dropped
     assert report.area_suggestions == ()
+
+    named_as, what_was_wrong = HOW_EACH_IS_NAMED[described]
+    drop = the_one_unusable_drop(report)
+    assert named_as in drop.detail, drop
+    assert what_was_wrong in drop.detail, drop
+    assert drop.severity is None, drop
+
+    unnamed = report.unnamed_areas
+    assert [brief.slug for brief, _ in unnamed] == [finding(1)["slug"]], unnamed
+    assert [suggestion for _, suggestion in unnamed] == [""], unnamed
+
+
+def test_a_field_that_is_not_a_list_is_one_drop_beside_every_finding_filed(
+        tmp_path, harness):
+    """The field rather than its entries is what was wrong, so it is named once
+    rather than once per entry — there are no entries to name — and the two
+    findings beside it are both filed."""
+    target = a_target(tmp_path, "a-field-that-is-not-a-list")
+    report, inspector = broad_planting(
+        target, harness, findings=[finding(1), finding(2)],
+        envelope={SUGGESTIONS:
+                  UNUSABLE_SUGGESTIONS["a field that is not a list at all"]})
+
+    assert inspector.invocations, "the inspection was never attempted"
+    assert filed_slugs(report) == {finding(1)["slug"], finding(2)["slug"]}
+    assert report.dropped_for(inspection.NO_ARTIFACT) == (), report.dropped
+    assert len(report.dropped) == 1, report.dropped
+    assert SUGGESTIONS in the_one_unusable_drop(report).detail
+
+
+def test_each_refused_entry_is_its_own_drop_and_the_usable_one_beside_them_is_kept(
+        tmp_path, harness):
+    """Several refused entries in one field, each named by position or by slug,
+    beside one usable pair that still reaches the report.
+
+    The usable one is the control for the drops: a filter that refused
+    everything would name it too, and a filter that had stopped reading the
+    field would carry it nowhere.
+    """
+    target = a_target(tmp_path, "several-refused-beside-one-usable")
+    report, inspector = broad_planting(
+        target, harness, findings=[finding(1)],
+        envelope={SUGGESTIONS: [
+            "not-a-pair",                                   # position 1
+            {"slug": finding(1)["slug"], "concerns": "  "},  # position 2
+            a_suggestion(finding(1)["slug"]),                # usable
+            None,                                           # position 4
+        ]})
+
+    assert inspector.invocations, "the inspection was never attempted"
+    assert filed_slugs(report) == {finding(1)["slug"]}, report.dropped
+    assert report.area_suggestions == (
+        inspection.AreaSuggestion(slug=finding(1)["slug"], concerns=CONCERNS),)
+
+    details = [one.detail
+               for one in report.dropped_for(inspection.UNUSABLE_SUGGESTION)]
+    assert len(details) == 3, report.dropped
+    assert "the suggestion at position 1" in details[0], details
+    assert finding(1)["slug"] in details[1] and "blank" in details[1], details
+    assert "the suggestion at position 4" in details[2], details
+    assert not any("position 3" in one for one in details), details
 
 
 @pytest.mark.parametrize("described", sorted(UNREADABLE_ENVELOPES))
@@ -721,29 +854,72 @@ def test_the_same_inspection_still_reports_an_envelope_it_cannot_read(
     assert reported, report.dropped
 
 
-def test_a_post_story_inspection_files_it_too_and_says_nothing_was_missing(
+#: Words that exist only inside an unusable entry, so finding them anywhere is
+#: that entry having been read as usable. The entry is unusable because its
+#: `concerns` is not a string, which is the shape `_area_suggestions` refuses
+#: while leaving the words on disk for a search to find. The drop that names
+#: the refusal says the slug and the key, and not the words.
+UNUSABLE_WORDS = "this entry was never a pair and must reach nothing"
+
+AN_UNUSABLE_PAIR = {"slug": A_SLUG, "concerns": {"words": UNUSABLE_WORDS}}
+
+
+def queued_text(target: Path) -> str:
+    """Every entry this inspection left in the queue, as one text.
+
+    The queue entry is what a brief, its payload, its outbox entry and its
+    tracker item are all made from downstream — nothing else is written and
+    nothing is sent from anywhere else — so words absent from every byte of it
+    reach none of them.
+    """
+    queue = outbox.queue_dir(target)
+    return "\n".join(path.read_text(encoding="utf-8")
+                     for path in sorted(queue.rglob("*")) if path.is_file())
+
+
+def test_a_post_story_inspection_files_it_too_names_the_drop_and_the_missing_area(
         tmp_path, harness, monkeypatch):
     """The narrow path, where the same envelope problem cost a whole story's
     inspection its findings.
 
     The summary is the line that carries the counts and every way the
-    inspection dropped something, so it is where both halves are read: one
-    finding found and one filed, and the missing-artifact reason not named on
-    it. The control for that absence is the test below, where the same summary
-    of the same fixture does name it.
+    inspection dropped something, so it is where the halves are read: one
+    finding found and one filed, the missing-artifact reason not named on it,
+    and — since story-187 — the unusable-suggestion reason named with its
+    count, on the same terms as a malformed finding, while the finding count
+    stays at one because a suggestion is not a finding. The control for the
+    missing-artifact absence is the test below, where the same summary of the
+    same fixture does name it.
+
+    The brief that was filed named no area, and the only suggestion written
+    for it was refused; the refusal is still evidence of a vocabulary, so the
+    report writes its no-area-was-named note for the brief, with nothing to
+    say it concerns. The control for that note is
+    `test_an_area_less_brief_the_envelope_offered_nothing_for_is_not_reported`,
+    the same run with no suggestion written at all, which writes none.
     """
     target = a_target(tmp_path, "a-story-with-an-unusable-suggestion")
     code, inspector = narrow_planting(
         target, harness, monkeypatch, findings=[finding(1)],
-        envelope={SUGGESTIONS:
-                  UNUSABLE_SUGGESTIONS["an entry with no concerns key"]})
+        envelope={SUGGESTIONS: [AN_UNUSABLE_PAIR]})
 
     assert code == 0
     assert inspector.invocations, "the inspection was never attempted"
 
     said = summary_of(target)
-    assert "1 finding(s), 1 filed" in said, said
+    assert "1 finding(s), 1 filed, 1 dropped" in said, said
     assert inspection.NO_ARTIFACT not in said, said
+    assert f"; {inspection.UNUSABLE_SUGGESTION}: 1" in said, said
+
+    notes = notes_in(target)
+    assert len(notes) == 1, inspection_lines(target)
+    assert "no area was named for" in notes[0], notes
+    assert finding(1)["slug"] in notes[0], notes
+    assert UNUSABLE_WORDS not in "\n".join(inspection_lines(target))
+
+    queued = queued_text(target)
+    assert finding(1)["slug"] in queued, queued
+    assert UNUSABLE_WORDS not in queued, queued
 
 
 @pytest.mark.parametrize("described", sorted(UNREADABLE_ENVELOPES))
@@ -769,55 +945,99 @@ def test_the_same_summary_names_the_missing_artifact_when_it_is_missing(
     assert "0 filed" in said, said
 
 
-#: Words that exist only inside an unusable entry, so finding them anywhere is
-#: that entry having been read as usable. The entry is unusable because its
-#: `concerns` is not a string, which is the shape `_area_suggestions` refuses
-#: while leaving the words on disk for a search to find.
-UNUSABLE_WORDS = "this entry was never a pair and must reach nothing"
-
-AN_UNUSABLE_PAIR = {"slug": A_SLUG, "concerns": {"words": UNUSABLE_WORDS}}
-
-
-def queued_text(target: Path) -> str:
-    """Every entry this inspection left in the queue, as one text.
-
-    The queue entry is what a brief, its payload, its outbox entry and its
-    tracker item are all made from downstream — nothing else is written and
-    nothing is sent from anywhere else — so words absent from every byte of it
-    reach none of them.
-    """
-    queue = outbox.queue_dir(target)
-    return "\n".join(path.read_text(encoding="utf-8")
-                     for path in sorted(queue.rglob("*")) if path.is_file())
+def area_less_block(text: str) -> list[str]:
+    """The lines `l5-inspect` prints between its area-less header and the list
+    of what was filed: the briefs it says were filed with no area."""
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines)
+              if "filed with no area" in line]
+    if not starts:
+        return []
+    block = []
+    for line in lines[starts[0] + 1:]:
+        if not line.startswith("  "):
+            break
+        block.append(line)
+    return block
 
 
-def test_an_unusable_suggestion_reaches_no_queue_entry_and_no_report(
+def dropped_lines(text: str) -> list[str]:
+    """The lines `l5-inspect` prints beneath its "dropped" header."""
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines)
+              if line.startswith("dropped ")]
+    if not starts:
+        return []
+    return [line for line in lines[starts[0] + 1:] if line.startswith("  ")]
+
+
+def test_an_unusable_suggestion_reaches_no_queue_entry_and_is_named_as_a_drop(
         tmp_path, harness):
-    """What an unusable entry costs beside the finding: nothing, and nothing of
-    its own either.
+    """What an unusable entry costs beside the finding: nothing; and what it
+    yields of its own: one named drop, and no line carrying its words.
 
-    Both absences are read beside the filed finding's own slug, which the
-    identical read of the identical report and the identical read of the
-    identical queue do find — so neither absence can be satisfied by a report
-    that printed nothing, a queue this read cannot see, or a slug resolved to
-    something that appears in neither.
+    Both absences of the words are read beside the filed finding's own slug,
+    which the identical read of the identical report and the identical read of
+    the identical queue do find — so neither absence can be satisfied by a
+    report that printed nothing, a queue this read cannot see, or a slug
+    resolved to something that appears in neither. The drop is read off the
+    same printed text, in the dropped list `l5-inspect` prints for every drop
+    without an edit for this one, and the area-less block names the filed
+    brief because the refused entry is still evidence of a vocabulary. The
+    control for that block is
+    `test_the_broad_report_of_such_a_target_is_the_report_it_was_before`,
+    where the same fixture with no suggestion written prints none.
     """
-    target = a_target(tmp_path, "an-unusable-suggestion-yields-nothing")
+    target = a_target(tmp_path, "an-unusable-suggestion-yields-one-drop")
     report, inspector = broad_planting(
         target, harness, findings=[finding(1)],
         envelope={SUGGESTIONS: [AN_UNUSABLE_PAIR]})
 
     assert inspector.invocations, "the inspection was never attempted"
     assert report.area_suggestions == ()
+    drop = the_one_unusable_drop(report)
+    assert A_SLUG in drop.detail and "concerns" in drop.detail, drop
 
     text, code = printed(report)
     assert code == 0
     assert finding(1)["slug"] in text, text
     assert UNUSABLE_WORDS not in text, text
 
+    dropped = dropped_lines(text)
+    assert len(dropped) == 1, text
+    assert inspection.UNUSABLE_SUGGESTION in dropped[0], dropped
+    assert drop.detail in dropped[0], dropped
+
+    block = area_less_block(text)
+    assert len(block) == 1, text
+    assert finding(1)["slug"] in block[0], block
+    assert not any("concerns" in line for line in block), block
+
     queued = queued_text(target)
     assert finding(1)["slug"] in queued, queued
     assert UNUSABLE_WORDS not in queued, queued
+    assert inspection.UNUSABLE_SUGGESTION not in queued, queued
+
+
+def test_the_two_readers_of_the_printed_report_find_what_they_look_for():
+    """The controls for the two lists read above: each reader, pointed at a
+    constructed report carrying one filed brief that named no area, one
+    suggestion for it and one malformed-finding drop, finds the block and the
+    drop — so an empty answer from either is the text lacking the thing and
+    not the reader looking past it."""
+    report = dataclasses.replace(
+        a_report(a_filed(UNNAMED),
+                 suggestions=[{"slug": UNNAMED, "concerns": CONCERNS}]),
+        dropped=(inspection.Drop(inspection.MALFORMED, "nothing at all"),))
+    text, code = printed(report)
+    assert code == 0
+
+    block = area_less_block(text)
+    assert any(UNNAMED in line for line in block), text
+    assert any(CONCERNS in line for line in block), text
+
+    dropped = dropped_lines(text)
+    assert dropped == [f"  {inspection.MALFORMED}: nothing at all"], text
 
 
 THE_CONCESSION = "the envelope schema has already been satisfied"
@@ -1082,6 +1302,80 @@ def test_the_broad_report_prints_no_suggestion_for_a_finding_it_did_not_file():
     assert CONCERNS in text, text
     assert CONCERNS_OF_THE_DROPPED not in text, text
     assert "never-filed" not in text, text
+
+
+# ==========================================================================
+# A refused suggestion is evidence of a vocabulary, and is not a finding
+#
+# The gate in `Report.unnamed_areas` and the count in `story_inspection._counts`
+# are one derivation each beneath both surfaces, so they are asserted once
+# here on constructed reports — the driven tests above show the same rule
+# through each surface, and these show that the reason itself is what decides.
+# ==========================================================================
+
+
+def a_refusal(detail: str = "the suggestion at position 1: not an object"
+              ) -> inspection.Drop:
+    """One drop of the kind `_area_suggestions` records for a refused entry."""
+    return inspection.Drop(inspection.UNUSABLE_SUGGESTION, detail)
+
+
+def test_a_refused_suggestion_alone_opens_the_gate_on_an_area_less_brief():
+    """One filed brief that named no area, no usable suggestion, and one drop
+    saying the only suggestion written was refused: the brief is returned,
+    with an empty suggestion beside it.
+
+    The two controls are the same report with the drop taken off, where
+    nothing is returned — which is the no-vocabulary rule, unchanged — and the
+    same report with a malformed-finding drop in the refusal's place, where
+    nothing is returned either. So it is that reason, and not the presence of
+    any drop at all, that is read as evidence.
+    """
+    refused = dataclasses.replace(a_report(a_filed(UNNAMED)),
+                                  dropped=(a_refusal(),))
+    assert refused.unnamed_areas == ((a_filed(UNNAMED), ""),)
+
+    without = dataclasses.replace(refused, dropped=())
+    assert without.unnamed_areas == ()
+
+    other_drop = dataclasses.replace(
+        refused,
+        dropped=(inspection.Drop(inspection.MALFORMED, "position 1: title"),))
+    assert other_drop.unnamed_areas == ()
+
+
+def test_a_refused_suggestion_beside_a_brief_that_named_an_area_names_nothing():
+    """The gate opens the question and the brief's own area answers it: a
+    refused suggestion beside a brief that named an area leaves nothing to
+    report, on the same terms a usable one would."""
+    report = dataclasses.replace(a_report(a_filed(NAMED, area=AN_AREA)),
+                                 dropped=(a_refusal(),))
+    assert report.unnamed_areas == ()
+
+    text, code = printed(report)
+    assert code == 0
+    assert area_less_block(text) == [], text
+    assert len(dropped_lines(text)) == 1, text
+
+
+def test_a_refused_suggestion_is_dropped_but_is_not_counted_as_a_finding():
+    """`_counts` is what the summary line's findings figure comes from, so a
+    suggestion counted there would read as a finding the inspection lost.
+
+    The control is the same report with a malformed-finding drop in the
+    refusal's place, which the same count does count as a finding: so the
+    figure below is the reason being excluded and not a count that has stopped
+    seeing drops.
+    """
+    refused = dataclasses.replace(a_report(a_filed(UNNAMED)),
+                                  dropped=(a_refusal(),))
+    assert story_inspection._counts(refused) == (1, 1, 1)
+    assert inspection.UNUSABLE_SUGGESTION in story_inspection.NOT_A_FINDING
+
+    malformed = dataclasses.replace(
+        refused,
+        dropped=(inspection.Drop(inspection.MALFORMED, "position 1: title"),))
+    assert story_inspection._counts(malformed) == (2, 1, 1)
 
 
 # ==========================================================================

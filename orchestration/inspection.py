@@ -237,6 +237,16 @@ ALREADY_FILED_LOCALLY = "already filed by this harness"
 ALREADY_QUEUED = "already queued"
 
 MALFORMED = "malformed"
+#: An `area_suggestions` entry the reader could not use — not an object, a
+#: `slug` or `concerns` missing or not a string, or blank — or a field that is
+#: not a list at all. Distinct from MALFORMED because a suggestion is not a
+#: finding: it reaches no brief, no payload, no outbox entry and no tracker, so
+#: a count of findings must not count it, and a reader is owed which of the two
+#: was refused. Named rather than skipped because a usable suggestion is one of
+#: only two clues that the target declares an area vocabulary, and a refused
+#: one is the same clue: dropping it silently silenced the report of the
+#: area-less briefs beside it.
+UNUSABLE_SUGGESTION = "unusable area suggestion"
 UNKNOWN_WORKFLOW = "names a workflow the harness does not define"
 
 #: The finding is real and rated honestly and is beneath the floor this
@@ -483,6 +493,12 @@ class AreaSuggestion:
     not be filed under. `slug` is what matches it to a brief that was actually
     filed, so a suggestion about a finding that was dropped is matched to
     nothing and printed by neither report surface.
+
+    Only a usable pair becomes one of these. An entry the reader refused is
+    not silently skipped but recorded as a Drop under UNUSABLE_SUGGESTION,
+    named and with what was wrong, in the same list as the inspection's other
+    drops — and it still counts as evidence that the target declares an area
+    vocabulary, which is what keeps the area-less briefs beside it reported.
     """
 
     slug: str
@@ -643,13 +659,24 @@ class Report:
         it was handed declares names none of which fit, or a sibling filing that
         named an area. Where neither is present there is no evidence of a
         vocabulary at all, and nothing is said.
+
+        A suggestion counts as that evidence whether or not it was usable: a
+        refused entry — recorded under UNUSABLE_SUGGESTION in `dropped` — was
+        still written, and it is written only where a vocabulary was handed
+        over. Reading only the usable ones let a slip in the sentence meant to
+        explain the gap silence the report of the gap, so an inspection whose
+        every brief named no area and whose only suggestion was refused still
+        returns each filed brief, with an empty suggestion beside it.
         """
         suggested = {
             one.slug: one.concerns for one in self.area_suggestions
             if one.concerns
         }
-        declares_areas = bool(suggested) or any(
-            brief.area for brief in self.filed)
+        declares_areas = (
+            bool(suggested)
+            or bool(self.dropped_for(UNUSABLE_SUGGESTION))
+            or any(brief.area for brief in self.filed)
+        )
         if not declares_areas:
             return ()
         return tuple(
@@ -945,8 +972,10 @@ def _reported_cost(invoked) -> float | None:
     return float(reported)
 
 
-def _area_suggestions(document) -> tuple[AreaSuggestion, ...]:
-    """What one envelope said it could name no area for.
+def _area_suggestions(
+        document) -> tuple[tuple[AreaSuggestion, ...], tuple[Drop, ...]]:
+    """What one envelope said it could name no area for, and what of that it
+    said unusably: the usable suggestions, and one Drop per refused entry.
 
     The envelope declares the field and holds it to nothing, so this filter is
     where a suggestion is judged and it is the only thing that judges one. That
@@ -956,26 +985,55 @@ def _area_suggestions(document) -> tuple[AreaSuggestion, ...]:
     an entry that reaches no brief, no payload, no outbox entry and no tracker.
     So an envelope carrying the sibling not at all — every envelope written
     before the field existed, and every envelope an inspection of a target
-    declaring no areas writes — yields nothing, a field that is not a list at
-    all yields nothing, and an entry that is not a usable pair of strings
-    yields nothing of its own and costs the entries beside it nothing, on the
-    rule the findings loop already follows for one malformed finding.
+    declaring no areas writes — yields nothing and drops nothing.
+
+    A refused entry is a named drop rather than a silent skip, on the rule the
+    findings loop already follows for one malformed finding: it costs the
+    entries beside it nothing, and it is named — by its slug where it carries a
+    readable one, otherwise by its position — with what was wrong with it, so
+    it shows up in the same list where the inspection reports its other drops.
+    A field that is not a list at all is one such drop rather than a per-entry
+    one. Naming it matters beyond the report of the drop itself: a suggestion
+    is written only where a vocabulary the Inspector was handed declared names
+    none of which fit, so a refused one is evidence of a vocabulary exactly as
+    a usable one is, and `Report.unnamed_areas` reads it as such. Nothing here
+    reaches a brief, a payload, an outbox entry or a tracker.
     """
-    declared = document.get(AREA_SUGGESTIONS) or []
+    declared = document.get(AREA_SUGGESTIONS)
+    if declared is None:
+        return (), ()
     if not isinstance(declared, list):
-        return ()
+        return (), (Drop(
+            UNUSABLE_SUGGESTION,
+            f"the {AREA_SUGGESTIONS} field is not a list "
+            f"(found {type(declared).__name__})",
+        ),)
     found = []
-    for one in declared:
-        if not isinstance(one, dict):
+    dropped = []
+    for position, one in enumerate(declared, start=1):
+        named = _describe(one, f"the suggestion at position {position}")
+        problem = _suggestion_problem(one)
+        if problem:
+            dropped.append(Drop(UNUSABLE_SUGGESTION, f"{named}: {problem}"))
             continue
-        slug = one.get("slug")
-        concerns = one.get("concerns")
-        if not isinstance(slug, str) or not isinstance(concerns, str):
-            continue
-        if not slug.strip() or not concerns.strip():
-            continue
-        found.append(AreaSuggestion(slug=slug.strip(), concerns=concerns.strip()))
-    return tuple(found)
+        found.append(AreaSuggestion(
+            slug=one["slug"].strip(), concerns=one["concerns"].strip()))
+    return tuple(found), tuple(dropped)
+
+
+def _suggestion_problem(one) -> str:
+    """What is wrong with one `area_suggestions` entry, or "" for a usable pair."""
+    if not isinstance(one, dict):
+        return f"not an object (found {type(one).__name__})"
+    for key in ("slug", "concerns"):
+        if key not in one:
+            return f"'{key}' is missing"
+        value = one[key]
+        if not isinstance(value, str):
+            return f"'{key}' is not a string (found {type(value).__name__})"
+        if not value.strip():
+            return f"'{key}' is blank"
+    return ""
 
 
 def _area(finding) -> str:
@@ -1079,7 +1137,10 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
         result.dropped.append(Drop(NO_ARTIFACT, f"{scope.label}: {problem}"))
         return result
 
-    result.area_suggestions = _area_suggestions(document)
+    # A refused suggestion is a named drop beside the findings' own, so it
+    # reaches Report.dropped on both paths through the same list.
+    result.area_suggestions, refused = _area_suggestions(document)
+    result.dropped.extend(refused)
 
     brief_schema = schema_validator.load_schema(BRIEF_SCHEMA, harness_root)
     defined = harness_config.workflow_names(harness_root)

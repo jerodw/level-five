@@ -180,8 +180,11 @@ FILED_COMMIT_SUBJECT = (
 )
 
 #: The drop reasons that name something other than a finding the invocation
-#: produced, so a count of findings does not count them.
-NOT_A_FINDING = (inspection.NO_ARTIFACT,)
+#: produced, so a count of findings does not count them: an invocation that
+#: wrote no artifact at all, and an area suggestion the reader refused — a
+#: suggestion reaches no brief and is not a finding whether or not it was
+#: usable.
+NOT_A_FINDING = (inspection.NO_ARTIFACT, inspection.UNUSABLE_SUGGESTION)
 
 
 # --------------------------------------------------------------------------
@@ -861,8 +864,8 @@ def _counts(report) -> tuple[int, int, int]:
     """What the invocation produced, what was filed, and what was dropped.
 
     A drop that names something other than a finding — an invocation that wrote
-    no artifact at all — is counted as dropped but not as a finding, because it
-    is not one.
+    no artifact at all, or an area suggestion the reader refused — is counted
+    as dropped but not as a finding, because it is not one.
     """
     dropped = len(report.dropped)
     findings = len(report.filed) + sum(
@@ -924,6 +927,7 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
         inspection.ALREADY_FILED_LOCALLY,
         inspection.ALREADY_QUEUED,
         inspection.MALFORMED,
+        inspection.UNUSABLE_SUGGESTION,
         inspection.UNKNOWN_WORKFLOW,
         inspection.BENEATH_THE_FLOOR,
         inspection.PAST_THE_CAP,

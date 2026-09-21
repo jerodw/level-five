@@ -902,6 +902,37 @@ def test_a_finding_missing_a_required_field_is_dropped_and_named(missing,
     assert len(found.entries) == 1
 
 
+def test_a_finding_that_is_not_an_object_is_dropped_alone_and_named_by_position(
+        tmp_path):
+    """A string and a null among the findings cost only themselves.
+
+    Before story-187 the envelope typed its items as objects, so either entry
+    cost the whole scope its findings under "no findings artifact". Now the
+    loop that judges findings one at a time drops each under MALFORMED, named
+    by its position because a non-object carries no slug or title to be named
+    by, and files the object beside them. The control for "no such drop" is
+    `test_a_findings_file_that_misses_the_envelope_schema_says_that` and its
+    siblings above, where the identical drive of an envelope that is
+    unreadable as a whole does record one.
+    """
+    conforming = brief(slug="the-one-that-conforms")
+    found = inspecting(tmp_path, act=writes("a defect", None, conforming))
+
+    assert found.filed_slugs == [conforming["slug"]]
+    assert len(found.entries) == 1
+    assert found.dropped(NO_ARTIFACT) == (), found.report.dropped
+
+    dropped = found.dropped(MALFORMED)
+    assert len(dropped) == 2, found.report.dropped
+    assert "the finding at position 1" in dropped[0].detail, dropped
+    assert "the finding at position 2" in dropped[1].detail, dropped
+    assert all(one.severity is None for one in dropped), dropped
+
+    printed = report_text(found)
+    assert "the finding at position 1" in printed
+    assert "the finding at position 2" in printed
+
+
 def test_a_finding_whose_field_is_out_of_its_enum_is_dropped_and_named(
         tmp_path):
     found = inspecting(tmp_path, act=writes(
@@ -2321,22 +2352,64 @@ def test_a_conforming_envelope_is_accepted():
 @pytest.mark.parametrize("instance,path", [
     pytest.param({}, "$.findings", id="no-findings"),
     pytest.param({"findings": {}}, "$.findings", id="findings-not-an-array"),
-    pytest.param({"findings": ["a defect"]}, "$.findings[0]",
-                 id="finding-not-an-object"),
 ])
 def test_each_way_of_malforming_the_envelope_is_refused(instance, path):
+    """The two ways an envelope is unreadable as a whole: nothing in either
+    can be judged one entry at a time. A finding that is not an object is no
+    longer among them — see the test below."""
     problems = schema_validator.validate(instance, FINDINGS_SCHEMA)
     assert problems, instance
     assert any(path in problem for problem in problems), problems
 
 
-def test_the_envelope_types_its_items_as_objects_and_nothing_more():
-    """Which is what lets one malformed finding be dropped without costing the
-    rest, and what keeps the brief's shape defined once."""
-    items = FINDINGS_SCHEMA["properties"]["findings"]["items"]
-    assert items == {"type": "object"}
+#: Two findings that are not objects at all, which the envelope used to refuse
+#: as a whole and now leaves to the loop that judges findings one at a time.
+NOT_OBJECTS = ("a defect", None)
+
+
+def test_a_finding_that_is_not_an_object_passes_the_envelope_and_fails_the_brief():
+    """The rule since story-187: the envelope holds `findings` to being an
+    array and nothing more, so a string or a null among the findings is not an
+    envelope the validator refuses. What refuses it is the brief schema, one
+    finding at a time, at the root of the finding rather than at a field — and
+    that is what lets it be dropped alone and named by its position, exactly
+    as a finding missing a field already is.
+    """
+    for one in NOT_OBJECTS:
+        assert schema_validator.validate(envelope(one),
+                                         FINDINGS_SCHEMA) == [], one
+        assert schema_validator.validate(envelope(brief(), one),
+                                         FINDINGS_SCHEMA) == [], one
+        problems = schema_validator.validate(one, BRIEF_SCHEMA)
+        assert problems, one
+        assert any(problem.startswith("$:") for problem in problems), problems
+
+
+def test_the_envelope_holds_the_findings_to_an_array_and_nothing_more():
+    """No item declaration, an array, and required: which is what lets one
+    malformed finding — an object missing a field, or no object at all — be
+    dropped without costing the rest, and what keeps the brief's shape
+    defined once.
+
+    The absence of the item declaration is controlled by splicing one back
+    onto the shipped declaration, where the identical validator refuses the
+    string finding the shipped one accepts — so the acceptance above is the
+    declaration and not a validator that has stopped reading `items`.
+    """
+    declared = FINDINGS_SCHEMA["properties"]["findings"]
+    assert "items" not in declared, declared
+    assert declared["type"] == "array"
+    assert "findings" in FINDINGS_SCHEMA["required"]
     assert schema_validator.validate(envelope({"anything": True}),
                                      FINDINGS_SCHEMA) == []
+
+    typed = {**FINDINGS_SCHEMA,
+             "properties": {**FINDINGS_SCHEMA["properties"],
+                            "findings": {**declared,
+                                         "items": {"type": "object"}}}}
+    refused = schema_validator.validate(envelope("a defect"), typed)
+    assert refused, "the spliced item declaration refused nothing"
+    assert any("$.findings[0]" in problem for problem in refused), refused
 
 
 def test_the_brief_schema_states_why_its_paths_are_bare_and_what_it_is_not():
