@@ -1,0 +1,149 @@
+story:
+  id: story-194
+  title: The scope extension's create-sense bound, its accounting on every verdict and its parenthetical walk agree with the rest of the coordinator
+  description: |
+    Story-183 let the verifier reach one file outside a story's declared
+    scope when that file states a rule the story changed, with the
+    coordinator refusing a reach that crosses a bound. Three things it left
+    behind sit in the same few hundred lines. First, a stage that is only
+    forbidden from creating files somewhere is treated as forbidden from
+    changing anything there, so an implementer's reach into an existing test
+    is refused with a message about creating a file nobody would create.
+    Second, the record that says which routed findings were acted on and
+    which were left is written once per attempt, on the first verdict, so a
+    refusal made on a later verdict of the same attempt — the ordinary place
+    a verifier discovers a fix needs a second file — is logged and then
+    forgotten: no brief is filed for it. Third, two functions each walk a
+    do_not_modify entry backwards to find where its reason starts, and
+    nothing keeps the two walks agreeing.
+
+    This story makes the create bound ask the question the enforcement
+    already asks — a confinement governs a change whether or not the file
+    exists, a create restriction governs only a creation — makes a refusal on
+    any verdict of an attempt reach the record the completion filing reads,
+    and makes the parenthetical walk one function both readers call. It
+    leaves the three bounds themselves, what a reasoned entry protects, the
+    once-per-attempt rule for the split itself, the archived verdict, and
+    the Inspector's line between a finding about the story's change and one
+    about surrounding code exactly as they are. It was planned from the brief
+    filed under 274, which covers and supersedes the briefs filed as #266,
+    #267 and #268.
+
+    The create bound. scope_extension_check in orchestration/story_coordinator.py
+    is pure over its inputs and has no tree to look at, so it gains a required
+    argument answering whether a repository-relative path already exists, and
+    the verifier branch of run_story supplies it from the run's target root.
+    A restriction governs an extension when StageRestriction.governs is true
+    of the path and either the restriction's sense governs modifications (a
+    confinement) or the path does not exist (a create restriction meeting a
+    creation); which senses govern modifications is read off a table beside
+    _ROUTES_NECESSARY_EDITS, so no call site compares the sense. A refusal
+    under a create restriction says the path does not exist and the extension
+    would create it, beside the restriction's own wording.
+
+    The accounting. account_after_verdict in orchestration/story_inspection.py
+    keeps its once-per-attempt split. Where the attempt's accounting artifact
+    already exists and this verdict's refused_slugs is non-empty, the routed
+    slugs it names that the artifact records as acted on are moved to the
+    remainder, each with the refusal recorded as its declined reason, the
+    artifact is rewritten through write_accounting with the counts recomputed,
+    and an event of the accounting kind says which slugs moved and why. A
+    refused slug the artifact already records in the remainder is left as it
+    was recorded. A refused slug the artifact does not record as routed
+    changes nothing, as today. remainder_findings and file_at_completion are
+    unchanged: they read remainder_slugs, which is now correct.
+
+    The walk. One private function in orchestration/story_coordinator.py
+    returns the index of the "(" that opens the parenthetical an entry ends
+    with, walking back from its final ")" and counting depth, or None where
+    the stripped entry does not end with ")" or no "(" balances it.
+    carries_a_reason and _entry_paths both call it; carries_a_reason still
+    asks for non-empty text before it and a word character inside it, and
+    _entry_paths still splits the text before it on _ENTRY_PATH_BOUNDARY,
+    splitting the whole entry where the walk returns None.
+  workflow: story-workflow
+
+tasks:
+  - Add a table beside _ROUTES_NECESSARY_EDITS in orchestration/story_coordinator.py saying, per sense, whether a restriction governs a modification of an existing file (a confinement does, a create restriction does not), read through a property on StageRestriction and by no call site comparing the sense.
+  - Give scope_extension_check a required argument answering whether a path already exists in the tree, and have the stage-restriction bound refuse only where the restriction governs the path and either its sense governs modifications or the path does not exist; word a create-sense refusal so it says the path does not exist and the extension would create it.
+  - Supply that argument in run_story's verifier branch from the run's target root, and adapt the existing calls in tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py to the new signature where they break.
+  - In orchestration/story_inspection.py, have the accounting amend an already-written attempt artifact when the verdict handed to it names refused slugs, moving each such slug the artifact records as acted on to the remainder with the refusal as its declined reason, rewriting the artifact through write_accounting, and saying what moved in an accounting event; leave the split itself once per attempt.
+  - Extract the backward walk from carries_a_reason and _entry_paths into one private function returning the opening index of the entry's closing parenthetical, or None, and have both readers call it without changing what either decides.
+  - Update the docstrings and section comments that state the old readings, and the story-183 section of .harness/docs/ARCHITECTURE.md, so they describe the create-sense bound, the amended accounting and the shared walk.
+  - Write the tests named under acceptance criteria.
+
+acceptance_criteria:
+  - A repairable finding carrying scope_extension whose category resolves to a stage declaring may_not_create over the file's directory is accepted when the file exists in the tree, and refused when it does not, with the refusal naming the restriction in its own words and saying the extension would create the file.
+  - A finding under the same conditions whose stage is confined elsewhere is refused whether or not the file exists, and the blocked-path and do_not_modify bounds decide exactly as before.
+  - The verifier branch decides existence against the run's target root, shown by a coordinator run under a workflow whose entered stage declares may_not_create over a directory, where an extension naming an existing file there is granted and one naming a missing file there is refused.
+  - A refusal made on the second verdict of one attempt — the verdict a correction or repair pass returns to — moves each routed slug it names from acted_on_slugs to remainder_slugs in that attempt's accounting artifact, records the refusal as the slug's declined reason, writes an accounting event saying so, and the run's completion filing files that finding as a brief.
+  - A second verdict of an attempt that refuses nothing leaves the accounting artifact byte-for-byte what the first verdict wrote, and a refused slug the artifact already records in the remainder keeps the reason it was recorded with.
+  - carries_a_reason and _entry_paths read the opening of an entry's closing parenthetical from one function, held by an assertion over the source or the call graph, and an entry whose reason carries nested parentheses, and one whose last parenthetical follows an earlier one, are judged and split at the same position by both.
+  - Every do_not_modify entry in the committed story artifacts under .harness/stories/ is judged by carries_a_reason and split by _entry_paths exactly as before the walk was shared.
+  - All existing tests pass, adapted where the signature change forced it and not weakened or skipped.
+
+technical_plan:
+  implementation_steps:
+    - Add _GOVERNS_MODIFICATIONS (or a name of that shape) keyed as _SENSES is, with a StageRestriction property reading it, next to routes_necessary_edits.
+    - Change scope_extension_check's signature to take an existence predicate as a required keyword argument; in the restriction bound, select the first restriction where governs(path) and (governs_modifications or not exists(path)); compose the create-sense wording.
+    - Pass a predicate over target_root from run_story's verifier branch; adapt the two calls in the story-183 test module.
+    - In _account_after_verdict, replace the early return on an existing artifact with an amendment path taken only when refused_slugs is non-empty; read the artifact, recompute acted/remainder lists from the findings record, rebuild the declined list keeping existing entries and adding the refusal for each moved slug, call write_accounting, and _say what moved.
+    - Add the shared walker above carries_a_reason; rewrite both readers over it.
+    - Revise docstrings, the section comment above SCOPE_EXTENSION, and the ARCHITECTURE.md section.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the create-sense bound and its wording, the existence argument at the check and its call site, and the shared parenthetical walk
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: the accounting amends an existing attempt artifact for a refusal made on a later verdict
+    - file: tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+      stage: implementer
+      reason: the two calls to scope_extension_check take the new required argument
+      reverting_breaks_the_suite: the check's signature gains a required argument, so the module's calls fail without the adaptation; reverting the edit reddens the suite.
+    - file: tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+      stage: tester
+      reason: the new assertions under acceptance criteria, in one module or split as the tester judges
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the story-183 section states the prefix reading, the once-per-attempt accounting and two walks; a section for this story records what changed and why
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-verifier.md, prompts/refactor-verifier.md and schemas/verification-result.schema.json (their wording — a restriction on the stage governs the file — already reads the enforcement's way once the bound does, and the existing prompt tests pin their phrases)
+    - workflows/ (the three bounds and the repair-pass budget are story-183's and unchanged; no definition gains or loses a key)
+    - orchestration/plan_validation.py (it imports carries_a_reason and reads it unchanged; the walk is shared beneath the predicate, not beside it)
+    - the about_the_change partition in orchestration/story_inspection.py (the Inspector's line between a finding about the story's change and one about surrounding code holds)
+    - file_at_completion and remainder_findings in orchestration/story_inspection.py (the completion filing keeps reading the final attempt's remainder_slugs; the amendment makes that record correct rather than adding a second one to read)
+    - the archived verdict under verification/ in the run directory (it stays what the verifier wrote; the run's decision about it lives in the events and the accounting)
+    - schemas/retry-guidance.schema.json and the retry-routing path of the verifier branch (retries carry no grants; extending them is a second story)
+    - prompts/inspector.md (what the Inspector files is not this story's)
+
+verification_requirements:
+  - Confirm each acceptance criterion against the tester's module, and that the create-sense cases show the same finding accepted where the file exists and refused where it does not, so the decision is a fact about existence and not about the fixture.
+  - Confirm the second-verdict case drives a coordinator run in which the verifier is entered twice inside one attempt and the refusal is made on the returning verdict, and that the brief is filed at completion for the moved slug.
+  - Confirm the shared walk is one function called by both readers and that no test over do_not_modify entries was weakened, deleted or skipped.
+  - Confirm no workflow definition, prompt or schema changed, and that plan_validation still imports carries_a_reason under the same name.
+  - Confirm the existing story-183 test module was adapted only where the signature change forced it.
+
+constraints:
+  - The coordinator stays deterministic; no model is called at any bound or in the accounting.
+  - The once-per-attempt split of routed findings is unchanged; the amendment moves slugs a refusal named and decides nothing else.
+  - The blocked-path and do_not_modify bounds, and the confinement reading of the stage-restriction bound, decide exactly as they did.
+  - What carries_a_reason and _entry_paths decide over every entry read today is unchanged; only where the walk lives moves.
+  - Every decision this story adds is reconstructable from state.json and events.log.
+  - Python 3.10+, standard library only.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 14:58:53
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 274
