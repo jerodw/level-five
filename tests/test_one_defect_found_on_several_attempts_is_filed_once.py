@@ -37,7 +37,13 @@ The subjects, in the order the criteria state them:
     as it found it, with its held and accounting artifacts still in the run
     directory; the same run resumed and completed files its own final
     attempt's, once, and the resume moved every earlier artifact under the
-    entry it closed.
+    entry it closed. Since story-198 it files that closed entry's own final
+    attempt too, and says on the completion line how many came from there:
+    what the resume moved aside used to be stranded, so a finding a verifier
+    had looked at and declined before an interruption never reached the
+    backlog. What that entry's *earlier* attempts held is still superseded,
+    which is this module's rule applied within the entry rather than across
+    the run.
 
   * **the one call and the one event.** Everything filed at completion reaches
     the queue through `inspection.file_findings`, and the event that says so
@@ -505,11 +511,25 @@ def test_a_run_resumed_after_an_escalation_files_its_own_final_attempts_once(
 
     The escalated run is resumed and completes on its first attempt: the
     queue, empty at the escalation, now holds that attempt's held finding and
-    remainder — and none of the three earlier readings, though every one of
-    them was held or left by a verdict — through one filing call. The resume
-    moved the earlier entry's held artifacts under resumes/resume-1/ beside
-    its findings records and accountings, and the resumed entry's attempt 1
-    wrote its own at the root.
+    remainder through one filing call. The resume moved the earlier entry's
+    held artifacts under resumes/resume-1/ beside its findings records and
+    accountings, and the resumed entry's attempt 1 wrote its own at the root.
+
+    **And the earlier entry's final reading, which story-198 stopped
+    stranding.** Everything the interrupted entry wrote was moved into that
+    entry's directory and the filing looked only at the current one, so a
+    finding raised before the interruption — including one a verifier had
+    looked at and reasonably declined, which is exactly what is supposed to
+    become a backlog item — reached the backlog from nowhere. Its copy was
+    sitting in the archive with nothing to go and get it. So the queue holds
+    the earlier entry's attempt 3 as well as this entry's attempt 1, and the
+    completion line says how many came from there.
+
+    What it still does not hold is that entry's attempts 1 and 2: an entry
+    contributes its own final attempt and no earlier reading of it, which is
+    the rule of this whole module applied a second time. Their absence is not
+    a claim about a filing that did nothing, because the same reading of the
+    same queue finds attempt 3's two beside them.
     """
     escalated = drive(target, harness, tmp_path,
                       per_attempt=[[FIRST, BESIDE_FIRST], [SECOND, BESIDE_SECOND],
@@ -533,14 +553,21 @@ def test_a_run_resumed_after_an_escalation_files_its_own_final_attempts_once(
     assert resumed.runner.queue_at_judging == [[]]
 
     text = [json.dumps(entry) for entry in resumed.queue]
-    assert len(text) == 2
+    assert len(text) == 4
     assert any(fourth["body"] in entry for entry in text)
     assert any(beside_fourth["body"] in entry for entry in text)
-    assert markers_in(resumed.queue) == []
+    # The earlier entry's own final attempt, recovered rather than stranded,
+    # and its two superseded readings still left where they were.
+    assert markers_in(resumed.queue) == sorted([THIRD["body"],
+                                                BESIDE_THIRD["body"]])
     assert len(filings) == 1
-    assert sorted(filings[0]) == sorted([beside_fourth["slug"], fourth["slug"]])
+    assert sorted(filings[0]) == sorted(
+        [beside_fourth["slug"], fourth["slug"],
+         BESIDE_THIRD["slug"], THIRD["slug"]])
     assert len(filed_events(resumed)) == 1
-    assert filed_events(resumed)[0]["filed"] == 2
+    assert filed_events(resumed)[0]["filed"] == 4
+    assert "from earlier entries of this run: 2" in \
+        filed_events(resumed)[0]["message"], filed_events(resumed)
 
     closed = story_coordinator.entry_dir(resumed.run_dir, 1)
     assert closed.is_dir()

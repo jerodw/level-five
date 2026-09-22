@@ -2330,6 +2330,14 @@ class InspectingRunner:
     invocation writes findings, so the count the cap is applied to is the one
     this fixture chose rather than that count multiplied by however many
     scopes the configuration happens to produce.
+
+    Every invocation writes a findings artifact all the same, an empty report
+    where it has no findings to give. That is what the sentence above means
+    and it is not the same as writing nothing: since story-198 an invocation
+    that produces *no* artifact is made a second time, so a fixture that wrote
+    nothing on its later calls would have every scope after the first invoked
+    twice — coupling each proof here to the retry's bound, which none of them
+    is about. An empty report is a real answer and is invoked once.
     """
 
     def __init__(self, artifact: Path, findings: list):
@@ -2343,9 +2351,9 @@ class InspectingRunner:
         first = not self.calls
         self.calls.append({"stage": stage, "prompt": prompt,
                            "max_budget_usd": max_budget_usd})
-        if first:
-            self.artifact.write_text(json.dumps({"findings": self.findings}),
-                                     encoding="utf-8")
+        self.artifact.write_text(
+            json.dumps({"findings": self.findings if first else []}),
+            encoding="utf-8")
         return AgentResult(ok=True, result_text="inspected")
 
 

@@ -1837,6 +1837,7 @@ def append_event(
     scope_files: int | None = None,
     invocations: int | None = None,
     dedupe_ran: bool | None = None,
+    inspection_made: bool | None = None,
     routed: int | None = None,
     acted_on: int | None = None,
     operation: str | None = None,
@@ -1903,6 +1904,15 @@ def append_event(
         # treatment `discarded_session_block` already gets one log over. The
         # `is not None` filter below is what lets a false through.
         "dedupe_ran": dedupe_ran,
+        # Whether that inspection was made at all — whether an invocation
+        # produced a findings artifact to read. Written on every inspection
+        # entry, false included, for the reason `dedupe_ran` above is: a
+        # boolean has a false to say, and absence would mean either that or an
+        # entry written before this field existed. A false is the case this
+        # exists for: an inspection whose invocations produced nothing used to
+        # record zero findings, which is indistinguishable from one that looked
+        # and found nothing.
+        "inspection_made": inspection_made,
         # The accounting after a verdict: how many findings the pre-stage
         # inspection routed to the story, and how many of those the verdict
         # acted on. On the same omitted-when-None terms as the counts above;
@@ -4570,8 +4580,9 @@ def suite_turn(
             handle.close()
 
 
-def inspection_started(run_dir: Path, story_id: str, scope_files: int) -> None:
-    """Announce the post-story inspection, before the invocation is made.
+def inspection_started(run_dir: Path, story_id: str, scope_files: int,
+                       *, retrying: bool = False) -> None:
+    """Announce an inspection invocation, before the invocation is made.
 
     A run says "story completed" and the inspection then takes about as long as
     a stage while saying nothing, so the only reasonable reading of that
@@ -4586,11 +4597,29 @@ def inspection_started(run_dir: Path, story_id: str, scope_files: int) -> None:
     and roughly how much of it, and renders through the shared composer with
     the kind spelled as a literal here, on the terms `_suite_rerun_started`
     states.
+
+    `retrying` says this is the second invocation for one inspection, made
+    because the first produced no findings artifact. It is a wording of this
+    announcement rather than an announcement of its own, and deliberately: one
+    kind is spelled in one function here, so a sibling announcer for the retry
+    would be a second definition of one event, free to drift from this one in
+    message and in what it says the wait is worth. It is the shape
+    `suite_turn`'s own repeated announcement already takes — one call in one
+    body, with the message saying which occasion it is. The estimate and the
+    cost clause are the same either way, because a retry is another whole
+    invocation rather than a remainder of the first: what the wait is worth is
+    what it was worth a moment ago.
     """
+    began = (
+        f"the inspection of what {story_id} changed produced no findings "
+        f"file; inspecting it again, over {scope_files} file(s)"
+    ) if retrying else (
+        f"inspecting what {story_id} changed, over {scope_files} file(s)"
+    )
     append_event(
         run_dir,
         _announcement(
-            f"inspecting what {story_id} changed, over {scope_files} file(s)",
+            began,
             INSPECTION_COST,
             estimate=duration_estimate(INSPECTION_OPERATION),
         ),

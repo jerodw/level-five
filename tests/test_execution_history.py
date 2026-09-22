@@ -652,6 +652,10 @@ OPTIONAL_FIELDS = {
     "retry_decision", "retry_reason", "retry_category", "retry_stage",
     "findings", "filed", "dropped",
     "mode", "cost_usd", "scope_files", "invocations", "dedupe_ran",
+    # Whether an invocation of that inspection produced a findings report,
+    # which is what separates one that produced none from one that reported
+    # nothing.
+    "inspection_made",
     "routed", "acted_on",
     # Which timed operation an entry completes, beside its duration_seconds;
     # the key the cross-run duration log records an observation under.

@@ -1,0 +1,6 @@
+{"story_id": "story-198", "mode": "narrow", "cost_usd": 3.2952205, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-22 09:52:10", "findings": 2, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-198", "timestamp": "2026-09-22 09:55:01", "filed": 0, "dropped": 0, "routed": 2, "acted_on": 2}
+{"story_id": "story-198", "mode": "narrow", "cost_usd": 4.999605000000001, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-22 10:56:09", "findings": 2, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-198", "timestamp": "2026-09-22 10:59:13", "filed": 0, "dropped": 0, "routed": 2, "acted_on": 1}
+{"story_id": "story-198", "mode": "narrow", "cost_usd": 4.3558639999999995, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-22 12:09:55", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true}
+{"story_id": "story-198", "timestamp": "2026-09-22 12:15:00", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 1}

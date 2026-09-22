@@ -58,6 +58,7 @@ from pathlib import Path
 import conftest
 import filed_query
 import inspection
+import story_coordinator
 import story_inspection
 
 from test_an_inspection_records_what_it_cost import (  # noqa: F401 - shared
@@ -73,6 +74,7 @@ from test_an_inspection_records_what_it_cost import (  # noqa: F401 - shared
     problems_with,
     records,
     routed_logs,
+    run_dir_of,
 )
 
 #: What the two filed-query commands this module writes say and where they are
@@ -120,8 +122,20 @@ def inspection_lines(target: Path) -> list[str]:
 
 
 def summary_of(target: Path) -> str:
-    """The one line carrying the counts, which is the summary."""
-    said = [line for line in inspection_lines(target) if "finding(s)" in line]
+    """The one line the inspection's own record carries, which is the summary.
+
+    Told apart from the notes beside it by the kind of the entry that carries
+    it rather than by the words on it. A note is appended with no kind of its
+    own, and the summary is the single entry of the inspection's kind, so this
+    is the same line it always was — but since story-198 the summary of an
+    inspection that could not be made reports no findings tally, because
+    reporting one would say the Inspector looked and found nothing. Selecting
+    on the tally would find no line at all in exactly the case the line has
+    the most to say.
+    """
+    said = [one["message"]
+            for one in story_coordinator.load_history(run_dir_of(target))
+            if one.get("event") == inspection.INSPECTION_EVENT]
     assert len(said) == 1, messages(target)
     return said[0]
 

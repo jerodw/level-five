@@ -128,11 +128,15 @@
       },
       "invocations": {
         "type": "integer",
-        "description": "How many agent invocations the recorded cost covers. Absent on every entry that is not an inspection, and zero on one recording an inspection that was not made."
+        "description": "How many agent invocations the recorded cost covers. Absent on every entry that is not an inspection, and zero on one recording an inspection that invoked nothing at all. An invocation that produced no findings artifact is made once more, so a scope can account for two: the count beside the summed cost is what tells a reader afterwards that it was, and the allowance is per invocation, so the second is handed its own rather than the remainder of the first."
       },
       "dedupe_ran": {
         "type": "boolean",
         "description": "Whether the inspection's filed query answered for every scope it covered. False is an inspection made without dedupe: the findings were filed anyway, because a query that could not answer costs dedupe and costs nothing else, so what this records is that the inspection may have refiled what is already in the tracker. It is a statement about the filed query alone and not about the local queue read beside it, which knows only what this machine filed and cannot see a duplicate filed from another checkout. Present on every entry that is an inspection, including one where the query did answer, because a boolean has a false to say and absence would otherwise mean either that or an entry written before this field existed. An inspection that made no invocation at all records false, because no query answered for it. Absent on every entry that is not an inspection, including the note a run appends beside an inspection's own entry naming the scope whose dedupe failed."
+      },
+      "inspection_made": {
+        "type": "boolean",
+        "description": "Whether an invocation of this inspection produced a findings report to read. False is an inspection that could not be made: an invocation produced no findings artifact, was made once more because a reviewer's process can die before it writes anything, and produced none again. It is what separates an inspection that produced no report from one that reported nothing — the two were previously one entry, because both recorded zero findings — so a false means nothing looked rather than that the change is clean. It is not the findings count by another name: a well-formed report carrying an empty findings array records true with `findings` zero, since the trigger is the absence of the file and never what the file said. Present on every entry that is an inspection, including one where it was made, because a boolean has a false to say and absence would otherwise mean either that or an entry written before this field existed. An inspection that made no invocation at all records false. Absent on every entry that is not an inspection, including the accounting and the filing at completion, which are not inspections and ask no such question."
       },
       "routed": {
         "type": "integer",

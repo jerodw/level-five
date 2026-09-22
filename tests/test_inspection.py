@@ -8,7 +8,11 @@ implementation. The subjects are kept apart deliberately:
     at a fake runner that records what it was handed rather than inferred
     from the arguments that were parsed. Two named paths make two
     invocations; no arguments makes one per `source_dirs` entry plus one for
-    `tests_dir`; neither key declared makes one over the tracked tree.
+    `tests_dir`; neither key declared makes one over the tracked tree. Each
+    of those is driven against an invocation that produced a report, because
+    since story-198 one that produced none is made a second time, and that
+    second invocation is `tests/test_an_inspection_that_was_not_made.py`'s
+    subject rather than this module's.
 
   * **what a scope resolves to.** What git tracks beneath it, minus every
     path under a blocked path, with the blocked set read off the execution
@@ -607,6 +611,16 @@ def failing_query(tmp_path: Path, code: int = 3) -> str:
 
 # --------------------------------------------------------------------------
 # One scope is one agent invocation
+#
+# Every drive in this section writes an envelope — `writes()`, which is a
+# well-formed one carrying nothing — rather than taking the module's
+# write-nothing default. Since story-198 an invocation that produced no
+# findings artifact is made once more, so a scope driven against a runner that
+# writes nothing is two invocations and not one, and the counts here would be
+# counting the retry rather than the scopes. An invocation that produced a
+# report is invoked exactly once whatever the report says, which is what makes
+# these counts the number of scopes again; the retry, its bound and the trigger
+# for it are `tests/test_an_inspection_that_was_not_made.py`'s subject.
 # --------------------------------------------------------------------------
 
 
@@ -616,7 +630,8 @@ def test_two_named_paths_make_two_invocations(tmp_path):
     Each invocation is handed its own scope's files and not its neighbour's,
     which is what makes them two scopes rather than one invocation made twice.
     """
-    found = inspecting(tmp_path, arguments=(SOURCE_DIR, OTHER_SOURCE_DIR))
+    found = inspecting(tmp_path, act=writes(),
+                       arguments=(SOURCE_DIR, OTHER_SOURCE_DIR))
 
     assert len(found.invocations) == 2
     assert found.scope_labels == [SOURCE_DIR, OTHER_SOURCE_DIR]
@@ -630,7 +645,7 @@ def test_two_named_paths_make_two_invocations(tmp_path):
 
 def test_no_arguments_makes_one_invocation_per_source_dir_plus_one_for_tests(
         tmp_path):
-    found = inspecting(tmp_path, config=configuration(**{
+    found = inspecting(tmp_path, act=writes(), config=configuration(**{
         SOURCE_DIRS_KEY: [SOURCE_DIR, OTHER_SOURCE_DIR],
         TESTS_DIR_KEY: TESTS_DIR,
     }))
@@ -650,7 +665,7 @@ def test_with_no_source_dirs_the_tracked_tree_is_the_scope_and_tests_is_its_own(
     its own invocation and its own kind — but by leaving it to that scope, so
     a target that declares only `tests_dir` still has its tests inspected.
     """
-    found = inspecting(tmp_path,
+    found = inspecting(tmp_path, act=writes(),
                        config=configuration(**{TESTS_DIR_KEY: TESTS_DIR}))
 
     assert len(found.invocations) == 2
@@ -666,7 +681,7 @@ def test_with_no_source_dirs_the_tracked_tree_is_the_scope_and_tests_is_its_own(
 def test_a_target_declaring_neither_key_is_inspected_over_its_tracked_tree(
         tmp_path):
     """Inspected rather than refused, which is the whole of the claim."""
-    found = inspecting(tmp_path, config=configuration())
+    found = inspecting(tmp_path, act=writes(), config=configuration())
 
     assert len(found.invocations) == 1
     assert found.scope_kinds == [SOURCE]
@@ -691,7 +706,7 @@ def test_source_and_tests_are_a_union_and_not_a_merge(tmp_path):
     assert [scope.kind for scope in scopes] == [SOURCE, TESTS]
     assert with_source[SOURCE_DIRS_KEY] == [SOURCE_DIR]
 
-    found = inspecting(tmp_path, config=with_source)
+    found = inspecting(tmp_path, act=writes(), config=with_source)
     assert f"{TESTS}\n" in found.prompt(1), found.prompt(1)
     assert f"{SOURCE}\n" in found.prompt(0), found.prompt(0)
 
@@ -1958,9 +1973,14 @@ def test_the_cost_ceiling_reaches_the_runner_as_this_invocations_allowance(
     """Observed at the runner, and per scope rather than per inspection.
 
     The report says how many invocations were made, which is what lets a
-    reader see that the ceiling multiplies with the scopes.
+    reader see that the ceiling multiplies with the scopes. The envelope is
+    written for the reason the section above states: these two invocations are
+    two scopes, and a runner that wrote nothing would make them four. That the
+    *retry's* invocation is handed the ceiling again rather than what the first
+    one left is `tests/test_an_inspection_that_was_not_made.py`'s.
     """
-    found = inspecting(tmp_path, arguments=(SOURCE_DIR, OTHER_SOURCE_DIR))
+    found = inspecting(tmp_path, act=writes(),
+                       arguments=(SOURCE_DIR, OTHER_SOURCE_DIR))
 
     assert [one.max_budget_usd for one in found.invocations] == \
         [MAX_COST_USD, MAX_COST_USD]

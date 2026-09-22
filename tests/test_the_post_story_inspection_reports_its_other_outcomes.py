@@ -674,20 +674,97 @@ def summary_of(report) -> str:
     return story_inspection._summary("label", report, (), (), "")
 
 
-def test_every_defined_reason_is_summarised_with_the_clause_it_always_had():
-    """One drop count per defined reason, each a different figure, and the
-    line carries "; <reason>: <count>" for every one of them, with the
-    total agreeing."""
-    names = sorted(drop_reason_names())
-    dropped = tuple(
+def reasons_that_mean_no_report(names: set[str]) -> list[str]:
+    """Which of `names` the module's own predicate reads as no report made.
+
+    Derived rather than spelled: `inspection.was_made` is the one answer the
+    summary line, the stage's findings record and the cross-run boolean are
+    all decided by, so asking it which reason it keys on is asking the
+    definition instead of restating it. A reason added or renamed there
+    follows here with no edit, and a second reason acquiring that meaning is
+    reported by the assertion below rather than silently halving this module's
+    coverage.
+    """
+    return sorted(
+        name for name in names
+        if not inspection.was_made((inspection.Drop(getattr(inspection, name),
+                                                    "why"),)))
+
+
+#: The one reason whose presence changes what the rest of the line is. A drop
+#: under it is the record that no invocation produced a report, so since
+#: story-198 the line that carries it says the inspection could not be made in
+#: place of the tally — and a tally is exactly what the case below is about.
+#: Named here rather than excluded silently, so that a reader meets the
+#: exception and the case that covers it beside it.
+NOT_MADE = reasons_that_mean_no_report(drop_reason_names())
+
+
+def test_exactly_one_defined_reason_means_the_inspection_produced_no_report():
+    """The premise the split below rests on. If no reason meant it the case
+    that holds one out would be holding out nothing and the case beside it
+    would be asserting about a line the summary never writes; if two did, the
+    second would be summarised by neither."""
+    assert len(NOT_MADE) == 1, NOT_MADE
+    assert NOT_MADE[0] in drop_reason_names(), NOT_MADE
+
+
+def drops_under(names: list[str]) -> tuple:
+    """One drop per reason, each under a count of its own, in `names` order.
+
+    The counts ascend from one, so a summary that named a reason with its
+    neighbour's count is reported rather than absorbed.
+    """
+    return tuple(
         inspection.Drop(getattr(inspection, name), f"{name} {ordinal}")
         for position, name in enumerate(names, start=1)
         for ordinal in range(position))
+
+
+def test_every_defined_reason_is_summarised_with_the_clause_it_always_had():
+    """One drop count per defined reason, each a different figure, and the
+    line carries "; <reason>: <count>" for every one of them, with the
+    total agreeing.
+
+    Every reason but the one that says no report was produced: a report
+    carrying that one is a report of an inspection that could not be made, and
+    a line that then stated a tally would be reporting the Inspector as having
+    looked. Its own clause is asserted in the case below, on a line that has
+    no tally to agree with — and the combination this exercised, a missing
+    artifact beside findings that were dropped for other reasons, cannot occur
+    in an inspection at all: with no envelope read there is no findings loop,
+    so no other reason has anything to be recorded against.
+    """
+    names = [name for name in sorted(drop_reason_names())
+             if name not in NOT_MADE]
+    dropped = drops_under(names)
     line = summary_of(inspection.Report(dropped=dropped))
 
     for position, name in enumerate(names, start=1):
         assert f"; {getattr(inspection, name)}: {position}" in line, line
     assert f"{len(dropped)} dropped" in line, line
+
+
+def test_the_reason_that_says_no_report_was_produced_keeps_its_clause_too():
+    """The half the case above holds out, so that no reason the module defines
+    goes unsummarised.
+
+    The same clause, in the same shape, on a line whose opening says the
+    inspection could not be made rather than counting findings — because a
+    tally of zero is what an inspection that looked and found nothing reports,
+    and telling those two apart is what story-198 is for. The control for the
+    absence of a tally is the case above, whose identical drive of every other
+    reason does carry one.
+    """
+    reason = getattr(inspection, NOT_MADE[0])
+    detail = "the scope: two invocations and neither wrote a findings file"
+    line = summary_of(inspection.Report(
+        dropped=(inspection.Drop(reason, detail),)))
+
+    assert f"; {reason}: 1" in line, line
+    assert detail in line, line
+    assert "finding(s)" not in line, line
+    assert "dropped" not in line, line
 
 
 def test_a_reason_no_constant_defines_is_summarised_with_its_count():

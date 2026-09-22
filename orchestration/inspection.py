@@ -81,6 +81,20 @@ name, never with `git add -A` — so the record does not sit in the working tree
 as a dirty tree the next run's pre-flight refuses. Both halves are guarded: a
 record that cannot be written costs the record and nothing else.
 
+**An inspection that produced no report is told apart from one that reported
+nothing.** A reviewer's process can die before it writes anything, and the
+absence of a findings artifact was read as an answer: the run reported zero
+findings, told the stage that judges the change that the inspection ran and was
+clean, and moved on, while whatever that reviewer would have said was lost.
+Every other agent the harness runs is already treated differently — a stage
+whose process dies is simply run again — so an invocation that produced no
+findings artifact is made once more, and only a second failure records the
+drop. The trigger is the missing file and nothing else: never the number of
+findings, which is why an envelope carrying an empty findings array is a real
+answer and is never retried, and never what the invocation reported spending,
+which stays corroboration in the record rather than something the routing
+reads. Exactly one retry, fixed in code.
+
 **A floor decides what is filed and never what a rating means.** Filing runs at
 roughly three and a half briefs per completed story and planning drains none of
 them, so a backlog that nothing bounds grows monotonically; `inspect_min_severity`
@@ -535,6 +549,67 @@ class Filed:
     refiled_over_failure: bool = False
 
 
+def was_made(dropped) -> bool:
+    """Whether every invocation behind these drops produced a findings artifact.
+
+    The one predicate beneath everything that has to tell an inspection that
+    produced no report from one that reported nothing: the summary line the run
+    writes, the findings record the judging stage reads, and the boolean the
+    cross-run record carries. Three statements about one inspection, and three
+    readings of what makes it true would be three statements that can disagree.
+
+    Read off the drops rather than off a flag, because the drop is already the
+    record of it: `NO_ARTIFACT` is appended once per scope whose invocations
+    both came back with nothing, and it is appended nowhere else. So this is
+    answerable of a scope result and of a whole report alike, which is what
+    lets one predicate serve a mode that inspects one scope and a mode that
+    inspects several — and over several, false means at least one of them
+    produced no report, which is the reading `Report.dedupe_ran` beside it
+    already takes of its own question.
+
+    An inspection that made no invocation at all — a bound it could not obey,
+    nothing in scope — has no such drop, so this answers true of it. That is
+    why its callers state their own case rather than deriving it from here: a
+    caller that made no invocation knows it, and this answers the narrower
+    question of whether an invocation that was made delivered.
+    """
+    return not any(one.reason == NO_ARTIFACT for one in dropped)
+
+
+def not_made_detail(dropped) -> str:
+    """Why the inspection behind these drops could not be made, in one string.
+
+    The companion of `was_made`, and here for the reason that one is: the
+    vocabulary of drop reasons belongs to this module, so a caller wording a
+    line about a missing report asks for the words rather than reaching for the
+    constant. A standing rule holds the run's summary line to naming no reason
+    constant of this module's — it counts whatever reasons the drops carry, so
+    that a reason added here reaches that line with no edit there — and a
+    caller that had to name this one to say why would have been the exception
+    that makes the rule stop meaning anything.
+
+    The details of each such drop, joined, so a mode that inspects several
+    scopes says why each of them produced nothing; empty where every
+    invocation delivered, which is a caller asking a question it has already
+    had answered.
+    """
+    return "; ".join(one.detail for one in dropped if one.reason == NO_ARTIFACT)
+
+
+def finding_key(finding) -> str:
+    """The outbox key one finding would be filed under.
+
+    The identity this module already derives, put through the queue's own
+    digest — so a caller comparing two findings for sameness compares them by
+    exactly what the queue would file them under, rather than by a second
+    notion of when two findings are the same one. `outbox.identity_key` is
+    still the only derivation of a key in the harness and this module still
+    hashes nothing; what this adds is a name for the pair, so a reader that is
+    not this module's neighbour need not reach the queue to ask the question.
+    """
+    return outbox.identity_key(identity(finding))
+
+
 @dataclass(frozen=True)
 class Dedupe:
     """Whether the filed query answered for one scope, and what it said.
@@ -716,14 +791,22 @@ class _Found:
 
 @dataclass
 class _ScopeResult:
-    """What one invocation produced: what it found, dropped, and cost.
+    """What one scope produced: what it found, dropped, and cost.
 
-    `cost_usd` is what the runner's own result reported, carried and never
-    computed — nothing here reads an agent log back to recover it. None is a
-    runner that returned nothing and a result carrying no cost alike: the
-    harness was told no figure, which is not the same as a figure of zero, and
-    keeping the two apart is what stops a zero nobody reported from being
+    `cost_usd` is the sum of what the runner's own results reported, carried
+    and never computed — nothing here reads an agent log back to recover it.
+    None is a runner that returned nothing and a result carrying no cost alike:
+    the harness was told no figure, which is not the same as a figure of zero,
+    and keeping the two apart is what stops a zero nobody reported from being
     averaged later as though it were one.
+
+    `invocations` is how many invocations were actually made for this scope:
+    one ordinarily, and two where the first produced no findings artifact and
+    was made again. It is carried rather than assumed by the caller, so the
+    `invocations` and `cost_usd` a record reports corroborate each other — a
+    record saying two invocations is how a reader of the log afterwards knows
+    a retry happened, and a caller that counted one per scope would have said
+    the second invocation's cost was the first one's.
     """
 
     found: list = field(default_factory=list)
@@ -733,6 +816,7 @@ class _ScopeResult:
     scope_files: int = 0
     #: What this invocation could name no area for, read off its envelope.
     area_suggestions: tuple = ()
+    invocations: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -1070,50 +1154,31 @@ def _severity(finding) -> int | None:
     return None
 
 
-def inspect_scope(scope: Scope, target_root: Path, config: dict,
-                  harness_root: Path, bound: Bounds, blocked: tuple[str, ...],
-                  runner, index: LocalIndex = LocalIndex()) -> _ScopeResult:
-    """One scope: ask what is filed, invoke once, and read what was written.
+def _one_invocation(scope: Scope, target_root: Path, config: dict,
+                    harness_root: Path, bound: Bounds, paths: tuple[str, ...],
+                    answer, artifact: Path, log_path: Path, runner):
+    """Invoke the Inspector once and read back what it wrote.
 
-    The order is the point. What is already filed against this scope's paths is
-    asked for *before* the invocation and injected into the prompt as data, and
-    a finding whose key matches an item the query reported is dropped without
-    the model being asked about it a second time. A query that could not answer
-    is recorded as dedupe not having run for this scope and the findings are
-    filed anyway.
+    Returns `(document, problem, cost)`: the envelope the invocation wrote and
+    "" where it wrote one, or None and the reason there is none. Factored out
+    of `inspect_scope` so that invoking again is a second call to one thing
+    rather than a second copy of the sequence — the artifact removed before
+    and after, the runner called, the cost read off its result, the envelope
+    read back — because two copies of that sequence are two chances for the
+    retry to differ from the attempt it is retrying.
 
-    `index` is the local queue read once for the whole inspection and handed
-    down, because the queue is not scoped. It defaults to an empty index, so a
-    caller that does not supply one gets exactly what it got before the local
-    tier existed.
+    The artifact is removed before the invocation and again after it is read,
+    so an artifact an earlier invocation left is never read as this one's and
+    this one leaves none for the next. That is what makes a retry sound: the
+    second invocation starts from nothing on disk, so a document it comes back
+    with is a document it wrote.
 
-    A scope carrying an explicit path list is taken at its word; every other
-    scope has its paths computed from its prefix exactly as it always did.
+    The allowance handed down is the ceiling as the bounds resolved it, not a
+    remainder of it. The ceiling is declared per invocation, so a second
+    invocation gets its own — the shape a self-route already has, where a
+    stage that runs again in place is handed its stage ceiling rather than
+    what the failed invocation left of it.
     """
-    result = _ScopeResult()
-    paths = scope.paths or scope_paths(target_root, scope, blocked)
-    result.scope_files = len(paths)
-    answer = filed_query.query(paths, config, target_root, harness_root)
-    result.dedupe = Dedupe(
-        scope=scope.label,
-        ran=answer.answered,
-        known=len(answer.items),
-        reason=answer.reason,
-        excluded=answer.excluded,
-    )
-    known = {item.key for item in answer.items}
-    # The two sources are a union: a finding either of them knows is dropped,
-    # and neither source's answer depends on the other having answered. `known`
-    # is kept separately so a drop can name which source knew it.
-    checked = known | index.landed
-
-    artifact, log_path = findings_paths(target_root, config)
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    # An artifact left by an earlier invocation is not this one's, and reading
-    # one as this one's would report findings nothing found. Removed before the
-    # invocation and again after it is read, so whatever this invocation does,
-    # the next one starts with nothing there. What the invocation said on the
-    # way to writing it is kept by the runner's own log.
     artifact.unlink(missing_ok=True)
     try:
         granted = list(config.get("allowed_tools") or ())
@@ -1138,13 +1203,112 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
         # the same event the result text is read off — so nothing anywhere
         # parses an agent log back to recover it. A runner that returns nothing
         # and a result carrying no cost both leave it None.
-        result.cost_usd = _reported_cost(invoked)
+        cost = _reported_cost(invoked)
         document, problem = _read_findings(artifact, harness_root)
     finally:
         artifact.unlink(missing_ok=True)
+    return document, problem, cost
+
+
+def inspect_scope(scope: Scope, target_root: Path, config: dict,
+                  harness_root: Path, bound: Bounds, blocked: tuple[str, ...],
+                  runner, index: LocalIndex = LocalIndex(),
+                  announce=None) -> _ScopeResult:
+    """One scope: ask what is filed, invoke once, and read what was written.
+
+    The order is the point. What is already filed against this scope's paths is
+    asked for *before* the invocation and injected into the prompt as data, and
+    a finding whose key matches an item the query reported is dropped without
+    the model being asked about it a second time. A query that could not answer
+    is recorded as dedupe not having run for this scope and the findings are
+    filed anyway.
+
+    `index` is the local queue read once for the whole inspection and handed
+    down, because the queue is not scoped. It defaults to an empty index, so a
+    caller that does not supply one gets exactly what it got before the local
+    tier existed.
+
+    A scope carrying an explicit path list is taken at its word; every other
+    scope has its paths computed from its prefix exactly as it always did.
+
+    **An invocation that produced no findings artifact is made once more.**
+    Every other agent the harness runs is already treated that way — a stage
+    whose process dies is simply run again — and the inspection was the one
+    place with no equivalent, so a reviewer's process dying before it wrote
+    anything was read as "looked, found nothing" and the findings it would have
+    reported were lost. The trigger is the **absence of the artifact and
+    nothing else**: not how many findings came back, not what the invocation
+    reported spending, not anything it printed. An invocation that wrote a
+    well-formed envelope carrying an empty findings array is a real answer —
+    the Inspector looked and found nothing — and is never retried. Exactly one
+    retry, fixed here rather than configured: a workflow key could not govern
+    both modes, because a broad-mode inspection is made with no workflow
+    loaded.
+
+    `announce` is the seam by which a caller says the second invocation is
+    being made, called once and immediately before it. A caller that supplies
+    none — every broad-mode path — announces nothing, which is what every
+    caller did before the retry existed. What the callable does, and whether a
+    failure in it may escape, is its own: the narrow modes hand over a guarded
+    one, so announcing cannot become the thing that stops an inspection, and
+    guarding it a second time here would be a second answer to that question.
+    """
+    result = _ScopeResult()
+    paths = scope.paths or scope_paths(target_root, scope, blocked)
+    result.scope_files = len(paths)
+    answer = filed_query.query(paths, config, target_root, harness_root)
+    result.dedupe = Dedupe(
+        scope=scope.label,
+        ran=answer.answered,
+        known=len(answer.items),
+        reason=answer.reason,
+        excluded=answer.excluded,
+    )
+    known = {item.key for item in answer.items}
+    # The two sources are a union: a finding either of them knows is dropped,
+    # and neither source's answer depends on the other having answered. `known`
+    # is kept separately so a drop can name which source knew it.
+    checked = known | index.landed
+
+    artifact, log_path = findings_paths(target_root, config)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    invoke = (scope, target_root, config, harness_root, bound, paths, answer,
+              artifact, log_path, runner)
+
+    document, first_problem, first_cost = _one_invocation(*invoke)
+    costs = [first_cost]
+    result.invocations = 1
+    second_problem = ""
 
     if document is None:
-        result.dropped.append(Drop(NO_ARTIFACT, f"{scope.label}: {problem}"))
+        # No findings artifact, which is the one trigger: the invocation did
+        # not deliver, whatever it reported and whatever it printed. Said
+        # before the second one is made, so a reader watching the run meets the
+        # retry announced the way a stage being re-run is rather than a second
+        # silence of the same length.
+        if announce is not None:
+            announce()
+        document, second_problem, second_cost = _one_invocation(*invoke)
+        costs.append(second_cost)
+        result.invocations = 2
+
+    # Summed on the terms the single figure was carried on: a cost neither
+    # invocation reported stays None rather than becoming zero, because zero is
+    # what an invocation that genuinely cost nothing would report, and averaging
+    # the two together corrupts every figure taken from the corpus later.
+    result.cost_usd = reported_total(costs)
+
+    if document is None:
+        # Recorded only once both invocations have produced nothing, and named
+        # for both: a reader meeting this drop is meeting an inspection that
+        # was tried twice, and a detail naming one attempt would read as an
+        # inspection that was tried once.
+        result.dropped.append(Drop(
+            NO_ARTIFACT,
+            f"{scope.label}: two invocations were made and neither produced a "
+            f"findings artifact; the first: {first_problem}; "
+            f"the second: {second_problem}",
+        ))
         return result
 
     # A refused suggestion is a named drop beside the findings' own, so it
@@ -1328,7 +1492,7 @@ def _held_failed(finding, failed: frozenset) -> bool:
     if not failed:
         return False
     try:
-        return outbox.identity_key(identity(finding)) in failed
+        return finding_key(finding) in failed
     except (TypeError, ValueError):
         return False
 
@@ -1592,6 +1756,15 @@ def record(target_root: Path, config: dict, report: Report) -> Recorded:
             # without dedupe" a question one read of a tracked file answers,
             # once the report this printed has scrolled away.
             "dedupe_ran": report.dedupe_ran,
+            # Written on every record for the reason `dedupe_ran` beside it
+            # is: a boolean has a false to say, and absence would mean either
+            # that or a line written before the field existed. False here is
+            # an inspection that was not made — every invocation for at least
+            # one scope came back with no findings artifact, twice — which is
+            # the thing this log could not previously be asked about, because
+            # such an inspection recorded zero findings and read as one that
+            # looked and found nothing.
+            "inspection_made": was_made(report.dropped),
         }
         if report.cost_usd is not None:
             # Absent where nothing was reported, rather than zero: the same
@@ -1662,7 +1835,11 @@ def inspect(target_root: Path, config: dict, harness_root: Path, *,
             scope, target_root, config, harness_root, bound, blocked, runner,
             index,
         )
-        invocations += 1
+        # What the scope actually made, rather than one per scope: a scope
+        # whose first invocation produced no findings artifact was invoked
+        # again, and a count of scopes would report the two invocations' summed
+        # cost as one invocation's.
+        invocations += result.invocations
         found.extend(result.found)
         dropped.extend(result.dropped)
         dedupe.append(result.dedupe)

@@ -931,6 +931,15 @@ def test_the_same_summary_names_the_missing_artifact_when_it_is_missing(
     make findings out of, names the reason on the same line and files nothing —
     so the line above is the drop not having happened rather than a summary
     that stopped saying what it dropped.
+
+    Since story-198 that envelope is written by both invocations, because an
+    invocation that produced nothing a reader can make findings out of is made
+    once more, and "files nothing" is said on that line as the inspection
+    having been unmakeable rather than as a tally reading zero — a tally there
+    would report the Inspector as having looked and found nothing. So what is
+    read for "nothing was filed" is the queue itself, which is where a filed
+    brief would be; the wording of the line is
+    `tests/test_an_inspection_that_was_not_made.py`'s subject.
     """
     target = a_target(tmp_path, f"a-story-with-{as_a_path(described)}")
     code, inspector = narrow_planting(
@@ -942,7 +951,8 @@ def test_the_same_summary_names_the_missing_artifact_when_it_is_missing(
 
     said = summary_of(target)
     assert inspection.NO_ARTIFACT in said, said
-    assert "0 filed" in said, said
+    assert "finding(s)" not in said, said
+    assert queued_text(target) == "", queued_text(target)
 
 
 def area_less_block(text: str) -> list[str]:
