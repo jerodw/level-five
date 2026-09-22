@@ -44,6 +44,20 @@ subjects, kept apart:
     and a waiter granted the old inode after the path has moved on lets it
     go and queues on the new one rather than running.
 
+  * **the bound measures the holder (story-196).** Every run that takes the
+    turn appends a stamp — its pid and the moment — to the lock file, and a
+    waiter that sees the stamp change restarts its bound, so a queue of
+    healthy runs handing the turn on never expires anyone. Six waiters behind
+    healthy holders, each holding one suite's time under a bound of five, are
+    granted in order with no takeover and the inode unchanged; a waiter behind
+    a normal handoff announces the restart and measures the new holder from
+    the handoff; a stamped holder that hangs is taken over at the bound from
+    the handoff, not from the waiter's start; a stampless lock file is
+    measured from the first poll that sees it exactly as a stamped one is;
+    every route that takes the turn leaves the stamp before the body runs;
+    and the stamp is read for equality and for nothing else — a line that is
+    no pid and no time is waited behind like any other.
+
   * **what the turn does not touch.** The configured command runs exactly as
     configured on every path, no module under `orchestration/` names the
     worker-count option, and the selector runs of a nomination and the census
@@ -81,7 +95,16 @@ Every absence asserted here sits beside a demonstration that it can fail:
     beside the same release with no swap in between, which is the ordinary
     grant on the old inode with no restart;
   * "the old key is declared nowhere" sits beside the new key, which the same
-    schema declares.
+    schema declares;
+  * "a stampless lock file carries no stamp" is read off the file itself
+    before the wait, beside the stamped holder whose file does carry one;
+  * "no waiter behind healthy holders takes over" sits beside the last
+    waiter's queueing time, read to exceed the bound — the very wait that
+    expired before the bound measured the holder;
+  * "the stamp is read for nothing but equality" sits beside a planted body
+    that parses one and signals its pid, which the same scan reports;
+  * "no wait-driving module names the poll's number" sits beside a planted
+    module that does, which the same scan reports.
 
 The wall clock is read here for one purpose: preconditions. A process has to
 have started its command before anything can be asked about whether a second
@@ -588,9 +611,13 @@ def test_the_overlap_reading_reports_a_constructed_pair_that_does_overlap():
 
 
 def test_the_contended_run_announces_its_wait_once_before_each_suite_run(two_runs):
-    """Exactly one wait event ahead of the suite-run announcement of the same
-    stage, in the run that found the lock held, and none in the run that did
-    not — readable off the events log as the gap between the two lines."""
+    """A wait event ahead of the suite-run announcement of the same stage, in
+    the run that found the lock held, and none in the run that did not —
+    readable off the events log as the gap between the two lines. Since
+    story-196 the wait may be announced more than once: it restarts whenever
+    the turn changes hands, and here the first run's clean-clone check can
+    take the turn between two of the second run's polls, so a wait may be
+    followed by a restart of the same stage before its suite-run line."""
     first = two_runs.start(FIRST_STORY)
     wait_for(lambda: len(two_runs.started_files()) >= 1,
              "the first run started its suite command",
@@ -609,19 +636,21 @@ def test_the_contended_run_announces_its_wait_once_before_each_suite_run(two_run
                  if e["event"] in (WAITED, RERUN_STARTED)]
     # The declaring stage's suite run waited. Whether the verifier's clean
     # clone did as well depends on which run reached the lock first after the
-    # release, so only the first pair is fixed; every wait there is must be
-    # followed at once by the suite-run announcement of its own stage.
-    assert announced[:2] == [(WAITED, DECLARING), (RERUN_STARTED, DECLARING)]
+    # release, so only the first wait is fixed; every wait there is must be
+    # followed at once by a restart of the same stage's wait or by the
+    # suite-run announcement of its own stage, and nothing else.
+    assert announced[0] == (WAITED, DECLARING)
     for index, (kind, stage) in enumerate(announced):
         if kind == WAITED:
-            assert announced[index + 1] == (RERUN_STARTED, stage)
+            assert announced[index + 1] in [(WAITED, stage), (RERUN_STARTED, stage)]
     assert announced.count((RERUN_STARTED, DECLARING)) == 1
     assert announced.count((RERUN_STARTED, VERIFYING)) == 1
 
     # The announcement convention: what started, then what the wait is worth,
     # and the line is in events.log ahead of the suite-run line.
-    [message] = [e["message"] for e in entries_of_kind(contended_dir, WAITED)
-                 if e["stage"] == DECLARING]
+    message, *restarts = [e["message"] for e in entries_of_kind(contended_dir, WAITED)
+                          if e["stage"] == DECLARING]
+    assert all(CHANGED_HANDS in restart for restart in restarts)
     assert message == story_coordinator._announcement(*message.split("; ", 1))
     assert "another run holds" in message and "minutes" in message
     lines = log_lines(contended_dir)
@@ -1313,7 +1342,11 @@ def test_three_waiters_behind_a_hung_holder_drain_one_per_bound_and_never_togeth
         assert waiters.in_body() == ["third"]
         assert waiters.sleeping() == []
         assert inode_at(lock) == new_inode
-        assert kinds_of(waiters.run_dir("third")) == [WAITED, WAITED]
+        # Three waits, not two: since story-196 the third also announces a
+        # restart when the second is granted normally after the taker's body
+        # ends — the stamp at the path changed, so its bound started over from
+        # that handoff rather than running on from the takeover.
+        assert kinds_of(waiters.run_dir("third")) == [WAITED, WAITED, WAITED]
         waiters.end_body("third")
 
         assert waiters.errors == {}
@@ -1395,7 +1428,10 @@ def test_a_holder_that_lets_go_as_the_taker_expires_is_taken_on_the_old_inode_an
     on the old inode, renames nothing over the path and writes no takeover
     note. A second waiter behind it is refused for as long as the taker's body
     runs and is then granted the same inode, so at no moment are two suites
-    in flight."""
+    in flight. Since story-196 that second waiter announces one restart: the
+    taker's grant stamped the file, and a changed stamp is the turn having
+    changed hands whether or not the inode did — so its bound measures the
+    taker from the grant rather than the holder from its own start."""
     with_estimate()
     target = make_target("let-go-at-expiry")
     config = {**config_of(target), KEY: "2"}
@@ -1431,12 +1467,16 @@ def test_a_holder_that_lets_go_as_the_taker_expires_is_taken_on_the_old_inode_an
         assert kinds_of(waiters.run_dir("taker")) == [WAITED]
         assert notes_about_the_turn(waiters.run_dir("taker")) == []
 
-        # The other is still refused, by the taker now, and never restarts:
-        # the turn did not change hands.
+        # The other is still refused, by the taker now. It restarts once — the
+        # taker's stamp on the same inode is the turn having changed hands —
+        # and then keeps waiting, with no note of its own.
         waiters.step()
         waiters.step()
         assert waiters.in_body() == ["taker"] and waiters.sleeping() == ["other"]
-        assert kinds_of(waiters.run_dir("other")) == [WAITED]
+        assert kinds_of(waiters.run_dir("other")) == [WAITED, WAITED]
+        first_wait, restart = entries_of_kind(waiters.run_dir("other"), WAITED)
+        assert CHANGED_HANDS not in first_wait["message"]
+        assert CHANGED_HANDS in restart["message"]
         waiters.end_body("taker")
 
         waiters.step_until(lambda: waiters.in_body() != [], "the other taking the turn")
@@ -1448,7 +1488,7 @@ def test_a_holder_that_lets_go_as_the_taker_expires_is_taken_on_the_old_inode_an
         holder.close()
 
     assert waiters.errors == {}
-    assert kinds_of(waiters.run_dir("other")) == [WAITED]
+    assert kinds_of(waiters.run_dir("other")) == [WAITED, WAITED]
     for name in ("taker", "other"):
         assert notes_about_the_turn(waiters.run_dir(name)) == []
         assert all(0 < step <= POLL for step in waiters.slept[name])
@@ -1586,6 +1626,458 @@ def test_the_same_drive_without_the_swap_runs_on_the_old_inode(
     assert inode_at(lock) == old_inode
     assert kinds_of(tmp_path / "waiter") == [WAITED]
     assert 30.0 <= sum(clock.slept) < 30.0 + 2 * POLL
+
+
+# --------------------------------------------------------------------------
+# The bound measures the current holder (story-196)
+# --------------------------------------------------------------------------
+#
+# Every run that takes the turn appends one line to the lock file — its pid
+# and the moment it took the turn — and a waiter that sees the file's last
+# line change restarts its bound from that poll. The stamp is read here from
+# the file itself, never through the coordinator, so what these assert is
+# what any process would find at the path.
+
+
+def stamp_lines(lock_path: Path) -> list[str]:
+    """Every line of the file at the lock path, oldest first."""
+    return lock_path.read_text(encoding="utf-8").splitlines()
+
+
+def stamp_at(lock_path: Path) -> str | None:
+    """The last line at the lock path, or None where the file carries none."""
+    lines = stamp_lines(lock_path)
+    return lines[-1] if lines else None
+
+
+def is_a_stamp_of_this_process(line: str | None) -> bool:
+    """Whether a line is a stamp of this process: its pid, a space, and a
+    moment that reads as a number. The waiters below run on threads of this
+    process, so every stamp any of them writes carries this pid."""
+    if line is None:
+        return False
+    pid, _, moment = line.partition(" ")
+    if pid != str(os.getpid()):
+        return False
+    try:
+        float(moment)
+    except ValueError:
+        return False
+    return True
+
+
+def stagger(names: list[str]) -> dict[str, float]:
+    """A start time for each waiter, spread across one poll in the order
+    given, so their polls come round in that order every poll and a handoff
+    is always seen first by the waiter named first among those still
+    waiting. Derived from the poll constant so no number is written here."""
+    return {name: 1000.0 + index * POLL / len(names)
+            for index, name in enumerate(names)}
+
+
+def hold_one_suite_then(waiters: Waiters, names: list[str], release) -> None:
+    """Let the holder keep the turn for one suite's time, then release it at
+    a moment where the next poll is the first-named waiter still waiting: the
+    step just taken was the last-named's. Every step in between asserts no
+    two waiters are in their bodies at once."""
+    took_at = waiters.now
+    while True:
+        stepped = waiters.step()
+        if waiters.now >= took_at + ESTIMATE_SECONDS and stepped == names[-1]:
+            break
+    release()
+
+
+def test_six_waiters_behind_healthy_holders_are_granted_in_order_and_none_takes_over(
+        make_target, tmp_path):
+    """The story's central claim. Six waiters queue behind a holder that
+    takes one suite's time, under a bound of five suites; each, once granted,
+    holds for one suite's time too. The sixth therefore queues for longer
+    than the bound — the wait that expired while the bound measured the
+    waiter's own time in the queue — and is granted normally: none writes a
+    takeover note, the inode at the path never changes, and no two are ever
+    in their bodies at once. Each waiter behind a handoff announces it, so
+    the n-th to be granted carries n wait events."""
+    with_estimate()
+    target = make_target("six-healthy")
+    config = {**config_of(target), KEY: "5"}
+    bound = bound_of("5")
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    inode = inode_at(lock)
+    names = [f"waiter-{n}" for n in range(1, 7)]
+    started_at = stagger(names)
+    waiters = Waiters(target, config, tmp_path / "waiters")
+    try:
+        for name in names:
+            waiters.start(name, started_at[name])
+            assert kinds_of(waiters.run_dir(name)) == [WAITED]
+        assert waiters.sleeping() == sorted(names)
+
+        hold_one_suite_then(waiters, names, holder.close)
+        granted_at: dict[str, float] = {}
+        for index, name in enumerate(names):
+            waiters.step_until(lambda: waiters.in_body() != [],
+                               f"{name} taking the turn")
+            assert waiters.in_body() == [name]
+            granted_at[name] = waiters.now
+            assert inode_at(lock) == inode
+            assert is_a_stamp_of_this_process(stamp_at(lock))
+            # One wait event, then one restart per handoff seen: the first
+            # saw none, the sixth saw five.
+            assert kinds_of(waiters.run_dir(name)) == [WAITED] * (index + 1)
+            first_wait, *restarts = entries_of_kind(waiters.run_dir(name), WAITED)
+            assert CHANGED_HANDS not in first_wait["message"]
+            assert all(CHANGED_HANDS in restart["message"] for restart in restarts)
+            assert notes_about_the_turn(waiters.run_dir(name)) == []
+            if waiters.sleeping():
+                hold_one_suite_then(waiters, names, lambda: waiters.end_body(name))
+                assert waiters.in_body() == []
+            else:
+                waiters.end_body(name)
+    finally:
+        holder.close()
+
+    assert waiters.errors == {}
+    assert list(granted_at) == names
+    # The last waiter queued for longer than the bound, so under a bound that
+    # measured its own time in the queue it would have expired and taken the
+    # turn over — the absence of a takeover above is asserted against a wait
+    # that would have produced one.
+    last = names[-1]
+    assert granted_at[last] - started_at[last] > bound + POLL
+    assert inode_at(lock) == inode
+    for name in names:
+        assert takeover_notes(waiters.run_dir(name)) == []
+        assert all(0 < step <= POLL for step in waiters.slept[name])
+
+
+def test_a_waiter_behind_a_normal_handoff_announces_the_restart_and_measures_the_new_holder(
+        make_target, tmp_path):
+    """A holder lets go inside the bound; the waiter ahead is granted and the
+    one behind announces, through a second wait event whose message says the
+    turn changed hands, that its bound starts over from the handoff. The new
+    holder then keeps the turn past the moment the waiter's original bound
+    would have expired, and the waiter is still waiting: it is granted only
+    when the holder finishes, with no takeover note, on the same inode."""
+    with_estimate()
+    target = make_target("normal-handoff")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    inode = inode_at(lock)
+    names = ["ahead", "behind"]
+    started_at = stagger(names)
+    lets_go_at = 30.0
+    assert lets_go_at < bound
+    waiters = Waiters(target, config, tmp_path / "waiters")
+    try:
+        for name in names:
+            waiters.start(name, started_at[name])
+        while True:
+            stepped = waiters.step()
+            if waiters.now >= 1000.0 + lets_go_at and stepped == names[-1]:
+                break
+        holder.close()
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the ahead taking the turn")
+        assert waiters.in_body() == ["ahead"]
+        handoff_at = waiters.now
+        assert inode_at(lock) == inode
+        assert kinds_of(waiters.run_dir("ahead")) == [WAITED]
+
+        waiters.step()
+        assert waiters.sleeping() == ["behind"]
+        assert kinds_of(waiters.run_dir("behind")) == [WAITED, WAITED]
+        first_wait, restart = entries_of_kind(waiters.run_dir("behind"), WAITED)
+        assert CHANGED_HANDS not in first_wait["message"]
+        assert CHANGED_HANDS in restart["message"]
+        assert restart["message"] == story_coordinator._announcement(
+            *restart["message"].split("; ", 1))
+        assert str(lock) in restart["message"]
+        assert FROM_THE_ESTIMATE in restart["message"]
+
+        # Past the waiter's original expiry and still inside the bound from
+        # the handoff: the ahead holds, the behind waits, nothing was taken.
+        original_expiry = started_at["behind"] + bound
+        waiters.step_until(lambda: waiters.now > original_expiry + POLL,
+                           "the original bound passing")
+        assert waiters.now < handoff_at + bound
+        assert waiters.in_body() == ["ahead"] and waiters.sleeping() == ["behind"]
+        assert kinds_of(waiters.run_dir("behind")) == [WAITED, WAITED]
+        assert inode_at(lock) == inode
+        waiters.end_body("ahead")
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the behind taking the turn")
+        assert waiters.in_body() == ["behind"]
+        assert waiters.now > original_expiry
+        assert inode_at(lock) == inode
+        waiters.end_body("behind")
+    finally:
+        holder.close()
+
+    assert waiters.errors == {}
+    assert kinds_of(waiters.run_dir("behind")) == [WAITED, WAITED]
+    for name in names:
+        assert notes_about_the_turn(waiters.run_dir(name)) == []
+        assert takeover_notes(waiters.run_dir(name)) == []
+        assert all(0 < step <= POLL for step in waiters.slept[name])
+
+
+def test_a_stamped_holder_that_hangs_after_a_handoff_is_taken_over_at_the_bound_from_the_handoff(
+        make_target, tmp_path):
+    """The other side of the restart: the bound really does start over. A
+    waiter queues behind a stampless holder; the holder lets go and a run
+    that takes its turn through the coordinator — so it stamps the file —
+    becomes the holder and never finishes. The waiter restarts at the handoff
+    and expires one bound after it, not one bound after it began waiting;
+    only then does it take the turn over, with the note and the fresh inode a
+    takeover leaves, and its stamp replaces the hung holder's at the path."""
+    with_estimate()
+    target = make_target("hung-after-handoff")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    old_inode = inode_at(lock)
+    lets_go_at = 30.0
+    assert lets_go_at > 2 * POLL, "the two expiries must be more than a poll apart"
+    waiters = Waiters(target, config, tmp_path / "waiters")
+    hung = contextlib.ExitStack()
+    try:
+        waiters.start("behind", 1000.0)
+        waiters.step_until(lambda: waiters.now >= 1000.0 + lets_go_at,
+                           "the holder's time to let go")
+        assert stamp_at(lock) is None
+        holder.close()
+        enter_turn(hung, tmp_path / "hung", target, config, FakeClock())
+        hung_stamp = stamp_at(lock)
+        assert is_a_stamp_of_this_process(hung_stamp)
+        assert inode_at(lock) == old_inode
+
+        waiters.step()
+        assert waiters.sleeping() == ["behind"]
+        assert kinds_of(waiters.run_dir("behind")) == [WAITED, WAITED]
+        restarted_at = waiters.now
+        [_, restart] = entries_of_kind(waiters.run_dir("behind"), WAITED)
+        assert CHANGED_HANDS in restart["message"]
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the behind expiring")
+        assert waiters.in_body() == ["behind"]
+        # One bound after the handoff, which is later than one bound after
+        # the waiter began by more than the poll's slack.
+        assert waiters.now == pytest.approx(restarted_at + bound, abs=POLL)
+        assert waiters.now > 1000.0 + bound + POLL
+        assert inode_at(lock) != old_inode
+        assert stamp_at(lock) != hung_stamp
+        assert is_a_stamp_of_this_process(stamp_at(lock))
+        assert kinds_of(waiters.run_dir("behind")) == [WAITED, WAITED, NOTE]
+        assert len(takeover_notes(waiters.run_dir("behind"))) == 1
+        waiters.end_body("behind")
+    finally:
+        holder.close()
+        hung.close()
+
+    assert waiters.errors == {}
+    assert all(0 < step <= POLL for step in waiters.slept["behind"])
+
+
+def test_a_stamped_hung_holder_is_taken_over_by_the_first_to_expire_and_the_rest_restart(
+        make_target, tmp_path):
+    """The three-waiter drain behind a holder that stamped the file, taken
+    through the coordinator rather than a bare lock. The first to expire
+    takes the turn and its stamp replaces the holder's at the path; the
+    other two announce the change of hands and are still waiting when the
+    taker's body ends; they then drain one after the other, the last
+    announcing the second's grant too, and never together."""
+    with_estimate()
+    target = make_target("stamped-hung")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    hung = contextlib.ExitStack()
+    enter_turn(hung, tmp_path / "hung", target, config, FakeClock())
+    hung_inode = inode_at(lock)
+    hung_stamp = stamp_at(lock)
+    assert is_a_stamp_of_this_process(hung_stamp)
+    names = ["first", "second", "third"]
+    started_at = stagger(names)
+    waiters = Waiters(target, config, tmp_path / "waiters")
+    try:
+        for name in names:
+            waiters.start(name, started_at[name])
+
+        waiters.step_until(lambda: waiters.in_body() != [], "a waiter entering its body")
+        assert waiters.in_body() == ["first"]
+        assert waiters.now == pytest.approx(1000.0 + bound, abs=POLL)
+        new_inode = inode_at(lock)
+        assert new_inode != hung_inode
+        assert stamp_at(lock) != hung_stamp
+        assert is_a_stamp_of_this_process(stamp_at(lock))
+        assert kinds_of(waiters.run_dir("first")) == [WAITED, NOTE]
+        assert len(takeover_notes(waiters.run_dir("first"))) == 1
+
+        waiters.step()
+        waiters.step()
+        assert waiters.in_body() == ["first"]
+        assert waiters.sleeping() == ["second", "third"]
+        for name in ("second", "third"):
+            first_wait, restart = entries_of_kind(waiters.run_dir(name), WAITED)
+            assert CHANGED_HANDS not in first_wait["message"]
+            assert CHANGED_HANDS in restart["message"]
+        waiters.end_body("first")
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the second taking the turn")
+        assert waiters.in_body() == ["second"]
+        assert inode_at(lock) == new_inode
+        waiters.step()
+        assert waiters.sleeping() == ["third"]
+        assert kinds_of(waiters.run_dir("third")) == [WAITED, WAITED, WAITED]
+        waiters.end_body("second")
+
+        waiters.step_until(lambda: waiters.in_body() != [], "the third taking the turn")
+        assert waiters.in_body() == ["third"]
+        assert inode_at(lock) == new_inode
+        waiters.end_body("third")
+    finally:
+        hung.close()
+
+    assert waiters.errors == {}
+    for name in ("second", "third"):
+        assert takeover_notes(waiters.run_dir(name)) == []
+        assert notes_about_the_turn(waiters.run_dir(name)) == []
+    for name in names:
+        assert all(0 < step <= POLL for step in waiters.slept[name])
+
+
+def test_a_stampless_lock_file_is_measured_from_the_first_poll_exactly_as_a_stamped_one(
+        make_target, tmp_path):
+    """A holder that took the lock without writing a stamp — a bare flock, as
+    a harness older than the stamp would leave — is measured from the first
+    poll that sees it: one wait event, no restart, and the takeover at the
+    bound. Beside it the same wait behind a holder that did stamp, whose
+    sleeps are the very same sequence."""
+    with_estimate()
+    target = make_target("stampless")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    with holding(lock):
+        # The control for the absence the case turns on: the file carries no
+        # line at all before the wait.
+        assert stamp_at(lock) is None
+        ran, stampless = take_turn(tmp_path / "stampless", target, config)
+        assert is_a_stamp_of_this_process(stamp_at(lock))
+    assert ran is True
+    assert sum(stampless.slept) == pytest.approx(bound, abs=POLL)
+    assert kinds_of(tmp_path / "stampless") == [WAITED, NOTE]
+    assert len(takeover_notes(tmp_path / "stampless")) == 1
+
+    hung = contextlib.ExitStack()
+    try:
+        enter_turn(hung, tmp_path / "hung", target, config, FakeClock())
+        assert is_a_stamp_of_this_process(stamp_at(lock))
+        ran, stamped = take_turn(tmp_path / "stamped", target, config)
+    finally:
+        hung.close()
+    assert ran is True
+    assert stamped.slept == stampless.slept
+    assert kinds_of(tmp_path / "stamped") == [WAITED, NOTE]
+    assert len(takeover_notes(tmp_path / "stamped")) == 1
+
+
+def test_every_route_that_takes_the_turn_leaves_this_runs_stamp_as_the_last_line_before_the_body_runs(
+        make_target, tmp_path):
+    """Read from inside the body on each route: the uncontended first grant,
+    a second uncontended grant (appended, the earlier line kept), a grant
+    inside the bound after the holder lets go, the fresh file a takeover
+    renames over the path — one line, the taker's — and the grant on the old
+    inode inside the takeover helper when the holder has let go."""
+    with_estimate()
+    target = make_target("every-route")
+    config = {**config_of(target), KEY: "2"}
+    lock = lock_of(target)
+
+    with contextlib.ExitStack() as stack:
+        enter_turn(stack, tmp_path / "uncontended", target, config, FakeClock())
+        [first] = stamp_lines(lock)
+        assert is_a_stamp_of_this_process(first)
+    with contextlib.ExitStack() as stack:
+        enter_turn(stack, tmp_path / "again", target, config, FakeClock())
+        lines = stamp_lines(lock)
+        assert lines[:-1] == [first]
+        assert is_a_stamp_of_this_process(lines[-1])
+    before = stamp_lines(lock)
+
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def let_go(now: float) -> None:
+        if now - 1000.0 >= 30.0 and not holder.closed:
+            holder.close()
+
+    try:
+        with contextlib.ExitStack() as stack:
+            enter_turn(stack, tmp_path / "granted", target, config,
+                       FakeClock(on_advance=let_go))
+            lines = stamp_lines(lock)
+            assert lines[:-1] == before
+            assert is_a_stamp_of_this_process(lines[-1])
+    finally:
+        holder.close()
+    assert kinds_of(tmp_path / "granted") == [WAITED]
+    before = stamp_lines(lock)
+
+    with holding(lock) as hung:
+        with contextlib.ExitStack() as stack:
+            enter_turn(stack, tmp_path / "taker", target, config, FakeClock())
+            assert inode_at(lock) != inode_held(hung)
+            [only] = stamp_lines(lock)
+            assert is_a_stamp_of_this_process(only)
+            assert only not in before
+    assert len(takeover_notes(tmp_path / "taker")) == 1
+    before = stamp_lines(lock)
+
+    with open(lock, "a", encoding="utf-8") as waited_on:
+        assert story_coordinator._take_over_suite_turn(lock, waited_on) is waited_on
+        lines = stamp_lines(lock)
+        assert lines[:-1] == before
+        assert is_a_stamp_of_this_process(lines[-1])
+
+
+def test_a_stamp_that_is_no_pid_and_no_time_is_waited_behind_like_any_other(
+        make_target, tmp_path):
+    """The stamp is compared for equality and read for nothing else, shown
+    from the file's side: a holder whose last line names no pid and no time
+    is waited behind for the whole bound and taken over like any other, and
+    so is one whose line carries this process's pid and a moment long before
+    the clock — which a bound that read the time would have expired at
+    once, and a takeover that signalled the pid would have aimed at this
+    process."""
+    with_estimate()
+    target = make_target("no-pid-no-time")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    lines = {"garbage": "no-such-pid long-ago", "own-pid-long-ago": f"{os.getpid()} 0.0"}
+    for label, line in lines.items():
+        with holding(lock) as hung:
+            hung.write(f"{line}\n")
+            hung.flush()
+            assert stamp_at(lock) == line
+            ran, clock = take_turn(tmp_path / label, target, config)
+        assert ran is True
+        assert sum(clock.slept) == pytest.approx(bound, abs=POLL)
+        assert all(0 < step <= POLL for step in clock.slept)
+        assert kinds_of(tmp_path / label) == [WAITED, NOTE]
+        assert len(takeover_notes(tmp_path / label)) == 1
 
 
 def test_an_uncontended_turn_writes_nothing_and_sleeps_nothing(make_target, tmp_path):
@@ -1919,3 +2411,158 @@ def test_only_the_three_whole_suite_call_sites_enter_the_turn():
     assert entering == {"suite_run_check", "clean_clone_check", "revert_check"}
     for name in ("run_nomination", "_run_selection", "suite_census_check"):
         assert "suite_turn(" not in conftest.function_source(COORDINATOR_SOURCE, name)
+
+
+# --------------------------------------------------------------------------
+# The stamp is read for equality only, and the poll is named by its constant
+# --------------------------------------------------------------------------
+
+#: The reader of the stamp at the path, named once here: every use of what
+#: it returns is what the scan below walks.
+STAMP_READER = "_stamp_at"
+
+
+def _is_equality(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Compare)
+            and all(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops))
+
+
+def _calls(node: ast.AST, name: str) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == name)
+
+
+def stamp_reads_beyond_equality(source: str) -> list[str]:
+    """Every use of a stamp read off the lock file that is not a comparison
+    for equality: a call to the reader whose result goes anywhere but an
+    assignment or an equality, and a load of a name assigned from it that is
+    anything but an operand of an equality. Each is reported as the
+    statement or expression it sits in."""
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree)
+               for child in ast.iter_child_nodes(node)}
+    holding_a_stamp = {
+        target.id
+        for node in ast.walk(tree) if isinstance(node, ast.Assign)
+        and _calls(node.value, STAMP_READER)
+        for target in node.targets if isinstance(target, ast.Name)
+    }
+    found = []
+    for node in ast.walk(tree):
+        parent = parents.get(node)
+        if _calls(node, STAMP_READER):
+            if isinstance(parent, ast.Assign) or _is_equality(parent):
+                continue
+            found.append(ast.unparse(parent))
+        elif (isinstance(node, ast.Name) and node.id in holding_a_stamp
+              and isinstance(node.ctx, ast.Load) and not _is_equality(parent)):
+            found.append(ast.unparse(parent))
+    return found
+
+
+def test_the_stamp_is_never_read_for_anything_but_equality():
+    """No code in the coordinator signals a pid read from the lock file or
+    compares a time read from it against a clock: the reader's result is
+    assigned or compared for equality and nothing else, and neither the
+    writer nor the reader nor the turn names a signal or parses a stamp."""
+    assert stamp_reads_beyond_equality(COORDINATOR_SOURCE) == []
+    reader = conftest.function_source(COORDINATOR_SOURCE, STAMP_READER)
+    writer = conftest.function_source(COORDINATOR_SOURCE, "_stamp_suite_turn")
+    turn = conftest.function_source(COORDINATOR_SOURCE, "suite_turn")
+    takeover = conftest.function_source(COORDINATOR_SOURCE, "_take_over_suite_turn")
+    for body in (reader, writer, turn, takeover):
+        assert "kill" not in body
+        assert "SIG" not in body
+    for parse in ("int(", "float(", ".split("):
+        assert parse not in reader
+    assert f"{STAMP_READER}(" in turn and f"{STAMP_READER}(" not in takeover
+    assert "_stamp_suite_turn(" in turn and "_stamp_suite_turn(" in takeover
+
+
+PLANTED_STAMP_READS = '''\
+def suite_turn(lock_path, handle, clock):
+    last_stamp = _stamp_at(lock_path)
+    pid, moment = last_stamp.split(" ")
+    if clock() - float(moment) > 60:
+        kill(int(pid), 15)
+    if float(_stamp_at(lock_path)) < clock():
+        pass
+    return _stamp_at(lock_path) != last_stamp
+'''
+
+
+def test_the_same_scan_reports_a_planted_body_that_parses_and_signals_a_stamp():
+    """The control for the absence above: a body that splits a stamp, reads
+    its time against the clock and signals its pid is reported at each of
+    those uses, and its one equality is not."""
+    assert stamp_reads_beyond_equality(PLANTED_STAMP_READS) == [
+        "last_stamp.split", "float(_stamp_at(lock_path))"]
+
+
+def comment_above(source: str, declaration: str) -> str:
+    """The `#:` comment block immediately above the line beginning with
+    `declaration`, joined into one string."""
+    lines = source.splitlines()
+    [index] = [i for i, line in enumerate(lines) if line.startswith(declaration)]
+    block = []
+    while index > 0 and lines[index - 1].startswith("#:"):
+        index -= 1
+        block.insert(0, lines[index][2:].strip())
+    return " ".join(block)
+
+
+def wait_driving_modules() -> list[Path]:
+    """The modules under tests/ that enter the turn, which are the ones whose
+    sleeps and slacks are measured against the poll."""
+    return sorted(path for path in (REPO_ROOT / "tests").glob("test_*.py")
+                  if "suite_turn(" in path.read_text(encoding="utf-8"))
+
+
+def floats_naming_the_poll(source: str, *, except_functions: tuple[str, ...] = ()
+                           ) -> list[str]:
+    """Every float literal in `source` equal to the poll interval or to the
+    half second it replaced, outside the functions named — the assertion
+    that the constant has its value, and this scan, which has to write the
+    retired value to look for it."""
+    retired = 0.5
+    tree = ast.parse(source)
+    tree.body = [node for node in tree.body
+                 if not (isinstance(node, ast.FunctionDef)
+                         and node.name in except_functions)]
+    return [repr(node.value) for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, float)
+            and node.value in (POLL, retired)]
+
+
+def test_the_poll_is_five_seconds_named_by_its_constant_and_its_comment_says_why():
+    """The poll interval is five seconds; the comment above it says why five
+    — measured against a suite that takes minutes, and a hung holder measured
+    in suite runs — and that a blocking flock interrupted by an alarm was
+    considered and not taken; and no module that drives the wait names the
+    number, old or new, rather than the constant."""
+    assert story_coordinator.SUITE_TURN_POLL_SECONDS == 5.0
+    comment = comment_above(COORDINATOR_SOURCE, "SUITE_TURN_POLL_SECONDS =")
+    assert "five" in comment.lower()
+    assert "suite run" in comment
+    assert "alarm" in comment and "flock" in comment
+    assert "not taken" in comment
+    assert wait_driving_modules() != []
+    own = (test_the_poll_is_five_seconds_named_by_its_constant_and_its_comment_says_why.__name__,
+           floats_naming_the_poll.__name__)
+    for module in wait_driving_modules():
+        except_functions = own if module.name == Path(__file__).name else ()
+        assert floats_naming_the_poll(
+            module.read_text(encoding="utf-8"), except_functions=except_functions
+        ) == [], module.name
+
+
+def test_the_same_scan_reports_a_planted_module_that_names_the_poll():
+    """The control for the absence above: a module that writes the number as
+    a slack, and one that writes the retired half second, are each reported,
+    and one that reads the constant is not."""
+    assert floats_naming_the_poll(
+        f"assert sum(slept) == approx(bound, abs={POLL!r})") == [repr(POLL)]
+    assert floats_naming_the_poll("assert all(step <= 0.5 for step in slept)") == ["0.5"]
+    assert floats_naming_the_poll(
+        "assert all(step <= story_coordinator.SUITE_TURN_POLL_SECONDS for step in slept)"
+    ) == []

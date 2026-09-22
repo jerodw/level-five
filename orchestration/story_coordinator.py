@@ -936,8 +936,15 @@ SUITE_TURN_WAIT_FALLBACK_SECONDS = 60 * 60.0
 
 #: How often a run waiting for its turn asks for the lock again. The poll is
 #: what makes a killed holder's release visible: the kernel drops the lock the
-#: moment the holder dies, and the next poll takes it.
-SUITE_TURN_POLL_SECONDS = 0.5
+#: moment the holder dies, and the next poll takes it. Five seconds because of
+#: what the poll is measured against: a suite run takes minutes, so a handoff
+#: delayed by at most five seconds is invisible, and a hung holder is measured
+#: in suite runs rather than seconds — while seven waiters each polling twice
+#: a second, as the half-second poll had them, is load for nothing. A blocking
+#: flock interrupted by an alarm was considered and not taken: signals in a
+#: process that also spawns and kills subprocesses are a mechanism this
+#: coordinator does not have and should not gain for sub-second latency.
+SUITE_TURN_POLL_SECONDS = 5.0
 
 #: The lock file's name under the worktree root. Beside the worktrees because
 #: that directory is already the harness's own, already outside the repository,
@@ -4135,15 +4142,20 @@ def _suite_rerun_started(
 # takes the turn *from* the holder — a live process's flock cannot be taken,
 # so the takeover is a fresh file renamed over the lock path, which the hung
 # holder does not hold; the holder keeps its lock on an orphaned inode nobody
-# opens again. Every other waiter notices the inode at the path change, says
-# so, reopens the path and starts its wait over, so behind a hung run the queue
+# opens again. Every other waiter notices the turn change hands, says so,
+# reopens the path and starts its wait over, so behind a hung run the queue
 # drains one run per wait instead of all giving up within minutes of each
 # other and sharing the machine with the hung one. Every path that runs
 # without a turn, takes one over, or restarts its wait says so in events.log.
 #
 # The bound is a configured count of suite runs times what a suite run has
 # taken on this machine, or a fallback where too few have been measured — see
-# `suite_turn_wait_seconds`.
+# `suite_turn_wait_seconds`. It measures the current holder, not this run's
+# time in the queue: every run that takes the turn appends a stamp of its
+# tenure to the lock file, a waiter reads the stamp on every poll beside the
+# inode, and a stamp that differs from the one it last saw restarts its bound
+# — so a queue of healthy runs handing the turn on never expires anyone, and a
+# takeover fires only when one holder has held the turn for the whole bound.
 
 
 def suite_lock_path(target_root: Path, config: dict) -> Path:
@@ -4185,6 +4197,39 @@ def _inode_at(lock_path: Path) -> int:
     the caller treats as the could-not-open path.
     """
     return lock_path.stat().st_ino
+
+
+def _stamp_suite_turn(handle) -> None:
+    """Mark this run's tenure on the lock file it holds: one appended line,
+    `<pid> <time>`, flushed before the caller's body runs.
+
+    The stamp is identity and nothing else. A waiter compares the file's last
+    line for equality with the last one it saw, so a line that differs is the
+    turn having changed hands — by a normal grant as much as by a takeover.
+    The pid is what makes two processes' stamps distinct and the time is what
+    makes one process's successive turns distinct; nothing signals the pid and
+    nothing compares the time against a clock, since a holder's clock is not a
+    waiter's. The file stays append-only, and one line per suite run is
+    negligible growth.
+    """
+    # `getpid` is imported by name rather than reached through `os`, for the
+    # reason `_inode_held` gives: this module names no environment reader.
+    from os import getpid
+
+    handle.write(f"{getpid()} {time.time()!r}\n")
+    handle.flush()
+
+
+def _stamp_at(lock_path: Path) -> str | None:
+    """The current stamp at the lock path — the file's last line — or None
+    where the file carries none: one left by a harness older than the stamp,
+    or by a holder that died between taking the lock and writing it. Read as
+    a whole line and returned for equality with the last one seen, and for
+    nothing else. A read that fails is an `OSError` the caller treats as the
+    could-not-open path.
+    """
+    lines = lock_path.read_text(encoding="utf-8").splitlines()
+    return lines[-1] if lines else None
 
 
 def _takeover_lock_path(lock_path: Path) -> Path:
@@ -4239,6 +4284,14 @@ def _take_over_suite_turn(lock_path: Path, handle):
     holder still there — is taken over. The waiter's side of the same race is
     `_confirm_suite_turn`.
 
+    Whichever way the turn is taken here, the holder's stamp is the last line
+    of the file at the lock path before this returns (`_stamp_suite_turn`):
+    written on `handle` where its retried flock is granted, and written into
+    the fresh file after it is locked and before it is renamed over the path,
+    so a swapped-in file is never seen stampless. A waiter polling the path
+    reads that stamp beside the inode, and a stamp that differs from the one
+    it last saw is what restarts its bound.
+
     Any `OSError` other than the takeover lock being held propagates, so the
     caller treats it as the could-not-open path; a temporary file left by such
     a failure is removed on the way out.
@@ -4250,6 +4303,7 @@ def _take_over_suite_turn(lock_path: Path, handle):
         if _inode_at(lock_path) != waited_on:
             return None
         if _try_suite_lock(handle):
+            _stamp_suite_turn(handle)
             return handle
         descriptor, fresh = tempfile.mkstemp(
             dir=lock_path.parent, prefix=f"{SUITE_LOCK_NAME}.")
@@ -4258,6 +4312,7 @@ def _take_over_suite_turn(lock_path: Path, handle):
             # A file nobody else has opened: the lock is granted, and it is
             # the lock the handle keeps once the file is at the lock path.
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _stamp_suite_turn(handle)
             Path(fresh).replace(lock_path)
         except BaseException:
             handle.close()
@@ -4281,30 +4336,45 @@ def suite_turn(
 ):
     """Hold the repository's turn at the whole suite for the body's duration.
 
-    The lock is tried without blocking first. When it is held, a
+    The lock is tried without blocking first. Every route by which the turn
+    is taken — that first grant, a grant inside the bound, and both grants
+    inside `_take_over_suite_turn` — leaves this run's stamp as the last line
+    of the file at the path before the body runs (`_stamp_suite_turn`): one
+    line, the pid and the moment the turn was taken, read by waiters for
+    equality and for nothing else. When the lock is held, a
     `suite-turn-waited` event announces the wait — through `_announcement`,
-    naming what the wait is worth and where its bound came from — and the
+    naming what the wait is worth and where its bound came from — the stamp
+    at the path (or its absence, which is a value of its own) is recorded
+    beside the inode of the handle being waited on and the clock, and the
     path is then polled every `SUITE_TURN_POLL_SECONDS`. Each poll makes two
-    observations, in this order. First the inode at the path is compared
-    against the inode of the handle being waited on: a different inode is the
-    turn having changed hands (a waiter ahead of this one took it over), at
-    which point the handle is reopened on the path, a second
-    `suite-turn-waited` event announces the restart, and the bound starts over
-    from that moment. Then, with the same inode, the flock is tried: refused
-    is the same holder still there, granted is the holder finishing normally
-    and the turn taken on the same inode. The announcement is written before
-    the wait and the suite's own announcement after it, so the wait is
-    readable off the events log as the gap between the two lines; an
-    uncontended turn writes nothing at all.
+    observations, in this order. First the inode at the path and the stamp
+    at the path are compared against the ones recorded: either differing is
+    the turn having changed hands — a different stamp on the same inode is a
+    holder that finished and a waiter ahead of this one granted the turn
+    normally, and a different inode is a takeover, which always comes with a
+    different stamp — at which point the handle is reopened on the path, the
+    stamp is recorded afresh, a second `suite-turn-waited` event announces
+    the restart, and the bound starts over from that moment. Then, with both
+    unchanged, the flock is tried: refused is the same holder still there,
+    granted is the holder finishing normally and the turn taken on the same
+    inode. The bound therefore measures how long the *current holder* has
+    held the turn, not how long this run has been queueing, so a deep queue
+    of healthy runs never expires anyone: a waiter expires only when one
+    holder has held the turn for the whole bound, which is what hung means.
+    A lock file carrying no stamp is measured from the first poll that sees
+    it, and no restart is written for it until a stamped holder replaces it.
+    The announcement is written before the wait and the suite's own
+    announcement after it, so the wait is readable off the events log as the
+    gap between the two lines; an uncontended turn writes nothing at all.
 
     A bound that expires with the lock still held takes the turn from the
     holder, through `_take_over_suite_turn`, and a note says the bound
     expired, that this run took the turn, and that the previous holder was
     left running. A takeover another waiter got to first takes nothing over
-    here: the next poll sees the new inode and restarts, so behind a hung
-    holder the queue drains one run per wait. A bound of zero takes nothing
-    over — it writes the wait and the expiry note and runs at once without a
-    turn, exactly as it did before takeovers existed.
+    here: the next poll sees the new inode and stamp and restarts, so behind
+    a hung holder the queue drains one run per wait. A bound of zero takes
+    nothing over — it writes the wait and the expiry note and runs at once
+    without a turn, exactly as it did before takeovers existed.
 
     A takeover and a normal release can meet, and the two sides of the race
     are closed under the takeover lock. A holder that lets go in the window
@@ -4321,9 +4391,12 @@ def suite_turn(
     and neither is closed here. The first: a lock refused by the hung holder
     and one refused by a waiter granted and confirmed in the instant between
     this run's expiry and its taking the takeover lock look the same to the
-    taker. The second: the first, uncontended `_try_suite_lock` at the top of
-    this function is the one grant not confirmed under the takeover lock, so
-    a fresh entrant granted the old inode after the holder lets go — while a
+    taker. The stamp is the mark a grant leaves on the file that closing it
+    would need, and it is deliberately not used for that here: the stamp is
+    read for equality on a poll and never under the takeover lock by a taker.
+    The second: the first, uncontended `_try_suite_lock` at the top of this
+    function is the one grant not confirmed under the takeover lock, so a
+    fresh entrant granted the old inode after the holder lets go — while a
     taker already holds the takeover lock with its retry refused and has not
     yet renamed the fresh file over the path — runs on the orphaned inode
     beside the taker. Each is a fraction of a poll.
@@ -4344,10 +4417,13 @@ def suite_turn(
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(lock_path, "a", encoding="utf-8")
         taken = _try_suite_lock(handle)
-        if not taken:
+        if taken:
+            _stamp_suite_turn(handle)
+        else:
             bound = suite_turn_wait_seconds(config)
             cost = suite_turn_wait_cost(config)
             waited_on = _inode_held(handle)
+            last_stamp = _stamp_at(lock_path)
             message = (
                 f"waiting for the repository's turn at the suite, which "
                 f"another run holds at {lock_path}"
@@ -4368,7 +4444,8 @@ def suite_turn(
                 while clock() - started < bound:
                     sleep(min(SUITE_TURN_POLL_SECONDS,
                               max(0.0, bound - (clock() - started))))
-                    if _inode_at(lock_path) != waited_on:
+                    if (_inode_at(lock_path) != waited_on
+                            or _stamp_at(lock_path) != last_stamp):
                         changed_hands = True
                         break
                     taken = _try_suite_lock(handle)
@@ -4382,6 +4459,8 @@ def suite_turn(
                             fcntl.flock(handle, fcntl.LOCK_UN)
                             taken = False
                             changed_hands = True
+                        else:
+                            _stamp_suite_turn(handle)
                         break
                 if taken:
                     break
@@ -4389,6 +4468,7 @@ def suite_turn(
                     # The bound expired on a holder that is still there. Take
                     # the turn from it, unless another waiter got there first
                     # -- then the next poll sees the new inode and restarts.
+                    # Either grant inside the takeover writes the stamp.
                     handle_after = _take_over_suite_turn(lock_path, handle)
                     if handle_after is handle:
                         # The holder let go as this run went to take the
@@ -4412,22 +4492,29 @@ def suite_turn(
                         )
                         break
                     sleep(SUITE_TURN_POLL_SECONDS)
-                    changed_hands = _inode_at(lock_path) != waited_on
+                    changed_hands = (_inode_at(lock_path) != waited_on
+                                     or _stamp_at(lock_path) != last_stamp)
                     if not changed_hands:
-                        # Still the inode this run waited on: whoever holds
-                        # the takeover lock has not swapped yet. Try again
-                        # rather than re-announce a wait that has not ended.
+                        # Still the inode and stamp this run waited on:
+                        # whoever holds the takeover lock has not swapped
+                        # yet. Try again rather than re-announce a wait that
+                        # has not ended.
                         continue
                 if changed_hands:
-                    # The turn changed hands: reopen the path, say so, and
-                    # start the bound over from this moment.
+                    # The turn changed hands — by a normal grant or by a
+                    # takeover, told apart by nobody here: reopen the path,
+                    # record the stamp the new holder left, say so, and start
+                    # the bound over from this moment.
                     handle.close()
                     handle = open(lock_path, "a", encoding="utf-8")
                     waited_on = _inode_held(handle)
+                    last_stamp = _stamp_at(lock_path)
                     message = (
                         f"the turn at the suite changed hands, so the wait "
-                        f"restarts: another run took the turn at {lock_path} "
-                        f"from the holder this run was waiting on"
+                        f"restarts: another run now holds the turn at "
+                        f"{lock_path} in place of the holder this run was "
+                        f"waiting on, and the bound is measured against it "
+                        f"from now"
                     )
                     announce = True
                     continue
