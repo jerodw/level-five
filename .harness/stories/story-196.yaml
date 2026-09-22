@@ -1,0 +1,188 @@
+story:
+  id: story-196
+  title: A waiter's bound at the suite measures how long the current holder has held the turn, so a deep queue of healthy runs never triggers a takeover
+  description: |
+    A run that wants the test suite waits its turn behind whichever run is
+    using it, and gives up waiting — taking the turn over — once it has
+    waited longer than five suite runs' worth of time, on the theory that a
+    holder still there after that long is hung. But the clock measures how
+    long this run has been queueing, not how long the current holder has held
+    the turn. An ordinary handoff, where a holder finishes and the next in
+    line is granted the same lock, restarts nobody's clock. So a queue of six
+    healthy runs makes the sixth expire while a healthy run holds the turn,
+    and it runs its suite on top of that one — exactly the overlap the turn
+    exists to prevent. The eight stories run together on 2026-09-21 left
+    hour-long waits in their logs that were queue depth rather than hung
+    holders; under the code as it stands those waits become takeovers.
+
+    This story makes the bound measure the current holder. Every run that
+    takes the turn writes a one-line mark of its tenure into the lock file it
+    holds: its pid and the moment it took the turn. A waiter reads that mark
+    on every poll beside the inode it already reads; a mark that differs from
+    the one it last saw means the turn changed hands, so it restarts its bound
+    from that moment and says so through the wait announcement it already
+    writes, whether the hands changed by a normal grant or by a takeover. A
+    takeover then fires only when one holder has held the turn for the
+    configured number of suite runs, which is what hung means. The mark is
+    identity only: nothing signals the pid in it and nothing compares the time
+    in it against a clock, since a holder's clock is not the waiter's.
+    Alongside, the poll interval goes from half a second to five seconds,
+    because against suites measured in minutes, seven waiters polling twice a
+    second is load for nothing.
+
+    Left alone, deliberately: the bound's value and its derivation from the
+    suite-run estimate (story-190's, unchanged); the takeover's shape — a
+    fresh file renamed over the path under the takeover lock — and the orphan
+    check on a grant; and the lock's scope, which stays per repository. This
+    story was planned from the brief filed under 305.
+
+    Where the clock is and what restarts it. `suite_turn` in
+    orchestration/story_coordinator.py sets `started = clock()` when the wait
+    begins and again only where `changed_hands` is true, and `changed_hands`
+    is set only where `_inode_at(lock_path)` differs from the inode the waiter
+    opened — that is, only after `_take_over_suite_turn` renamed a fresh file
+    over the path. An ordinary grant keeps the inode, so every other waiter's
+    clock runs on through as many healthy handoffs as the queue holds. The
+    bound itself is right — `suite_turn_wait_seconds` returns the configured
+    count times the measured estimate — but it is compared against the wrong
+    interval.
+
+    The stamp. The lock file is opened for append and is today never written;
+    a stamp is a line, `<pid> <time>`, appended by the holder at every route
+    by which a turn is taken: the uncontended first grant, a grant inside the
+    bound confirmed under the takeover lock, a grant on the old inode inside
+    `_take_over_suite_turn`, and the swap — where the taker writes its stamp
+    into the fresh file before renaming it over the path, so a swapped-in
+    file is never seen stampless. The file stays append-only and the current
+    stamp is its last line; the time in it is what makes the same process's
+    successive turns distinct, and one line per suite run is negligible
+    growth. The stamp is read as a whole line and compared for equality with
+    the last one seen, and that is all it is read for.
+
+    The baseline. A waiter records the stamp it sees — or its absence, which
+    is a value of its own — at the moment it begins waiting, beside the inode
+    and the clock, and restarts only on a later poll whose stamp differs. A
+    lock file carrying no stamp (one left by a harness older than this story,
+    or a holder that died between taking the lock and writing it) is
+    therefore measured from the first poll that sees it, and no spurious
+    restart is written for it; when a stamped holder replaces it the change
+    is seen and the bound restarts. The inode comparison stays, because it is
+    what tells a waiter its handle is an orphan after a swap; the stamp is
+    what tells it the turn moved. The restart on a changed inode already
+    exists, and a changed inode always comes with a changed stamp, so the
+    restart is one path announced through the existing `suite-turn-waited`
+    line, its message saying the turn changed hands.
+
+    The poll interval. `SUITE_TURN_POLL_SECONDS` becomes 5.0, as the named
+    constant it already is, with its comment saying why five: a handoff
+    delayed by at most five seconds against a ten-minute suite is invisible,
+    and a hung holder is measured in suite runs rather than seconds. A
+    blocking flock interrupted by an alarm was considered and not taken:
+    signals in a process that also spawns and kills subprocesses are a
+    mechanism this coordinator does not have and should not gain for
+    sub-second latency. The tests that drive the wait read the constant by
+    name (`POLL` in tests/test_suite_turns.py and the reads in
+    tests/test_config_keys_are_obeyed.py), so the change is one line and one
+    comment there; the `two_runs` tests drive the real coordinator with real
+    sleep, so a handoff there is up to five seconds later than before, well
+    inside their 180-second precondition.
+
+    One forced test adaptation: in
+    `test_three_waiters_behind_a_hung_holder_drain_one_per_bound_and_never_together`
+    the third waiter now announces a restart when the second is granted
+    normally after the taker's body ends, so its event list gains one
+    `suite-turn-waited` entry. Everything else that test holds — one taker,
+    the other two restarting and still waiting when the taker's body ends,
+    then draining one after the other and never together, the takeover note
+    written by the taker alone — stands.
+
+    The architecture text in .harness/docs/ARCHITECTURE.md under "Suite runs
+    in flight at once take the machine in turn" describes the bound as what
+    decides a holder is hung, says the lock file is opened for appending and
+    never written, describes the restart as happening only on a changed
+    inode, and notes that closing one of the two remaining race windows
+    "would need a mark the grant leaves on the file". All four are revised:
+    the bound is per holder and why; the file carries a stamp per turn and
+    what it is and is not read for; the restart happens on a changed stamp,
+    of which a takeover's changed inode is one case; and the mark now exists
+    but this story does not use it to close that window, which is said so a
+    later planner knows the choice was made rather than missed.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/story_coordinator.py, add a stamp to the suite lock, written by the holder at every route by which the turn is taken (the uncontended first grant in `suite_turn`, a grant inside the bound after `_confirm_suite_turn`, a grant on the old inode inside `_take_over_suite_turn`, and the fresh file in `_take_over_suite_turn` before it is renamed over the path), as one appended line carrying the holder's pid and the time it took the turn, flushed before the body runs.
+  - In `suite_turn`, read the current stamp (the lock file's last line, or its absence) beside the inode at the start of the wait and on every poll, and treat a stamp that differs from the last one seen as the turn having changed hands: reopen the path, announce the restart through the existing `suite-turn-waited` line, and start the bound over from that moment — the same path a changed inode already takes. Nothing reads the pid or the time in a stamp for any purpose but equality.
+  - Change `SUITE_TURN_POLL_SECONDS` to 5.0 and rewrite its comment to say why five, including that a blocking flock interrupted by an alarm was considered and not taken.
+  - Revise the docstring of `suite_turn` and of `_take_over_suite_turn` so they describe the stamp, what a poll reads, and what restarts the bound.
+  - In tests/test_suite_turns.py, beside the takeover tests, add the cases listed under acceptance criteria — six waiters behind healthy holders with none taking over, a hung holder taken over by the first waiter to expire with the rest restarting, a restart announced on a normal handoff with the bound starting over from it, and a stampless lock file measured from the first poll that sees it — and adapt the third waiter's event count in `test_three_waiters_behind_a_hung_holder_drain_one_per_bound_and_never_together` to the restart it now announces on a normal handoff, changing nothing else in that test.
+  - In .harness/docs/ARCHITECTURE.md, under "Suite runs in flight at once take the machine in turn", say that the bound is measured per holder and why, what the stamp is and what it is and is not read for, that the restart happens on a changed stamp (a takeover's changed inode being one case), that the poll interval is five seconds and why, and that the mark the earlier text said a race-closing would need now exists but is deliberately not used to close that window.
+
+acceptance_criteria:
+  - Six waiters queued behind healthy holders, each holder taking one suite's time and the bound set to five suites, are granted the turn in order, none writes a takeover note, and the inode at the lock path never changes.
+  - A holder that holds the turn for longer than the bound is taken over by the first waiter to expire, and every other waiter announces a restart and is still waiting when the taker's body ends; behind a hung holder the queue then drains one after the other and never together, as `test_three_waiters_behind_a_hung_holder_drain_one_per_bound_and_never_together` holds today, with the third waiter's event list carrying one more `suite-turn-waited` entry for the restart it announces when the second is granted normally.
+  - A waiter behind a holder that finishes normally and is replaced by the next waiter announces a restart through a second `suite-turn-waited` event whose message says the turn changed hands, and its bound starts over from the handoff rather than from when it began waiting; the same waiter's log carries no takeover note.
+  - A lock file carrying no stamp — a holder that took the lock without writing one — is measured from the first poll that sees it: the waiter writes one `suite-turn-waited` event and no spurious restart, and expires against that holder at the bound exactly as it does against a stamped one.
+  - Every route by which a turn is taken leaves the holder's stamp as the last line of the file at the lock path before the body runs, including the fresh file a takeover renames over the path.
+  - The stamp is never read for anything but equality with the last stamp seen: no code in orchestration/story_coordinator.py signals a pid read from the lock file or compares a time read from it against a clock.
+  - The existing assertions that the takeover swaps only a lock still refused under the takeover lock (`test_the_takeover_swaps_only_a_lock_still_refused_under_the_takeover_lock`) and that a fresh entrant queues behind the new holder (`test_a_fresh_entrant_after_a_takeover_queues_behind_the_new_holder`) stand unchanged, as do `test_a_holder_that_lets_go_as_the_taker_expires_is_taken_on_the_old_inode_and_nothing_is_swapped` and `test_a_waiter_granted_the_old_inode_after_the_path_moved_on_requeues_rather_than_running`.
+  - `SUITE_TURN_POLL_SECONDS` is 5.0, its comment says why five and that a blocking flock interrupted by an alarm was considered and not taken, and no test names the number rather than the constant.
+  - The section of .harness/docs/ARCHITECTURE.md on suite turns says the bound is measured per holder and why, describes the stamp and what it is and is not read for, and says the mark the earlier text said a race-closing would need now exists and is deliberately not used for that.
+  - The bound's value and its derivation from the suite-run estimate, the takeover's shape, the orphan check on a grant, and the per-repository scope of the lock are unchanged.
+
+technical_plan:
+  implementation_steps:
+    - Add a helper that appends a stamp line (`<pid> <time>`) to a lock handle and flushes it, and a helper that reads the current stamp at the lock path — the file's last line, or None where the file is empty — treating a read that fails as the could-not-open path the surrounding code already has.
+    - Call the stamp writer at every route that takes the turn; in `_take_over_suite_turn`, write it into the fresh file after locking it and before `Path(fresh).replace(lock_path)`, and write it on the handle where the retried flock is granted.
+    - In `suite_turn`, record the stamp beside `waited_on` when the wait begins and after every restart; on each poll, read the stamp beside the inode and set `changed_hands` where either differs; keep the inode comparison as it is.
+    - Change the poll constant and its comment; revise the docstrings.
+    - Write the new tests through the `Waiters` stepping harness and the injected clock; adapt the one event count in the three-waiters test.
+    - Revise the architecture section.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: the stamp helpers, their calls at every grant route, the stamp read in the poll loop of `suite_turn`, the poll constant and its comment, and the docstrings.
+    - file: tests/test_suite_turns.py
+      stage: tester
+      reason: the new cases beside the takeover tests, and the third waiter's event count in the three-waiters test.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the suite-turn section says the bound is per holder, what the stamp is, what restarts the wait, why the poll is five seconds, and that the mark is not used to close the remaining race window.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - tests/test_suite_turns.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - suite_turn_wait_seconds, suite_turn_wait_cost, suite_turn_wait_problems and DEFAULT_SUITE_TURN_WAIT_SUITE_RUNS in orchestration/story_coordinator.py (the bound's value and its derivation from the estimate are story-190's and unchanged; only what the bound is compared against changes)
+    - the rename-over-the-path shape of _take_over_suite_turn and the inode check in _confirm_suite_turn (the takeover's shape and the orphan check on a grant are unchanged; the stamp is added beside them, not in place of them)
+    - suite_lock_path and SUITE_LOCK_NAME (the lock's scope stays per repository)
+    - schemas/execution-history.schema.json (the restart is announced through the existing suite-turn-waited kind, so no kind is added)
+    - tests/test_config_keys_are_obeyed.py (its suite-turn case reads the poll constant by name and expects event lists the baseline-at-wait-start design leaves unchanged)
+    - tests/test_a_run_announces_what_it_is_waiting_on.py (the emitter map only names the existing kind, which is not new)
+    - schemas/harness-config.schema.json, .harness/config.yaml and templates/config.yaml (no configuration key is added or changed; the poll interval is a constant, not a key)
+
+verification_requirements:
+  - The new tests in tests/test_suite_turns.py fail against the coordinator as it stood before this story (a waiter's clock running through a healthy handoff) and pass against it after.
+  - The whole suite passes, including the existing takeover, fresh-entrant, old-inode and orphan-requeue tests unchanged in their assertions.
+  - The stamp is written at every route that takes the turn, including the fresh file a takeover renames over the path, and is read only for equality.
+  - The poll constant is 5.0, its comment says why, and no test under tests/ names the old or new number in place of the constant.
+  - The architecture section records the per-holder bound, the stamp, the poll interval and the unclosed window as the acceptance criteria describe.
+
+constraints:
+  - The bound's value and its derivation from the suite-run estimate are unchanged.
+  - The takeover's shape — a fresh file locked and renamed over the path under the takeover lock — and the orphan check on a grant are unchanged; the inode comparison stays beside the stamp comparison.
+  - The lock stays per repository, and no configuration key is added.
+  - No event kind is added; the restart is announced through the existing suite-turn-waited line composed through _announcement, and the takeover is still a note.
+  - The pid in a stamp is never signalled and the time in it is never compared against a clock; the stamp is compared only for equality with the last stamp seen.
+  - The coordinator stays deterministic and makes no model call; the wait is still observed through the injected clock and sleep, and no test bounds the machine.
+  - No signal-based wait replaces the poll.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-21 22:21:17
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 305
