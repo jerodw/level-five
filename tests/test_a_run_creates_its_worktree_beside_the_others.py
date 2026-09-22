@@ -145,7 +145,12 @@ def cut_linked_worktree(target: Target, story_id: str = LINKED_STORY_ID) -> Path
     and its branch is that story's branch for the same reason.
     """
     branch = target.story_branch(story_id)
-    path = worktree_directory(target) / branch.replace("/", "-")
+    # Where the harness would have put it, asked of the one function that
+    # decides that, rather than flattened here: a fixture standing in for what
+    # a previous run left behind stands where a run would have left it, and a
+    # second spelling of the derivation beside this one would be free to
+    # disagree with it.
+    path = worktrees.worktree_path(target.root, target.config(), branch)
     made = worktrees.add(target.root, path, branch, DEFAULT_BRANCH)
     assert not made.problems, made.problems
     return path
@@ -371,4 +376,5 @@ def test_a_run_from_a_linked_worktree_for_a_branch_with_a_tree_uses_that_tree(
     assert (elsewhere / ".harness" / "runs" / STORY_ID / "state.json").is_file()
     # And nothing was created for that branch where the derivation would have
     # put it, which is the control's other half: `find` answered first.
-    assert not (worktree_directory(target) / branch.replace("/", "-")).exists()
+    assert not worktrees.worktree_path(
+        target.root, target.config(), branch).exists()

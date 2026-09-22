@@ -250,12 +250,36 @@ def worktree_root(target_root: Path, config: dict) -> Path:
 def worktree_path(target_root: Path, config: dict, branch: str) -> Path:
     """Where the worktree for `branch` lives, derived in one function.
 
-    A branch name carries slashes and a directory name may not, so the
-    separators are flattened. Derived here and nowhere else, so the caller that
-    creates a worktree and the caller that looks for one cannot disagree about
-    where it would be.
+    The configured branch prefix is dropped off the front of the branch, and
+    what remains is flattened because a branch name carries slashes and a
+    directory name may not. Under the prefix `story/` the branch
+    `story/story-172` therefore names the directory `story-172` rather than
+    saying the word twice, which is what a developer meets on every `ls`, every
+    log line naming a path inside the tree, and every `cd`.
+
+    A branch that does not carry the configured prefix is flattened whole and
+    unchanged, so nothing else that derives a tree from a branch changes shape;
+    and a branch that is exactly the prefix with nothing after it is flattened
+    whole too, so the answer is never the worktree root itself.
+
+    The prefix is read off the config this function is already handed, with the
+    key and the default `story_coordinator.story_branch` reads — the branch the
+    prefix is stripped from is the branch that function built, so the two must
+    not be able to disagree about what the prefix is.
+
+    Derived here and nowhere else, so the caller that creates a worktree and
+    the caller that looks for one cannot disagree about where it would be. A
+    branch `story/story-172` and a bare branch `story-172` now name one
+    directory: accepted, because a run asks `find` — which matches by branch off
+    `git worktree list` — before it derives any path, so this decides only for a
+    branch that has no tree yet, and git refuses a second working tree at an
+    occupied path.
     """
-    return worktree_root(target_root, config) / branch.replace("/", "-")
+    prefix = config.get("branch_prefix", "story/")
+    name = branch
+    if prefix and name.startswith(prefix) and name != prefix:
+        name = name[len(prefix):]
+    return worktree_root(target_root, config) / name.replace("/", "-")
 
 
 def standing_branch(root: Path) -> str:

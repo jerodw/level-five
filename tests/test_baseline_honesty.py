@@ -2362,6 +2362,20 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "this repository configures in .harness/config.yaml, because the "
         "claim is that this deployment's own story directory is the one the "
         "shipped rule set blocks, which a fixture's directory cannot say",
+    "test_a_worktree_is_named_for_its_story.py":
+        "the one thing it resolves live is the subject of one criterion and "
+        "could be nothing else: schemas/harness-config.schema.json's "
+        "worktree_dir description, which states the naming rule in prose to "
+        "whoever configures this harness and would otherwise stand "
+        "contradicting the function. The claim is that the description this "
+        "repository ships says the configured branch prefix is dropped before "
+        "the remainder is flattened, so a fixture schema would say back only "
+        "what the module had just written into it. Everything the derivation "
+        "itself is asserted against is built here — the configurations "
+        "carrying a prefix, a non-default prefix and no prefix at all are "
+        "plain dictionaries, and the scan for a recomputed flattening reads a "
+        "directory it is handed, with planted violations under tmp_path "
+        "proving it reports one",
     "test_bookkeeping_self_route_budget.py":
         "every run it drives goes through a workflow it builds with "
         "conftest.build_workflow, because the two budgets a stage declares and "

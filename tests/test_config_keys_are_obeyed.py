@@ -727,7 +727,17 @@ KEY_PROOFS: dict[str, Proof] = {
 #
 # This is what makes every proof above non-vacuous. A proof that configured a
 # key and asserted nothing about its effect passes the coverage checks and
-# dies here, because the copy it runs in no longer reads the key at all.
+# dies here, because in the copy it runs in the key is no longer read where
+# the behaviour under proof consults it: a literal stands in place of that
+# read, so the configured value cannot reach the proof.
+#
+# Where a key is read in more than one place, the substitution replaces the
+# read the proof goes through, and a read left standing elsewhere is one that
+# proof does not pass through. `branch_prefix` is the instance: the
+# coordinator reads it to name the branch a run stands on, which is what its
+# proof asserts and what the substitution below replaces, while
+# `orchestration/worktrees.py` reads the same key to strip that prefix off a
+# branch before naming the tree — a derivation the branch proof never reaches.
 #
 # Four keys have no fallback, so the substitution is `None` — which is what
 # the code would compute if the key were absent. `test_command` has neither a
@@ -1769,7 +1779,12 @@ def test_worktree_dir_is_where_a_run_cuts_the_tree_it_works_in(tmp_path):
     and the run cannot complete.
     """
     run = complete_run(tmp_path)
-    configured = run.target.parent / "xyzzy-worktrees" / "xyzzy-branch-story-001"
+    # The tree inside the configured directory is named for the branch with the
+    # configured branch_prefix dropped off the front since story-197, so the
+    # varied `xyzzy-branch/` is stripped and `story-001` is what remains. The
+    # key this proof is about is the directory above it, which is unchanged;
+    # the branch itself is still read off the tree below.
+    configured = run.target.parent / "xyzzy-worktrees" / "story-001"
     assert run.run_root == configured
     assert configured.is_dir()
     assert run.run_dir == configured / str(VARYING["runs_dir"]) / STORY_ID
@@ -3295,7 +3310,8 @@ def test_the_proof_for_each_key_goes_red_when_that_key_stops_being_read(
     This is the assertion that makes the proofs above mean something. A proof
     that configured its key and then asserted nothing about its effect would
     satisfy the coverage checks, satisfy the no-default check, and pass in a
-    copy that no longer reads the key at all — and only this reports it.
+    copy where a literal stands in place of the read it goes through — and
+    only this reports it.
     """
     root = harness_copy
     apply_mutation(root, key)
