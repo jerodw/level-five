@@ -1,0 +1,7 @@
+{"story_id": "story-200", "operation": "implementer", "duration_seconds": 1109.667, "timestamp": "2026-09-22 17:24:15"}
+{"story_id": "story-200", "operation": "suite-run", "duration_seconds": 419.243, "timestamp": "2026-09-22 17:39:30"}
+{"story_id": "story-200", "operation": "tester", "duration_seconds": 915.33, "timestamp": "2026-09-22 17:39:30"}
+{"story_id": "story-200", "operation": "documenter", "duration_seconds": 53.669, "timestamp": "2026-09-22 17:40:24"}
+{"story_id": "story-200", "operation": "inspection", "duration_seconds": 227.506, "timestamp": "2026-09-22 17:44:11"}
+{"story_id": "story-200", "operation": "verifier", "duration_seconds": 419.889, "timestamp": "2026-09-22 17:47:24"}
+{"story_id": "story-200", "operation": "clean-clone", "duration_seconds": 410.15, "timestamp": "2026-09-22 17:54:14"}

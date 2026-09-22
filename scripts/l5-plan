@@ -101,6 +101,7 @@ sys.path.insert(0, str(HARNESS_ROOT / "orchestration"))
 import brief_fetch  # noqa: E402
 import brief_key as brief_key_field  # noqa: E402
 import context_assembler  # noqa: E402
+import git_remote  # noqa: E402
 import harness_config  # noqa: E402
 import item_update  # noqa: E402
 import plan_commit  # noqa: E402
@@ -199,7 +200,7 @@ def main() -> None:
     # this invocation cannot do what it was asked to do. Asked here, before a
     # worktree is created, before an agent is invoked and before anything is
     # written, because discovering it after a session has run costs the session.
-    remote = plan_commit.resolve_remote(target_root)
+    remote = git_remote.resolve(target_root)
     unreachable = story_ids.remote_unreachable(target_root, remote)
     if unreachable:
         sys.exit(refuse_unreachable_remote(remote, unreachable))

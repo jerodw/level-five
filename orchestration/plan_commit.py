@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+import git_remote
 import story_coordinator
 
 
@@ -141,29 +142,6 @@ def commit_artifacts(
     return CommitResult(relative, subject, sha)
 
 
-def current_branch(target_root: Path) -> str:
-    result = _git(target_root, "rev-parse", "--abbrev-ref", "HEAD")
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
-def resolve_remote(target_root: Path) -> str:
-    """The remote the current branch tracks, else origin, else "".
-
-    Read from the branch's configured upstream rather than from a remote ref,
-    so a branch that tracks a remote it has never been pushed to still resolves
-    to it. Empty means no remote to push to, which is reported rather than
-    attempted.
-    """
-    branch = current_branch(target_root)
-    if branch and branch != "HEAD":
-        configured = _git(target_root, "config", f"branch.{branch}.remote")
-        remote = configured.stdout.strip()
-        if remote:
-            return remote
-    remotes = _git(target_root, "remote").stdout.split()
-    return "origin" if "origin" in remotes else ""
-
-
 def push_commit(target_root: Path, remote: str = "") -> PushResult:
     """Push HEAD to the resolved remote, reporting rather than failing.
 
@@ -176,14 +154,15 @@ def push_commit(target_root: Path, remote: str = "") -> PushResult:
     `remote` is the remote a caller has already resolved, and it is the whole
     of what a caller pushing from somewhere else needs. Since story-117 the
     commit is made in a planning worktree standing on a story branch that
-    tracks nothing, so resolving the remote *there* would fall through to
-    `origin` and find nothing in a repository whose remote is named anything
-    else — while the reservation, resolved in the developer's own checkout,
-    had already reached it. Passing it keeps the resolution one fact with one
-    home. Omitted, it is resolved here exactly as it always was.
+    tracks nothing, so the remote is resolved in the developer's own checkout
+    and handed here: the tree the push is made from and the tree the question
+    was answered about are not the same tree, and only the caller knows which
+    one it meant. Omitted, it is resolved through `git_remote` against the
+    tree being pushed from — the same resolver every other asker calls, so
+    the answer is one fact with one home rather than a copy kept here.
     """
-    branch = current_branch(target_root)
-    remote = remote or resolve_remote(target_root)
+    branch = git_remote.current_branch(target_root)
+    remote = remote or git_remote.resolve(target_root)
     if not remote:
         return PushResult(False, "", branch, "no remote configured")
     pushed = _git(target_root, "push", remote, "HEAD")

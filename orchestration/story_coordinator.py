@@ -59,6 +59,7 @@ from pathlib import Path
 import agent_runner
 import brief_key
 import context_assembler
+import git_remote
 import harness_config
 import item_update
 import outbox_sweep
@@ -2075,16 +2076,13 @@ def _base_remote(target_root: Path, base: str) -> str:
     It is a function rather than two copies because two readers need it: the
     tracking ref below, and the refresh that brings that ref up to date. Two
     derivations would be two answers to which remote the base belongs to.
+    Since story-200 the derivation itself lives in `git_remote`, where every
+    other asker in the harness reads it, so the one answer the two readers here
+    share is the one answer the rest of the harness shares with them; this
+    function stays because what it names — the remote the *base* belongs to —
+    is what those two readers ask for.
     """
-    configured = _git(target_root, "config", f"branch.{base}.remote")
-    remote = configured.stdout.strip() if configured.returncode == 0 else ""
-    if remote:
-        return remote
-    remotes = _git(target_root, "remote")
-    if remotes.returncode != 0 or not remotes.stdout.split():
-        return ""
-    names = remotes.stdout.split()
-    return "origin" if "origin" in names else names[0]
+    return git_remote.resolve(target_root, base)
 
 
 #: The prefix that runs the refresh's fetch with git's terminal prompting
@@ -2604,6 +2602,13 @@ def fetch_story_branch(
     that answered and did not have the branch is a remote that does not have
     it, which is what the caller's existing sentence correctly says.
 
+    Which remote is asked is `git_remote.resolve`, the one resolver every
+    asker in the harness calls, rather than a choice composed here: since
+    story-200 this path reads the branch's own tracking configuration first
+    like its neighbours do, and a clone whose one remote is named something
+    other than `origin` is answered by that remote here exactly as it is
+    everywhere else.
+
     It runs under `NO_TERMINAL_PROMPT`, as its sibling does, so a checkout with
     no credentials reports a reason rather than blocking on a prompt whose
     output is redirected to a file the developer never sees.
@@ -2616,12 +2621,12 @@ def fetch_story_branch(
     """
     if branch_exists(target_root, branch):
         return StoryBranchFetch(resolved=True)
-    remotes = _git(target_root, "remote")
-    names = remotes.stdout.split() if remotes.returncode == 0 else []
-    if not names:
+    remote = git_remote.resolve(target_root)
+    if not remote:
         # Not silence: a clone with no remote is one that could not ask, and a
         # caller told nothing here would say the branch is absent from a remote
-        # that does not exist.
+        # that does not exist. Decided before any fetch is spawned, so the
+        # empty answer produces this sentence rather than a fetch's.
         return StoryBranchFetch(
             resolved=False,
             problem=(
@@ -2629,7 +2634,6 @@ def fetch_story_branch(
                 f"branch {branch}"
             ),
         )
-    remote = "origin" if "origin" in names else names[0]
     fetched = _bounded_fetch(
         [
             *NO_TERMINAL_PROMPT,
