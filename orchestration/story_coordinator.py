@@ -4225,11 +4225,35 @@ def _stamp_at(lock_path: Path) -> str | None:
     where the file carries none: one left by a harness older than the stamp,
     or by a holder that died between taking the lock and writing it. Read as
     a whole line and returned for equality with the last one seen, and for
-    nothing else. A read that fails is an `OSError` the caller treats as the
-    could-not-open path.
+    nothing else. A read that fails is an `OSError`, and one whose bytes are
+    not valid text a `UnicodeDecodeError`: the caller catches both and treats
+    either as the could-not-open path. Nothing the harness writes here can
+    reach that second state — another process or a filesystem can.
     """
     lines = lock_path.read_text(encoding="utf-8").splitlines()
     return lines[-1] if lines else None
+
+
+def _suite_turn_changed_hands(lock_path: Path, waited_on: int,
+                              last_stamp: str | None) -> bool:
+    """Whether the turn at `lock_path` has changed hands since a waiter
+    recorded `waited_on` — the inode of the handle it is waiting on — and
+    `last_stamp`, the stamp at the path then, or its absence.
+
+    The one spelling of that question. A waiter asks it on every poll and
+    again after a takeover attempt that did not win, and the two asked it in
+    two places that had to keep agreeing: a different stamp is the turn having
+    moved, by a normal grant as much as by a takeover, and a different inode is
+    what tells a waiter the handle it holds is an orphan a taker renamed past.
+    Either differing is a change of hands, and the caller restarts its bound
+    against the new holder from that moment.
+
+    The stamp is compared for equality and read for nothing else, which is
+    `_stamp_at`'s own rule; a read that fails or cannot be decoded raises, and
+    the wait's own handler treats either as the could-not-open path.
+    """
+    return (_inode_at(lock_path) != waited_on
+            or _stamp_at(lock_path) != last_stamp)
 
 
 def _takeover_lock_path(lock_path: Path) -> Path:
@@ -4401,10 +4425,11 @@ def suite_turn(
     yet renamed the fresh file over the path — runs on the orphaned inode
     beside the taker. Each is a fraction of a poll.
 
-    A lock file that cannot be created or opened, and any stat or open that
-    fails mid-wait other than the lock being held, runs the body anyway and
-    says why as a note naming the path and the error. Nothing here refuses or
-    stops a run.
+    A lock file that cannot be created or opened, any stat or open that fails
+    mid-wait other than the lock being held, and a lock file whose bytes are
+    not valid text — which nothing the harness writes can produce, and another
+    process or a filesystem can — all run the body anyway and say why as a
+    note naming the path and the error. Nothing here refuses or stops a run.
 
     `sleep` and `clock` are parameters for the reason `run_story`'s `sleep`
     is: a test observes the wait without taking it. The kind is a literal in
@@ -4444,8 +4469,8 @@ def suite_turn(
                 while clock() - started < bound:
                     sleep(min(SUITE_TURN_POLL_SECONDS,
                               max(0.0, bound - (clock() - started))))
-                    if (_inode_at(lock_path) != waited_on
-                            or _stamp_at(lock_path) != last_stamp):
+                    if _suite_turn_changed_hands(
+                            lock_path, waited_on, last_stamp):
                         changed_hands = True
                         break
                     taken = _try_suite_lock(handle)
@@ -4492,8 +4517,8 @@ def suite_turn(
                         )
                         break
                     sleep(SUITE_TURN_POLL_SECONDS)
-                    changed_hands = (_inode_at(lock_path) != waited_on
-                                     or _stamp_at(lock_path) != last_stamp)
+                    changed_hands = _suite_turn_changed_hands(
+                        lock_path, waited_on, last_stamp)
                     if not changed_hands:
                         # Still the inode and stamp this run waited on:
                         # whoever holds the takeover lock has not swapped
@@ -4527,7 +4552,7 @@ def suite_turn(
                     artifacts=[artifact],
                 )
                 break
-    except OSError as error:
+    except (UnicodeDecodeError, OSError) as error:
         append_event(
             run_dir,
             f"no turn at the suite was taken because the lock file "

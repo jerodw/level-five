@@ -587,6 +587,27 @@ def wait_until(predicate, patience: float = PATIENCE_SECONDS) -> bool:
     return predicate()
 
 
+def recorded_pid(child_pid: Path) -> int | None:
+    """The pid the fixture recorded, or None where it has recorded none yet.
+
+    The fixture records it with `echo $! >`, and a shell redirect creates and
+    truncates the file before `echo` puts anything in it -- the same window
+    the marker below is read through, and for the same reason. So a path that
+    is absent, one that is there holding nothing, and one caught mid-write all
+    mean the same thing here: no pid has been recorded. Answering None for
+    each is what lets a caller wait for the value it is about to use rather
+    than for the path to appear.
+    """
+    try:
+        recorded = child_pid.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        return int(recorded)
+    except ValueError:
+        return None
+
+
 def spawned_child_pid(child_pid: Path) -> int:
     """The pid the fixture command recorded, or an inconclusive report.
 
@@ -597,13 +618,23 @@ def spawned_child_pid(child_pid: Path) -> int:
     nothing about process groups either way. Widening the bound would only
     move the load at which the same thing happens, so what it reports instead
     is that the run could not be conducted.
+
+    The precondition is that a pid was *recorded*, not that the path is there.
+    The command is killed at the bound, so one killed partway through its
+    redirect leaves the path behind holding nothing, and reading that as a pid
+    is a crash where the honest answer is the report this already makes for a
+    command that never reached the redirect at all. Nothing is waited for: the
+    transport has returned and the command is dead, so what the file holds now
+    is what it will hold.
     """
-    if not child_pid.exists():
+    pid = recorded_pid(child_pid)
+    if pid is None:
         machine_load.inconclusive(
             f"the command was killed at the {SPAWN_BOUND_SECONDS:g}s bound "
-            f"before it had backgrounded the child this test is about, so "
-            f"nothing could be established about the group")
-    return int(child_pid.read_text(encoding="utf-8").strip())
+            f"before it had backgrounded the child this test is about and "
+            f"recorded its pid, so nothing could be established about the "
+            f"group")
+    return pid
 
 
 def test_the_kill_reaches_the_process_group_and_not_only_the_command(
@@ -662,10 +693,20 @@ def test_the_same_child_survives_when_only_the_leader_is_killed(tmp_path):
         [str(command)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True)
     try:
-        assert wait_until(lambda: child_pid.exists())
+        # What this control waits for is the pid the fixture records, not the
+        # path it records into. The leader is still running here, so the read
+        # lands inside the window `recorded_pid` describes: `echo $! >` creates
+        # and truncates the file before it writes, and a read taken the moment
+        # the path appears sees an empty one. That is the same window, and the
+        # same repair, as the marker below -- which this control already waits
+        # on by content, and which the pid was left waiting on by path.
+        assert wait_until(lambda: recorded_pid(child_pid) is not None), (
+            "the fixture command recorded no child pid, so this control has "
+            "no child to watch outlive its leader")
         process.kill()
         process.wait(timeout=PATIENCE_SECONDS)
-        pid = int(child_pid.read_text(encoding="utf-8").strip())
+        pid = recorded_pid(child_pid)
+        assert pid is not None
         # The leader is gone and its child is not: the predicate the kill case
         # negates, holding here because only the leader was killed.
         assert alive(pid) or marker.exists(), (
@@ -693,6 +734,35 @@ def test_the_same_child_survives_when_only_the_leader_is_killed(tmp_path):
     finally:
         if process.poll() is None:  # pragma: no cover - the kill above succeeded
             process.kill()
+
+
+def test_the_pid_reader_answers_none_for_a_path_the_redirect_has_only_opened(
+        tmp_path):
+    """The three states the recorded pid passes through, driven directly.
+
+    The two readers above take the file as they find it, and whether they
+    find it mid-write depends on the load on the machine at that moment --
+    so a green suite says nothing about which state they saw. This drives
+    each state instead, and the middle one is the one that matters: a file
+    the shell's redirect has created and not yet written into. Reading that
+    as a pid is what ended a run here, and the last assertion is that same
+    read, shown failing on the same bytes the reader answers None for.
+    """
+    absent = tmp_path / "never-written.pid"
+    opened = tmp_path / "opened.pid"
+    opened.write_text("", encoding="utf-8")
+    written = tmp_path / "written.pid"
+    written.write_text("4242\n", encoding="utf-8")
+
+    assert recorded_pid(absent) is None
+    assert recorded_pid(opened) is None
+    assert recorded_pid(written) == 4242
+
+    # The read the reader replaces, on the middle file: this is the crash,
+    # and it is what says the middle case is a real state and not a state
+    # the reader invented a branch for.
+    with pytest.raises(ValueError):
+        int(opened.read_text(encoding="utf-8").strip())
 
 
 # --------------------------------------------------------------------------

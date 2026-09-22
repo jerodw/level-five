@@ -2726,7 +2726,11 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "suite_turn_wait_suite_runs count and say why it counts suite runs "
         "rather than a duration, and that "
         "schemas/cross-run-history.schema.json names no suite-turn event, so "
-        "the wait reaches a run's own history and no durable cross-run log. A "
+        "the wait reaches a run's own history and no durable cross-run log; "
+        "and that schemas/harness-config.schema.json describes the key as "
+        "bounding the current holder's tenure rather than this run's time in "
+        "the queue, because what a person is told when they configure this "
+        "deployment's number is a fact about the file it ships. A "
         "fixture configuration could say only what the module had written "
         "into it, and a fixture schema could not answer what this deployment "
         "projects across runs",

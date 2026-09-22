@@ -58,6 +58,18 @@ subjects, kept apart:
     and the stamp is read for equality and for nothing else — a line that is
     no pid and no time is waited behind like any other.
 
+  * **the repairs of story-199.** The question a waiter asks after a takeover
+    attempt that took nothing over is driven from its stamp half, which
+    nothing reached before: the attempt is refused by a contender holding the
+    takeover lock, the turn then changes hands on the very inode the waiter
+    is waiting on, and the waiter announces the change and measures a whole
+    fresh bound from it. A lock file whose bytes no text decoder accepts is
+    shown taking the could-not-open path — the body runs, the note says why,
+    and nothing is raised out of the wait. And the shipped configuration
+    schema is read for what it tells someone setting the bound: not that it
+    limits their queueing, which story-196 made false, but what it measures
+    and when it starts over.
+
   * **what the turn does not touch.** The configured command runs exactly as
     configured on every path, no module under `orchestration/` names the
     worker-count option, and the selector runs of a nomination and the census
@@ -104,7 +116,16 @@ Every absence asserted here sits beside a demonstration that it can fail:
   * "the stamp is read for nothing but equality" sits beside a planted body
     that parses one and signals its pid, which the same scan reports;
   * "no wait-driving module names the poll's number" sits beside a planted
-    module that does, which the same scan reports.
+    module that does, which the same scan reports;
+  * "a waiter that lost its takeover restarts on the new stamp" sits beside
+    the same drive with nothing stamped, under which it announces no restart
+    and takes the turn over a whole bound earlier;
+  * "an undecodable lock file raises nothing and is left untouched" sits
+    beside the same bytes read as text, which raise, and beside the same held
+    lock carrying decodable text, which is waited behind and taken over;
+  * "the key's description no longer claims to bound the queueing" sits
+    beside the shipped text with that claim put back, which the same reading
+    reports.
 
 The wall clock is read here for one purpose: preconditions. A process has to
 have started its command before anything can be asked about whether a second
@@ -1957,6 +1978,161 @@ def test_a_stamped_hung_holder_is_taken_over_by_the_first_to_expire_and_the_rest
         assert all(0 < step <= POLL for step in waiters.slept[name])
 
 
+def watching_takeover_outcomes(monkeypatch) -> list[str]:
+    """Record what each takeover attempt the turn makes came to. The real
+    helper is called and its answer classified: "lost" where it took nothing
+    over — another waiter holding the takeover lock — "granted" where the
+    handle this run waited on was handed back, and "swapped" where a fresh
+    inode was renamed over the path.
+
+    `watching_takeovers` above records the same calls by the inodes either
+    side of them, which is what the race tests read; this one names which of
+    the three answers came back, which is what a test about the poll after a
+    refused attempt is asking."""
+    seen: list[str] = []
+    real = story_coordinator._take_over_suite_turn
+
+    def watching(lock_path, handle):
+        result = real(lock_path, handle)
+        seen.append("lost" if result is None
+                    else "granted" if result is handle else "swapped")
+        return result
+
+    monkeypatch.setattr(story_coordinator, "_take_over_suite_turn", watching)
+    return seen
+
+
+@contextlib.contextmanager
+def a_contender_holding_the_takeover_lock(target: Path):
+    """Hold the takeover lock beside the suite lock, as another waiter mid-
+    takeover holds it, and hand back the handle so the test can let it go at
+    the moment it chooses. A takeover attempted while it is held takes
+    nothing over and leaves the path exactly as it found it."""
+    lock_of(target).parent.mkdir(parents=True, exist_ok=True)
+    with open(takeover_lock_of(target), "a", encoding="utf-8") as contender:
+        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield contender
+
+
+def test_a_waiter_that_lost_the_takeover_and_then_sees_a_new_stamp_restarts_its_wait(
+        make_target, tmp_path, monkeypatch):
+    """The stamp half of the question a waiter asks after a takeover attempt
+    that did not win. The waiter's bound expires on a holder that never lets
+    go, and its attempt takes nothing over because another waiter holds the
+    takeover lock. In the poll after that attempt the turn changes hands on
+    the very same inode — a holder granted the lock it waited on stamps the
+    file it already has, which is what the takeover's own granted route does
+    — so the only thing that differs is the stamp. The waiter announces the
+    change of hands and measures a whole fresh bound against the new holder
+    from that moment, rather than expiring again on the next poll as it would
+    have done had it carried on with the wait it began."""
+    with_estimate()
+    target = make_target("lost-the-takeover")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    attempts = watching_takeover_outcomes(monkeypatch)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    inode = inode_at(lock)
+    first_stamp = stamp_at(lock)
+    planted: dict[str, object] = {}
+
+    with a_contender_holding_the_takeover_lock(target) as contender:
+
+        def on_advance(now: float) -> None:
+            if not attempts or planted:
+                return
+            # The attempt has been refused and the waiter has slept the one
+            # poll that follows it: the turn changes hands here, on the inode
+            # the waiter is already waiting on, and nothing else about the
+            # path differs.
+            assert inode_at(lock) == inode
+            holder.write(f"{os.getpid()} {now!r}\n")
+            holder.flush()
+            planted["at"], planted["stamp"] = now, stamp_at(lock)
+            assert planted["stamp"] != first_stamp
+            assert inode_at(lock) == inode
+            # The contender's takeover ended: this run's next attempt is free
+            # to win, so what defers it is the restart and nothing else.
+            fcntl.flock(contender, fcntl.LOCK_UN)
+
+        try:
+            ran, clock = take_turn(tmp_path / "waiter", target, config,
+                                   clock=FakeClock(on_advance=on_advance))
+        finally:
+            holder.close()
+
+    assert ran is True
+    assert planted, "the takeover attempt was never refused"
+    assert attempts == ["lost", "swapped"]
+    # One wait, one restart, and the takeover note the second expiry wrote.
+    assert kinds_of(tmp_path / "waiter") == [WAITED, WAITED, NOTE]
+    first_wait, restart = entries_of_kind(tmp_path / "waiter", WAITED)
+    assert CHANGED_HANDS not in first_wait["message"]
+    assert CHANGED_HANDS in restart["message"]
+    assert restart["message"] == story_coordinator._announcement(
+        *restart["message"].split("; ", 1))
+    assert str(lock) in restart["message"]
+    assert FROM_THE_ESTIMATE in restart["message"]
+    # The bound was measured from the change of hands: the turn was taken one
+    # whole bound after the stamp appeared, which is a bound later than the
+    # poll on which the waiter would otherwise have tried again.
+    assert clock.now_at == pytest.approx(planted["at"] + bound, abs=POLL)
+    assert clock.now_at > 1000.0 + bound + POLL + bound / 2
+    assert all(0 < step <= POLL for step in clock.slept)
+    assert inode_at(lock) != inode
+    assert len(takeover_notes(tmp_path / "waiter")) == 1
+
+
+def test_the_same_losing_takeover_with_the_stamp_unchanged_restarts_nothing(
+        make_target, tmp_path, monkeypatch):
+    """The control for the restart above: the same drive, the same refused
+    attempt and the same moment of release, with no new stamp on the file.
+    The waiter finds the inode and the stamp it waited on, says nothing about
+    changed hands, and takes the turn over on its next attempt — so the
+    restart above is the stamp's doing and not the losing attempt's."""
+    with_estimate()
+    target = make_target("lost-but-unchanged")
+    config = {**config_of(target), KEY: "2"}
+    bound = bound_of("2")
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    attempts = watching_takeover_outcomes(monkeypatch)
+    holder = open(lock, "a", encoding="utf-8")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    inode = inode_at(lock)
+    before = stamp_lines(lock)
+    released: list[float] = []
+
+    with a_contender_holding_the_takeover_lock(target) as contender:
+
+        def on_advance(now: float) -> None:
+            if not attempts or released:
+                return
+            released.append(now)
+            fcntl.flock(contender, fcntl.LOCK_UN)
+
+        try:
+            ran, clock = take_turn(tmp_path / "unchanged", target, config,
+                                   clock=FakeClock(on_advance=on_advance))
+        finally:
+            holder.close()
+
+    assert ran is True
+    assert released, "the takeover attempt was never refused"
+    assert attempts == ["lost", "swapped"]
+    assert kinds_of(tmp_path / "unchanged") == [WAITED, NOTE]
+    [wait] = entries_of_kind(tmp_path / "unchanged", WAITED)
+    assert CHANGED_HANDS not in wait["message"]
+    assert len(takeover_notes(tmp_path / "unchanged")) == 1
+    # Taken over on the attempt right after the refused one, a whole bound
+    # earlier than the waiter above took it.
+    assert clock.now_at == pytest.approx(1000.0 + bound + POLL, abs=POLL)
+    assert stamp_lines(lock) != before and inode_at(lock) != inode
+
+
 def test_a_stampless_lock_file_is_measured_from_the_first_poll_exactly_as_a_stamped_one(
         make_target, tmp_path):
     """A holder that took the lock without writing a stamp — a bare flock, as
@@ -2080,6 +2256,76 @@ def test_a_stamp_that_is_no_pid_and_no_time_is_waited_behind_like_any_other(
         assert len(takeover_notes(tmp_path / label)) == 1
 
 
+#: Bytes no text decoder accepts, left at the lock path. Nothing the harness
+#: writes there can produce them — every route that touches the file appends a
+#: stamp of a pid and a moment — but another process or a filesystem can, and
+#: what the turn does when it meets them is the subject below.
+UNDECODABLE = b"\xff\xfe not a lock file\n"
+
+#: The same bytes' worth of ordinary text: a line that is no stamp of anything,
+#: which the turn reads and waits behind like any other.
+DECODABLE = "not a lock file\n"
+
+
+def test_a_lock_file_whose_bytes_are_not_valid_text_runs_the_body_and_says_why(
+        make_target, tmp_path):
+    """A held lock whose file cannot be decoded takes the could-not-open path.
+    Reading the stamp is where the bytes are met, so the turn meets them only
+    when the lock is held; it then runs its body, writes the note saying no
+    turn was taken and why, sleeps nothing and raises nothing out of the wait.
+    The file is left exactly as it was found.
+
+    Beside it the control, which is the same held lock with the same text
+    decodable: that one is waited behind for the whole bound and taken over,
+    so the note above is the undecodable bytes' doing and not the holder's."""
+    with_estimate()
+    target = make_target("undecodable")
+    config = {**config_of(target), KEY: "2"}
+    lock = lock_of(target)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with holding(lock):
+        lock.write_bytes(UNDECODABLE)
+        # The control for the bytes themselves: read as text they raise, which
+        # is the failure the turn is being asked to survive.
+        with pytest.raises(UnicodeDecodeError):
+            lock.read_text(encoding="utf-8")
+        inode = inode_at(lock)
+        ran, clock = take_turn(tmp_path / "undecodable-run", target, config)
+
+    assert ran is True
+    assert clock.slept == []
+    assert kinds_of(tmp_path / "undecodable-run") == [NOTE]
+    [note] = notes_about_the_turn(tmp_path / "undecodable-run")
+    assert str(lock) in note
+    assert "could not be created or opened" in note
+    assert "without one" in note
+    # The error the run could not work out is carried in the note beside the
+    # path, so a reader is told which lock file and what about it.
+    assert "utf-8" in note
+    assert takeover_notes(tmp_path / "undecodable-run") == []
+    # Nothing was written to the file and nothing was swapped over the path:
+    # no stamp, no takeover, no repair of a file the run cannot read.
+    assert lock.read_bytes() == UNDECODABLE
+    assert inode_at(lock) == inode
+
+    control = make_target("decodable")
+    control_config = {**config_of(control), KEY: "2"}
+    control_lock = lock_of(control)
+    control_lock.parent.mkdir(parents=True, exist_ok=True)
+    with holding(control_lock) as hung:
+        hung.write(DECODABLE)
+        hung.flush()
+        assert stamp_at(control_lock) == DECODABLE.strip()
+        ran, control_clock = take_turn(tmp_path / "decodable-run", control,
+                                       control_config)
+    assert ran is True
+    assert sum(control_clock.slept) == pytest.approx(bound_of("2"), abs=POLL)
+    assert kinds_of(tmp_path / "decodable-run") == [WAITED, NOTE]
+    assert len(takeover_notes(tmp_path / "decodable-run")) == 1
+    assert all("could not be created or opened" not in note
+               for note in notes_about_the_turn(tmp_path / "decodable-run"))
+
+
 def test_an_uncontended_turn_writes_nothing_and_sleeps_nothing(make_target, tmp_path):
     """The absence the two-process control above demonstrates can fail: a free
     lock is taken on the first try, and the events log gains no line."""
@@ -2174,6 +2420,72 @@ def test_the_key_is_declared_and_set_in_both_configurations():
     assert f"{KEY}: 5" in shipped and OLD_KEY not in shipped
     assert "counts suite runs" in shipped
     assert "duration" in shipped and "core count" in shipped
+
+
+#: The shipped schema this deployment configures itself against — the file a
+#: person reads when they set the key, and the subject of the assertions
+#: below rather than an input to them.
+HARNESS_CONFIG_SCHEMA = REPO_ROOT / "schemas" / "harness-config.schema.json"
+
+#: The claim story-196 made false and left in the key's description: that the
+#: number bounds how long this run queues. It does not — it bounds one
+#: holder's tenure — so a person setting it today was being told the wrong
+#: thing about what they were setting.
+RETIRED_QUEUEING_CLAIM = "bounds the queueing"
+
+#: What the description says in its place: what the bound is measured
+#: against, when it starts over, and what that leaves a run behind a queue of
+#: runs that are all healthy.
+SAYS_WHAT_THE_BOUND_MEASURES = (
+    "current holder's tenure",
+    "restarts whenever the turn changes hands",
+    "as long as that queue takes",
+)
+
+
+def queueing_claims(description: str) -> list[str]:
+    """Every sentence of a key's description claiming the bound limits how
+    long this run queues. Reported as the sentence it is, so a failure says
+    what the text still tells whoever is setting the number."""
+    return [sentence.strip() for sentence in description.split(".")
+            if RETIRED_QUEUEING_CLAIM in sentence.lower()]
+
+
+def test_the_keys_description_says_the_bound_measures_the_current_holder():
+    """Read off the shipped schema file itself, because what a person is told
+    when they configure this number is a fact about what this repository
+    deploys and a copy of it could only say what the copy said. The retired
+    claim is gone, what replaced it says what the bound is measured against
+    and what a deep queue of healthy holders means for a waiter, and the rest
+    of the entry — the fallback, the refusal, the takeover — is untouched."""
+    shipped = json.loads(HARNESS_CONFIG_SCHEMA.read_text(encoding="utf-8"))
+    # The file the harness itself loads for this schema is this one.
+    assert schema_validator.load_schema("harness-config") == shipped
+    description = shipped["properties"][KEY]["description"]
+
+    assert queueing_claims(description) == []
+    for phrase in SAYS_WHAT_THE_BOUND_MEASURES:
+        assert phrase in description, phrase
+    # The sentences this story leaves alone, so the rewording is one sentence
+    # and not a rewrite of what the key still does.
+    for kept in ("sixty minutes", "pre-flight", "takes the turn",
+                 "counts suite runs as measured on this machine"):
+        assert kept in description, kept
+
+
+def test_the_same_reading_reports_the_claim_this_story_replaced():
+    """The control for the absence above: the retired sentence, put back into
+    the shipped text, is reported by the same reading — so the empty list is
+    the description having lost that claim and not the reading having stopped
+    looking for it."""
+    description = json.loads(
+        HARNESS_CONFIG_SCHEMA.read_text(encoding="utf-8")
+    )["properties"][KEY]["description"]
+    restored = f"{description} This bounds the queueing."
+
+    assert queueing_claims(restored) == ["This bounds the queueing"]
+    assert queueing_claims("It bounds the queueing behind it.") != []
+    assert queueing_claims("The bound is measured against the holder.") == []
 
 
 # --------------------------------------------------------------------------
@@ -2421,6 +2733,11 @@ def test_only_the_three_whole_suite_call_sites_enter_the_turn():
 #: it returns is what the scan below walks.
 STAMP_READER = "_stamp_at"
 
+#: The one predicate answering whether the turn changed hands, which is where
+#: the reader is called from: the turn asks it rather than reading the stamp
+#: itself, and the takeover asks neither.
+CHANGED_HANDS_PREDICATE = "_suite_turn_changed_hands"
+
 
 def _is_equality(node: ast.AST) -> bool:
     return (isinstance(node, ast.Compare)
@@ -2432,12 +2749,60 @@ def _calls(node: ast.AST, name: str) -> bool:
             and node.func.id == name)
 
 
+def _predicate_definitions(tree: ast.AST) -> list[ast.FunctionDef]:
+    return [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+            and node.name == CHANGED_HANDS_PREDICATE]
+
+
+def _stamp_parameters_of_the_predicate(
+        tree: ast.AST, holding_a_stamp: set[str]) -> set[str]:
+    """The parameter names under which a recorded stamp arrives inside the
+    changed-hands predicate, followed from each call that hands it one.
+
+    The predicate is free to spell its parameter whatever it likes: what makes
+    a name inside it a stamp is that a caller passed a stamp in that position,
+    not that the two functions happen to have chosen the same word. Tracking
+    it by spelling would leave the exemption below a blind spot the moment
+    either name were renamed."""
+    definitions = _predicate_definitions(tree)
+    arrived_as: set[str] = set()
+    for call in ast.walk(tree):
+        if not _calls(call, CHANGED_HANDS_PREDICATE):
+            continue
+        for definition in definitions:
+            parameters = [argument.arg for argument in definition.args.args]
+            for index, argument in enumerate(call.args):
+                if (isinstance(argument, ast.Name)
+                        and argument.id in holding_a_stamp
+                        and index < len(parameters)):
+                    arrived_as.add(parameters[index])
+            for keyword in call.keywords:
+                if (isinstance(keyword.value, ast.Name)
+                        and keyword.value.id in holding_a_stamp
+                        and keyword.arg in parameters):
+                    arrived_as.add(keyword.arg)
+    return arrived_as
+
+
 def stamp_reads_beyond_equality(source: str) -> list[str]:
     """Every use of a stamp read off the lock file that is not a comparison
     for equality: a call to the reader whose result goes anywhere but an
     assignment or an equality, and a load of a name assigned from it that is
     anything but an operand of an equality. Each is reported as the
-    statement or expression it sits in."""
+    statement or expression it sits in.
+
+    Handing a recorded stamp to the changed-hands predicate is a comparison
+    for equality, because that is the whole of what the predicate does with
+    it and the predicate's own body is walked by this same scan. The
+    exemption is by that one name: a stamp handed to any other call is
+    reported, and a parse or a signal inside the predicate is reported there.
+    It exists because a predicate cannot be told what was recorded without
+    being passed it, so consolidating the question into one place is
+    otherwise indistinguishable here from carrying a stamp off to be read.
+
+    Inside the predicate a stamp is followed by the position it arrived in
+    rather than by the word the predicate calls it, so the exemption does not
+    quietly become a hole when either side renames its variable."""
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree)
                for child in ast.iter_child_nodes(node)}
@@ -2447,15 +2812,24 @@ def stamp_reads_beyond_equality(source: str) -> list[str]:
         and _calls(node.value, STAMP_READER)
         for target in node.targets if isinstance(target, ast.Name)
     }
+    inside_the_predicate = {
+        id(node) for definition in _predicate_definitions(tree)
+        for node in ast.walk(definition)
+    }
+    arrived_as = _stamp_parameters_of_the_predicate(tree, holding_a_stamp)
     found = []
     for node in ast.walk(tree):
         parent = parents.get(node)
+        tracked = holding_a_stamp
+        if id(node) in inside_the_predicate:
+            tracked = holding_a_stamp | arrived_as
         if _calls(node, STAMP_READER):
             if isinstance(parent, ast.Assign) or _is_equality(parent):
                 continue
             found.append(ast.unparse(parent))
-        elif (isinstance(node, ast.Name) and node.id in holding_a_stamp
-              and isinstance(node.ctx, ast.Load) and not _is_equality(parent)):
+        elif (isinstance(node, ast.Name) and node.id in tracked
+              and isinstance(node.ctx, ast.Load) and not _is_equality(parent)
+              and not _calls(parent, CHANGED_HANDS_PREDICATE)):
             found.append(ast.unparse(parent))
     return found
 
@@ -2470,12 +2844,27 @@ def test_the_stamp_is_never_read_for_anything_but_equality():
     writer = conftest.function_source(COORDINATOR_SOURCE, "_stamp_suite_turn")
     turn = conftest.function_source(COORDINATOR_SOURCE, "suite_turn")
     takeover = conftest.function_source(COORDINATOR_SOURCE, "_take_over_suite_turn")
-    for body in (reader, writer, turn, takeover):
+    # The predicate is the only place the stamp is read for a comparison, so
+    # it is held to the same absence of signals as the bodies around it.
+    predicate = conftest.function_source(
+        COORDINATOR_SOURCE, CHANGED_HANDS_PREDICATE)
+    for body in (reader, writer, turn, takeover, predicate):
         assert "kill" not in body
         assert "SIG" not in body
     for parse in ("int(", "float(", ".split("):
         assert parse not in reader
-    assert f"{STAMP_READER}(" in turn and f"{STAMP_READER}(" not in takeover
+    # The stamp is read for a comparison in the one changed-hands predicate,
+    # which the turn asks; before that predicate existed the turn spelled
+    # that comparison itself, in the two places the predicate now answers
+    # for. The turn still reads the stamp on its own account, to record what
+    # a waiter is waiting behind — at its entry to the wait and again at each
+    # restart — so it calls the reader as well as the predicate. The takeover
+    # calls neither.
+    assert f"{STAMP_READER}(" in predicate
+    assert f"{STAMP_READER}(" in turn
+    assert f"{STAMP_READER}(" not in takeover
+    assert f"{CHANGED_HANDS_PREDICATE}(" in turn
+    assert f"{CHANGED_HANDS_PREDICATE}(" not in takeover
     assert "_stamp_suite_turn(" in turn and "_stamp_suite_turn(" in takeover
 
 
@@ -2497,6 +2886,75 @@ def test_the_same_scan_reports_a_planted_body_that_parses_and_signals_a_stamp():
     those uses, and its one equality is not."""
     assert stamp_reads_beyond_equality(PLANTED_STAMP_READS) == [
         "last_stamp.split", "float(_stamp_at(lock_path))"]
+
+
+PLANTED_STAMP_HANDED_ON = '''\
+def suite_turn(lock_path, waited_on):
+    last_stamp = _stamp_at(lock_path)
+    if _suite_turn_changed_hands(lock_path, waited_on, last_stamp):
+        pass
+    carried_off(last_stamp)
+    return _stamp_at(lock_path) != last_stamp
+
+
+def _suite_turn_changed_hands(lock_path, waited_on, last_stamp):
+    pid, moment = last_stamp.split(" ")
+    return _stamp_at(lock_path) != last_stamp
+'''
+
+
+#: The same planted body with the predicate spelling its stamp parameter
+#: something other than the caller's name for it. Nothing about what the
+#: predicate does with the stamp changed — it still parses it and signals
+#: from it — so a scan that followed the stamp by position reports those uses
+#: exactly as above, and one that followed it by spelling reports nothing.
+PLANTED_STAMP_HANDED_ON_UNDER_ANOTHER_NAME = '''\
+def suite_turn(lock_path, waited_on):
+    last_stamp = _stamp_at(lock_path)
+    if _suite_turn_changed_hands(lock_path, waited_on, last_stamp):
+        pass
+    carried_off(last_stamp)
+    return _stamp_at(lock_path) != last_stamp
+
+
+def _suite_turn_changed_hands(lock_path, waited_on, recorded):
+    pid, moment = recorded.split(" ")
+    os.kill(int(pid), signal.SIGTERM)
+    return _stamp_at(lock_path) != recorded
+'''
+
+
+def test_the_scan_exempts_the_predicate_by_name_and_walks_its_body_anyway():
+    """The control for the exemption the consolidation needed: a stamp handed
+    to the changed-hands predicate is not reported, one handed to any other
+    call is, and a parse inside the predicate itself is reported there — so
+    the exemption is a comparison for equality recognised by one name rather
+    than a licence to carry a stamp off."""
+    found = stamp_reads_beyond_equality(PLANTED_STAMP_HANDED_ON)
+    assert sorted(found) == ["carried_off(last_stamp)", "last_stamp.split"]
+    assert not any(CHANGED_HANDS_PREDICATE in use for use in found)
+
+
+def test_the_scan_follows_a_stamp_into_the_predicate_under_any_parameter_name():
+    """The control for what makes the exemption above a rule rather than a
+    coincidence of two independently chosen words: the same planted body with
+    the predicate's stamp parameter renamed is reported at the same uses. A
+    scan tracking stamps by spelling sees nothing here, because no assignment
+    in this body is named `recorded`; one tracking them by the position they
+    were handed in reports the parse and the signal inside the predicate, and
+    still does not report the handing-on itself."""
+    found = stamp_reads_beyond_equality(
+        PLANTED_STAMP_HANDED_ON_UNDER_ANOTHER_NAME)
+    assert sorted(found) == ["carried_off(last_stamp)", "recorded.split"]
+    assert not any(CHANGED_HANDS_PREDICATE in use for use in found)
+    # The signal the planted predicate sends is reached through what the parse
+    # produced rather than through the stamp itself, which is the scan's own
+    # boundary here and why the assertion above is not the whole guard: the
+    # shipped predicate is held to naming no signal at all, beside the reader,
+    # the writer, the turn and the takeover.
+    assert "os.kill" in PLANTED_STAMP_HANDED_ON_UNDER_ANOTHER_NAME
+    assert "kill" not in conftest.function_source(
+        COORDINATOR_SOURCE, CHANGED_HANDS_PREDICATE)
 
 
 def comment_above(source: str, declaration: str) -> str:
