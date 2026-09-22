@@ -525,6 +525,25 @@ class StageRestriction:
         """
         return _ROUTES_NECESSARY_EDITS[self.sense]
 
+    @property
+    def governs_modifications(self) -> bool:
+        """Whether this restriction governs a change to a file that exists.
+
+        A confinement governs every write outside its prefixes, whether the
+        file is there or not: modifying an existing file outside the lane is
+        exactly what it forbids. A create restriction governs only a creation,
+        so a change to a file that already exists beneath its prefix is
+        maintenance the stage may own — which is the reading the ownership
+        check and the revert check already take, since the first reads
+        `created` alone and the second decides a modification by reverting
+        it. The scope-extension bound reads this so it asks the same question
+        the enforcement asks, rather than treating a stage forbidden to create
+        somewhere as forbidden to change anything there. Read off
+        `_GOVERNS_MODIFICATIONS` so no call site compares the sense; adding a
+        sense is adding a row there.
+        """
+        return _GOVERNS_MODIFICATIONS[self.sense]
+
 
 #: How each sense reads in prose, keyed by the workflow key that declares it.
 #: The one place a restriction's words are written; `StageRestriction.wording`
@@ -539,6 +558,16 @@ _SENSES = {
 #: only reader, and a sense declared in one table and not the other fails
 #: loudly there rather than falling through to either disposition.
 _ROUTES_NECESSARY_EDITS = {
+    CREATE_RESTRICTION: False,
+    CONFINEMENT: True,
+}
+
+#: Whether each sense governs a modification of a file that already exists,
+#: keyed as `_SENSES` is. A confinement does; a create restriction governs
+#: only a creation. `StageRestriction.governs_modifications` is its only
+#: reader, and a sense declared in `_SENSES` and not here fails loudly there
+#: rather than falling through to either reading.
+_GOVERNS_MODIFICATIONS = {
     CREATE_RESTRICTION: False,
     CONFINEMENT: True,
 }
@@ -7952,18 +7981,54 @@ def _repair_pass_recorded(
 # scope_extension. The coordinator decides each such reach against three
 # bounds it holds itself — the execution rules' blocked paths, the resolved
 # stage's own restrictions, and a reasoned scope.do_not_modify entry — and
-# refuses one that crosses any, naming the bound. A refusal drops that
-# finding from the pass and never stops the run: the verdict the accounting
-# is handed records it as declined with the bound as its reason, so it is
-# filed as a brief at completion rather than lost. A finding carrying no
-# scope_extension is put to the blocked-path bound alone, because a grant can
-# reach no blocked path whatever the finding says; the other two bounds are
-# an extension's. Nothing below writes a stage name, a category or an
-# artifact name; no model is called.
+# refuses one that crosses any, naming the bound. The blocked-path bound is
+# asked of every finding, with or without a scope_extension, because a grant
+# can reach no blocked path whatever the finding says; the other two bounds
+# are an extension's. The restriction bound asks the question the enforcement
+# asks: a confinement governs a change whether or not the file exists, and a
+# create restriction governs only a creation, so an implementer's reach into
+# an existing test is accepted and its reach to a test that is not there is
+# refused as the creation it would be. A refusal drops that finding from the
+# pass and never stops the run: the verdict the accounting is handed records
+# it as declined with the bound as its reason, and a refusal made on a later
+# verdict of the same attempt amends the accounting already written, so it is
+# filed as a brief at completion rather than lost. Nothing below writes a
+# stage name, a category or an artifact name; no model is called.
 
 
 #: The field a repairable finding carries to ask for an extension.
 SCOPE_EXTENSION = "scope_extension"
+
+
+def _closing_parenthetical_start(entry: str) -> int | None:
+    """The index of the "(" opening the parenthetical `entry` closes with.
+
+    Walks back from the end of the stripped entry counting depth, so a reason
+    may itself carry parentheses — `(see story-025 (plan time))` opens at
+    the first "(" — and returns None where no "(" balances the ")" the walk
+    meets. The one walk both readers of an entry make: `carries_a_reason`
+    asks what stands either side of the opening, and `_entry_paths` splits
+    the text before it. Written once so the two cannot come to judge one
+    entry at two positions.
+
+    The walk itself does not ask whether the entry *ends* with ")": that is
+    `carries_a_reason`'s question, asked before it walks, and `_entry_paths`
+    never asked it — a committed artifact carries an entry whose
+    parenthetical sits mid-text, which `_entry_paths` has always split at
+    that opening, and the shared walk keeps every committed entry split and
+    judged exactly as before.
+    """
+    text = entry.rstrip()
+    depth = 0
+    for position in range(len(text) - 1, -1, -1):
+        character = text[position]
+        if character == ")":
+            depth += 1
+        elif character == "(":
+            depth -= 1
+            if depth == 0:
+                return position
+    return None
 
 
 def carries_a_reason(entry: str) -> bool:
@@ -7971,11 +8036,11 @@ def carries_a_reason(entry: str) -> bool:
 
     True when non-empty text — the path or area — precedes a closing
     parenthetical holding at least one word character. The parenthetical is
-    the one the entry ends with, found by walking back from its final ")" to
-    the "(" that balances it, so a reason may itself carry parentheses. Shape
-    alone is read: the reason's text is neither parsed nor scored, so a bare
-    path and an empty parenthetical are the two things refused and any reason
-    at all passes.
+    the one the entry ends with, found by `_closing_parenthetical_start` —
+    the walk `_entry_paths` also reads — so a reason may itself carry
+    parentheses. Shape alone is read: the reason's text is neither parsed nor
+    scored, so a bare path and an empty parenthetical are the two things
+    refused and any reason at all passes.
 
     Defined here rather than in plan_validation, which imports it back under
     the same name, because the plan-time reason check and the run-time
@@ -7985,17 +8050,11 @@ def carries_a_reason(entry: str) -> bool:
     text = entry.rstrip()
     if not text.endswith(")"):
         return False
-    depth = 0
-    for position in range(len(text) - 1, -1, -1):
-        character = text[position]
-        if character == ")":
-            depth += 1
-        elif character == "(":
-            depth -= 1
-            if depth == 0:
-                reason, before = text[position + 1:-1], text[:position]
-                return before.strip() != "" and re.search(r"\w", reason) is not None
-    return False
+    opening = _closing_parenthetical_start(text)
+    if opening is None:
+        return False
+    reason, before = text[opening + 1:-1], text[:opening]
+    return before.strip() != "" and re.search(r"\w", reason) is not None
 
 
 #: The boundary between the paths one do_not_modify entry lists before its
@@ -8011,20 +8070,13 @@ def _entry_paths(entry: str) -> list[str]:
     Planners write one entry for several files ("prompts/a.md, prompts/b.md
     and prompts/c.md (the reason)"), so the text is split on the clause
     boundary and each piece is a path in its own right. An entry naming one
-    path yields that one piece.
+    path yields that one piece. Where no parenthetical balances —
+    `_closing_parenthetical_start` returns None — the whole entry is split,
+    as it always was.
     """
     text = entry.rstrip()
-    depth = 0
-    before = text
-    for position in range(len(text) - 1, -1, -1):
-        character = text[position]
-        if character == ")":
-            depth += 1
-        elif character == "(":
-            depth -= 1
-            if depth == 0:
-                before = text[:position]
-                break
+    opening = _closing_parenthetical_start(text)
+    before = text if opening is None else text[:opening]
     return [piece.strip() for piece in _ENTRY_PATH_BOUNDARY.split(before)
             if piece.strip()]
 
@@ -8100,25 +8152,44 @@ def scope_extension_check(
     stages: list[dict],
     story: dict | None,
     rules: dict,
+    *,
+    exists,
 ) -> ScopeExtensionCheck:
     """Decide each repairable finding against the bounds that apply to it.
 
-    Pure over its inputs. The blocked-path bound is asked of every finding,
-    with or without a scope_extension: a path under a repository-wide blocked
-    path from the execution rules can be reached by no grant, so a finding
-    naming one is refused here, before the pass is routed, rather than
-    routed, granted, edited and only then stopping the run at the blocked-path
-    check. The other two bounds are asked of a finding carrying an extension
-    alone: the stage its category resolves to declares a restriction that
-    governs the path, so a tester's extension cannot reach the implementation
-    — unlike an in-scope repairable finding, whose grant lifts the stage's
-    confinement for that file; or a reasoned scope.do_not_modify entry names
-    the path or a directory it is under. The bounds are asked in that order
-    and the first that applies is the one named. A finding whose category the
-    routing table does not define is left in `accepted` before any bound is
-    asked, whatever its path, because the routing that follows escalates
-    naming the unknown category and the bounds have no stage to ask about — a
-    refusal there would name an empty stage and hide the category behind it.
+    Pure over its inputs; it has no tree to look at, so `exists` — a required
+    keyword answering whether a repository-relative path is already in the
+    tree — is what it asks about existence, and the verifier branch supplies
+    it from the run's target root. The blocked-path bound is asked of every
+    finding, with or without a scope_extension: a path under a
+    repository-wide blocked path from the execution rules can be reached by
+    no grant, so a finding naming one is refused here, before the pass is
+    routed, rather than routed, granted, edited and only then stopping the
+    run at the blocked-path check. The other two bounds are asked of a
+    finding carrying an extension alone: the stage its category resolves to
+    declares a restriction that governs the extension, or a reasoned
+    scope.do_not_modify entry names the path or a directory it is under. The
+    bounds are asked in that order and the first that applies is the one
+    named.
+
+    A restriction governs an extension when `StageRestriction.governs` is
+    true of the path and either the restriction's sense governs
+    modifications — a confinement, so a tester's extension cannot reach the
+    implementation, unlike an in-scope repairable finding whose grant lifts
+    the confinement for that file — or the path does not exist, a create
+    restriction meeting a creation. Which senses govern modifications is
+    read off `governs_modifications`, so nothing here compares the sense:
+    that is the question the ownership check and the revert check already
+    ask, and an implementer's reach into an existing test is accepted rather
+    than refused over a file nobody would create. A refusal under a create
+    restriction says the path does not exist and the extension would create
+    it, beside the restriction's own wording.
+
+    A finding whose category the routing table does not define is left in
+    `accepted` before any bound is asked, whatever its path, because the
+    routing that follows escalates naming the unknown category and the
+    bounds have no stage to ask about — a refusal there would name an empty
+    stage and hide the category behind it.
     """
     by_name = {stage["name"]: stage for stage in stages}
     blocked = list(rules.get("blocked_paths") or [])
@@ -8143,12 +8214,29 @@ def scope_extension_check(
             accepted.append(finding)
             continue
         else:
-            governing = next(
-                (one for one in restrictions_on(by_name[stage_name]) if one.governs(path)),
-                None,
-            )
-            if governing is not None:
+            # Existence is asked once per finding and only where a restriction
+            # governs the path at all, so a stage declaring none never has
+            # the tree consulted on its account.
+            present = None
+            governing = None
+            for one in restrictions_on(by_name[stage_name]):
+                if not one.governs(path):
+                    continue
+                if one.governs_modifications:
+                    governing = one
+                    break
+                if present is None:
+                    present = bool(exists(path))
+                if not present:
+                    governing = one
+                    break
+            if governing is not None and governing.governs_modifications:
                 bound = f"{governing.wording}, and {path} is governed by it"
+            elif governing is not None:
+                bound = (
+                    f"{governing.wording}, and {path} does not exist, "
+                    f"so the extension would create it"
+                )
         if bound is None:
             entry = do_not_modify_bound(story, path)
             if entry is not None:
@@ -11735,6 +11823,10 @@ def run_story(
             # finding removed and recorded as declined with the refusal as its
             # reason. The archived verdict above is what the verifier wrote;
             # this is what the run decided about it. Nothing here escalates.
+            # Whether a reached path already exists is decided against the
+            # run's target root — the tree the run works in — because a
+            # create restriction governs only a creation, and the check has
+            # no tree of its own to ask.
             declared_inspection = (stage.get("inspection") or {}).get("result")
             # The repairable findings as the verifier wrote them, read once
             # here and handed to the malformed-verdict check below. The
@@ -11756,6 +11848,7 @@ def run_story(
             extensions = scope_extension_check(
                 [] if stops_on_a_directory else repairable_as_written,
                 routes, stage_names, stages, reading.parsed, rules,
+                exists=lambda path, root=target_root: (root / path).exists(),
             )
             for refused in extensions.refused:
                 _scope_extension_refused(run_dir, name, refused)

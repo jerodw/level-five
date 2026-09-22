@@ -376,7 +376,11 @@ def check(*findings: dict, story: dict = DECLARED, rules: dict = RULES):
     the verdict's own list, because the verdict handed on drops a refused
     finding by identity."""
     return story_coordinator.scope_extension_check(
-        list(findings), ROUTES, STAGE_NAMES, WORKFLOW["stages"], story, rules)
+        list(findings), ROUTES, STAGE_NAMES, WORKFLOW["stages"], story, rules,
+        # Every path this module's fixture reaches is read as existing, so
+        # the confinement, blocked-path and do_not_modify bounds decide
+        # exactly as they did before the check asked about existence.
+        exists=lambda path: True)
 
 
 def test_the_check_accepts_what_no_bound_applies_to_and_refuses_the_rest():
@@ -1194,7 +1198,7 @@ def inspected_check(*findings: dict):
     return story_coordinator.scope_extension_check(
         list(findings), judging["on_failure"]["retry_routing"],
         inspected.STAGE_NAMES, inspected.WORKFLOW["stages"],
-        DECLARED, RULES)
+        DECLARED, RULES, exists=lambda path: True)
 
 
 def test_the_routed_slugs_are_read_off_the_findings_artifact_before_accounting(

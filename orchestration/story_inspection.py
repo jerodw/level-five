@@ -1916,8 +1916,19 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
 
     Once per attempt, decided by the presence of the accounting artifact: the
     second verdict of one attempt — the one a correction pass returns to —
-    finds it and accounts nothing twice, and a retry, whose findings artifact
-    is its own, is accounted under the next attempt's number.
+    finds it and splits nothing twice, and a retry, whose findings artifact
+    is its own, is accounted under the next attempt's number. What a later
+    verdict of the same attempt *can* do is amend: where it names
+    `refused_slugs`, each routed slug the artifact records as acted on is
+    moved to the remainder with the refusal recorded as its declined reason,
+    the artifact is rewritten with the counts recomputed, and an event of
+    this kind says which slugs moved and why — a refusal the verifier
+    discovers on the returning verdict of a correction or repair pass would
+    otherwise be logged and then forgotten, with no brief filed for it. A
+    refused slug the artifact already records in the remainder keeps the
+    reason it was recorded with, and one the artifact does not record as
+    routed changes nothing. A later verdict refusing nothing leaves the
+    artifact byte-for-byte what the first verdict wrote.
 
     An attempt that routed nothing is not accounted: a findings artifact that
     is absent, that records `ran` false, or that carries no findings leaves
@@ -1954,7 +1965,13 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     label = f"accounting for the findings routed to {story_id}"
     if (Path(run_dir) / accounting_artifact_file(artifact, attempt)).is_file():
         # This attempt is accounted. A second verdict within it — the one a
-        # correction pass returns to — changes nothing about what was routed.
+        # correction or repair pass returns to — changes nothing about what
+        # was routed; the one thing it can change is a refusal made on this
+        # verdict of a slug the first verdict acted on, which is amended in.
+        if refused_slugs:
+            _amend_accounting(run_dir, story_id, artifact=artifact,
+                              attempt=attempt, verdict=verdict,
+                              refused_slugs=refused_slugs, label=label)
         return
     record = _read_findings_record(run_dir, artifact, attempt)
     if record is None or not record.get("ran"):
@@ -1992,6 +2009,114 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
          f"{len(acted)} acted on by the verdict, {len(remainder)} left by it "
          f"for the run's completion, of which {with_reason} declined with a "
          f"reason and {without_reason} declined without one; 0 filed, 0 dropped",
+         kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
+         filed=0, dropped=0)
+
+
+def _refusal_reasons(verdict, slugs) -> dict:
+    """The reason the verdict's `declined_findings` gives for each of
+    `slugs`, taking the *last* entry naming a slug.
+
+    `declined_reasons` takes the first, which is right for the verifier's own
+    decline. A refusal is appended by the coordinator after whatever the
+    verifier wrote (`verdict_after_refusals` extends the array), so for a
+    slug the coordinator refused a file of, the last entry is the refusal —
+    which is what the amendment records as the moved slug's reason.
+    """
+    wanted = frozenset(one for one in slugs if isinstance(one, str))
+    reasons: dict = {}
+    if not isinstance(verdict, dict):
+        return reasons
+    for entry in verdict.get("declined_findings") or ():
+        if not isinstance(entry, dict):
+            continue
+        slug, reason = entry.get("slug"), entry.get("reason")
+        if slug in wanted and isinstance(reason, str) and reason.strip():
+            reasons[slug] = reason
+    return reasons
+
+
+def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
+                      attempt: int, verdict, refused_slugs, label: str) -> None:
+    """Move the refused slugs the attempt's accounting records as acted on
+    into its remainder, and say so.
+
+    Reached only from a later verdict of an already-accounted attempt that
+    names `refused_slugs`. The split itself is not redone: the acted-on set
+    is the recorded one minus the moved slugs, the remainder is the routed
+    findings less that, so everything the first verdict left stays exactly
+    as it was recorded, reason included. Each moved slug gains a declined
+    entry carrying the refusal — read off the verdict's `declined_findings`,
+    where the coordinator wrote it — or recorded as declined without a
+    reason where none is there. The artifact is rewritten through
+    `write_accounting` with the counts recomputed, so `remainder_slugs` is
+    what `file_at_completion` reads and the brief the refusal promised is
+    filed. Where no recorded acted-on slug is refused there is nothing to
+    move: the artifact is left byte-for-byte as written and no event is
+    appended.
+
+    The amendment rebuilds the two lists from the attempt's findings record,
+    so it stops where the first split stops: a findings record that is absent
+    or cannot be read as one would rewrite the accounting with nothing routed
+    and nothing left, erasing what the first verdict recorded and the refusal
+    with it. Where the record cannot be read the artifact is left byte-for-
+    byte as written and an event of this kind says the refusal could not be
+    amended in and why, so the run's record carries the refusal even though
+    the accounting does not.
+    """
+    accounting = _read_record(
+        Path(run_dir) / accounting_artifact_file(artifact, attempt))
+    if accounting is None:
+        return
+    acted_slugs = [one for one in accounting.get("acted_on_slugs") or ()
+                   if isinstance(one, str)]
+    remainder_slugs = [one for one in accounting.get("remainder_slugs") or ()
+                       if isinstance(one, str)]
+    moved = [slug for slug in refused_slugs
+             if isinstance(slug, str) and slug in acted_slugs
+             and slug not in remainder_slugs]
+    moved = list(dict.fromkeys(moved))
+    if not moved:
+        return
+    record = _read_findings_record(run_dir, artifact, attempt)
+    if record is None:
+        _say(run_dir,
+             f"{label}: not amended on a later verdict of attempt {attempt}; "
+             f"a scope extension was refused of {', '.join(moved)}, which the "
+             f"accounting records as acted on, but the attempt's findings "
+             f"record {findings_artifact_file(artifact, attempt)} is absent "
+             f"or cannot be read, so the accounting is left as the first "
+             f"verdict wrote it",
+             kind=ACCOUNTING_EVENT, routed=len(acted_slugs) + len(remainder_slugs),
+             acted_on=len(acted_slugs), filed=0, dropped=0)
+        return
+    routed = _findings_in(record)
+    kept = frozenset(acted_slugs) - frozenset(moved)
+    acted = [one for one in routed if _slug_of(one) and _slug_of(one) in kept]
+    acted_ids = {id(one) for one in acted}
+    remainder = [one for one in routed if id(one) not in acted_ids]
+    reasons = _refusal_reasons(verdict, moved)
+    declined = [one for one in accounting.get("declined") or ()
+                if isinstance(one, dict)]
+    for slug in moved:
+        entry = {"slug": slug, "reason_given": slug in reasons}
+        if slug in reasons:
+            entry["reason"] = reasons[slug]
+        declined.append(entry)
+    write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
+                     acted_on=acted, remainder=remainder, declined=declined)
+    why = "; ".join(
+        f"{slug}: {reasons[slug]}" if slug in reasons else
+        f"{slug}: the coordinator refused a scope extension of it, "
+        f"and the verdict records no reason"
+        for slug in moved
+    )
+    _say(run_dir,
+         f"{label}: amended on a later verdict of attempt {attempt}; "
+         f"{len(moved)} moved from acted on to left for the run's completion "
+         f"because a scope extension was refused — {why}; now "
+         f"{len(acted)} acted on by the verdict, {len(remainder)} left by it; "
+         f"0 filed, 0 dropped",
          kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
          filed=0, dropped=0)
 

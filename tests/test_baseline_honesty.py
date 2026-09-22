@@ -3383,6 +3383,21 @@ DECLARED_HISTORY_READERS = {
         "resolver is about — escalate and never resume, revert and restore, a "
         "hotfix that modifies rather than adds — is built under tmp_path there "
         "rather than looked for here",
+    "test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story sharing the parenthetical walk and "
+        "correcting the create-sense bound left every workflow definition, "
+        "every prompt, every schema and orchestration/plan_validation.py "
+        "alone — the walk moved beneath carries_a_reason and not beside it, "
+        "and no definition gained or lost a key. No constructed repository can "
+        "say what this story did not touch, and the comparison is made through "
+        "conftest.story_diff over the story's own range rather than against "
+        "HEAD, which would go vacuously green the moment the working tree is "
+        "committed. Its control is a pair of histories the module builds with "
+        "conftest.constructed_story — one story respecting the prompts "
+        "directory and one editing it — so an empty diff here is the story "
+        "having left those paths alone rather than a range bounded at the "
+        "wrong commits",
     "test_the_queue_holds_work_and_the_index_holds_receipts.py":
         "its subject includes what story-107 itself left alone: that the "
         "harness configuration schema and the target configuration template "
