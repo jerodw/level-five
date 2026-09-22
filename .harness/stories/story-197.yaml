@@ -1,0 +1,141 @@
+story:
+  id: story-197
+  title: A story's worktree is named for the story, so the directory reads story-172 and not story-story-172
+  description: |
+    Every story's working tree is a directory beside the repository, and every
+    one of them says "story" twice: level-five-worktrees/story-story-172,
+    story-story-190. The directory is named after the branch with its slash
+    flattened to a hyphen, and the branch is the configured prefix story/
+    followed by the story id story-172, so the word arrives once from each
+    side. A developer listing that directory, reading a log line that names a
+    path inside it, or typing one after cd, meets the stutter on every run.
+
+    This story teaches the one function that decides where a worktree lives to
+    drop the configured branch prefix off the front of the branch before
+    flattening what remains. A branch story/story-172 under prefix story/ names
+    the directory story-172; a branch that does not carry the prefix is
+    flattened whole exactly as it is today, so nothing else that derives a tree
+    from a branch changes shape. The decision stays inside that single
+    function, which is the property it already promises: the caller that
+    creates a tree and the caller that looks for one cannot disagree about
+    where it would be.
+
+    It leaves the branch name itself alone — the branch stays story/story-172 —
+    and it leaves the configured prefix alone. It does not move the directory
+    the trees live under, and it does not touch the two lock files that sit in
+    that directory beside them. It adds no compatibility fallback for trees
+    already on disk under the old name: a run asks git which tree stands on the
+    branch before it derives any path, so an existing tree is found under
+    whatever name its directory carries, and the derivation only ever decides
+    for a branch that has no tree yet. This story was planned from the brief
+    filed under 316.
+
+    Where the name is made: worktrees.worktree_path at
+    orchestration/worktrees.py:250-258 returns worktree_root(target_root,
+    config) / branch.replace("/", "-"), and both callers reach it — the
+    coordinator's resolve_run_root at orchestration/story_coordinator.py:2508
+    and the planning session at scripts/l5-plan:259. The function already holds
+    the configuration, so the prefix is a value it reads off config rather than
+    a name written into orchestration; story_coordinator.story_branch at :2025
+    reads the same key the same way, config.get("branch_prefix", "story/").
+
+    The rule is stated in four places and the story lands all four. The
+    function is one. The worktree_dir description in
+    schemas/harness-config.schema.json states the naming rule in prose and is
+    two. .harness/docs/ARCHITECTURE.md, under "Where a worktree lives", is
+    three. The tests are four:
+    tests/test_a_run_creates_its_worktree_beside_the_others.py restates
+    branch.replace("/", "-") itself at :148 and :374 and is adapted to read the
+    function instead, which is what that module's own rule about one derivation
+    asks; tests/test_planning_runs_on_its_own_worktree.py at :147 and :605
+    already reaches the function and needs no change.
+
+    Two edges are decided here rather than left to the implementer. A branch
+    equal to the prefix with nothing after it is flattened whole rather than
+    stripped to an empty name, so the function never answers the worktree root
+    itself. And a branch story/story-172 and a bare branch story-172 now name
+    the same directory: that is accepted, because resolve_run_root asks
+    worktrees.find — which matches by branch off git worktree list — before it
+    derives any path, and git refuses a second working tree at an occupied
+    path.
+  workflow: story-workflow
+
+tasks:
+  - Teach worktrees.worktree_path to strip the configured branch prefix from the front of the branch, where the branch carries it, before flattening the remainder; leave a branch that does not carry the prefix flattened whole, and leave a branch that is exactly the prefix flattened whole rather than stripped to an empty name.
+  - Read the prefix off the config the function is already handed, with the same key and the same default story_branch uses, so no prefix is written into orchestration.
+  - Update the function's docstring so it states the derivation it now performs, including that the prefix is stripped and that a branch outside the prefix is unchanged.
+  - Update the worktree_dir description in schemas/harness-config.schema.json where it states how a worktree is named, so the schema's prose and the function agree.
+  - Write the standing assertions for the new derivation, and adapt the two places in tests/test_a_run_creates_its_worktree_beside_the_others.py that restate the flattening themselves so they read the function instead.
+  - Record the new form in .harness/docs/ARCHITECTURE.md under "Where a worktree lives".
+
+acceptance_criteria:
+  - For a target configuring branch_prefix story/, worktrees.worktree_path answers worktree_root / story-172 for the branch story/story-172.
+  - For that same target, a branch that does not begin with the configured prefix is flattened whole and unchanged from today's answer - a branch feature/x answers worktree_root / feature-x.
+  - For a target configuring a branch_prefix other than story/, the same stripping happens against that configured prefix rather than against a literal story/, and a target configuring no branch_prefix at all gets the default story/ stripped.
+  - A branch equal to the configured prefix with nothing after it answers a directory named for the whole flattened branch, never worktree_root itself.
+  - A fresh run invoked for a story creates its worktree at the new name and works in it, and a planning session creates its detached worktree at the new name and works in it - both observed by the directory actually worked in rather than by a path a derivation predicts.
+  - A run for a branch an existing worktree already stands on still works in that existing tree, whatever the tree is named, because worktrees.find answers before the derivation is reached.
+  - The existing assertions that the caller which creates a worktree and the caller which looks for one agree about where it is still pass, and the story-123 control in tests/test_a_run_creates_its_worktree_beside_the_others.py still constructs its defect and still fails under the mutant.
+  - tests/test_a_run_creates_its_worktree_beside_the_others.py no longer restates branch.replace("/", "-") anywhere; the two sites that did read worktrees.worktree_path instead.
+  - The naming rule as stated in schemas/harness-config.schema.json's worktree_dir description and in .harness/docs/ARCHITECTURE.md both say the prefix is stripped.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/worktrees.py, change worktree_path to read the configured branch prefix from the config it already receives, using the same key and default story_coordinator.story_branch uses, strip it from the front of branch when branch starts with it and something remains after it, and flatten the remainder as before.
+    - Rewrite that function's docstring to state the stripped-prefix derivation, that a branch outside the prefix is flattened whole, and that the derivation still happens here and nowhere else.
+    - Amend the worktree_dir description in schemas/harness-config.schema.json where it says a worktree is "named for the branch it stands on with the separators flattened", so it says the configured branch prefix is dropped first.
+    - Write the standing assertions for the new derivation in tests/, covering the configured prefix, a branch outside it, a non-default configured prefix, an unset prefix, the prefix-only branch, and a run and a plan each driven end to end to the new name.
+    - Adapt tests/test_a_run_creates_its_worktree_beside_the_others.py:148 and :374 to call worktrees.worktree_path rather than recomputing branch.replace("/", "-").
+    - Record the change in .harness/docs/ARCHITECTURE.md under "Where a worktree lives".
+  likely_file_changes:
+    - file: orchestration/worktrees.py
+      stage: implementer
+      reason: worktree_path is the one derivation, and this is the whole of the behaviour change.
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: the worktree_dir description states the naming rule in prose, so it would otherwise stand contradicting the function.
+    - file: tests/test_a_run_creates_its_worktree_beside_the_others.py
+      stage: tester
+      reason: two sites restate the flattening themselves and are adapted to read the function; the module's own control and its end-to-end run and plan cases are the place the new name is observed.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: "Where a worktree lives" names the flattening and must name the new form.
+
+scope:
+  modify:
+    - orchestration/worktrees.py
+    - schemas/harness-config.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py (story_branch and resolve_run_root already read the prefix and already route through worktree_path, so the corrected derivation reaches a run without the coordinator naming the rule)
+    - scripts/l5-plan (it already reaches the derivation through worktree_path and creates the tree it derives within the same process, so the new name reaches planning without a change here)
+    - .harness/config.yaml (the configured branch_prefix and the branch name it builds are deliberately unchanged - the branch stays story/story-172 and only the directory is renamed)
+    - orchestration/worktrees.py's worktree_root and the locks beside it (where the worktree root is, and the suite and takeover locks that live in it, are outside this story - only the name of a tree within the root changes)
+    - orchestration/story_ids.py (it reads branch_prefix to name and claim a story branch, which this story deliberately leaves as it is)
+
+verification_requirements:
+  - Confirm worktree_path answers the stripped name for a branch carrying the configured prefix, and the whole flattened name for a branch that does not carry it, under a configured prefix, a non-default configured prefix and an unset one.
+  - Confirm the prefix-only branch answers a named directory rather than the worktree root.
+  - Confirm a fresh run and a planning session each create and then work in a tree at the new name, observed from the directory worked in rather than from a recomputed path.
+  - Confirm a run for a branch an existing worktree stands on still works in that tree, so the resume path is untouched.
+  - Confirm no test module recomputes branch.replace("/", "-") in place of calling worktree_path.
+  - Confirm the naming rule as written in schemas/harness-config.schema.json and in .harness/docs/ARCHITECTURE.md agrees with what the function now does.
+  - Confirm the full suite passes and no existing assertion was weakened, skipped or deleted.
+
+constraints:
+  - The derivation stays inside worktrees.worktree_path; no second place decides a worktree's name.
+  - The branch prefix is read off the config the function is handed, never written into orchestration as a literal.
+  - No compatibility fallback is added for trees already on disk under the old name; worktrees.find answering by branch is what covers them, and it already does.
+  - The branch name, the configured branch_prefix, the worktree root and the lock files beside the trees are unchanged.
+  - A branch that does not carry the configured prefix keeps exactly today's answer.
+  - Verification rules are immutable: no existing assertion is weakened or skipped to make this pass.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-22 08:29:08
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 316
